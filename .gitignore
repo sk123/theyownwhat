@@ -1,4 +1,3 @@
 # Ignore data folder
 data/
-
-data/*
+.env
