@@ -1,0 +1,9 @@
+# For all web crawlers
+User-agent: *
+
+# Disallow crawling of the API endpoints to save crawl budget
+# and prevent indexing of non-human-readable content.
+Disallow: /api/
+
+# Specify the location of the sitemap for better indexing.
+Sitemap: https://theyownwhat.net/sitemap.xml

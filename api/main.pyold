@@ -1,0 +1,626 @@
+# main.py
+import os
+import re
+import json
+from fastapi import FastAPI, HTTPException, Depends
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+import psycopg2
+from psycopg2 import pool
+from psycopg2.extras import RealDictCursor
+from pydantic import BaseModel
+import logging
+from typing import List, Dict, Any, Optional, Set
+import openai
+import requestsu
+import time
+import sys
+from datetime import date, datetime
+from decimal import Decimal
+from collections import defaultdict 
+
+# Add the current directory to Python path
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+# Import the shared utility functions
+from shared_utils import get_name_variations, normalize_business_name, normalize_person_name
+
+# --- Configuration & Setup ---
+logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(name)s:%(message)s')
+logger = logging.getLogger(__name__)
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], 
+    allow_credentials=True, 
+    allow_methods=["*"], 
+    allow_headers=["*"],
+)
+
+DATABASE_URL = os.environ.get("DATABASE_URL")
+openai.api_key = os.environ.get("OPENAI_API_KEY")
+SERPAPI_API_KEY = os.environ.get("SERPAPI_API_KEY")
+
+# --- Database Connection Pool ---
+db_pool = None
+
+def create_cache_table(cursor):
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS report_cache (
+            id SERIAL PRIMARY KEY, 
+            entity_name TEXT NOT NULL, 
+            report_html TEXT NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        );
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_entity_name_created_at ON report_cache (entity_name, created_at DESC);")
+    logger.info("✅ Report cache table checked/initialized.")
+    
+    cursor.execute("""
+    CREATE OR REPLACE FUNCTION normalize_person_name(name_text TEXT)
+    RETURNS TEXT AS $$
+    DECLARE
+        normalized TEXT;
+    BEGIN
+        IF name_text IS NULL THEN
+            RETURN '';
+        END IF;
+        normalized := trim(upper(name_text));
+        normalized := regexp_replace(normalized, '[,.''`\"]', '', 'g');
+        normalized := trim(regexp_replace(normalized, '\s+', ' ', 'g'));
+        normalized := regexp_replace(normalized, '\s+(JR|SR|III|IV|II|ESQ|MD|PHD|DDS)$', '');
+        RETURN normalized;
+    END;
+    $$ LANGUAGE plpgsql IMMUTABLE;
+    """)
+    logger.info("✅ normalize_person_name() SQL function checked/initialized.")
+
+
+@app.on_event("startup")
+def startup_event():
+    global db_pool
+    retries = 10
+    while retries > 0:
+        try:
+            # --- UPDATED Pool Size ---
+            db_pool = pool.SimpleConnectionPool(5, 50, dsn=DATABASE_URL)
+            logger.info("✅ Database connection pool created successfully (max 50).")
+            conn = None
+            try:
+                conn = db_pool.getconn()
+                with conn.cursor() as cursor:
+                    create_cache_table(cursor)
+                conn.commit()
+            finally:
+                if conn: 
+                    db_pool.putconn(conn)
+            return
+        except psycopg2.OperationalError as e:
+            logger.warning(f"⚠️ Database not ready, retrying... ({retries} attempts left)")
+            retries -= 1
+            time.sleep(5)
+    logger.error("❌ Could not connect to the database after multiple retries. Exiting.")
+    sys.exit(1)
+
+def get_db_connection():
+    if db_pool is None: 
+        raise HTTPException(status_code=503, detail="Database connection is not available.")
+    conn = None
+    try:
+        conn = db_pool.getconn()
+        yield conn
+    finally:
+        if conn: 
+            db_pool.putconn(conn)
+
+# --- Pydantic Models ---
+class SearchResult(BaseModel):
+    id: str
+    name: str
+    type: str
+    context: Optional[str] = None
+    network_id: Optional[int] = None
+
+class Entity(BaseModel):
+    id: str
+    name: str
+    type: str
+    status: Optional[str] = None
+    details: Optional[Dict[str, Any]] = None
+
+class NetworkLoadRequest(BaseModel):
+    entity_id: str
+    entity_type: str
+    entity_name: str
+
+class InsightItem(BaseModel):
+    name: str
+    value: str
+    entity_id: str
+    entity_name: str
+    entity_type: str
+
+class InsightReport(BaseModel):
+    title: str
+    data: List[InsightItem]
+
+class CachedReport(BaseModel):
+    entity_name: str
+    created_at: str
+    size: int
+    norm_name: str # Added for grouping
+
+class CachedReportDetail(BaseModel):
+    entity_name: str
+    created_at: str
+    report_html: str
+
+class NetworkStats(BaseModel):
+    total_properties: int
+    total_value: float
+    total_businesses: int
+    total_principals: int
+
+# --- UPDATED: Pydantic model for AI Digest request ---
+class ReportRequest(BaseModel):
+    business_names: List[str]
+    top_principal: str
+    network_stats: NetworkStats
+    
+# --- Helper Functions & JSON Serialization ---
+
+def json_converter(o):
+    if isinstance(o, (datetime, date)):
+        return o.isoformat()
+    if isinstance(o, Decimal):
+        return str(o)
+    raise TypeError(f"Object of type {o.__class__.__name__} is not JSON serializable")
+
+def shape_property_row(prop_row: dict) -> dict:
+    return {
+        "address": prop_row.get('location'),
+        "city": prop_row.get('property_city'),
+        "owner": prop_row.get('owner'),
+        "assessed_value": prop_row.get('assessed_value'),
+        "details": prop_row
+    }
+
+# --- API Endpoints ---
+@app.get("/api/search", response_model=List[SearchResult])
+def search_entities(type: str, term: str, conn=Depends(get_db_connection)):
+    if len(term) < 3:
+        raise HTTPException(status_code=400, detail="Search term must be at least 3 characters long.")
+    
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            if type == 'business':
+                # Uses ILIKE to engage the trigram index case-insensitively
+                query = """
+                    SELECT DISTINCT b.id, b.name, b.business_address as context, en.network_id
+                    FROM businesses b
+                    LEFT JOIN entity_networks en ON en.entity_id = b.id::text AND en.entity_type = 'business'
+                    WHERE b.name ILIKE %s AND b.status = 'Active'
+                    ORDER BY b.name 
+                    LIMIT 50;
+                """
+                cursor.execute(query, (f'%{term}%',)) # Pass raw term
+                rows = cursor.fetchall()
+                results = [SearchResult(id=str(r['id']), name=r['name'], type='business', context=r.get('context'), network_id=r.get('network_id')) for r in rows]
+
+            elif type == 'owner':
+                # This query is correct as it compares normalized values
+                norm_term = normalize_person_name(term)
+                query = """
+                    SELECT 
+                        name, id, type, context, network_id
+                    FROM (
+                        SELECT 
+                            en.entity_name as name, b.id as id,
+                            CASE WHEN b.id IS NOT NULL THEN 'business' ELSE 'principal' END as type,
+                            'Network Principal' as context, en.network_id
+                        FROM entity_networks en
+                        LEFT JOIN businesses b ON en.entity_name = b.name
+                        WHERE en.entity_type = 'principal' AND en.normalized_name LIKE %s
+                        UNION
+                        SELECT 
+                            p.owner as name, b.id as id,
+                            CASE WHEN b.id IS NOT NULL THEN 'business' ELSE 'principal' END as type,
+                            'Property Owner' as context, COALESCE(en_biz.network_id, en_prin.network_id) as network_id
+                        FROM properties p
+                        LEFT JOIN businesses b ON p.owner = b.name
+                        LEFT JOIN entity_networks en_biz ON en_biz.entity_id = b.id::text AND en_biz.entity_type = 'business'
+                        LEFT JOIN entity_networks en_prin ON en_prin.entity_id = p.principal_id AND en_prin.entity_type = 'principal'
+                        WHERE p.principal_id LIKE %s
+                    ) as combined_results
+                    LIMIT 50;
+                """
+                params = (f'%{norm_term}%', f'%{norm_term}%')
+                cursor.execute(query, params)
+                rows = cursor.fetchall()
+                results = []
+                for r in rows:
+                    results.append(SearchResult(
+                        id=str(r['id']) if r['type'] == 'business' else r['name'],
+                        name=r['name'], type=r['type'],
+                        context=r.get('context'), network_id=r.get('network_id')
+                    ))
+
+            elif type == 'address':
+                # Uses ILIKE to engage trigram index if one exists on location
+                query = """
+                    SELECT DISTINCT ON (p.owner)
+                        p.owner as name, p.location as context, b.id as business_id,
+                        en_biz.network_id as biz_network_id, en_prin.network_id as prin_network_id
+                    FROM properties p
+                    LEFT JOIN businesses b ON p.owner = b.name
+                    LEFT JOIN entity_networks en_biz ON en_biz.entity_id = b.id::text AND en_biz.entity_type = 'business'
+                    LEFT JOIN entity_networks en_prin ON en_prin.entity_id = normalize_person_name(p.owner) AND en_prin.entity_type = 'principal'
+                    WHERE p.location ILIKE %s
+                    AND p.owner IS NOT NULL AND p.owner != ''
+                    ORDER BY p.owner
+                    LIMIT 50;
+                """
+                cursor.execute(query, (f'%{term}%',)) # Pass raw term
+                rows = cursor.fetchall()
+                results = []
+                for r in rows:
+                    if r['business_id']:
+                        results.append(SearchResult(
+                            id=str(r['business_id']), name=r['name'], type='business',
+                            context=r.get('context'), network_id=r.get('biz_network_id')
+                        ))
+                    else:
+                        results.append(SearchResult(
+                            id=r['name'], name=r['name'], type='principal',
+                            context=r.get('context'), network_id=r.get('prin_network_id')
+                        ))
+            
+            else:
+                raise HTTPException(status_code=400, detail="Invalid search type.")
+            return results
+    except psycopg2.Error as e:
+        logger.error(f"Database search error: {e}")
+        raise HTTPException(status_code=500, detail="Database query failed.")
+
+
+@app.post("/api/network/stream_load")
+def stream_load_network(request: NetworkLoadRequest, conn=Depends(get_db_connection)):
+    def generate_network_data():
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                network_id = None
+                
+                cursor.execute(
+                    "SELECT network_id FROM entity_networks WHERE entity_type = %s AND entity_id = %s LIMIT 1",
+                    (request.entity_type, request.entity_id if request.entity_type == 'business' else normalize_person_name(request.entity_id))
+                )
+                network_result = cursor.fetchone()
+                if network_result:
+                    network_id = network_result['network_id']
+                
+                if not network_id:
+                    logger.info(f"'{request.entity_name}' is not in a network. Checking its principals for connections...")
+                    principals_to_check = []
+                    if request.entity_type == 'business':
+                        cursor.execute("SELECT name_c FROM principals WHERE business_id = %s", (request.entity_id,))
+                        principals_to_check = [normalize_person_name(r['name_c']) for r in cursor.fetchall() if r['name_c']]
+                    elif request.entity_type == 'principal':
+                        principals_to_check = [normalize_person_name(request.entity_name)]
+                    
+                    if principals_to_check:
+                        cursor.execute(
+                            "SELECT network_id FROM entity_networks WHERE entity_type = 'principal' AND entity_id = ANY(%s) AND network_id IS NOT NULL LIMIT 1",
+                            (principals_to_check,)
+                        )
+                        jump_result = cursor.fetchone()
+                        if jump_result:
+                            network_id = jump_result['network_id']
+                            logger.info(f"Network Jump successful! Found network {network_id} via a principal.")
+
+                if not network_id:
+                    # ISOLATED ENTITY
+                    logger.info(f"No network found. Streaming isolated entity: {request.entity_name}")
+                    isolated_entity = None
+                    if request.entity_type == 'business':
+                        cursor.execute("SELECT * FROM businesses WHERE id = %s", (request.entity_id,))
+                        business = cursor.fetchone()
+                        if business: isolated_entity = Entity(id=str(business['id']), name=business['name'], type='business', status=business.get('status'), details=business).model_dump()
+                    else:
+                        norm_name = normalize_person_name(request.entity_name)
+                        isolated_entity = Entity(id=norm_name, name=request.entity_name, type='principal', details={}).model_dump()
+                    if not isolated_entity:
+                         yield json.dumps({"type": "done", "data": "Entity not found"}, default=json_converter) + "\n"
+                         return
+                    
+                    links = {"business_to_principal": [], "principal_to_business": []}
+                    if request.entity_type == 'business':
+                        cursor.execute("SELECT normalize_person_name(name_c) as normalized_principal_name FROM principals WHERE business_id = %s", (request.entity_id,))
+                        for row in cursor.fetchall():
+                            prin_key = f"principal_{row['normalized_principal_name']}"
+                            links["business_to_principal"].append({"source": f"business_{request.entity_id}", "target": prin_key})
+                    
+                    yield json.dumps({"type": "entities", "data": {"entities": [isolated_entity], "links": links}}, default=json_converter) + "\n"
+                    
+                    cursor.execute("SELECT * FROM properties WHERE business_id = %s OR principal_id = %s", (request.entity_id, normalize_person_name(request.entity_name)))
+                    properties = [shape_property_row(p) for p in cursor.fetchall()]
+                    if properties: yield json.dumps({"type": "properties", "data": properties}, default=json_converter) + "\n"
+                    yield json.dumps({"type": "done", "data": "isolated"}) + "\n"
+                    return
+                
+                # FULL NETWORK
+                logger.info(f"Streaming full network: {network_id}")
+                cursor.execute("SELECT * FROM entity_networks WHERE network_id = %s", (network_id,))
+                network_entities_rows = cursor.fetchall()
+                biz_ids = [r['entity_id'] for r in network_entities_rows if r['entity_type'] == 'business']
+                prin_ids = {r['entity_id'] for r in network_entities_rows if r['entity_type'] == 'principal'}
+                
+                entities_dict = {}
+                if biz_ids:
+                    cursor.execute("SELECT * FROM businesses WHERE id = ANY(%s)", (biz_ids,))
+                    for b in cursor.fetchall(): entities_dict[f"business_{b['id']}"] = Entity(id=str(b['id']), name=b['name'], type='business', status=b.get('status'), details=b)
+                if prin_ids:
+                    cursor.execute("SELECT raw_name, normalized_name FROM (SELECT DISTINCT ON (normalized_name) name_c as raw_name, normalize_person_name(name_c) as normalized_name FROM principals WHERE normalize_person_name(name_c) = ANY(%s)) as subq", (list(prin_ids),))
+                    for p in cursor.fetchall(): entities_dict[f"principal_{p['normalized_name']}"] = Entity(id=p['normalized_name'], name=p['raw_name'], type='principal', details={})
+                
+                links = {"business_to_principal": [], "principal_to_business": []}
+                if biz_ids:
+                    cursor.execute(
+                        "SELECT business_id, normalize_person_name(name_c) as normalized_principal_name "
+                        "FROM principals "
+                        "WHERE business_id = ANY(%s) AND normalize_person_name(name_c) = ANY(%s)",
+                        (biz_ids, list(prin_ids) or [None])
+                    )
+                    links_rows = cursor.fetchall()
+
+                    for row in links_rows:
+                        biz_key = f"business_{row['business_id']}"
+                        prin_key = f"principal_{row['normalized_principal_name']}"
+                        
+                        if biz_key in entities_dict and prin_key in entities_dict:
+                            links["business_to_principal"].append({"source": biz_key, "target": prin_key})
+                            links["principal_to_business"].append({"source": prin_key, "target": biz_key})
+                
+                yield json.dumps({"type": "entities", "data": {"entities": [e.model_dump() for e in entities_dict.values()], "links": links}}, default=json_converter) + "\n"
+                
+                prop_query = "SELECT * FROM properties WHERE business_id = ANY(%s) OR principal_id = ANY(%s)"
+                params = (biz_ids or [None], list(prin_ids) or [None])
+            
+            conn.commit()
+            
+            logger.info(f"Starting property stream for network {network_id}...")
+            with conn.cursor(name='property_stream', cursor_factory=RealDictCursor) as stream_cursor:
+                stream_cursor.itersize = 250
+                stream_cursor.execute(prop_query, params)
+                
+                while True:
+                    property_chunk_rows = stream_cursor.fetchmany(stream_cursor.itersize)
+                    if not property_chunk_rows:
+                        break
+                    property_chunk = [shape_property_row(p) for p in property_chunk_rows]
+                    yield json.dumps({"type": "properties", "data": property_chunk}, default=json_converter) + "\n"
+            
+            logger.info(f"Property stream for network {network_id} complete.")
+            yield json.dumps({"type": "done", "data": "network"}) + "\n"
+
+        except Exception as e:
+            logger.error(f"Error during network stream: {e}", exc_info=True)
+            yield json.dumps({"type": "error", "data": f"An unexpected error occurred: {e}"}, default=json_converter) + "\n"
+            
+    return StreamingResponse(generate_network_data(), media_type="application/x-ndjson")
+
+@app.get("/api/insights", response_model=List[InsightReport])
+def get_insights(conn=Depends(get_db_connection)):
+    insight_groups = defaultdict(list)
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute("SELECT 1 FROM cached_insights LIMIT 1;")
+            if cursor.fetchone() is None:
+                logger.warning("cached_insights table is empty. Please run generate_insights.py.")
+                return []
+                
+            cursor.execute("""
+                SELECT title, rank, network_name, property_count, 
+                       primary_entity_id, primary_entity_name, primary_entity_type
+                FROM cached_insights
+                ORDER BY title, rank;
+            """)
+            
+            for row in cursor.fetchall():
+                insight_item = InsightItem(
+                    name=row['network_name'],
+                    value=str(row['property_count']),
+                    entity_id=row['primary_entity_id'],
+                    entity_name=row['primary_entity_name'],
+                    entity_type=row['primary_entity_type']
+                )
+                insight_groups[row['title']].append(insight_item)
+        
+        final_reports = []
+        if 'Statewide' in insight_groups:
+            final_reports.append(InsightReport(title="Top 10 Statewide Networks (by Property Count)", data=insight_groups.pop('Statewide')))
+        
+        for title, data in insight_groups.items():
+            final_reports.append(InsightReport(title=f"Top 10 Networks: {title}", data=data))
+            
+        return final_reports
+            
+    except psycopg2.Error as e:
+        logger.error(f"Database insights error: {e}")
+        if e.pgcode == '42P01': # undefined_table
+             logger.error("Error: cached_insights table not found. Please run generate_insights.py.")
+             raise HTTPException(status_code=500, detail="Insights have not been generated. Please run the backend insights script.")
+        raise HTTPException(status_code=500, detail="Database query failed.")
+
+
+@app.get("/api/cached-reports", response_model=List[CachedReport])
+def get_cached_reports(conn=Depends(get_db_connection)):
+    with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        cursor.execute("""
+            SELECT 
+                entity_name, 
+                created_at, 
+                LENGTH(report_html) as report_size,
+                UPPER(entity_name) as norm_name 
+            FROM report_cache 
+            ORDER BY 
+                norm_name ASC, 
+                created_at DESC;
+        """)
+        reports = cursor.fetchall()
+        return [CachedReport(
+            entity_name=r['entity_name'], 
+            created_at=r['created_at'].isoformat(),
+            size=r['report_size'],
+            norm_name=r['norm_name']
+        ) for r in reports]
+
+@app.get("/api/cached-report/{entity_name}", response_model=CachedReportDetail)
+def get_cached_report(entity_name: str, conn=Depends(get_db_connection)):
+    with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        cursor.execute("""
+            SELECT report_html, created_at FROM report_cache
+            WHERE entity_name = %s ORDER BY created_at DESC LIMIT 1
+        """, (entity_name,))
+        result = cursor.fetchone()
+        if not result:
+            raise HTTPException(status_code=404, detail="Report not found")
+        return CachedReportDetail(
+            report_html=result['report_html'], created_at=result['created_at'].isoformat(),
+            entity_name=entity_name
+        )
+
+@app.get("/api/cached-reports-count")
+def get_cached_reports_count(conn=Depends(get_db_connection)):
+    with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        cursor.execute("SELECT COUNT(DISTINCT entity_name) as count FROM report_cache")
+        return {"count": cursor.fetchone()['count']}
+
+# --- UPDATED: AI Digest Caching Logic ---
+@app.post("/api/generate-report")
+async def generate_report(request: ReportRequest, conn=Depends(get_db_connection)):
+    
+    # Create the new composite cache key
+    top_business = request.business_names[0] if request.business_names else 'N/A'
+    top_principal = request.top_principal if request.top_principal else 'N/A'
+    cache_key = f"{top_business} | {top_principal}"
+    
+    with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        cursor.execute("""
+            SELECT report_html FROM report_cache
+            WHERE entity_name = %s AND created_at >= current_date
+            ORDER BY created_at DESC LIMIT 1;
+        """, (cache_key,)) # Use new key
+        
+        cached_report = cursor.fetchone()
+        if cached_report:
+            logger.info(f"CACHE HIT for network: {cache_key}")
+            return {"report": cached_report['report_html']}
+        
+        logger.info(f"CACHE MISS for network: {cache_key}. Generating new report.")
+        all_web_results = []
+        
+        # Use only the top business name for the web search query
+        web_search_entities = [name for name in request.business_names if name][:3] # Get up to 3 valid names
+        for entity_name in web_search_entities:
+            web_results = fetch_serp_results(f'"{entity_name}" Connecticut news reviews lawsuits', 5)
+            if web_results:
+                all_web_results.extend(web_results)
+            time.sleep(0.5)
+
+        digest = f"<div>"
+        stats = request.network_stats
+        formatted_value = f"${int(stats.total_value):,}" if stats.total_value else "$0"
+        
+        digest += "<h4>Network Overview</h4><ul>"
+        if top_business != 'N/A':
+            digest += f"<li><strong>Primary Business:</strong> {top_business}</li>"
+        if top_principal != 'N/A':
+            digest += f"<li><strong>Key Principal:</strong> {top_principal}</li>"
+        digest += f"""
+                <li><strong>Total Properties:</strong> {stats.total_properties}</li>
+                <li><strong>Total Assessed Value:</strong> {formatted_value}</li>
+                <li><strong>Associated Businesses:</strong> {stats.total_businesses}</li>
+                <li><strong>Associated Principals:</strong> {stats.total_principals}</li>
+            </ul>
+        """
+        if not all_web_results:
+            digest += "<h4>Web Intelligence Summary</h4><p>No relevant web search results found for the key entities in this network.</p>"
+        else:
+            articles_text = "\n\n".join([
+                f"- Title: {r.get('title')}\n- URL: {r.get('url')}\n- Snippet: {r.get('snippet')}" 
+                for r in all_web_results if r.get('snippet')
+            ])
+            prompt = f"""
+                You are an investigative journalist analyzing a Connecticut property network linked to:
+                - Primary Business: **{top_business}**
+                - Key Principal: **{top_principal}**
+                
+                Based *only* on the following web search results, write a concise "Web Intelligence Summary".
+                - Synthesize findings into a single narrative.
+                - Structure the response in clean, readable HTML. 
+                - Use an <h4> for the section title "Web Intelligence Summary".
+                - Use <ul> and <li> for any lists of facts or events.
+                - Use <strong> tags to highlight key names, companies, or legal terms.
+                - Cite sources by embedding clickable links (<a> tags) directly in your text where the information is mentioned.
+                **Search Results:**
+                {articles_text}
+            """
+            generated_summary = call_openai_with_retry(prompt)
+            digest += generated_summary
+        digest += "</div>"
+        try:
+            cursor.execute("""
+                INSERT INTO report_cache (entity_name, report_html)
+                VALUES (%s, %s);
+            """, (cache_key, digest)) # Use new key
+            conn.commit()
+            logger.info(f"CACHE WRITE for network: {cache_key}")
+        except psycopg2.Error as e:
+            logger.error(f"Failed to write to cache for {cache_key}: {e}")
+            conn.rollback()
+        return {"report": digest}
+
+def fetch_serp_results(query: str, num: int = 5) -> List[Dict[str, str]]:
+    if not SERPAPI_API_KEY:
+        logger.warning("SERPAPI_API_KEY not set. Skipping web search.")
+        return []
+    params = {"q": query, "engine": "google", "api_key": SERPAPI_API_KEY, "num": num}
+    try:
+        response = requests.get("https://serpapi.com/search.json", params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        results = []
+        if data.get("organic_results"):
+            for r in data["organic_results"]:
+                results.append({"title": r.get("title"), "url": r.get("link"), "snippet": r.get("snippet")})
+        return results
+    except requests.RequestException as e:
+        logger.error(f"SerpAPI request failed: {e}")
+        return []
+
+def call_openai_with_retry(prompt: str) -> str:
+    if not openai.api_key:
+        return "OpenAI API key not configured. Cannot generate summary."
+    retries, delay = 3, 2
+    for i in range(retries):
+        try:
+            response = openai.chat.completions.create(
+                model="gpt-4-turbo",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3
+            )
+            return response.choices[0].message.content
+        except openai.RateLimitError:
+            logger.warning(f"OpenAI rate limit hit. Retrying in {delay}s...")
+            time.sleep(delay)
+            delay *= 2
+        except Exception as e:
+            logger.error(f"OpenAI API call failed: {e}")
+            return f"Error calling AI model: {e}"
+    return "AI model request failed after multiple retries."
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -1,0 +1,27 @@
+2025-09-14 17:36:06,242 - INFO - Database connection successful.
+2025-09-14 17:36:06,243 - INFO - Finding unlinked properties with similarity >= 0.3...
+2025-09-14 17:36:06,243 - ERROR - An error occurred during analysis: dict is not a sequence
+Traceback (most recent call last):
+  File "/app/api/analyze_unlinked_business_properties.py", line 226, in main
+    business_properties = find_unlinked_business_properties(
+  File "/app/api/analyze_unlinked_business_properties.py", line 99, in find_unlinked_business_properties
+    cursor.execute(query, params)
+  File "/usr/local/lib/python3.10/site-packages/psycopg2/extras.py", line 236, in execute
+    return super().execute(query, vars)
+TypeError: dict is not a sequence
+2025-09-14 17:36:06,247 - INFO - Database connection closed.
+2025-09-14 17:37:10,940 - INFO - Database connection successful.
+2025-09-14 17:37:10,940 - INFO - Finding unlinked properties with similarity >= 0.3...
+2025-09-14 17:37:10,940 - ERROR - An error occurred during analysis: dict is not a sequence
+Traceback (most recent call last):
+  File "/app/api/analyze_unlinked_business_properties.py", line 222, in main
+    business_properties = find_unlinked_business_properties(
+  File "/app/api/analyze_unlinked_business_properties.py", line 97, in find_unlinked_business_properties
+    cursor.execute(query, params)  # This line will now work
+  File "/usr/local/lib/python3.10/site-packages/psycopg2/extras.py", line 236, in execute
+    return super().execute(query, vars)
+TypeError: dict is not a sequence
+2025-09-14 17:37:10,941 - INFO - Database connection closed.
+2025-09-14 17:38:16,973 - INFO - Database connection successful.
+2025-09-14 17:38:16,973 - INFO - Finding unlinked properties with similarity >= 0.3...
+2025-09-14 18:13:59,004 - INFO - Database connection closed.

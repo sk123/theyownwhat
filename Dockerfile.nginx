@@ -1,0 +1,8 @@
+# Use the official Nginx image from Docker Hub
+FROM nginx:1.25-alpine
+
+# This Dockerfile is now very simple.
+# The nginx.conf and the app's static files (index.html)
+# will be mounted directly via volumes in docker-compose.yml.
+# This allows for easy modification without rebuilding the image.
+

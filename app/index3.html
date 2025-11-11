@@ -1,0 +1,1513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta name="description" content="Uncover hidden property networks in Connecticut. An advocacy and investigative tool for linking property owners with their business entities for greater transparency.">
+  <title>they own WHAT??</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
+
+  <style>
+    :root{
+      --primary-hue:221; --primary:hsl(var(--primary-hue),83%,53%); --primary-dark:hsl(var(--primary-hue),83%,43%);
+      --secondary-hue:162; --secondary:hsl(var(--secondary-hue),72%,46%);
+      --danger:#ef4444; --warning:#f59e0b;
+      --bg:#f1f5f9; --card-bg:#fff; --text:#0f172a; --text-muted:#64748b; --border:#e2e8f0;
+      --shadow-sm:0 1px 2px 0 rgb(0 0 0 / 0.05);
+      --shadow:0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+      --shadow-lg:0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+      --radius-md:.375rem; --radius-lg:.5rem;
+    }
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:'Inter',system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--text);line-height:1.6;min-height:100vh}
+    .container{max-width:1400px;margin:0 auto;padding:15px}
+    header p{color:var(--text-muted);font-size:.9rem;margin:0}
+
+    /* Buttons & inputs */
+    .btn{padding:10px 16px;font-size:.92rem;font-weight:700;border:none;border-radius:var(--radius-md);cursor:pointer;transition:.2s}
+    .btn-primary{background:var(--primary);color:#fff;box-shadow:var(--shadow-sm)}
+    .btn-primary:hover{background:var(--primary-dark);transform:translateY(-1px)}
+    .btn-secondary{background:var(--card-bg);color:var(--text);border:1px solid var(--border);box-shadow:var(--shadow-sm)}
+    .btn-secondary:hover{background:var(--bg)}
+    .btn-purple{background:#8b5cf6;color:#fff}
+    .btn-purple:hover{background:#7c3aed}
+    .btn-pink{background:#ec4899;color:#fff}
+    .btn-pink:hover{background:#db2777}
+    .btn-small{font-size:.82rem;padding:6px 10px}
+
+    .search-bar{background:var(--card-bg);padding:12px 16px;box-shadow:var(--shadow);margin-top:12px;border-radius:var(--radius-lg);border:1px solid var(--border)}
+    .search-controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    .search-tabs{display:flex;gap:6px}
+    .tab-button{padding:7px 12px;border:1px solid var(--border);background:none;color:var(--text-muted);font-size:.86rem;font-weight:700;cursor:pointer;border-radius:var(--radius-md);transition:.2s}
+    .tab-button.active{background:var(--primary);color:#fff;border-color:var(--primary)}
+    .tab-button:hover:not(.active){background:#f8fafc}
+    .search-input{flex:1;padding:9px 12px;font-size:.95rem;border:1px solid var(--border);border-radius:var(--radius-md);min-width:200px}
+    .search-input:focus{outline:none;border-color:var(--primary);box-shadow:0 0 0 3px hsla(var(--primary-hue),83%,53%,.2)}
+
+    /* Mobile sticky search bar */
+    .mobile-search-bar{
+      position:fixed;
+      bottom:0;
+      left:0;
+      right:0;
+      background:var(--card-bg);
+      border-top:2px solid var(--border);
+      padding:8px 12px;
+      z-index:1000;
+      display:none;
+      box-shadow:0 -4px 6px -1px rgb(0 0 0 / 0.1);
+    }
+    .mobile-search-controls{
+      display:flex;
+      gap:6px;
+      align-items:center;
+    }
+    .mobile-search-input{
+      flex:1;
+      padding:8px 10px;
+      font-size:.85rem;
+      border:1px solid var(--border);
+      border-radius:var(--radius-md);
+      min-width:0;
+    }
+    .mobile-search-btn{
+      padding:8px 12px;
+      font-size:.8rem;
+      white-space:nowrap;
+    }
+
+    /* Dashboard layout */
+    .dashboard{margin-top:12px;display:none}
+    /* Fixed-height workspace; slimmer stats so more left column is visible */
+    .dashboard.active{display:flex;flex-direction:column;height:calc(100vh - 210px);min-height:540px}
+    .stats-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:12px}
+    .stat-card{background:var(--card-bg);border:1px solid var(--border);color:var(--text);padding:14px;border-radius:var(--radius-lg);text-align:left;transition:.2s}
+    .stat-card:hover{transform:translateY(-2px);box-shadow:var(--shadow)}
+    .stat-number{font-size:1.6rem;font-weight:800;margin-bottom:2px;color:var(--primary)}
+    .stat-label{font-size:.78rem;color:var(--text-muted)}
+
+    .city-filters-container{display:none;background:var(--card-bg);padding:12px;border-radius:var(--radius-lg);box-shadow:var(--shadow-sm);border:1px solid var(--border);margin-bottom:12px}
+    .filter-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+    .filter-title{font-size:.86rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;font-weight:800;margin-bottom:0}
+    .city-btn-row{display:flex;gap:8px;flex-wrap:wrap}
+    .city-btn{padding:7px 12px;background:#fff;border:1px solid var(--border);border-radius:var(--radius-md);cursor:pointer;transition:.2s;font-size:.82rem;display:flex;flex-direction:column;align-items:center}
+    .city-btn:hover{border-color:var(--primary);background:var(--bg)}
+    .city-btn.active{background:var(--primary);color:#fff;border-color:var(--primary)}
+    .city-count{font-weight:800;font-size:1rem}
+    .city-name{font-size:.72rem;opacity:.9}
+
+    /* Grid with principals on top, businesses below (businesses get more space) */
+    .content-grid{flex:1;min-height:0;display:grid;grid-template-columns:350px 1fr;gap:16px;margin-bottom:16px}
+    .network-panel{background:var(--card-bg);border-radius:var(--radius-lg);padding:14px;box-shadow:var(--shadow);display:flex;flex-direction:column;border:1px solid var(--border);min-height:0}
+    .panel-header-flex{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+    .notice-inline{font-size:.8rem;font-weight:700;color:var(--text-muted);background:var(--bg);padding:3px 8px;border-radius:var(--radius-md)}
+    .entity-group{min-height:0}
+    #principals-group{flex:1;min-height:0;overflow-y:auto;padding-right:8px;margin-bottom:10px}
+    #businesses-group{flex:2;min-height:0;overflow-y:auto;padding-right:8px;border-top:1px solid var(--border);padding-top:10px}
+    .entity-group h4{color:var(--text-muted);font-size:.85rem;margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px;position:sticky;top:0;background:var(--card-bg);padding-bottom:4px;z-index:1}
+
+    /* Principal subtabs */
+    .principal-subtabs{display:flex;gap:4px;margin-bottom:8px;position:sticky;top:25px;background:var(--card-bg);padding:4px 0;z-index:2}
+    .principal-subtab{padding:4px 8px;font-size:.7rem;font-weight:700;border:1px solid var(--border);background:var(--bg);color:var(--text-muted);cursor:pointer;border-radius:4px;transition:.2s}
+    .principal-subtab.active{background:var(--primary);color:#fff;border-color:var(--primary)}
+    .principal-subtab:hover:not(.active){background:#e2e8f0}
+
+    .entity-item{background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-md);margin-bottom:6px;transition:.2s;display:flex;align-items:center;justify-content:space-between}
+    .entity-item:hover{border-color:var(--primary);background:#fff}
+    .entity-item.active-filter{border-color:var(--primary);background:hsl(var(--primary-hue),83%,97%);box-shadow:var(--shadow)}
+    .entity-filter-area{flex-grow:1;cursor:pointer;padding:9px}
+    .entity-details-btn{cursor:pointer;padding:8px 10px;font-size:1.05rem;opacity:.6;transition:.2s;border-radius:var(--radius-md);align-items:center;border-left:1px solid var(--border);display:flex}
+    .entity-details-btn:hover{opacity:1;background:#e2e8f0}
+    .entity-name{font-weight:800;color:var(--text);font-size:.92rem}
+    .entity-meta{color:var(--text-muted);font-size:.8rem;margin-top:2px}
+    .entity-badges{margin-top:5px;display:flex;flex-wrap:wrap;gap:6px}
+    .entity-badge{display:inline-block;background:hsl(var(--primary-hue),83%,95%);color:var(--primary-dark);padding:2px 8px;border-radius:12px;font-size:.72rem;font-weight:800}
+    .property-badge{background:#8b5cf6;color:#fff}
+    .status-badge{display:inline-block;padding:2px 8px;border-radius:12px;font-size:.68rem;font-weight:800}
+    .status-badge.active{background:hsl(var(--secondary-hue),72%,95%);color:hsl(var(--secondary-hue),72%,26%)}
+    .status-badge.inactive{background:var(--text-muted);color:#fff}
+    .status-badge.dissolved{background:var(--danger);color:#fff}
+    .status-badge.forfeited{background:var(--warning);color:#fff}
+    .status-badge.rejected{background:#6b7280;color:#fff}
+    .status-badge.unknown{background:#d1d5db;color:#1f2937}
+    .link-badge{background:#0ea5e9;color:#fff}
+
+    /* Mobile tab navigation */
+    .mobile-tab-nav{
+      display:none;
+      position:sticky;
+      top:0;
+      background:var(--card-bg);
+      border-bottom:1px solid var(--border);
+      z-index:100;
+      margin:-14px -14px 14px -14px;
+    }
+    .mobile-tab-buttons{
+      display:grid;
+      grid-template-columns:1fr 1fr 1fr;
+    }
+    .mobile-tab-btn{
+      padding:12px 8px;
+      border:none;
+      background:none;
+      color:var(--text-muted);
+      font-weight:700;
+      font-size:.8rem;
+      cursor:pointer;
+      border-bottom:3px solid transparent;
+      transition:.2s;
+    }
+    .mobile-tab-btn.active{
+      color:var(--primary);
+      border-bottom-color:var(--primary);
+      background:hsl(var(--primary-hue),83%,97%);
+    }
+    .mobile-tab-content{display:none}
+    .mobile-tab-content.active{display:block}
+
+    /* Properties table panel */
+    .table-panel{background:var(--card-bg);border-radius:var(--radius-lg);box-shadow:var(--shadow);border:1px solid var(--border);display:flex;flex-direction:column;min-height:0}
+    .table-header{padding:12px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+    .table-title{font-weight:800;color:var(--text);display:flex;align-items:center;gap:12px}
+    .filter-status{font-size:.84rem;font-weight:800;background:var(--bg);padding:3px 6px;border-radius:var(--radius-md);border:1px solid var(--border);display:none}
+    .filter-status button{margin-left:6px;background:none;border:none;color:var(--primary);cursor:pointer;font-weight:900;font-size:.8rem}
+    .table-actions{display:flex;gap:8px}
+    .filter-input{padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-md);font-size:.85rem}
+    .table-container{flex:1;min-height:0;overflow:auto}
+    .property-table{width:100%;border-collapse:collapse}
+    .property-table thead{background:var(--bg);position:sticky;top:0;z-index:10}
+    .property-table th{padding:10px;text-align:left;font-weight:800;color:var(--text-muted);border-bottom:2px solid var(--border);font-size:.8rem;cursor:pointer}
+    .property-table th:hover{color:var(--primary)}
+    .property-table td{padding:10px;border-bottom:1px solid var(--border);font-size:.88rem}
+    .property-table tbody tr{cursor:pointer;transition:background .2s}
+    .property-table tbody tr:hover{background:var(--bg)}
+    .map-link{color:var(--primary);text-decoration:none;font-weight:800}
+
+    /* Insights on Home */
+    .home-insights{margin-top:12px}
+    .home-insights .toggle-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+    .toggle-btn{padding:7px 10px;border:1px solid var(--border);background:var(--card-bg);border-radius:var(--radius-md);cursor:pointer;font-weight:800;font-size:.85rem}
+    .toggle-btn.active{background:var(--primary);color:#fff;border-color:var(--primary)}
+    .home-insights-card{background:var(--card-bg);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px;box-shadow:var(--shadow)}
+    .insight-item-group{background:#fff;border-radius:var(--radius-md);border:1px solid var(--border);margin-bottom:12px;overflow:hidden}
+    .insight-title{font-weight:800;color:var(--primary);padding:10px 12px;background:var(--bg);border-bottom:1px solid var(--border)}
+    .insight-item{display:flex;justify-content:space-between;gap:10px;padding:9px 12px;border-bottom:1px solid var(--border);cursor:pointer;transition:.2s;align-items:center}
+    .insight-item:last-child{border-bottom:none}
+    .insight-item:hover{background:hsl(var(--primary-hue),83%,97%);transform:translateX(3px)}
+    .insight-name{font-weight:800}
+    .insight-value{font-weight:800;color:var(--text-muted)}
+    .badge{display:inline-flex;align-items:center;border-radius:999px;padding:4px 8px;font-size:.72rem;font-weight:800;white-space:nowrap;border:1px solid #c7d2fe;margin-left:6px;background:#eef2ff;color:#3730a3}
+    .badge .sub-badge{margin-left:6px;padding:2px 6px;border-radius:999px;font-size:.64rem;font-weight:900;border:1px solid #d1d5db;background:#e5e7eb;color:#374151}
+    .badge .sub-badge.out{background:#fee2e2;border-color:#fecaca;color:#991b1b} /* out-of-state highlight */
+    .badge .sub-badge.in{background:#e5e7eb;border-color:#d1d5db;color:#374151}    /* CT (neutral) */
+
+    /* Click cue (small, pulsing) */
+    .click-cue{
+      display:inline-flex; align-items:center; gap:8px;
+      font-size:.85rem; font-weight:800; color:#1e40af;
+      background:#eff6ff; border:1px solid #bfdbfe; border-radius:999px;
+      padding:6px 10px; margin:6px 0 10px 0;
+      box-shadow:0 0 0 0 rgba(59,130,246,.4); animation:pulseCue 1.8s infinite;
+    }
+    @keyframes pulseCue{
+      0%{ box-shadow:0 0 0 0 rgba(59,130,246,.4) }
+      70%{ box-shadow:0 0 0 8px rgba(59,130,246,0) }
+      100%{ box-shadow:0 0 0 0 rgba(59,130,246,0) }
+    }
+
+    /* Get Started banner */
+    .get-started{
+      display:flex; align-items:center; gap:10px;
+      font-size:.9rem; font-weight:800; color:#334155;
+      background:#ffffff; border:1px dashed var(--border);
+      border-radius:12px; padding:10px 12px; margin:10px 0 12px 0;
+      box-shadow:var(--shadow-sm);
+    }
+    .get-started .dot{
+      width:8px; height:8px; border-radius:999px; background:#10b981;
+      box-shadow:0 0 0 0 rgba(16,185,129,.5); animation:pulseDot 1.8s infinite;
+    }
+    @keyframes pulseDot{
+      0%{box-shadow:0 0 0 0 rgba(16,185,129,.5)}
+      70%{box-shadow:0 0 0 10px rgba(16,185,129,0)}
+      100%{box-shadow:0 0 0 0 rgba(16,185,129,0)}
+    }
+
+    /* Loader & notices */
+    .loader{display:none;text-align:center;padding:30px;background:var(--card-bg);border-radius:12px;margin-top:14px;box-shadow:var(--shadow)}
+    .loader.active{display:block}
+    .spinner{border:4px solid var(--border);border-top:4px solid var(--primary);border-radius:50%;width:44px;height:44px;animation:spin 1s linear infinite;margin:0 auto 16px}
+    @keyframes spin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}}
+    .loader-text{color:var(--text-muted);font-size:1rem}
+    .error-message{background:#fef2f2;border-left:4px solid var(--danger);padding:12px;margin:14px 0;border-radius:4px;color:#991b1b}
+    .notice-message{background:#eff6ff;border-left:4px solid var(--primary);padding:12px;margin:0 0 14px 0;border-radius:4px;color:#1e40af}
+
+    /* Modals */
+    .modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:2000;align-items:center;justify-content:center}
+    .modal.active{display:flex}
+    .modal-content{background:#fff;border-radius:var(--radius-lg);max-width:900px;width:92%;max-height:82vh;display:flex;flex-direction:column;box-shadow:var(--shadow-lg)}
+    .modal-header{padding:16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}
+    .modal-title{font-size:1.1rem;font-weight:800}
+    .modal-body{padding:16px;overflow:auto}
+    .detail-section{margin-bottom:16px}
+    .detail-section h4{color:var(--primary);margin-bottom:8px;font-size:.92rem}
+    .detail-item{display:flex;padding:7px 0;border-bottom:1px solid var(--bg)}
+    .detail-label{font-weight:700;color:var(--text-muted);min-width:140px;font-size:.86rem}
+
+    /* Report modal */
+    .report-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:2100;align-items:center;justify-content:center}
+    .report-modal.active{display:flex}
+    .report-modal-content{background:#fff;border-radius:var(--radius-lg);width:90%;max-width:1000px;height:80vh;display:flex;flex-direction:column;box-shadow:var(--shadow-lg)}
+    .report-modal-header{padding:18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}
+    .report-modal-title{font-size:1.2rem;font-weight:800}
+    .report-modal-actions{display:flex;gap:8px}
+    .modal-btn{background:none;border:none;font-size:1.1rem;color:var(--text-muted);cursor:pointer;padding:5px 8px;border-radius:4px}
+    .modal-btn:hover{background:var(--bg)}
+    .report-modal-body{padding:18px;overflow-y:auto;flex:1}
+    .minimized-report{position:fixed;bottom:18px;right:18px;background:var(--primary);color:#fff;padding:10px 16px;border-radius:var(--radius-md);box-shadow:var(--shadow-lg);cursor:pointer;display:none;z-index:2200}
+    .minimized-report.active{display:block}
+
+    .header-content{display:flex;justify-content:space-between;align-items:center}
+    .header-actions{margin-left:auto;display:flex;gap:8px;align-items:center}
+
+    /* Mobile */
+    @media (max-width:800px){
+      .header-content{flex-direction:column;align-items:flex-start;gap:12px}
+      .header-actions{flex-wrap:wrap;gap:8px;width:100%}
+      .header-actions .btn{flex-grow:1}
+      .search-controls{flex-direction:column;align-items:stretch}
+      .search-tabs{display:grid;grid-template-columns:1fr 1fr 1fr;width:100%}
+      .search-input{min-width:100%}
+      .btn-primary,.btn-secondary{width:100%}
+      .content-grid{grid-template-columns:1fr}
+      .dashboard.active{height:auto;min-height:auto;padding-bottom:70px}
+      .container{padding-bottom:70px}
+      
+      /* Hide desktop search when mobile search is active */
+      .search-bar{display:none}
+      .mobile-search-bar{display:block}
+      
+      /* Mobile tab navigation */
+      .mobile-tab-nav{display:block}
+      
+      /* Adjust network panel for mobile tabs */
+      .network-panel{padding:0}
+      #principals-group, #businesses-group{
+        padding:14px;
+        margin-bottom:0;
+        border-top:none;
+        overflow-y:auto;
+        max-height:60vh;
+      }
+      
+      /* Table adjustments */
+      .property-table th, .property-table td{
+        padding:8px 4px;
+        font-size:.8rem;
+      }
+      
+      /* Modal adjustments */
+      .modal-content{
+        width:95%;
+        max-height:90vh;
+      }
+      
+      /* Stats row for mobile */
+      .stats-row{
+        grid-template-columns:repeat(2,1fr);
+        gap:8px;
+      }
+      .stat-card{
+        padding:10px;
+      }
+      .stat-number{
+        font-size:1.2rem;
+      }
+      .stat-label{
+        font-size:.7rem;
+      }
+      
+      /* City filters for mobile */
+      .city-btn{
+        padding:5px 8px;
+        font-size:.75rem;
+      }
+      .city-count{
+        font-size:.9rem;
+      }
+      .city-name{
+        font-size:.65rem;
+      }
+      
+      /* Mobile bottom padding for sticky search */
+      .minimized-report.active{
+        bottom:70px;
+      }
+    }
+  </style>
+</head>
+<body>
+<header>
+  <div class="container">
+    <div class="header-content">
+      <div>
+        <h1 id="app-title" style="cursor:pointer" onclick="goHome()">🏠 they own WHAT??</h1>
+        <p>Connecticut Property Network Explorer</p>
+      </div>
+      <div class="header-actions">
+        <button id="start-over-btn" class="btn btn-purple" onclick="goHome()" style="display:none;">↩️ Start Over</button>
+        <button class="btn btn-pink" onclick="browseReports()">📚 Reports</button>
+        <button class="btn btn-secondary" onclick="openAboutModal()">About</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div class="container">
+  <div class="search-bar" id="search-bar">
+    <div class="search-controls">
+      <div class="search-tabs">
+        <button id="tab-business" class="tab-button active" onclick="switchTab('business')">Business</button>
+        <button id="tab-owner" class="tab-button" onclick="switchTab('owner')">Owner</button>
+        <button id="tab-address" class="tab-button" onclick="switchTab('address')">Address</button>
+      </div>
+      <input type="text" class="search-input" id="search-input" placeholder="Enter active business name..." onkeypress="handleEnterKey(event)"/>
+      <button class="btn btn-primary" id="search-button" onclick="performSearch()">Search</button>
+      <button class="btn btn-secondary" onclick="resetSearch(true)">Clear</button>
+    </div>
+  </div>
+
+  <div class="mobile-search-bar" id="mobile-search-bar">
+    <div class="mobile-search-controls">
+      <input type="text" class="mobile-search-input" id="mobile-search-input" placeholder="Search..." onkeypress="handleMobileEnterKey(event)"/>
+      <button class="btn btn-primary mobile-search-btn" onclick="performMobileSearch()">Search</button>
+    </div>
+  </div>
+
+  <div class="loader" id="loader"><div class="spinner"></div><p class="loader-text" id="loader-text">Searching records...</p></div>
+  <div id="error-container"></div>
+
+  <div id="home-insights" class="home-insights" style="display:none;">
+    <div class="home-insights-card">
+      <div class="toggle-row" id="insights-toggle-row"></div>
+
+      <div id="get-started-banner" class="get-started" role="status" aria-live="polite" style="display:none;">
+        <span class="dot" aria-hidden="true"></span>
+        <span><strong>Get started:</strong> click a <em>network</em> or use <em>search</em> to begin.</span>
+      </div>
+      <div id="click-cue" class="click-cue" style="display:none;">
+      </div>
+
+      <div id="insights-groups"></div>
+    </div>
+  </div>
+
+  <div class="selection-section" id="selection-section" style="display:none;">
+    <div class="selection-card" style="background:#fff;border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px;box-shadow:var(--shadow);">
+      <h2 id="selection-title" style="margin-bottom:8px;font-size:1.05rem;">Select an Entity</h2>
+      <div id="selection-list"></div>
+    </div>
+  </div>
+
+  <div class="dashboard" id="dashboard">
+    <div class="stats-row">
+      <div class="stat-card"><div class="stat-number" id="total-properties">0</div><div class="stat-label">Properties Found</div></div>
+      <div class="stat-card"><div class="stat-number" id="total-businesses">0</div><div class="stat-label">Unique Businesses</div></div>
+      <div class="stat-card"><div class="stat-number" id="total-principals">0</div><div class="stat-label">Principals Found</div></div>
+      <div class="stat-card"><div class="stat-number" id="total-value">$0</div><div class="stat-label">Total Assessed Value</div></div>
+      <div class="stat-card"><div class="stat-number" id="total-appraised-value">$0</div><div class="stat-label">Total Appraised Value</div></div>
+    </div>
+
+    <div class="city-filters-container" id="city-filters-container" style="display:none;">
+      <div class="filter-header">
+        <h4 class="filter-title">🏙️ Filter by City:</h4>
+        <button id="ai-digest-btn" class="btn btn-primary btn-small" onclick="generateAiReport()" style="display:none;">🧠 Generate AI Digest</button>
+      </div>
+      <div class="city-btn-row" id="city-filters"></div>
+    </div>
+
+    <div class="content-grid">
+      <div class="network-panel" id="network-panel">
+        <div class="mobile-tab-nav" id="mobile-tab-nav">
+          <div class="mobile-tab-buttons">
+            <button class="mobile-tab-btn active" onclick="switchMobileTab('principals')">👥 Principals</button>
+            <button class="mobile-tab-btn" onclick="switchMobileTab('businesses')">🏢 Businesses</button>
+            <button class="mobile-tab-btn" onclick="switchMobileTab('properties')">🏠 Properties</button>
+          </div>
+        </div>
+
+        <div class="panel-header-flex">
+          <h3 style="font-size:1rem;">Network Entities</h3>
+          <span id="network-notice-inline" class="notice-inline"></span>
+        </div>
+
+        <div class="mobile-tab-content active" id="mobile-principals-tab">
+          <div class="entity-group" id="principals-group">
+            <h4>Principals</h4>
+            <div class="principal-subtabs" id="principal-subtabs">
+              <button class="principal-subtab active" onclick="filterPrincipals('all')">All</button>
+              <button class="principal-subtab" onclick="filterPrincipals('human')">👤 People</button>
+              <button class="principal-subtab" onclick="filterPrincipals('entity')">🏢 Entities</button>
+            </div>
+            <div id="principals-list"></div>
+          </div>
+        </div>
+
+        <div class="mobile-tab-content" id="mobile-businesses-tab">
+          <div class="entity-group" id="businesses-group">
+            <h4>Businesses</h4>
+            <div id="active-businesses-list"></div>
+            <div class="collapsible-section" id="inactive-section" style="display:none;">
+              <div class="collapsible-header" onclick="toggleInactive(this)" style="display:flex;justify-content:space-between;align-items:center;padding:7px 9px;background:#f8fafc;border:1px dashed var(--border);border-radius:8px;margin-top:8px;cursor:pointer;">
+                <span id="inactive-count">0 Inactive Businesses</span>
+                <span class="collapse-icon">▼</span>
+              </div>
+              <div class="collapsible-content" id="inactive-businesses-list" style="overflow:hidden;"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="mobile-tab-content" id="mobile-properties-tab">
+          <div class="table-panel" id="mobile-table-panel" style="border:none;box-shadow:none;border-radius:0;">
+            <div class="table-header">
+              <div class="table-title">
+                <span>Properties</span>
+                <span id="mobile-entity-filter-status" class="filter-status"></span>
+              </div>
+              <div class="table-actions">
+                <input type="text" class="filter-input" id="mobile-filter-input" placeholder="Filter..." onkeyup="filterProperties()"/>
+                <button class="btn btn-secondary" onclick="exportToCSV()" style="font-size:.8rem;padding:6px 10px;">Export</button>
+              </div>
+            </div>
+            <div class="table-container" id="mobile-table-container">
+              <table class="property-table" id="mobile-property-table">
+                <thead>
+                  <tr>
+                    <th onclick="sortTable(0)">Address ↕</th>
+                    <th onclick="sortTable(1)">City ↕</th>
+                    <th onclick="sortTable(2)">Owner ↕</th>
+                    <th onclick="sortTable(3)">Value ↕</th>
+                    <th>Map</th>
+                  </tr>
+                </thead>
+                <tbody id="mobile-property-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="desktop-network-content">
+          <div class="entity-group" id="desktop-principals-group">
+            <h4>Principals</h4>
+            <div class="principal-subtabs" id="desktop-principal-subtabs">
+              <button class="principal-subtab active" onclick="filterPrincipals('all')">All</button>
+              <button class="principal-subtab" onclick="filterPrincipals('human')">👤 People</button>
+              <button class="principal-subtab" onclick="filterPrincipals('entity')">🏢 Entities</button>
+            </div>
+            <div id="desktop-principals-list"></div>
+          </div>
+
+          <div class="entity-group" id="desktop-businesses-group">
+            <h4>Businesses</h4>
+            <div id="desktop-active-businesses-list"></div>
+            <div class="collapsible-section" id="desktop-inactive-section" style="display:none;">
+              <div class="collapsible-header" onclick="toggleInactive(this)" style="display:flex;justify-content:space-between;align-items:center;padding:7px 9px;background:#f8fafc;border:1px dashed var(--border);border-radius:8px;margin-top:8px;cursor:pointer;">
+                <span id="desktop-inactive-count">0 Inactive Businesses</span>
+                <span class="collapse-icon">▼</span>
+              </div>
+              <div class="collapsible-content" id="desktop-inactive-businesses-list" style="overflow:hidden;"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="table-panel" id="table-panel">
+        <div class="table-header">
+          <div class="table-title">
+            <span>Properties</span>
+            <span id="entity-filter-status" class="filter-status"></span>
+          </div>
+          <div class="table-actions">
+            <input type="text" class="filter-input" id="filter-input" placeholder="Filter table..." onkeyup="filterProperties()"/>
+            <button class="btn btn-secondary" onclick="exportToCSV()" style="font-size:.8rem;padding:6px 10px;">Export CSV</button>
+          </div>
+        </div>
+        <div class="table-container" id="table-container">
+          <table class="property-table" id="property-table">
+            <thead>
+              <tr>
+                <th onclick="sortTable(0)">Address ↕</th>
+                <th onclick="sortTable(1)">City ↕</th>
+                <th onclick="sortTable(2)">Owner ↕</th>
+                <th onclick="sortTable(3)">Assessed / Appraised Value ↕</th>
+                <th>Map</th>
+              </tr>
+            </thead>
+            <tbody id="property-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="report-modal" id="report-modal" style="display:none;">
+  <div class="report-modal-content">
+    <div class="report-modal-header">
+      <h3 class="report-modal-title">Investigative Digest</h3>
+      <div class="report-modal-actions">
+        <button class="modal-btn" onclick="downloadReport()" title="Download Report">💾</button>
+        <button class="modal-btn" onclick="minimizeReport()" title="Minimize">_</button>
+        <button class="modal-btn" onclick="closeReportModal()" title="Close">✕</button>
+      </div>
+    </div>
+    <div class="report-modal-body" id="report-modal-body"></div>
+  </div>
+</div>
+<div class="minimized-report" id="minimized-report" onclick="restoreReport()">🗞️ Investigative Digest (Click to restore)</div>
+
+<div class="modal" id="detail-modal" style="display:none;" onclick="closeModalOnBackdrop(event)">
+  <div class="modal-content" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <div>
+        <h3 class="modal-title" id="modal-title">Details</h3>
+        <p class="modal-subtitle" id="modal-subtitle"></p>
+      </div>
+      <button class="btn btn-secondary" style="padding:5px 10px;font-size:1.1rem" onclick="closeModal()">×</button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+  </div>
+</div>
+
+<div class="modal" id="about-modal" style="display:none;" onclick="closeModalOnBackdrop(event)">
+  <div class="modal-content" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h3 class="modal-title">About This Project</h3>
+      <button class="btn btn-secondary" style="padding:5px 10px;font-size:1.1rem" onclick="closeAboutModal()">×</button>
+    </div>
+    <div class="modal-body" id="about-modal-body">
+      <div class="detail-section">
+        <h4>What it is</h4>
+        <p>This tool maps relationships between Connecticut property owners, registered businesses, and their principals to reveal ownership networks and concentration patterns.</p>
+      </div>
+
+      <div class="detail-section">
+        <h4>Data Sources</h4>
+        <ul style="margin-left:20px;list-style:disc">
+          <li style="margin:5px 0 5px 5px"><a href="https://data.ct.gov/Business/Connecticut-Business-Registry-Business-Master/n7gp-d28j/about_data" target="_blank" rel="noopener noreferrer">CT Business Registry – Business Master</a></li>
+          <li style="margin:5px 0 5px 5px"><a href="https://data.ct.gov/Business/Connecticut-Business-Registry-Principals/ka36-64k6/about_data" target="_blank" rel="noopener noreferrer">CT Business Registry – Principals</a></li>
+          <li style="margin:5px 0 5px 5px"><a href="https://data.ct.gov/Local-Government/2024-Connecticut-Parcel-and-CAMA-Data/pqrn-qghw/about_data" target="_blank" rel="noopener noreferrer">CT 2024 Parcel & CAMA</a></li>
+          <li style="margin:5px 0 5px 5px">Supplemental municipal assessor pages (VGSI/QA) for filling gaps and updating records. (There's a lot left to do here.)</li>
+          <li style="margin:5px 0 5px 5px">Coming soon: AI digest report based on property ownership data, a comprehensive analysis of ownership patterns and trends, a web search for recent developments or news, and more. Mind the bugginess.</li>
+          <li style="margin:5px 0 5px 5px">Future enhancements: Improved entity resolution, additional data sources like code enforcement data (which I haven't found a good way to get ahold of yet), and more robust analytics to identify ownership patterns as they evolve, hopefully ultimately almost in real time. Who are these people buying our cities and leaving them in disrepair?</li>
+        </ul>
+      </div>
+
+      <div class="detail-section">
+        <h4>How it works</h4>
+        <ul style="margin-left:20px;list-style:disc">
+          <li style="margin:5px 0 5px 5px"><b>Normalization:</b> Standardizes business and principal names for robust matching.</li>
+          <li style="margin:5px 0 5px 5px"><b>Linking:</b> Connects principals ↔ businesses ↔ properties.</li>
+          <li style="margin:5px 0 5px 5px"><b>Pre-computed networks:</b> Back-end processes build ownership networks nightly.</li>
+          <li style="margin:5px 0 5px 5px"><b>Caching:</b> Insights and reports are cached for speed.</li>
+        </ul>
+      </div>
+
+      <div class="detail-section">
+        <h4>Purpose & Disclaimer</h4>
+        <p>This is an investigative/advocacy tool. While care is taken to ensure accuracy, users should verify critical findings with primary sources. No warranty is made as to timeliness or completeness.</p>
+      </div>
+
+      <div class="detail-section">
+        <h4>Contact</h4>
+        <p>Questions or feedback: <a href="mailto:salmunk@gmail.com">salmunk@gmail.com</a></p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // --- Global State ---
+  let allProperties = [], allEntities = new Map(), allLinks = {};
+  let currentSearchType = 'business', currentCityFilter = null, currentEntityFilter = null;
+  let reportContent = null;
+  let currentPrincipalFilter = 'all'; // New state for principal filtering
+  let currentMobileTab = 'principals'; // New state for mobile tabs
+
+  // Insights state + caching
+  let insightsIndex = {}, activeInsightsKey = null;
+  const INSIGHTS_CACHE_KEY = 'insights_cache_v2';
+  const INSIGHTS_CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12h
+
+  // --- DOM ---
+  const DOM = {
+    loader: document.getElementById('loader'),
+    loaderText: document.getElementById('loader-text'),
+    errorContainer: document.getElementById('error-container'),
+    networkNoticeInline: document.getElementById('network-notice-inline'),
+
+    selectionList: document.getElementById('selection-list'),
+    selectionSection: document.getElementById('selection-section'),
+    selectionTitle: document.getElementById('selection-title'),
+
+    dashboard: document.getElementById('dashboard'),
+    propertyTbody: document.getElementById('property-tbody'),
+    mobilePropertyTbody: document.getElementById('mobile-property-tbody'),
+    activeBusinessesList: document.getElementById('active-businesses-list'),
+    desktopActiveBusinessesList: document.getElementById('desktop-active-businesses-list'),
+    inactiveBusinessesList: document.getElementById('inactive-businesses-list'),
+    desktopInactiveBusinessesList: document.getElementById('desktop-inactive-businesses-list'),
+    inactiveSection: document.getElementById('inactive-section'),
+    desktopInactiveSection: document.getElementById('desktop-inactive-section'),
+    inactiveCount: document.getElementById('inactive-count'),
+    desktopInactiveCount: document.getElementById('desktop-inactive-count'),
+    principalsList: document.getElementById('principals-list'),
+    desktopPrincipalsList: document.getElementById('desktop-principals-list'),
+
+    totalProperties: document.getElementById('total-properties'),
+    totalBusinesses: document.getElementById('total-businesses'),
+    totalPrincipals: document.getElementById('total-principals'),
+    totalValue: document.getElementById('total-value'),
+    totalAppraisedValue: document.getElementById('total-appraised-value'),
+
+    cityFiltersContainer: document.getElementById('city-filters-container'),
+    cityFilters: document.getElementById('city-filters'),
+    entityFilterStatus: document.getElementById('entity-filter-status'),
+    mobileEntityFilterStatus: document.getElementById('mobile-entity-filter-status'),
+    aiDigestBtn: document.getElementById('ai-digest-btn'),
+
+    reportModal: document.getElementById('report-modal'),
+    reportModalBody: document.getElementById('report-modal-body'),
+    minimizedReport: document.getElementById('minimized-report'),
+
+    detailModal: document.getElementById('detail-modal'),
+    aboutModal: document.getElementById('about-modal'),
+    modalTitle: document.getElementById('modal-title'),
+    modalSubtitle: document.getElementById('modal-subtitle'),
+    modalBody: document.getElementById('modal-body'),
+
+    searchBar: document.getElementById('search-bar'),
+    mobileSearchBar: document.getElementById('mobile-search-bar'),
+    searchInput: document.getElementById('search-input'),
+    mobileSearchInput: document.getElementById('mobile-search-input'),
+    filterInput: document.getElementById('filter-input'),
+    mobileFilterInput: document.getElementById('mobile-filter-input'),
+
+    homeInsights: document.getElementById('home-insights'),
+    insightsToggleRow: document.getElementById('insights-toggle-row'),
+    insightsGroups: document.getElementById('insights-groups'),
+    getStartedBanner: document.getElementById('get-started-banner'),
+    clickCue: document.getElementById('click-cue'),
+
+    startOverBtn: document.getElementById('start-over-btn'),
+    mobileTabNav: document.getElementById('mobile-tab-nav')
+  };
+
+  // --- Utils ---
+  const formatCurrency = (v) => Number(v) ? '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 }) : 'N/A';
+  const formatValue = (key, value) => {
+    if (value == null || (typeof value === 'string' && value.trim()==='')) return 'N/A';
+    if (key.includes('value') || key.includes('amount')) return formatCurrency(value);
+    if (key.includes('date')) { const d = new Date(value); return isNaN(d) ? value : d.toLocaleDateString(); }
+    return value;
+  };
+  function normalizeForMatch(name){
+    if(!name) return '';
+    let n = name.toUpperCase().replace(/[,.'"`"&]/g,'').replace(/\s+/g,' ').trim();
+    const suffixes = [' LLC',' L L C',' LLP',' L L P',' INC',' CORP',' LP',' LTD',' COMPANY',' PROPERTIES',' REALTY',' HOLDINGS',' MANAGEMENT'];
+    for(const s of suffixes){ if(n.endsWith(s)){ n = n.slice(0, -s.length).trim(); break; } }
+    return n;
+  }
+  
+  // --- Rendering ---
+  function renderEntityLists(){
+    const entities = Array.from(allEntities.values());
+    const allBusinesses = entities.filter(e=>e.type==='business');
+
+    const activeBiz = allBusinesses.filter(b=>b.status && b.status.toUpperCase()==='ACTIVE');
+    const inactiveBiz = allBusinesses.filter(b=>!b.status || b.status.toUpperCase()!=='ACTIVE');
+
+    activeBiz.sort((a,b)=>a.name.localeCompare(b.name));
+    inactiveBiz.sort((a,b)=>a.name.localeCompare(b.name));
+
+    const renderBusiness = (e)=>{
+      const statusClass = (e.status || 'unknown').toLowerCase();
+      const meta = e.details?.business_address || e.details?.business_city || 'No address';
+      const eDetails = JSON.stringify(e).replace(/'/g,"\\'");
+      const safeId = String(e.id).replace(/'/g,"\\'");
+      const key = `${e.type}_${e.id}`;
+      return `<div class="entity-item" id="entity-dom-${key}">
+                <div class="entity-filter-area" onclick="filterByEntity('${e.type}', '${safeId}')" title="Filter properties by this entity">
+                  <div class="entity-name">${e.name}</div>
+                  <div class="entity-meta">${meta}</div>
+                  <div class="entity-badges">
+                    <span class="status-badge ${statusClass}">${e.status || 'UNKNOWN'}</span>
+                    <span class="entity-badge property-badge" id="propbadge-${e.type}-${e.id}" style="display:none;"></span>
+                  </div>
+                </div>
+                <div class="entity-details-btn" onclick='showEntityDetails(${eDetails})' title="Show details">ℹ️</div>
+              </div>`;
+    };
+
+    // Update all business lists (mobile and desktop)
+    const activeBusinessHtml = activeBiz.map(renderBusiness).join('');
+    const inactiveBusinessHtml = inactiveBiz.map(renderBusiness).join('');
+    
+    if (DOM.activeBusinessesList) DOM.activeBusinessesList.innerHTML = activeBusinessHtml;
+    if (DOM.desktopActiveBusinessesList) DOM.desktopActiveBusinessesList.innerHTML = activeBusinessHtml;
+    
+    // Handle inactive businesses
+    if (inactiveBiz.length > 0) {
+      if (DOM.inactiveSection) DOM.inactiveSection.style.display = 'block';
+      if (DOM.desktopInactiveSection) DOM.desktopInactiveSection.style.display = 'block';
+      if (DOM.inactiveCount) DOM.inactiveCount.textContent = `${inactiveBiz.length} Inactive`;
+      if (DOM.desktopInactiveCount) DOM.desktopInactiveCount.textContent = `${inactiveBiz.length} Inactive`;
+      if (DOM.inactiveBusinessesList) DOM.inactiveBusinessesList.innerHTML = inactiveBusinessHtml;
+      if (DOM.desktopInactiveBusinessesList) DOM.desktopInactiveBusinessesList.innerHTML = inactiveBusinessHtml;
+    } else {
+      if (DOM.inactiveSection) DOM.inactiveSection.style.display = 'none';
+      if (DOM.desktopInactiveSection) DOM.desktopInactiveSection.style.display = 'none';
+    }
+
+    renderPrincipalLists();
+  }
+  
+  function renderPrincipalLists() {
+    const entities = Array.from(allEntities.values());
+    let principals = entities.filter(e => e.type === 'principal');
+
+    // Apply principal filter
+    if (currentPrincipalFilter === 'human') {
+      principals = principals.filter(p => isPrincipalHuman(p.name));
+    } else if (currentPrincipalFilter === 'entity') {
+      principals = principals.filter(p => !isPrincipalHuman(p.name));
+    }
+
+    const principalLinkCounts = new Map();
+    principals.forEach(p => {
+      const key = `principal_${p.id}`;
+      const count = allLinks.principal_to_business?.filter(l => l.source === key).length || 0;
+      principalLinkCounts.set(p.id, count);
+    });
+    
+    // Sort by link count descending
+    principals.sort((a, b) => (principalLinkCounts.get(b.id) || 0) - (principalLinkCounts.get(a.id) || 0));
+
+    const renderPrincipal = (p) => {
+      const pDetails = JSON.stringify(p).replace(/'/g, "\\'");
+      const safeId = String(p.id).replace(/'/g, "\\'");
+      const key = `${p.type}_${p.id}`;
+      const count = principalLinkCounts.get(p.id) || 0;
+      const badge = count > 0 ? `<span class="entity-badge link-badge">${count} linked ${count === 1 ? 'business' : 'businesses'}</span>` : '';
+      const humanIndicator = isPrincipalHuman(p.name) ? '👤' : '🏢';
+      
+      return `<div class="entity-item" id="entity-dom-${key}">
+                <div class="entity-filter-area" onclick="filterByEntity('${p.type}', '${safeId}')" title="Filter properties by this entity">
+                  <div class="entity-name">${humanIndicator} ${p.name}</div>
+                  <div class="entity-badges">${badge}</div>
+                </div>
+                <div class="entity-details-btn" onclick='showEntityDetails(${pDetails})' title="Show details">ℹ️</div>
+              </div>`;
+    };
+
+    // Update both desktop and mobile lists
+    if (DOM.principalsList) DOM.principalsList.innerHTML = principals.map(renderPrincipal).join('');
+    if (DOM.desktopPrincipalsList) DOM.desktopPrincipalsList.innerHTML = principals.map(renderPrincipal).join('');
+  }
+
+  function renderStatsAndBadges(){
+    const allBiz = Array.from(allEntities.values()).filter(e=>e.type==='business');
+    const counts = new Map();
+    for(const p of allProperties){
+      if(p.owner){ const n = normalizeForMatch(p.owner); counts.set(n, (counts.get(n)||0)+1); }
+    }
+    allBiz.forEach(b=>{
+      const n = normalizeForMatch(b.name);
+      const c = counts.get(n) || 0;
+      const badge = document.getElementById(`propbadge-business-${b.id}`);
+      if(badge){
+        if(c > 0){
+          badge.textContent = `${c} ${c === 1 ? 'Property' : 'Properties'}`;
+          badge.style.display = 'inline-block';
+        } else {
+          badge.style.display = 'none';
+        }
+      }
+    });
+  }
+
+  // --- API ---
+  async function apiRequest(endpoint, options={}){
+    const res = await fetch(`/api/${endpoint}`, options);
+    if(!res.ok){
+      let detail = `HTTP ${res.status}`; try{ const data = await res.json(); detail = data.detail || detail; }catch(_){}
+      showError(`API Request Failed: ${detail}`); throw new Error(detail);
+    }
+    if(res.status === 204) return null;
+    const ct = res.headers.get('content-type') || '';
+    return ct.includes('application/json') ? res.json() : res.text();
+  }
+
+  // --- Insights caching ---
+  function getCachedInsights(){
+    try{
+      const raw = localStorage.getItem(INSIGHTS_CACHE_KEY);
+      if(!raw) return null;
+      const {timestamp, reports} = JSON.parse(raw);
+      if(!timestamp || !reports) return null;
+      if(Date.now() - timestamp > INSIGHTS_CACHE_TTL_MS) return null;
+      return reports;
+    }catch(_){ return null; }
+  }
+  function setCachedInsights(reports){
+    try{ localStorage.setItem(INSIGHTS_CACHE_KEY, JSON.stringify({timestamp: Date.now(), reports})); }catch(_){}
+  }
+  async function loadInsightsOnce(){
+    const cached = getCachedInsights();
+    if (cached){ 
+        insightsIndex = cached;
+        return; 
+    }
+    const reports = await apiRequest('insights');
+    insightsIndex = reports || {};
+    setCachedInsights(insightsIndex);
+  }
+
+  // --- Home Insights rendering ---
+  function renderHomeInsightsToggles(){
+    const keys = Object.keys(insightsIndex); if(!keys.length){ DOM.insightsToggleRow.innerHTML = ''; return; }
+    const ordered = ['STATEWIDE', ...keys.filter(k=>k!=='STATEWIDE').sort()];
+    DOM.insightsToggleRow.innerHTML = ordered.map(k=>{
+      const active = (k===activeInsightsKey) ? 'active' : '';
+      const label = (k==='STATEWIDE') ? 'Statewide' : k.split(' ').map(w=>w[0]+w.slice(1).toLowerCase()).join(' ');
+      return `<button class="toggle-btn ${active}" onclick="setInsightsScope('${k.replace(/'/g,"\\'")}')">${label}</button>`;
+    }).join('');
+  }
+
+  function renderHomeInsightsList(){
+    const group = insightsIndex[activeInsightsKey];
+    if(!group || group.length === 0){ DOM.insightsGroups.innerHTML = `<div class="notice-message">No insights available for this area.</div>`; return; }
+    const itemsHtml = group.map(item=>{
+      const safeId = (item.entity_id||'').replace(/'/g,"\\'");
+      const safeName = (item.entity_name||'').replace(/'/g,"\\'");
+      const safeType = (item.entity_type||'').replace(/'/g,"\\'");
+      const displayName = item.entity_name || 'Unknown';
+
+      const principalBadges = (item.principals && item.principals.length)
+        ? item.principals.map(p=>{
+            const state = (p.state || '').toUpperCase();
+            const out = state && state !== 'CT';
+            return `<span class="badge">${p.name}${state ? `<span class="sub-badge ${out ? 'out' : 'in'}">${state}</span>` : ''}</span>`;
+          }).join(' ')
+        : '';
+
+      return `<div class="insight-item" onclick="loadNetworkFromInsight({id:'${safeId}',name:'${safeName}'}, '${safeType}')">
+                <span class="insight-name">${displayName} ${principalBadges}</span>
+                <span class="insight-value">${item.value} Properties</span>
+              </div>`;
+    }).join('');
+    DOM.insightsGroups.innerHTML = `
+      <div class="insight-item-group">
+        <div class="insight-title">Top Networks: ${activeInsightsKey}</div>
+        ${itemsHtml}
+      </div>`;
+  }
+
+  function setInsightsScope(key){ activeInsightsKey = key; renderHomeInsightsToggles(); renderHomeInsightsList(); }
+
+  async function showHomeInsights(){
+    try{
+      showLoader(true,'Fetching insights...');
+      await loadInsightsOnce();
+      activeInsightsKey = insightsIndex['STATEWIDE'] ? 'STATEWIDE' : Object.keys(insightsIndex)[0] || null;
+      renderHomeInsightsToggles();
+      renderHomeInsightsList();
+      showClickCueOnce();
+      showGetStartedBanner();
+      DOM.homeInsights.style.display = 'block';
+      DOM.selectionSection.style.display = 'none';
+    }catch(_){
+      DOM.homeInsights.style.display = 'block';
+      DOM.insightsGroups.innerHTML = `<div class="notice-message">No insights found.</div>`;
+    }finally{ showLoader(false); }
+  }
+
+  // One-time cue/banner helpers
+  const CLICK_CUE_KEY = 'seen_click_cue_v1';
+  function showClickCueOnce(){ if (localStorage.getItem(CLICK_CUE_KEY) === '1') return; DOM.clickCue.style.display = 'inline-flex'; }
+  function hideClickCue(){ DOM.clickCue.style.display = 'none'; localStorage.setItem(CLICK_CUE_KEY, '1'); }
+  function showGetStartedBanner(){ if(DOM.getStartedBanner) DOM.getStartedBanner.style.display = 'flex'; }
+  function hideGetStartedBanner(){ if(DOM.getStartedBanner) DOM.getStartedBanner.style.display = 'none'; }
+  
+  // --- Responsive Utilities ---
+  function isMobile() {
+    return window.innerWidth <= 800;
+  }
+
+  function updateResponsiveElements() {
+    const mobile = isMobile();
+    
+    DOM.mobileTabNav.style.display = mobile ? 'block' : 'none';
+    
+    const desktopContent = document.querySelector('.desktop-network-content');
+    if (desktopContent) {
+      desktopContent.style.display = mobile ? 'none' : 'block';
+    }
+    
+    document.querySelectorAll('.mobile-tab-content').forEach(tab => {
+      if (mobile) {
+        tab.style.display = tab.id === `mobile-${currentMobileTab}-tab` ? 'block' : 'none';
+      } else {
+        tab.style.display = 'none';
+      }
+    });
+    
+    document.getElementById('table-panel').style.display = mobile ? 'none' : 'flex';
+  }
+
+  function switchMobileTab(tab) {
+    currentMobileTab = tab;
+    
+    document.querySelectorAll('.mobile-tab-btn').forEach(btn => btn.classList.remove('active'));
+    document.querySelector(`.mobile-tab-btn[onclick*="${tab}"]`).classList.add('active');
+    
+    document.querySelectorAll('.mobile-tab-content').forEach(content => content.classList.remove('active'));
+    document.getElementById(`mobile-${tab}-tab`).classList.add('active');
+    
+    updateResponsiveElements();
+  }
+
+  function isPrincipalHuman(name) {
+    if (!name) return false;
+    const upperName = name.toUpperCase();
+    const entityKeywords = ['LLC', 'INC', 'CORP', 'COMPANY', 'TRUST', 'ESTATE', 'PARTNERSHIP', 'LP', 'LLP', 'FOUNDATION', 'ASSOCIATION', 'HOLDINGS', 'VENTURES', 'PROPERTIES', 'REALTY', 'MANAGEMENT'];
+    if (entityKeywords.some(keyword => upperName.includes(keyword))) {
+      return false;
+    }
+    const parts = name.trim().split(/\s+/);
+    if (parts.length >= 2 && parts.length <= 4) {
+      if (!/\d/.test(name) && !/[&@#$%]/.test(name)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function filterPrincipals(filter) {
+    currentPrincipalFilter = filter;
+    document.querySelectorAll('.principal-subtab').forEach(btn => btn.classList.remove('active'));
+    document.querySelectorAll(`.principal-subtab[onclick*="${filter}"]`).forEach(btn => btn.classList.add('active'));
+    renderPrincipalLists();
+  }
+
+  // --- Mobile Search ---
+  function handleMobileEnterKey(e) {
+    if (e.key === 'Enter') performMobileSearch();
+  }
+
+  function performMobileSearch() {
+    const term = DOM.mobileSearchInput.value.trim();
+    DOM.searchInput.value = term;
+    performSearch();
+  }
+  // --- Search & Selection ---
+  async function performSearch(){
+    hideGetStartedBanner(); hideClickCue();
+    const term = DOM.searchInput.value.trim();
+    if (term.length < 3) return showError("Please enter at least 3 characters.");
+    DOM.homeInsights.style.display = 'none';
+    DOM.startOverBtn.style.display = 'inline-block';
+    clearError();
+    DOM.selectionSection.style.display = 'none';
+
+    showLoader(true,'Searching for matching entities...');
+    try{
+      const results = await apiRequest(`search?type=${currentSearchType}&term=${encodeURIComponent(term)}`);
+      if(!results || results.length===0) return showError("No results found.");
+      displaySelection(results);
+    }catch(_){/* handled already */}finally{ showLoader(false); }
+  }
+
+  function displaySelection(results){
+    DOM.selectionTitle.textContent = `Found ${results.length} results. Please select one:`;
+    DOM.selectionList.innerHTML = results.map(item=>{
+      const safeId = String(item.id).replace(/'/g,"\\'");
+      const safeName = String(item.name).replace(/'/g,"\\'");
+      const contextHTML = item.context ? `<div class="selection-item-subtitle" style="color:var(--text-muted);font-size:.9rem">${item.context}</div>` : '';
+      const networkBadge = item.network_id ? `<span class="entity-badge" style="background:#6d28d9;color:#fff;margin-top:5px;">Part of Network #${item.network_id}</span>` : '';
+      return `<div class="selection-item" style="padding:12px;margin-bottom:8px;background:#f8fafc;border:1px solid var(--border);border-radius:10px;cursor:pointer"
+                 onclick="startNetworkLoad({id:'${safeId}',name:'${safeName}'}, '${item.type}')">
+                <div class="selection-item-title" style="font-weight:800">${item.name}</div>
+                ${contextHTML}
+                ${networkBadge}
+              </div>`;
+    }).join('');
+    DOM.selectionSection.style.display = 'block';
+  }
+
+  function loadNetworkFromInsight(entityInfo, entityType){
+    hideGetStartedBanner(); hideClickCue();
+    DOM.homeInsights.style.display = 'none';
+    DOM.startOverBtn.style.display = 'inline-block';
+    resetSearch(false);
+    startNetworkLoad(entityInfo, entityType);
+  }
+
+  // --- Network load (stream) ---
+  async function startNetworkLoad(startEntity, startType){
+    resetSearch(false);
+    // Hide the search bar while in a loaded network
+    DOM.searchBar.style.display = 'none';
+
+    showLoader(true, `Loading network entities for ${startEntity.name}...`);
+    DOM.dashboard.classList.add('active');
+
+    allEntities.clear(); allProperties = []; allLinks = {};
+    DOM.propertyTbody.innerHTML = '';
+    DOM.startOverBtn.style.display = 'inline-block';
+
+    try{
+      const response = await fetch('/api/network/stream_load', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ entity_id:startEntity.id, entity_type:startType, entity_name:startEntity.name })
+      });
+      if(!response.ok){
+        let detail = `HTTP ${response.status}`;
+        try{ const e = await response.json(); detail = e.detail || detail; }catch(_){}
+        throw new Error(detail);
+      }
+
+      const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = '';
+      while(true){
+        const {value, done} = await reader.read(); if(done) break;
+        buffer += decoder.decode(value, {stream:true});
+        const lines = buffer.split('\n'); buffer = lines.pop();
+        for(const line of lines){
+          if(!line.trim()) continue;
+          try{
+            const chunk = JSON.parse(line);
+            if (chunk.type === 'entities'){
+              showLoader(true,'Loading properties...');
+              processEntityChunk(chunk.data.entities); allLinks = chunk.data.links || {}; renderEntityLists();
+            } else if (chunk.type === 'properties'){
+              allProperties.push(...chunk.data); appendPropertiesToTable(chunk.data);
+              showLoader(true, `Loading properties... (${allProperties.length} found)`);
+            } else if (chunk.type === 'done'){
+              showLoader(false);
+              renderStatsAndBadges(); updateCityFilters(); checkIsolatedNotice(startEntity, startType);
+              loadCachedReportsCount(); DOM.aiDigestBtn.style.display = 'block';
+              return;
+            } else if (chunk.type === 'error'){ throw new Error(chunk.data); }
+          }catch(e){ console.error('Error parsing stream chunk:', e, 'Chunk:', line); }
+        }
+      }
+    }catch(error){
+      showError(`Failed to load network: ${error.message}`); showLoader(false);
+    }
+  }
+
+  function processEntityChunk(entities){ (entities||[]).forEach(e=>{ const k = `${e.type}_${e.id}`; if(!allEntities.has(k)) allEntities.set(k, e); }); }
+
+  function appendPropertiesToTable(properties){
+    const html = properties.map(p=>{
+      const mapQuery = `${p.address||''}, ${p.city||''}`;
+      const assessed = formatCurrency(p.details?.assessed_value);
+      const appraised = formatCurrency(p.details?.appraised_value);
+      const propDetails = JSON.stringify(p.details || {}).replace(/'/g,"\\'");
+      return `<tr onclick='showPropertyDetails(${propDetails})'>
+                <td>${p.address || 'N/A'}</td>
+                <td>${p.city || 'N/A'}</td>
+                <td>${p.owner || 'N/A'}</td>
+                <td>${assessed} / ${appraised}</td>
+                <td><a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mapQuery)}" target="_blank" class="map-link" onclick="event.stopPropagation()">🗺️</a></td>
+              </tr>`;
+    }).join('');
+    DOM.propertyTbody.insertAdjacentHTML('beforeend', html);
+  }
+
+  function renderEntityLists(){
+    const entities = Array.from(allEntities.values());
+    const allBusinesses = entities.filter(e=>e.type==='business');
+    let principals = entities.filter(e=>e.type==='principal');
+
+    const activeBiz = allBusinesses.filter(b=>b.status && b.status.toUpperCase()==='ACTIVE');
+    const inactiveBiz = allBusinesses.filter(b=>!b.status || b.status.toUpperCase()!=='ACTIVE');
+
+    activeBiz.sort((a,b)=>a.name.localeCompare(b.name));
+    inactiveBiz.sort((a,b)=>a.name.localeCompare(b.name));
+
+    const renderBusiness = (e)=>{
+      const statusClass = (e.status || 'unknown').toLowerCase();
+      const meta = e.details?.business_address || e.details?.business_city || 'No address';
+      const eDetails = JSON.stringify(e).replace(/'/g,"\\'");
+      const safeId = String(e.id).replace(/'/g,"\\'");
+      const key = `${e.type}_${e.id}`;
+      return `<div class="entity-item" id="entity-dom-${key}">
+                <div class="entity-filter-area" onclick="filterByEntity('${e.type}', '${safeId}')" title="Filter properties by this entity">
+                  <div class="entity-name">${e.name}</div>
+                  <div class="entity-meta">${meta}</div>
+                  <div class="entity-badges">
+                    <span class="status-badge ${statusClass}">${e.status || 'UNKNOWN'}</span>
+                    <span class="entity-badge property-badge" id="propbadge-${e.type}-${e.id}" style="display:none;"></span>
+                  </div>
+                </div>
+                <div class="entity-details-btn" onclick='showEntityDetails(${eDetails})' title="Show details">ℹ️</div>
+              </div>`;
+    };
+
+    DOM.activeBusinessesList.innerHTML = activeBiz.map(renderBusiness).join('');
+    if (inactiveBiz.length>0){
+      DOM.inactiveSection.style.display = 'block';
+      DOM.inactiveCount.textContent = `${inactiveBiz.length} Inactive`;
+      DOM.inactiveBusinessesList.innerHTML = inactiveBiz.map(renderBusiness).join('');
+    } else { DOM.inactiveSection.style.display = 'none'; }
+
+    const principalLinkCounts = new Map();
+    principals.forEach(p=>{
+      const key = `principal_${p.id}`;
+      const count = allLinks.principal_to_business?.filter(l=>l.source===key).length || 0;
+      principalLinkCounts.set(p.id, count);
+    });
+    principals.sort((a,b)=>(principalLinkCounts.get(b.id)||0)-(principalLinkCounts.get(a.id)||0));
+
+    DOM.principalsList.innerHTML = principals.map(p=>{
+      const pDetails = JSON.stringify(p).replace(/'/g,"\\'");
+      const safeId = String(p.id).replace(/'/g,"\\'");
+      const key = `${p.type}_${p.id}`;
+      const count = principalLinkCounts.get(p.id) || 0;
+      const badge = count>0 ? `<span class="entity-badge link-badge">${count} linked ${count===1?'business':'businesses'}</span>` : '';
+      return `<div class="entity-item" id="entity-dom-${key}">
+                <div class="entity-filter-area" onclick="filterByEntity('${p.type}', '${safeId}')" title="Filter properties by this entity">
+                  <div class="entity-name">${p.name}</div>
+                  <div class="entity-badges">${badge}</div>
+                </div>
+                <div class="entity-details-btn" onclick='showEntityDetails(${pDetails})' title="Show details">ℹ️</div>
+              </div>`;
+    }).join('');
+  }
+
+  function renderStatsAndBadges(){
+    const allBiz = Array.from(allEntities.values()).filter(e=>e.type==='business');
+    const counts = new Map();
+    for(const p of allProperties){
+      if(p.owner){ const n = normalizeForMatch(p.owner); counts.set(n, (counts.get(n)||0)+1); }
+    }
+    allBiz.forEach(b=>{
+      const n = normalizeForMatch(b.name); const c = counts.get(n)||0; b.propertyCount = c;
+      if(c>0){ const badge = document.getElementById(`propbadge-${b.type}-${b.id}`); if(badge){ badge.textContent = `${c} properties`; badge.style.display='inline-block'; } }
+    });
+
+    const reSort = (container)=>{
+      Array.from(container.children).sort((a,b)=>{
+        const getC = (el)=>{ try{ const key = el.id.replace('entity-dom-',''); const biz = allEntities.get(key); return biz?.propertyCount || 0; }catch(_) {return 0;} };
+        return getC(b) - getC(a);
+      }).forEach(n=>container.appendChild(n));
+    };
+    reSort(DOM.activeBusinessesList); reSort(DOM.inactiveBusinessesList);
+
+    DOM.totalProperties.textContent = allProperties.length.toLocaleString();
+    DOM.totalBusinesses.textContent = allBiz.length;
+    DOM.totalPrincipals.textContent = Array.from(allEntities.values()).filter(e=>e.type==='principal').length.toLocaleString();
+    const totalValue = allProperties.reduce((s,p)=>s+(Number(p.details?.assessed_value)||0),0);
+    DOM.totalValue.textContent = formatCurrency(totalValue);
+    const totalAppraised = allProperties.reduce((s,p)=>s+(Number(p.details?.appraised_value)||0),0);
+    DOM.totalAppraisedValue.textContent = formatCurrency(totalAppraised);
+  }
+
+  function checkIsolatedNotice(startEntity, startType){
+    if (allEntities.size <= 1){
+      let notice = `<strong>Notice:</strong> This entity is not part of a larger pre-calculated network.`;
+      if (startType==='principal' && allProperties.length>0){
+        notice = `<strong>Notice:</strong> ${startEntity.name} is not associated with any businesses in the registry. Showing properties owned directly under this name.`;
+        document.getElementById('network-panel').style.display='none';
+        document.querySelector('.content-grid').style.gridTemplateColumns='1fr';
+      }
+      DOM.networkNoticeInline.innerHTML = `<div class="notice-message">${notice}</div>`; DOM.networkNoticeInline.className='';
+    } else {
+      DOM.networkNoticeInline.innerHTML = `Loading complete`; DOM.networkNoticeInline.className='notice-inline';
+    }
+  }
+
+  // --- Modals ---
+  function showEntityDetails(entity){
+    DOM.modalTitle.textContent = entity.name;
+    DOM.modalSubtitle.textContent = entity.type.charAt(0).toUpperCase()+entity.type.slice(1);
+    let body = '<div class="detail-section"><h4>Details</h4>';
+    if(entity.details && Object.keys(entity.details).length>0){
+      Object.entries(entity.details).forEach(([k,v])=>{
+        const val = formatValue(k,v); if(val!=='N/A') body += `<div class="detail-item"><span class="detail-label">${k.replace(/_/g,' ')}:</span><span>${val}</span></div>`;
+      });
+    } else { body += `<p>No registry details available.</p>`; }
+    body += '</div>';
+    DOM.modalBody.innerHTML = body;
+    DOM.detailModal.classList.add('active'); DOM.detailModal.style.display = 'flex';
+  }
+  function showPropertyDetails(details){
+    document.getElementById('modal-title').textContent = details.location || 'Property Details';
+    document.getElementById('modal-subtitle').textContent = details.property_city || '';
+    let body = '<div class="detail-section"><h4>Details</h4>';
+    Object.entries(details).forEach(([k,v])=>{
+      const val = formatValue(k,v); if(val!=='N/A') body += `<div class="detail-item"><span class="detail-label">${k.replace(/_/g,' ')}:</span><span>${val}</span></div>`;
+    });
+    document.getElementById('modal-body').innerHTML = body + '</div>';
+    DOM.detailModal.classList.add('active'); DOM.detailModal.style.display = 'flex';
+  }
+  function closeModal(){ DOM.detailModal.classList.remove('active'); DOM.detailModal.style.display = 'none'; }
+  function openAboutModal(){ DOM.aboutModal.classList.add('active'); DOM.aboutModal.style.display = 'flex'; }
+  function closeAboutModal(){ DOM.aboutModal.classList.remove('active'); DOM.aboutModal.style.display = 'none'; }
+  function closeModalOnBackdrop(e){ if(e.target.classList.contains('modal')){ e.target.classList.remove('active'); e.target.style.display = 'none'; } }
+
+  // --- Table & filters ---
+  function updatePropertyTable(){
+    let rows = allProperties;
+    if(currentCityFilter) rows = rows.filter(p=>p.city && p.city.toUpperCase()===currentCityFilter);
+    if(currentEntityFilter){
+      const ent = currentEntityFilter; const names = new Set([normalizeForMatch(ent.name)]);
+      if(ent.type==='principal' && allLinks.principal_to_business){
+        const eKey = `${ent.type}_${ent.id}`;
+        allLinks.principal_to_business.forEach(l=>{ if(l.source===eKey){ const b = allEntities.get(l.target); if(b) names.add(normalizeForMatch(b.name)); }});
+      }
+      rows = rows.filter(p=>p.owner && names.has(normalizeForMatch(p.owner)));
+    }
+    DOM.propertyTbody.innerHTML = rows.map(p=>{
+      const mapQuery = `${p.address||''}, ${p.city||''}`;
+      const assessed = formatCurrency(p.details?.assessed_value);
+      const appraised = formatCurrency(p.details?.appraised_value);
+      const propDetails = JSON.stringify(p.details || {}).replace(/'/g,"\\'");
+      return `<tr onclick='showPropertyDetails(${propDetails})'>
+                <td>${p.address || 'N/A'}</td>
+                <td>${p.city || 'N/A'}</td>
+                <td>${p.owner || 'N/A'}</td>
+                <td>${assessed} / ${appraised}</td>
+                <td><a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mapQuery)}" target="_blank" class="map-link" onclick="event.stopPropagation()">🗺️</a></td>
+              </tr>`;
+    }).join('');
+  }
+
+  function updateCityFilters(){
+    if(allProperties.length===0){ DOM.cityFiltersContainer.style.display='none'; return; }
+    const counts = {};
+    allProperties.forEach(p=>{ const c = p.city?.toUpperCase() || 'UNKNOWN'; counts[c] = (counts[c]||0)+1; });
+    const sorted = Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,10);
+    let html = `<button class="city-btn active" onclick="filterByCity(null, this)">
+                  <div class="city-count">${allProperties.length}</div>
+                  <div class="city-name">All Cities</div>
+                </button>`;
+    sorted.forEach(([city, count])=>{
+      const disp = city.split(' ').map(w=>w[0]+w.slice(1).toLowerCase()).join(' ');
+      html += `<button class="city-btn" onclick="filterByCity('${city}', this)">
+                 <div class="city-count">${count}</div>
+                 <div class="city-name">${disp}</div>
+               </button>`;
+    });
+    DOM.cityFilters.innerHTML = html; DOM.cityFiltersContainer.style.display='block';
+  }
+
+  function filterByCity(city, btn){
+    clearCityFilter(false); currentCityFilter = city;
+    if(btn) btn.classList.add('active'); clearEntityFilter(false); updatePropertyTable();
+  }
+  function clearCityFilter(update=true){
+    currentCityFilter = null;
+    document.querySelectorAll('#city-filters button').forEach(b=>b.classList.remove('active'));
+    const first = document.querySelector('#city-filters button'); if(first) first.classList.add('active');
+    if(update) updatePropertyTable();
+  }
+  function filterByEntity(type, id){
+    const key = `${type}_${id}`; currentEntityFilter = allEntities.get(key); if(!currentEntityFilter) return;
+    document.querySelectorAll('.entity-item.active-filter').forEach(el=>el.classList.remove('active-filter'));
+    const el = document.getElementById(`entity-dom-${key}`); if(el) el.classList.add('active-filter');
+    DOM.entityFilterStatus.innerHTML = `Filtering by: <strong>${currentEntityFilter.name}</strong> <button onclick="clearEntityFilter(true)">Show All</button>`;
+    DOM.entityFilterStatus.style.display='inline-block'; updatePropertyTable();
+  }
+  function clearEntityFilter(update=true){
+    currentEntityFilter = null;
+    document.querySelectorAll('.entity-item.active-filter').forEach(el=>el.classList.remove('active-filter'));
+    DOM.entityFilterStatus.style.display='none'; if(update) updatePropertyTable();
+  }
+  function sortTable(col){
+    const rows = Array.from(DOM.propertyTbody.querySelectorAll('tr'));
+    const asc = !DOM.propertyTbody.dataset.sortAsc || DOM.propertyTbody.dataset.sortAsc==='false';
+    rows.sort((a,b)=>{
+      const ta = (a.children[col].innerText||'').toUpperCase();
+      const tb = (b.children[col].innerText||'').toUpperCase();
+      if(ta<tb) return asc?-1:1; if(ta>tb) return asc?1:-1; return 0;
+    });
+    DOM.propertyTbody.innerHTML=''; rows.forEach(r=>DOM.propertyTbody.appendChild(r));
+    DOM.propertyTbody.dataset.sortAsc = asc ? 'true' : 'false';
+  }
+  function filterProperties(){
+    const q = DOM.filterInput.value.toLowerCase();
+    Array.from(DOM.propertyTbody.querySelectorAll('tr')).forEach(tr=>{
+      tr.style.display = tr.innerText.toLowerCase().includes(q) ? '' : 'none';
+    });
+  }
+  function exportToCSV(){
+    const headers = ['Address','City','Owner','Assessed Value','Appraised Value'];
+    const rows = Array.from(DOM.propertyTbody.querySelectorAll('tr'))
+      .filter(tr=>tr.style.display !== 'none')
+      .map(tr=>Array.from(tr.children).slice(0,4).map(td=>`"${td.innerText.replace(/"/g,'""')}"`).join(','));
+    const csv = [headers.join(','), ...rows].join('\n');
+    const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+    const url = URL.createObjectURL(blob); const a = document.createElement('a');
+    a.href = url; a.download = `properties_${new Date().toISOString().slice(0,10)}.csv`; a.click(); URL.revokeObjectURL(url);
+  }
+
+  // Collapsible for inactive businesses
+  function toggleInactive(headerEl){
+    const content = document.getElementById('inactive-businesses-list');
+    const icon = headerEl.querySelector('.collapse-icon');
+    const open = content.style.display !== 'block';
+    content.style.display = open ? 'block' : 'none';
+    icon.textContent = open ? '▲' : '▼';
+  }
+
+  // --- Loader & errors ---
+  function showError(msg){ DOM.errorContainer.innerHTML = `<div class="error-message">${msg}</div>`; showLoader(false); }
+  function clearError(){ DOM.errorContainer.innerHTML = ''; }
+  function showLoader(show, text){ DOM.loader.style.display = show ? 'block' : 'none'; if(text) DOM.loaderText.textContent = text; }
+
+  // --- Tabs / Input ---
+  function switchTab(type){
+    currentSearchType = type;
+    document.querySelectorAll('.tab-button').forEach(b=>b.classList.remove('active'));
+    document.getElementById(`tab-${type}`).classList.add('active');
+    DOM.searchInput.placeholder = (type==='business') ? 'Enter active business name...' :
+                                  (type==='owner') ? 'Enter owner/principal name...' : 'Enter street address...';
+    DOM.searchInput.focus();
+  }
+  function handleEnterKey(e){ if(e.key==='Enter') performSearch(); }
+
+  // --- Reports ---
+  async function browseReports(){
+    resetSearch(true); DOM.homeInsights.style.display='none';
+    showLoader(true,'Loading cached reports.');
+    try{
+      const reports = await apiRequest('cached-reports');
+      DOM.selectionTitle.textContent = 'Browse Cached Reports';
+      if(!reports || reports.length===0){
+        DOM.selectionList.innerHTML = `<div class="notice-message" style="margin:0;">No cached reports found.</div>`;
+      }else{
+        const groups = new Map();
+        for(const r of reports){ if(!groups.has(r.norm_name)) groups.set(r.norm_name, []); groups.get(r.norm_name).push(r); }
+        let html = '';
+        for(const [norm, list] of groups.entries()){
+          const title = list[0].entity_name;
+          html += `<div class="insight-item-group">
+                     <div class="insight-title">${title}</div>
+                     ${list.map(rep=>{
+                        const date = new Date(rep.created_at).toLocaleString();
+                        const size = (rep.size/1024).toFixed(1);
+                        const safe = rep.entity_name.replace(/'/g,"\\'");
+                        return `<div class="insight-item" onclick="viewCachedReport('${safe}')" title="Click to view this version">
+                                  <span class="insight-name" style="font-weight:600;font-size:.88rem;">Generated: ${date}</span>
+                                  <span class="insight-value">${size} KB</span>
+                                </div>`;
+                     }).join('')}
+                   </div>`;
+        }
+        DOM.selectionList.innerHTML = html;
+      }
+      DOM.selectionSection.style.display = 'block';
+    }catch(_){ showError('Failed to load cached reports'); }finally{ showLoader(false); }
+  }
+
+  async function viewCachedReport(entityName){
+    showLoader(true,'Loading report.');
+    try{
+      const report = await apiRequest(`cached-report/${encodeURIComponent(entityName)}`);
+      const html = `
+        <div style="background:#eff6ff;padding:10px;margin-bottom:12px;border-radius:6px;border:1px solid #90cdf4;">
+          <strong>Cached Report for:</strong> ${report.entity_name}<br>
+          <strong>Generated:</strong> ${new Date(report.created_at).toLocaleString()}
+        </div>${report.report_html}`;
+      openReportModal(html);
+      DOM.selectionSection.style.display = 'none';
+    }catch(_){ showError('Failed to load report'); }finally{ showLoader(false); }
+  }
+
+  function openReportModal(html){ reportContent = html; DOM.reportModalBody.innerHTML = html; DOM.reportModal.classList.add('active'); DOM.reportModal.style.display = 'flex'; }
+  function closeReportModal(){ DOM.reportModal.classList.remove('active'); DOM.reportModal.style.display = 'none'; }
+  function minimizeReport(){ DOM.reportModal.classList.remove('active'); DOM.reportModal.style.display = 'none'; DOM.minimizedReport.classList.add('active'); }
+  function restoreReport(){ DOM.minimizedReport.classList.remove('active'); DOM.reportModal.classList.add('active'); DOM.reportModal.style.display = 'flex'; }
+  function downloadReport(){
+    if(!reportContent){ alert("No report content to download."); return; }
+    const names = Array.from(allEntities.values()).slice(0,4).map(e=>e.name).join(', ');
+    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Network Report - ${names}</title>
+      <style>body{font-family:'Inter',-apple-system,sans-serif;max-width:800px;margin:40px auto;padding:20px;line-height:1.6;}
+      h3,h4{color:#2563eb;border-bottom:2px solid #e2e8f0;padding-bottom:10px;} a{color:#2563eb;} ul{margin-bottom:15px;}
+      .metadata{background:#f1f5f9;padding:15px;border-radius:8px;margin-bottom:20px;}</style></head>
+      <body><div class="metadata"><h1>Network Investigation Report</h1>
+        <p><strong>Generated:</strong> ${new Date().toLocaleString()}</p>
+        <p><strong>Primary Entities:</strong> ${names}</p>
+        <p><strong>Total Properties:</strong> ${allProperties.length}</p>
+        <p><strong>Total Network Size:</strong> ${allEntities.size} entities</p>
+      </div>${reportContent}</body></html>`;
+    const blob = new Blob([html],{type:'text/html'}); const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = `network_report_${new Date().toISOString().slice(0,10)}.html`; a.click(); URL.revokeObjectURL(url);
+  }
+  async function loadCachedReportsCount(){ try{}catch(_){ } }
+
+  // --- Reset / Home ---
+  function resetSearch(clearInput=false){
+    clearError(); if(clearInput) DOM.searchInput.value = '';
+    DOM.selectionSection.style.display = 'none';
+    DOM.dashboard.classList.remove('active');
+    DOM.cityFiltersContainer.style.display='none';
+    DOM.propertyTbody.innerHTML = '';
+    DOM.activeBusinessesList.innerHTML = '';
+    DOM.inactiveBusinessesList.innerHTML = '';
+    DOM.principalsList.innerHTML = '';
+    DOM.inactiveSection.style.display='none';
+    DOM.aiDigestBtn.style.display='none';
+    DOM.entityFilterStatus.style.display='none';
+    currentCityFilter = null; currentEntityFilter = null;
+    DOM.startOverBtn.style.display = 'none';
+    DOM.networkNoticeInline.innerHTML = ''; // reset inline notice
+    // Show search bar again when not in a loaded network
+    DOM.searchBar.style.display = 'block';
+  }
+
+  function goHome(){
+    resetSearch(true);
+    DOM.homeInsights.style.display='block';
+    showHomeInsights();
+    window.scrollTo({top:0, behavior:'smooth'});
+  }
+
+  // Hide cue/banner when the user engages from the insights list (extra safety)
+  DOM.insightsGroups.addEventListener('click', (e)=>{
+    if (e.target.closest('.insight-item')) { hideGetStartedBanner(); hideClickCue(); }
+  });
+
+  // --- AI Digest (hook) ---
+  async function generateAiReport(){
+    try{
+      const topPrin = Array.from(allEntities.values()).find(e=>e.type==='principal');
+      const stats = {
+        total_properties: allProperties.length,
+        total_value: allProperties.reduce((s,p)=>s+(Number(p.details?.assessed_value)||0),0),
+        total_businesses: Array.from(allEntities.values()).filter(e=>e.type==='business').length,
+        total_principals: Array.from(allEntities.values()).filter(e=>e.type==='principal').length
+      };
+      const payload = {
+        business_names: Array.from(allEntities.values()).filter(e=>e.type==='business').slice(0,3).map(b=>b.name),
+        top_principal: topPrin ? topPrin.name : '',
+        network_stats: stats
+      };
+      showLoader(true,'Generating Investigative Digest...');
+      const res = await apiRequest('generate-report', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+      if(res && res.report) openReportModal(res.report);
+    }catch(_){ showError('Failed to generate report.'); }finally{ showLoader(false); }
+  }
+
+  // --- Init ---
+    window.addEventListener('resize', updateResponsiveElements);
+  document.addEventListener('DOMContentLoaded', async ()=>{ await showHomeInsights(); });
+  // --- Event Listeners ---
+  // --- Event Listeners ---
+
+</body>
+</html>

@@ -1,0 +1,8 @@
+pandas
+psycopg2-binary
+requests
+fastapi
+uvicorn[standard]
+httpx
+python-dotenv
+openai
