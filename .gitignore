@@ -1,0 +1,4 @@
+# Ignore data folder
+data/
+
+data/*
