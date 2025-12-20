@@ -5,6 +5,9 @@ import time
 import json
 import logging
 import threading
+import requests
+import hashlib
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -384,6 +387,10 @@ class PrincipalInfo(BaseModel):
     name: str
     state: Optional[str] = None
 
+class BusinessInfo(BaseModel):
+    name: str
+    state: Optional[str] = None
+
 class InsightItem(BaseModel):
     entity_id: str
     entity_name: str
@@ -393,6 +400,100 @@ class InsightItem(BaseModel):
     total_appraised_value: Optional[float] = None
     business_name: Optional[str] = None
     principals: Optional[List[PrincipalInfo]] = None
+    businesses: Optional[List[BusinessInfo]] = None
+
+
+
+# ------------------------------------------------------------
+# AI ANALYSIS
+# ------------------------------------------------------------
+@app.get("/api/ai_analysis")
+def get_ai_analysis(entity_name: str, entity_type: str):
+    """
+    1. Search Google via SerpAPI for news/context.
+    2. If OpenAI available, summarize finding.
+    """
+    if not SERPAPI_API_KEY:
+        return {"summary": "SerpAPI not configured.", "sources": [], "risk": "Unknown"}
+
+    # Construct query
+    query = f"{entity_name} Connecticut real estate"
+    if entity_type == 'business':
+        query += " business LLC"
+    else:
+        query += " landlord property owner"
+
+    # Call SerpAPI
+    try:
+        params = {
+            "q": query,
+            "api_key": SERPAPI_API_KEY,
+            "tbm": "nws", # News search
+            "num": 5
+        }
+        resp = requests.get("https://serpapi.com/search", params=params)
+        data = resp.json()
+        
+        # Fallback to web search if no news
+        if "error" in data or not data.get("news_results"):
+             params.pop("tbm")
+             resp = requests.get("https://serpapi.com/search", params=params)
+             data = resp.json()
+
+        results = data.get("news_results", []) or data.get("organic_results", [])
+        
+        snippets = []
+        sources = []
+        for r in results[:5]:
+            title = r.get("title", "")
+            snippet = r.get("snippet", "")
+            link = r.get("link", "")
+            source = r.get("source", "Web")
+            snippets.append(f"- {title}: {snippet}")
+            sources.append({"title": title, "link": link, "source": source})
+
+        if not snippets:
+            return {"summary": "No public news records found.", "sources": [], "risk": "Low"}
+
+        # Summarize with OpenAI
+        summary_text = "Found recent mentions."
+        risk_level = "Unknown"
+        
+        if openai and OPENAI_API_KEY:
+            try:
+                system_prompt = (
+                    "You are a real estate investigator. Analyze these search snippets about a landlord/entity. "
+                    "Provide a 1-2 sentence summary of their reputation and mention any legal issues or controversies. "
+                    "Classify risk as Low, Moderate, or High."
+                )
+                user_msg = f"Entity: {entity_name}\nSnippets:\n" + "\n".join(snippets)
+                
+                chat_completion = openai.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_msg}
+                    ],
+                    max_tokens=100
+                )
+                content = chat_completion.choices[0].message.content
+                summary_text = content
+                if "High" in content: risk_level = "High"
+                elif "Moderate" in content: risk_level = "Moderate"
+                else: risk_level = "Low"
+            except Exception as e:
+                logger.error(f"OpenAI error: {e}")
+                summary_text = "AI Summary unavailable. Reference sources below."
+
+        return {
+            "summary": summary_text,
+            "sources": [s['link'] for s in sources], # Simplified for frontend
+            "risk": risk_level
+        }
+
+    except Exception as e:
+        logger.error(f"Analysis failed: {e}")
+        return {"summary": "Analysis failed.", "sources": [], "risk": "Unknown"}
 
 
 # ------------------------------------------------------------
@@ -1050,6 +1151,7 @@ def _calculate_and_cache_insights(cursor, town_col: Optional[str], town_filter: 
     top_networks = cursor.fetchall()
 
     for network in top_networks:
+        # Top Principals
         cursor.execute("""
             SELECT name, state FROM (
                 SELECT DISTINCT ON(pr.name_c)
@@ -1075,6 +1177,25 @@ def _calculate_and_cache_insights(cursor, town_col: Optional[str], town_filter: 
         
         network['principals'] = principals[:3]
 
+        # Top Businesses
+        cursor.execute("""
+            SELECT name, status, business_address, state FROM (
+                SELECT DISTINCT ON(b.name)
+                    b.name,
+                    b.status,
+                    b.business_address,
+                    b.business_state as state,
+                    COUNT(*) as link_count
+                FROM entity_networks en
+                JOIN businesses b ON en.entity_id = b.id::text
+                WHERE en.network_id = %s AND en.entity_type = 'business'
+                GROUP BY b.name, b.status, b.business_address, b.business_state
+            ) as distinct_businesses
+            ORDER BY link_count DESC
+            LIMIT 3;
+        """, (network['network_id'],))
+        businesses = cursor.fetchall()
+        network['businesses'] = businesses[:3]
 
     return top_networks
 
@@ -1345,3 +1466,162 @@ def get_ai_report(entity: str, entity_type: str, report_date: Optional[str] = No
 @app.get("/api/healthz")
 def healthz():
     return {"ok": True}
+
+
+# ------------------------------------------------------------
+# Network Digest (Batch Analysis)
+# ------------------------------------------------------------
+
+class DigestItem(BaseModel):
+    name: str
+    type: str
+
+class NetworkDigestRequest(BaseModel):
+    entities: List[DigestItem]
+    force: bool = False
+
+@app.post("/api/network_digest")
+def create_network_digest(req: NetworkDigestRequest, conn=Depends(get_db_connection)):
+    # 1. Generate Stable Hash (Cache Key)
+    sorted_ents = sorted(req.entities, key=lambda x: (x.type, x.name))
+    blob = json.dumps([{"n": e.name, "t": e.type} for e in sorted_ents], sort_keys=True)
+    digest_hash = hashlib.md5(blob.encode("utf-8")).hexdigest()
+    digest_id = f"DIGEST_{digest_hash}"
+    
+    today = date.today()
+    
+    with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        if not req.force:
+            cursor.execute("""
+                SELECT * FROM ai_reports
+                WHERE entity = %s AND entity_type = 'network_digest' AND report_date = %s
+                LIMIT 1
+            """, (digest_id, today))
+            existing = cursor.fetchone()
+            if existing:
+                return existing
+
+        # 2. Perform Analysis (Parallel Web Search)
+        combined_context = []
+
+        def fetch_entity_context(ent: DigestItem):
+            if not SERPAPI_API_KEY:
+                return {"context": f"Entity: {ent.name} ({ent.type}) - SerpAPI not configured.", "sources": []}
+            
+            query = f"{ent.name} Connecticut real estate"
+            if ent.type == 'business':
+                query += " business LLC"
+            else:
+                query += " landlord property owner"
+            
+            try:
+                url = "https://serpapi.com/search"
+                params = {
+                   "q": query,
+                   "api_key": SERPAPI_API_KEY,
+                   "hl": "en",
+                   "gl": "us",
+                   "num": 3 
+                }
+                resp = requests.get(url, params=params, timeout=10)
+                data = resp.json()
+                
+                snippets = []
+                sources = []
+                if "organic_results" in data:
+                    for res in data["organic_results"]:
+                         title = res.get("title", "")
+                         snip = res.get("snippet", "")
+                         link = res.get("link", "")
+                         if title or snip:
+                             snippets.append(f"- {title}: {snip}")
+                         if link:
+                             sources.append({"title": title, "url": link})
+                
+                if snippets:
+                    return {
+                        "context": f"Entity: {ent.name} ({ent.type})\n" + "\n".join(snippets),
+                        "sources": sources
+                    }
+                else:
+                    return {"context": f"Entity: {ent.name} ({ent.type}) - No significant results.", "sources": []}
+            except Exception as e:
+                logger.error(f"Search failed for {ent.name}: {e}")
+                return {"context": f"Entity: {ent.name} ({ent.type}) - Search Error.", "sources": []}
+
+        # Execute searches in parallel
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            # Limit to processing provided entities (Frontend should limit count if needed, but we handle parallel)
+            # We'll rely on Frontend to send a reasonable number (e.g. top 10).
+            results = list(executor.map(fetch_entity_context, req.entities))
+            combined_context = [r["context"] for r in results]
+            all_sources = []
+            seen_links = set()
+            for r in results:
+                for s in r["sources"]:
+                    if s["url"] not in seen_links:
+                        all_sources.append(s)
+                        seen_links.add(s["url"])
+
+        full_text_context = "\n\n".join(combined_context)
+        
+        # 3. Summarize with OpenAI
+        final_summary = "Analysis Unavailable."
+        title = f"AI Digest - {len(req.entities)} Entities"
+        
+        if openai and OPENAI_API_KEY:
+            prompt = (
+                "You are an investigative analyst. Analyze the following web search excerpts for a group of related Property Owners and Businesses.\n\n"
+                "STRUCTURE YOUR RESPONSE AS FOLLOWS:\n"
+                "1. OVERALL SUMMARY: A concise 3-4 sentence high-level overview of the entire network's footprint and reputation.\n"
+                "2. KEY RISKS & FINDINGS: Bullet points of major issues, complaints, or legal patterns.\n"
+                "3. ENTITY BREAKDOWN: Brief notes on individual principals or businesses where specific info was found.\n\n"
+                "Focus on identifying problems, complaints, violations, poor conditions, or anything of interest to tenants/organizers.\n"
+                "Be specific. If no negative info is found, focus on the scale of the portfolio.\n\n"
+                f"Web Search Data:\n{full_text_context}\n"
+            )
+            try:
+                 # Check for v1.0+ vs older SDK
+                 if hasattr(openai, "ChatCompletion"):
+                     resp = openai.ChatCompletion.create(
+                        model="gpt-4o-mini",
+                        messages=[
+                            {"role": "system", "content": "You are a meticulous investigative analyst."},
+                            {"role": "user", "content": prompt}
+                        ],
+                        temperature=0.3,
+                        max_tokens=1500,
+                     )
+                     final_summary = resp["choices"][0]["message"]["content"].strip()
+                 else:
+                     # New style
+                     from openai import OpenAI
+                     client = OpenAI(api_key=OPENAI_API_KEY)
+                     resp = client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        messages=[
+                            {"role": "system", "content": "You are a meticulous investigative analyst."},
+                            {"role": "user", "content": prompt}
+                        ],
+                        temperature=0.3,
+                        max_tokens=1500,
+                     )
+                     final_summary = resp.choices[0].message.content.strip()
+            except Exception as e:
+                logger.error(f"OpenAI Digest Error: {e}")
+                final_summary = f"AI Synthesis Encountered an Error. Displaying raw search hits instead:\n\n{full_text_context}"
+        else:
+             final_summary = "OpenAI API Key not configured. Displaying raw web search results:\n\n" + full_text_context
+
+        # 4. Save to Cache
+        cursor.execute("""
+            INSERT INTO ai_reports (entity, entity_type, report_date, title, content, sources)
+            VALUES (%s, 'network_digest', %s, %s, %s, %s)
+            ON CONFLICT (entity, entity_type, report_date)
+            DO UPDATE SET title=EXCLUDED.title, content=EXCLUDED.content, sources=EXCLUDED.sources
+            RETURNING *
+        """, (digest_id, today, title, final_summary, json.dumps(all_sources)))
+        
+        row = cursor.fetchone()
+        conn.commit()
+        return row
