@@ -146,7 +146,7 @@ export default function NetworkAnalysisModal({ isOpen, onClose, networkData, sta
                                             <Loader className="w-4 h-4 animate-spin" />
                                             Analyzing...
                                         </>
-                                    ) : digestResult ? (
+                                    ) : digestData ? (
                                         <>
                                             <ShieldCheck className="w-4 h-4" />
                                             Analysis Complete
