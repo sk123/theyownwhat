@@ -59,6 +59,10 @@ export default function AboutModal({ isOpen, onClose }) {
                                     <span className="mt-1 w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
                                     <span><strong>Smart Search:</strong> Added instant autocomplete for businesses, owners, and addresses with real-time feedback.</span>
                                 </li>
+                                <li className="flex items-start gap-2">
+                                    <span className="mt-1 w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
+                                    <span><strong>Mobile Experience:</strong> Enhanced mobile usability with sticky tabs, page-level scrolling, and improved navigation flow.</span>
+                                </li>
                             </ul>
                         </section>
 
