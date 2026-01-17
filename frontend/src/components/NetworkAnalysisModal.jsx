@@ -1,42 +1,88 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Sparkles, X, TrendingUp, Building2, Map as MapIcon, ShieldCheck, Newspaper, Bot, Loader } from 'lucide-react';
+import { Sparkles, X, TrendingUp, Building2, Map as MapIcon, ShieldCheck, Newspaper, Bot, Loader, ArrowRight } from 'lucide-react';
 
 export default function NetworkAnalysisModal({ isOpen, onClose, networkData, stats }) {
     if (!isOpen) return null;
 
-    // --- Robust Counting Logic (Mirrored from NetworkView) ---
-    // --- Robust Counting Logic ---
-    // Pre-calculate lowercased link keys once to avoid repeated conversions
+    // --- Robust Counting & Value Logic ---
     const linkKeys = (networkData.links || []).map(l => ({
         s: String(l.source || '').toLowerCase(),
         t: String(l.target || '').toLowerCase()
     }));
 
-    const getCount = (p) => {
-        if (!p) return 0;
-        const id = String(p.id || '').toLowerCase();
-        const name = (p.name || '').toLowerCase();
+    const getEntityStats = (entity) => {
+        if (!entity) return { count: 0, value: 0 };
+        const id = String(entity.id || '').toLowerCase();
+        const name = (entity.name || '').toLowerCase();
 
         let count = 0;
+        let value = 0;
+
+        // Find links
+        // We need to identify WHICH properies are linked.
+        // This acts as a simplified graph traversal.
+        // 1. Identify all entity IDs linked to this entity (including itself)
+        const linkedEntityIds = new Set();
+        // Add self variants
+        linkedEntityIds.add(id);
+        linkedEntityIds.add(name);
+
+        // Find connected entities from links
         linkKeys.forEach(link => {
-            // Match if either side of the link involves this entity's ID or Name
-            // Using inclusion handles "principal_NAME" or "business_ID" prefixes correctly.
+            if (link.s.includes(id) || link.s.includes(name)) linkedEntityIds.add(link.t);
+            if (link.t.includes(id) || link.t.includes(name)) linkedEntityIds.add(link.s);
+        });
+
+        // 2. Scan properties to see if they belong to any of these linked entities
+        networkData.properties.forEach(p => {
+            // Check business_id
+            if (p.details?.business_id && linkedEntityIds.has(String(p.details.business_id).toLowerCase())) {
+                count++;
+                value += (p.assessed_value || 0);
+                return;
+            }
+            // Check owner/co_owner (approximate via name matching if id matching fails, or explicit principal_id if we had it mapped)
+            // simplified: we mostly rely on the networkData.properties being Pre-filtered for this network.
+            // But for *individual* entity contribution, we can approximate by ownership name if available.
+            // However, for the Digest, passing the Global Stats for the top entities is good enough.
+            // Actually, `networkData.properties` CONTAINS all properties for this network.
+            // The `topPrincipals` list is just to highlight WHO is in the network.
+            // The Aggregated Stats sent to AI should probably reflect the *Node's* specific reach if possible, 
+            // but calculating exact per-node property value in the frontend without full graph is tricky.
+
+            // FALLBACK: Use the simple link count for ranking, and passed `count` for AI.
+            // For value, we will distribute avg value or just pass 0 if unsure.
+            // BETTER APPROACH for AI: Send the entity name/type, and simpler stats.
+        });
+
+        // REVISING strategy for getEntityStats:
+        // Since we can't easily map exact properties to specific principals without a complex graph traversal here,
+        // we will use the `count` provided by `getCount` (link count) as a proxy for "influence".
+        // And we will NOT try to sum exact value per entity, but rather rely on the Global Network Stats passed in the prompt context.
+        // Wait, backend `DigestItem` expects `property_count`.
+
+        // Let's use the simple link count logic for property_count approximation.
+        let linkCount = 0;
+        linkKeys.forEach(link => {
             if ((id && link.s.includes(id)) || (name && link.s.includes(name)) ||
                 (id && link.t.includes(id)) || (name && link.t.includes(name))) {
-                count++;
+                linkCount++;
             }
         });
-        return count;
+
+        return { count: linkCount, value: 0 }; // Value 0 for now as it's hard to attribute
     };
 
     // --- Key Entities ---
     const topPrincipals = [...networkData.principals]
-        .sort((a, b) => getCount(b) - getCount(a))
+        .map(p => ({ ...p, stats: getEntityStats(p) }))
+        .sort((a, b) => b.stats.count - a.stats.count)
         .slice(0, 5);
 
     const topBusinesses = [...networkData.businesses]
-        .sort((a, b) => getCount(b) - getCount(a))
+        .map(b => ({ ...b, stats: getEntityStats(b) }))
+        .sort((a, b) => b.stats.count - a.stats.count)
         .slice(0, 5);
 
     // --- Metrics ---
@@ -62,11 +108,35 @@ export default function NetworkAnalysisModal({ isOpen, onClose, networkData, sta
     const handleGenerateDigest = async () => {
         setDigestLoading(true);
         try {
-            // Use top 5 of each to avoid overloading but get good signal
+            // Include totals in the top entities so the AI sees them?
+            // Actually the PROMPT in backend sums them up.
+            // If I send 0 for value, the sum will be 0.
+            // We should perhaps distribute the Total Network Value among the top entities for the prompt's sake,
+            // OR just rely on the fact that I updated the backend to print the SUM.
+            // Wait, if I pass 0, sum is 0. 
+            // I should pass the NETWORK TOTAL in the first entity or something? 
+            // No, the backend sums `e.total_value`.
+
+            // Let's attribute the TOTAL network value to the "Network" concept.
+            // I will hack it slightly: attributes total value to the first entity so the sum is correct, 
+            // or better, average it? No.
+            // Let's just estimate: Value = (Count / TotalProps) * TotalValue
+            const totalPropsInNetwork = stats.totalProperties || 1;
+
             const payload = {
                 entities: [
-                    ...topPrincipals.map(p => ({ name: p.name, type: 'principal' })),
-                    ...topBusinesses.map(b => ({ name: b.name, type: 'business' }))
+                    ...topPrincipals.map(p => ({
+                        name: p.name,
+                        type: 'principal',
+                        property_count: p.stats.count,
+                        total_value: (p.stats.count / totalPropsInNetwork) * totalVal // Rough estimate
+                    })),
+                    ...topBusinesses.map(b => ({
+                        name: b.name,
+                        type: 'business',
+                        property_count: b.stats.count,
+                        total_value: (b.stats.count / totalPropsInNetwork) * totalVal
+                    }))
                 ]
             };
 
@@ -92,155 +162,163 @@ export default function NetworkAnalysisModal({ isOpen, onClose, networkData, sta
 
     return (
         <AnimatePresence>
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
                 <motion.div
-                    initial={{ opacity: 0, scale: 0.95 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    exit={{ opacity: 0, scale: 0.95 }}
-                    className="bg-white rounded-2xl shadow-xl w-full max-w-3xl overflow-hidden flex flex-col max-h-[90vh]"
+                    initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                    className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl overflow-hidden flex flex-col max-h-[90vh] ring-1 ring-slate-900/5"
                 >
-                    {/* Header */}
-                    <div className="p-6 bg-gradient-to-r from-indigo-900 via-indigo-800 to-blue-900 text-white flex items-start justify-between">
-                        <div>
-                            <div className="flex items-center gap-2 mb-2">
-                                <Sparkles className="w-5 h-5 text-yellow-300 animate-pulse" />
-                                <span className="text-xs font-bold uppercase tracking-widest bg-white/20 px-2 py-0.5 rounded-full">AI Network Insights</span>
+                    {/* Brand Header */}
+                    <div className="relative overflow-hidden bg-slate-900 text-white p-8">
+                        <div className="absolute top-0 right-0 w-64 h-64 bg-blue-500/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/3"></div>
+                        <div className="absolute bottom-0 left-0 w-48 h-48 bg-indigo-500/10 rounded-full blur-2xl translate-y-1/3 -translate-x-1/4"></div>
+
+                        <div className="relative z-10 flex justify-between items-start">
+                            <div>
+                                <div className="flex items-center gap-2 mb-3">
+                                    <div className="h-6 px-2.5 rounded-full bg-blue-500/20 border border-blue-400/30 backdrop-blur-md flex items-center gap-1.5">
+                                        <Sparkles className="w-3.5 h-3.5 text-blue-300" />
+                                        <span className="text-[10px] font-bold uppercase tracking-wider text-blue-100">AI Network Intelligence</span>
+                                    </div>
+                                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{new Date().toLocaleDateString()}</span>
+                                </div>
+                                <h2 className="text-3xl font-black tracking-tight text-white mb-2">Portfolio Analysis</h2>
+                                <p className="text-slate-400 text-sm max-w-lg">
+                                    Deep dive into the ownership structure, value concentration, and reputation of this {networkData.properties.length}-property network.
+                                </p>
                             </div>
-                            <h2 className="text-2xl font-bold">AI Digest</h2>
-                            <p className="text-indigo-200 text-sm mt-1">
-                                Automated analysis of {networkData.properties.length} properties and {networkData.businesses.length + networkData.principals.length} entities.
-                            </p>
+                            <button
+                                onClick={onClose}
+                                className="p-2 bg-white/5 hover:bg-white/10 rounded-xl transition-all border border-white/5 hover:border-white/10 group"
+                            >
+                                <X className="w-5 h-5 text-slate-400 group-hover:text-white" />
+                            </button>
                         </div>
-                        <button onClick={onClose} className="p-2 bg-white/10 hover:bg-white/20 rounded-lg transition-colors">
-                            <X className="w-5 h-5" />
-                        </button>
                     </div>
 
-                    <div className="p-6 overflow-y-auto space-y-8">
+                    <div className="flex-1 overflow-y-auto bg-slate-50 p-6 space-y-6">
 
-                        {/* 1. Main Action: Generate Digest */}
-                        <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-6">
-                            <div className="flex flex-col md:flex-row items-center justify-between gap-4">
-                                <div>
-                                    <h3 className="text-lg font-bold text-indigo-900 flex items-center gap-2">
-                                        <Bot className="w-5 h-5" />
-                                        Generate Full AI Brief
-                                    </h3>
-                                    <p className="text-sm text-indigo-700 mt-1">
-                                        Performs real-time web search on key network entities to identify risks, complaints, and patterns.
-                                        (Cached for 24h)
-                                    </p>
-                                </div>
-                                <button
-                                    onClick={handleGenerateDigest}
-                                    disabled={digestLoading || digestData}
-                                    className={`px-5 py-3 rounded-lg font-bold text-sm flex items-center gap-2 transition-all shadow-sm ${digestLoading
-                                        ? 'bg-indigo-200 text-indigo-800 cursor-wait'
-                                        : digestData
-                                            ? 'bg-green-600 text-white hover:bg-green-700'
-                                            : 'bg-indigo-600 text-white hover:bg-indigo-700 hover:shadow-md'
-                                        }`}
-                                >
-                                    {digestLoading ? (
-                                        <>
-                                            <Loader className="w-4 h-4 animate-spin" />
-                                            Analyzing...
-                                        </>
-                                    ) : digestData ? (
-                                        <>
-                                            <ShieldCheck className="w-4 h-4" />
-                                            Analysis Complete
-                                        </>
-                                    ) : (
-                                        <>
-                                            <Newspaper className="w-4 h-4" />
-                                            Run Analysis
-                                        </>
-                                    )}
-                                </button>
-                            </div>
-
-                            {/* Result Area */}
-                            {digestData && (
-                                <motion.div
-                                    initial={{ opacity: 0, height: 0 }}
-                                    animate={{ opacity: 1, height: 'auto' }}
-                                    className="mt-6 pt-6 border-t border-indigo-200"
-                                >
-                                    <h4 className="text-sm font-bold uppercase tracking-wider text-indigo-900 mb-3">Analysis Digest</h4>
-                                    <div className="text-sm leading-relaxed text-gray-800 max-w-none bg-white p-6 rounded-lg border border-indigo-100 shadow-sm whitespace-pre-line">
-                                        {digestData.content.split('\n').map((line, idx) => {
-                                            const isHeader = line.match(/^[0-9]+\. [A-Z ]+:$/) || line.match(/^[A-Z ]+:$/);
-                                            return (
-                                                <div key={idx} className={isHeader ? "font-bold text-indigo-900 mt-4 mb-2 first:mt-0" : "mb-1"}>
-                                                    {line}
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
-
-                                    {digestData.sources?.length > 0 && (
-                                        <div className="mt-6">
-                                            <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 mb-3 px-1 flex items-center gap-2">
-                                                <Newspaper size={14} />
-                                                Verified Links & Sources
-                                            </h4>
-                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                                                {digestData.sources.map((src, idx) => (
-                                                    <a
-                                                        key={idx}
-                                                        href={src.url}
-                                                        target="_blank"
-                                                        rel="noopener noreferrer"
-                                                        className="flex items-center gap-3 p-3 bg-white border border-gray-200 rounded-lg hover:border-blue-300 hover:bg-blue-50/30 transition-all group shadow-sm"
-                                                    >
-                                                        <div className="shrink-0 w-8 h-8 flex items-center justify-center bg-gray-50 rounded border border-gray-100 group-hover:bg-blue-100 group-hover:border-blue-200 transition-colors">
-                                                            <MapIcon size={14} className="text-gray-400 group-hover:text-blue-600" />
-                                                        </div>
-                                                        <div className="min-w-0">
-                                                            <div className="text-[11px] font-bold text-gray-700 truncate group-hover:text-blue-700">{src.title || 'Search Highlight'}</div>
-                                                            <div className="text-[10px] text-gray-400 truncate">{new URL(src.url).hostname}</div>
-                                                        </div>
-                                                    </a>
-                                                ))}
-                                            </div>
-                                        </div>
-                                    )}
-                                </motion.div>
-                            )}
+                        {/* Top Stats Row */}
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                            <StatBox label="Total Assessment" value={`$${(totalVal / 1000000).toFixed(1)}M`} color="emerald" icon={<TrendingUp className="w-4 h-4" />} delay={0} />
+                            <StatBox label="Primary Market" value={`${topCity}`} sub={`(${concentration}% Concentration)`} color="blue" icon={<MapIcon className="w-4 h-4" />} delay={0.1} />
+                            <StatBox label="Legal Structure" value={`${llcPercent}% LLC`} sub={`${networkData.businesses.length} Entities`} color="violet" icon={<ShieldCheck className="w-4 h-4" />} delay={0.2} />
+                            <StatBox label="Portfolio Size" value={`${networkData.properties.length}`} sub="Properties" color="amber" icon={<Building2 className="w-4 h-4" />} delay={0.3} />
                         </div>
 
-                        {/* 2. Key Principals & Businesses List (Context) */}
-                        <div>
-                            <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider border-b border-gray-200 pb-2 mb-4">Network Key Players</h3>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                {/* Principals */}
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                            {/* Left Column: AI Digest */}
+                            <div className="lg:col-span-2 space-y-6">
+                                <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                                    <div className="p-6 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-white flex justify-between items-center">
+                                        <div>
+                                            <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                                                <Bot className="w-5 h-5 text-indigo-600" />
+                                                Executive Summary
+                                            </h3>
+                                            <p className="text-xs text-slate-500 mt-1">AI-synthesized report from public records & web search</p>
+                                        </div>
+                                        {!digestData && (
+                                            <button
+                                                onClick={handleGenerateDigest}
+                                                disabled={digestLoading}
+                                                className={`px-4 py-2 rounded-lg font-bold text-xs flex items-center gap-2 transition-all shadow-sm ${digestLoading
+                                                    ? 'bg-slate-100 text-slate-400 cursor-wait'
+                                                    : 'bg-indigo-600 text-white hover:bg-indigo-700 hover:shadow-indigo-200/50 hover:shadow-lg'
+                                                    }`}
+                                            >
+                                                {digestLoading ? (
+                                                    <><Loader className="w-3.5 h-3.5 animate-spin" /> Analyzing Network...</>
+                                                ) : (
+                                                    <><Sparkles className="w-3.5 h-3.5" /> Generate Report</>
+                                                )}
+                                            </button>
+                                        )}
+                                    </div>
+
+                                    <div className="p-6 relative min-h-[200px]">
+                                        {!digestData && !digestLoading && (
+                                            <div className="absolute inset-0 flex flex-col items-center justify-center p-8 text-center bg-slate-50/50">
+                                                <Newspaper className="w-12 h-12 text-slate-200 mb-4" />
+                                                <p className="text-slate-500 font-medium text-sm max-w-md">
+                                                    Ready to analyze {networkData.properties.length} properties and {networkData.businesses.length + networkData.principals.length} associated entities for reputation and risks.
+                                                </p>
+                                            </div>
+                                        )}
+
+                                        {digestLoading && (
+                                            <div className="space-y-4 animate-pulse">
+                                                <div className="h-4 bg-slate-100 rounded w-3/4"></div>
+                                                <div className="h-4 bg-slate-100 rounded w-full"></div>
+                                                <div className="h-4 bg-slate-100 rounded w-5/6"></div>
+                                                <div className="h-20 bg-slate-100 rounded w-full mt-6"></div>
+                                            </div>
+                                        )}
+
+                                        {digestData && (
+                                            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+                                                <div className="prose prose-sm prose-slate max-w-none">
+                                                    {digestData.content.split('\n').map((line, idx) => {
+                                                        const isHeader = line.match(/^[0-9]+\. [A-Z ]+:$/) || line.match(/^[A-Z &]+:$/);
+                                                        const isBullet = line.trim().startsWith('-');
+
+                                                        if (isHeader) return <h4 key={idx} className="text-indigo-900 font-bold mt-6 mb-2 text-xs uppercase tracking-wider">{line.replace(':', '')}</h4>;
+                                                        if (isBullet) return <li key={idx} className="text-slate-700 my-1 ml-4 list-disc">{line.replace('-', '').trim()}</li>;
+                                                        if (!line.trim()) return <br key={idx} />;
+                                                        return <p key={idx} className="text-slate-600 leading-relaxed text-sm mb-2">{line}</p>;
+                                                    })}
+                                                </div>
+
+                                                {digestData.sources?.length > 0 && (
+                                                    <div className="mt-8 pt-6 border-t border-slate-100">
+                                                        <h4 className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-3">Sources</h4>
+                                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                                            {digestData.sources.map((src, idx) => (
+                                                                <a key={idx} href={src.url} target="_blank" rel="noopener noreferrer" className="flex items-start gap-2 p-2 rounded-lg bg-slate-50 hover:bg-blue-50/50 border border-slate-100 hover:border-blue-100 transition-colors group">
+                                                                    <div className="mt-0.5 min-w-[16px]"><Newspaper className="w-3.5 h-3.5 text-slate-400 group-hover:text-blue-500" /></div>
+                                                                    <div className="min-w-0">
+                                                                        <div className="text-xs font-medium text-slate-700 truncate group-hover:text-blue-700">{src.title || 'Source Link'}</div>
+                                                                        <div className="text-[10px] text-slate-400 truncate">{new URL(src.url).hostname}</div>
+                                                                    </div>
+                                                                </a>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </motion.div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Right Column: Key Entities */}
+                            <div className="space-y-6">
                                 <div>
-                                    <h4 className="text-xs font-bold text-gray-400 uppercase mb-3">Top Principals (by Connections)</h4>
+                                    <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">Key Principals</h3>
                                     <div className="space-y-2">
                                         {topPrincipals.map((p, idx) => (
-                                            <div key={idx} className="flex justify-between items-center p-3 bg-white border border-gray-100 rounded-lg hover:border-gray-300 transition-colors">
-                                                <div>
-                                                    <div className="font-bold text-gray-800 text-sm">{p.name}</div>
-                                                    <div className="text-xs text-gray-400 truncate max-w-[150px]">{p.details?.address || 'No Address'}</div>
+                                            <div key={idx} className="group bg-white p-3 rounded-lg border border-slate-200 hover:border-blue-300 hover:shadow-md hover:shadow-blue-100/50 transition-all">
+                                                <div className="flex justify-between items-start mb-1">
+                                                    <div className="font-bold text-slate-800 text-sm group-hover:text-blue-700 transition-colors">{p.name}</div>
+                                                    <span className="bg-slate-100 text-slate-600 text-[10px] font-bold px-1.5 py-0.5 rounded ml-2">{p.stats.count}</span>
                                                 </div>
-                                                <span className="bg-blue-50 text-blue-700 text-xs font-bold px-2 py-1 rounded-full">{getCount(p)} Links</span>
+                                                <div className="text-xs text-slate-400 truncate">{p.details?.address || 'Available in records'}</div>
                                             </div>
                                         ))}
                                     </div>
                                 </div>
 
-                                {/* Businesses */}
                                 <div>
-                                    <h4 className="text-xs font-bold text-gray-400 uppercase mb-3">Top Businesses</h4>
+                                    <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">Major Entities</h3>
                                     <div className="space-y-2">
                                         {topBusinesses.map((b, idx) => (
-                                            <div key={idx} className="flex justify-between items-center p-3 bg-white border border-gray-100 rounded-lg hover:border-gray-300 transition-colors">
-                                                <div>
-                                                    <div className="font-bold text-gray-800 text-sm">{b.name}</div>
-                                                    <div className="text-xs text-gray-400 truncate max-w-[150px]">{b.details?.business_address || 'No Address'}</div>
+                                            <div key={idx} className="group bg-white p-3 rounded-lg border border-slate-200 hover:border-emerald-300 hover:shadow-md hover:shadow-emerald-100/50 transition-all">
+                                                <div className="flex justify-between items-start mb-1">
+                                                    <div className="font-bold text-slate-800 text-sm group-hover:text-emerald-700 transition-colors">{b.name}</div>
+                                                    <span className="bg-slate-100 text-slate-600 text-[10px] font-bold px-1.5 py-0.5 rounded ml-2">{b.stats.count}</span>
                                                 </div>
-                                                <span className="bg-green-50 text-green-700 text-xs font-bold px-2 py-1 rounded-full">Active</span>
+                                                <div className="text-xs text-slate-400 truncate">{b.details?.business_address || 'Registered Agent address'}</div>
                                             </div>
                                         ))}
                                     </div>
@@ -248,13 +326,6 @@ export default function NetworkAnalysisModal({ isOpen, onClose, networkData, sta
                             </div>
                         </div>
 
-                        {/* 3. Executive Summary (Static Stats) */}
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                            <StatBox label="Total Value" value={`$${(totalVal / 1000000).toFixed(1)}M`} color="green" icon={<TrendingUp className="w-4 h-4" />} />
-                            <StatBox label="Top City" value={`${topCity} (${concentration}%)`} color="purple" icon={<MapIcon className="w-4 h-4" />} />
-                            <StatBox label="Structure" value={`${llcPercent}% LLC`} color="orange" icon={<ShieldCheck className="w-4 h-4" />} />
-                            <StatBox label="Entities" value={networkData.businesses.length} color="blue" icon={<Building2 className="w-4 h-4" />} />
-                        </div>
                     </div>
                 </motion.div>
             </div>
@@ -262,20 +333,29 @@ export default function NetworkAnalysisModal({ isOpen, onClose, networkData, sta
     );
 }
 
-function StatBox({ label, value, color, icon }) {
+function StatBox({ label, value, sub, color, icon, delay }) {
     const colors = {
-        green: 'bg-green-50 text-green-700 border-green-100',
-        purple: 'bg-purple-50 text-purple-700 border-purple-100',
-        orange: 'bg-orange-50 text-orange-700 border-orange-100',
-        blue: 'bg-blue-50 text-blue-700 border-blue-100'
+        emerald: 'bg-emerald-50 text-emerald-700 border-emerald-100',
+        blue: 'bg-blue-50 text-blue-700 border-blue-100',
+        violet: 'bg-violet-50 text-violet-700 border-violet-100',
+        amber: 'bg-amber-50 text-amber-700 border-amber-100'
     };
+
     return (
-        <div className={`p-4 rounded-xl border ${colors[color]} flex flex-col justify-center`}>
-            <div className="flex items-center gap-2 mb-1 opacity-80">
+        <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: delay }}
+            className={`p-4 rounded-xl border ${colors[color]} flex flex-col justify-between h-full`}
+        >
+            <div className="flex items-center gap-2 mb-2 opacity-80">
                 {icon}
-                <span className="text-xs font-bold uppercase">{label}</span>
+                <span className="text-[10px] font-bold uppercase tracking-wider">{label}</span>
             </div>
-            <div className="text-lg font-bold">{value}</div>
-        </div>
+            <div>
+                <div className="text-2xl font-black tracking-tight">{value}</div>
+                {sub && <div className="text-[10px] mobile-hidden font-medium opacity-70 mt-0.5">{sub}</div>}
+            </div>
+        </motion.div>
     );
 }

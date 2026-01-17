@@ -1,12 +1,12 @@
 import React from 'react';
-import { Building2, Users, MapPin } from 'lucide-react';
+import { Building2, Users, MapPin, TrendingUp, ChevronRight } from 'lucide-react';
 
 export default function Insights({ data, onSelect }) {
     if (!data) return null;
 
     const [selectedCity, setSelectedCity] = React.useState('Statewide');
 
-    // Normalize keys: Filter out 'STATEWIDE' from generic list because we add it manually as 'Statewide'
+    // Normalize keys
     const sortedCities = React.useMemo(() => {
         return Object.keys(data)
             .filter(k => k.toUpperCase() !== 'STATEWIDE')
@@ -18,7 +18,6 @@ export default function Insights({ data, onSelect }) {
 
     // Flatten logic (memoized)
     const allNetworks = React.useMemo(() => {
-        // We use the 'STATEWIDE' entry as the source for the Statewide view if it exists
         const sourceData = data['STATEWIDE'] || Object.values(data).flat();
         return sourceData.map(n => ({ ...n })).sort((a, b) => b.value - a.value);
     }, [data]);
@@ -26,7 +25,6 @@ export default function Insights({ data, onSelect }) {
     // Filter based on selection
     const displayedNetworks = React.useMemo(() => {
         if (selectedCity === 'Statewide') {
-            // Deduplicate by entity_name, keeping the one with higher property count
             const seen = new Map();
             allNetworks.forEach(n => {
                 const ex = seen.get(n.entity_name);
@@ -42,28 +40,29 @@ export default function Insights({ data, onSelect }) {
 
     return (
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                    <h3 className="text-xl font-black text-gray-900 tracking-tight">Top Property Networks</h3>
-                    <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Public Records Digest</span>
+            <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+                <div className="space-y-1">
+                    <h3 className="text-2xl font-black text-slate-900 tracking-tight flex items-center gap-2">
+                        <TrendingUp className="w-6 h-6 text-blue-600" />
+                        Top Networks
+                    </h3>
+
+                    <p className="text-slate-500 font-medium">Top portfolios and ownership networks by volume</p>
                 </div>
 
-                <div className="bg-white border border-gray-100 rounded-xl p-4 shadow-sm">
-                    <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Select Municipality</div>
-                    <div className="flex flex-wrap gap-2">
-                        {cities.map(city => (
-                            <button
-                                key={city}
-                                onClick={() => setSelectedCity(city)}
-                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all border ${selectedCity === city
-                                    ? 'bg-blue-600 text-white border-blue-600 shadow-md shadow-blue-100'
-                                    : 'bg-gray-50 text-gray-500 border-gray-100 hover:bg-gray-100 hover:border-gray-200'
-                                    }`}
-                            >
-                                {city}
-                            </button>
-                        ))}
-                    </div>
+                <div className="bg-white/50 backdrop-blur-sm border border-slate-200 rounded-xl p-1.5 flex gap-1 overflow-x-auto max-w-full no-scrollbar">
+                    {cities.map(city => (
+                        <button
+                            key={city}
+                            onClick={() => setSelectedCity(city)}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${selectedCity === city
+                                ? 'bg-slate-900 text-white shadow-md'
+                                : 'text-slate-500 hover:bg-white hover:shadow-sm'
+                                }`}
+                        >
+                            {city}
+                        </button>
+                    ))}
                 </div>
             </div>
 
@@ -73,57 +72,70 @@ export default function Insights({ data, onSelect }) {
                         <div
                             key={i}
                             onClick={() => onSelect(network.entity_id, network.entity_type)}
-                            className="group bg-white rounded-xl p-5 border border-gray-100 shadow-sm hover:shadow-md transition-all cursor-pointer hover:border-blue-200"
+                            className="group relative bg-white rounded-2xl p-6 border border-slate-100 shadow-[0_2px_8px_-2px_rgba(0,0,0,0.05)] hover:shadow-xl hover:shadow-blue-500/10 hover:-translate-y-1 transition-all duration-300 cursor-pointer overflow-hidden"
                         >
-                            <div className="flex justify-between items-start mb-4">
-                                <div className="p-2 bg-blue-50 text-blue-600 rounded-lg group-hover:bg-blue-600 group-hover:text-white transition-colors">
-                                    <Building2 size={20} />
-                                </div>
-                                <span className={`text-xs font-medium px-2 py-1 rounded-full ${selectedCity !== 'Statewide' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'
-                                    }`}>
-                                    {network.city || selectedCity}
-                                </span>
+                            <div className="absolute top-0 right-0 p-4 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <ChevronRight className="w-5 h-5 text-blue-500" />
                             </div>
 
-                            <h4 className="font-semibold text-gray-900 mb-2 line-clamp-2 min-h-[3rem]">
-                                {network.entity_name}
-                            </h4>
-
-                            <div className="space-y-2 text-sm text-gray-600">
-                                <div className="flex items-center gap-2">
-                                    <MapPin size={14} className="text-gray-400" />
-                                    <span>{network.value} Properties</span>
+                            <div className="flex items-start gap-4 mb-4">
+                                <div className="p-3 bg-blue-50 text-blue-600 rounded-xl group-hover:bg-blue-600 group-hover:text-white transition-colors duration-300">
+                                    <Building2 size={22} />
                                 </div>
-                                <div className="flex items-center gap-2">
-                                    <Users size={14} className="text-gray-400" />
-                                    <span>{(network.total_assessed_value / 1000000).toFixed(1)}M Total Value</span>
+                                <div className="space-y-1">
+                                    <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${selectedCity !== 'Statewide' ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-600'
+                                        }`}>
+                                        {network.city || selectedCity}
+                                    </span>
+                                    <div className="text-[10px] text-slate-400 font-medium">Rank #{i + 1}</div>
                                 </div>
                             </div>
 
-                            <div className="mt-4 pt-4 border-t border-gray-50 space-y-3">
-                                {network.principals?.length > 0 && (
-                                    <div>
-                                        <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">Key Principals</div>
-                                        <div className="flex flex-wrap gap-1">
-                                            {network.principals.map((p, idx) => (
-                                                <div key={idx} className="flex items-center gap-1 bg-gray-50 border border-gray-100 px-2 py-0.5 rounded text-[10px] text-gray-600">
-                                                    <span className="truncate max-w-[80px]">{p.name}</span>
-                                                    {p.state && <span className="bg-blue-100 text-blue-700 font-bold px-1 rounded text-[8px]">{p.state}</span>}
-                                                </div>
-                                            ))}
-                                        </div>
+                            <div className="mb-3 min-h-[4.5rem]">
+                                <h4 className="font-bold text-lg text-slate-900 leading-snug line-clamp-2 group-hover:text-blue-700 transition-colors">
+                                    {network.principals && network.principals.length > 0
+                                        ? network.principals[0].name
+                                        : network.entity_name}
+                                </h4>
+                                {network.businesses && network.businesses.length > 0 && (
+                                    <div className="text-xs font-semibold text-slate-500 mt-1 uppercase tracking-wide truncate">
+                                        {network.businesses[0].name}
                                     </div>
                                 )}
-                                {network.businesses?.length > 0 && (
+                            </div>
+
+
+                            <div className="grid grid-cols-2 gap-4 mb-6">
+                                <div className="space-y-0.5">
+                                    <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Properties</div>
+                                    <div className="text-xl font-black text-slate-900">{network.value}</div>
+                                </div>
+                                <div className="space-y-0.5">
+                                    <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Est. Value (Assessed)</div>
+                                    <div className="text-xl font-black text-slate-900">${(network.total_assessed_value / 1000000).toFixed(1)}M</div>
+                                </div>
+                                <div className="col-span-2 pt-2 border-t border-slate-50 mt-2">
+                                    <div className="flex justify-between items-center">
+                                        <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Appraised Value</span>
+                                        <span className="text-sm font-bold text-slate-700">${(network.total_appraised_value / 1000000).toFixed(1)}M</span>
+                                    </div>
+                                </div>
+                            </div>
+
+
+                            <div className="pt-4 border-t border-slate-50 space-y-3">
+                                {network.principals?.length > 0 && (
                                     <div>
-                                        <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">Key Entities</div>
-                                        <div className="flex flex-wrap gap-1">
-                                            {network.businesses.map((b, idx) => (
-                                                <div key={idx} className="flex items-center gap-1 bg-gray-50 border border-gray-100 px-2 py-0.5 rounded text-[10px] text-gray-600">
-                                                    <span className="truncate max-w-[80px]">{b.name}</span>
-                                                    {b.state && <span className="bg-green-100 text-green-700 font-bold px-1 rounded text-[8px]">{b.state}</span>}
+                                        <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Key Principals</div>
+                                        <div className="flex flex-wrap gap-1.5">
+                                            {network.principals.slice(0, 3).map((p, idx) => (
+                                                <div key={idx} className="flex items-center gap-1 bg-slate-50 border border-slate-100 px-2 py-1 rounded-md text-[10px] font-medium text-slate-600">
+                                                    {p.name}
                                                 </div>
                                             ))}
+                                            {network.principals.length > 3 && (
+                                                <div className="px-2 py-1 text-[10px] text-slate-400 font-bold">+{network.principals.length - 3}</div>
+                                            )}
                                         </div>
                                     </div>
                                 )}
@@ -131,8 +143,9 @@ export default function Insights({ data, onSelect }) {
                         </div>
                     ))
                 ) : (
-                    <div className="col-span-full py-12 text-center text-gray-400 bg-gray-50 rounded-xl border border-dashed border-gray-200">
-                        No significant property networks found for {selectedCity}.
+                    <div className="col-span-full py-20 text-center space-y-4 bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+                        <Building2 className="w-12 h-12 text-slate-300 mx-auto" />
+                        <div className="text-slate-400 font-medium">No significant property networks found for {selectedCity}.</div>
                     </div>
                 )}
             </div>

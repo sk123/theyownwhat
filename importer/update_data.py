@@ -13,10 +13,10 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 DATA_SOURCES = {
     "businesses": "businesses.csv",
     "principals": "principals.csv",
-    "properties": "parcels.csv",
+    "properties": "new_parcels.csv",
 }
 
-# --- Database Connection (from import_data.py) ---
+
 def get_db_connection():
     """Establishes a connection to the PostgreSQL database with retries."""
     retries = 10
@@ -451,9 +451,25 @@ def main():
     
     target_table = args.table_name
     csv_file = DATA_SOURCES[target_table]
+    
+    # Try container path first, then local path
     csv_path = f'/app/data/{csv_file}'
+    if not os.path.exists(csv_path):
+        # Fallback to local relative path
+        possible_paths = [
+            os.path.join(os.getcwd(), 'data', csv_file),
+            os.path.join(os.path.dirname(__file__), '..', 'data', csv_file),
+            os.path.join(os.getcwd(), 'tow3', 'data', csv_file)
+        ]
+        for p in possible_paths:
+            if os.path.exists(p):
+                csv_path = p
+                break
+    
+    print(f"Using data file: {csv_path}")
 
     if not DATABASE_URL:
+
         print("❌ Error: DATABASE_URL environment variable is not set.", file=sys.stderr)
         sys.exit(1)
         

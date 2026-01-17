@@ -11,12 +11,9 @@ import EntityDetailsModal from './components/EntityDetailsModal';
 import NetworkAnalysisModal from './components/NetworkAnalysisModal';
 import AboutModal from './components/AboutModal';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Sparkles } from 'lucide-react';
-
+import { Sparkles, Loader2, Search, ArrowRight, Building2, TrendingUp, Users } from 'lucide-react';
 
 // NOTE: This is a simplified App.jsx. In a real scenario we'd use React Router.
-// But for this "Single Page App" feel, conditional rendering works great.
-
 function App() {
   const [view, setView] = useState('home'); // home | dashboard
   const [loading, setLoading] = useState(false);
@@ -39,7 +36,15 @@ function App() {
   const [showAnalysis, setShowAnalysis] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
 
+  // Mobile Tabs
+  const [activeMobileTab, setActiveMobileTab] = useState('properties');
+
   const [loadingInsights, setLoadingInsights] = useState(true);
+  const [streamingStatus, setStreamingStatus] = useState({
+    entities: 0,
+    properties: 0,
+    active: false
+  });
 
   // Init Insights
   React.useEffect(() => {
@@ -78,6 +83,7 @@ function App() {
   // Load Network Stream
   const loadNetwork = async (id, type) => {
     setLoading(true);
+    setStreamingStatus({ entities: 0, properties: 0, active: true });
 
     const newData = { principals: [], businesses: [], properties: [], links: [] };
     const seenEntities = new Set();
@@ -86,6 +92,10 @@ function App() {
       (chunk) => {
         if (chunk.type === 'entities') {
           if (chunk.data.entities) {
+            setStreamingStatus(prev => ({
+              ...prev,
+              entities: prev.entities + chunk.data.entities.length
+            }));
             chunk.data.entities.forEach(e => {
               const key = `${e.type}_${e.id}`;
               if (!seenEntities.has(key)) {
@@ -130,6 +140,10 @@ function App() {
           }
         } else if (chunk.type === 'properties') {
           if (Array.isArray(chunk.data)) {
+            setStreamingStatus(prev => ({
+              ...prev,
+              properties: prev.properties + chunk.data.length
+            }));
             for (const prop of chunk.data) {
               newData.properties.push(prop);
             }
@@ -151,11 +165,13 @@ function App() {
           totalValue: totalVal
         });
 
+        setStreamingStatus(prev => ({ ...prev, active: false }));
         setView('dashboard');
         setLoading(false);
       },
       (err) => {
         console.error("Stream error", err);
+        setStreamingStatus(prev => ({ ...prev, active: false }));
         setLoading(false);
       }
     );
@@ -240,59 +256,91 @@ function App() {
   const [selectedProperty, setSelectedProperty] = useState(null);
   const [selectedDetailEntity, setSelectedDetailEntity] = useState(null);
 
+  // Background Grid Component
+  const BackgroundGrid = () => (
+    <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none">
+      <div className="absolute top-0 inset-x-0 h-px bg-gradient-to-r from-transparent via-slate-200 to-transparent opacity-50"></div>
+      <div className="absolute inset-0"
+        style={{
+          backgroundImage: 'radial-gradient(circle at 1px 1px, #e2e8f0 1px, transparent 0)',
+          backgroundSize: '40px 40px'
+        }}>
+      </div>
+      <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-blue-100/50 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2"></div>
+      <div className="absolute bottom-0 left-0 w-[500px] h-[500px] bg-indigo-100/50 rounded-full blur-3xl translate-y-1/3 -translate-x-1/4"></div>
+    </div>
+  );
+
   return (
-    <div className="h-screen bg-slate-50 flex flex-col overflow-hidden">
+    <div className="h-screen bg-slate-50 flex flex-col overflow-hidden font-sans text-slate-900 selection:bg-blue-100 selection:text-blue-900">
       <Header
         onHome={handleReset}
         onReset={view === 'dashboard' ? handleReset : null}
         onAbout={() => setShowAbout(true)}
       />
 
-      <main className="flex-1 overflow-hidden relative">
+      <LoadingScreen
+        visible={streamingStatus.active}
+        entities={streamingStatus.entities}
+        properties={streamingStatus.properties}
+      />
+
+      <main className="flex-1 overflow-hidden relative z-10">
         {/* HERO / SEARCH SECTION */}
         <AnimatePresence mode="wait">
           {view === 'home' && (
-            <div className="h-full overflow-y-auto w-full">
-              <div className="container mx-auto px-4 pt-8 pb-20">
+            <div className="h-full overflow-y-auto w-full relative">
+              <BackgroundGrid />
+
+              <div className="container mx-auto px-4 pt-12 pb-24 relative z-10">
                 <motion.div
-                  initial={{ opacity: 0, y: 20 }}
+                  initial={{ opacity: 0, y: 30 }}
                   animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -20 }}
-                  className="max-w-4xl mx-auto text-center pt-12 pb-8"
+                  exit={{ opacity: 0, y: -30 }}
+                  transition={{ duration: 0.6, ease: "easeOut" }}
+                  className="max-w-5xl mx-auto"
                 >
-                  <h2 className="text-5xl md:text-7xl font-black text-gray-900 mb-4 tracking-tighter">
-                    they own <span className="text-blue-600">WHAT??</span>
-                  </h2>
-                  <div className="flex items-center justify-center gap-2 mb-12 opacity-50">
-                    <p className="text-[11px] text-gray-400 font-bold uppercase tracking-[0.2em]">
-                      Click on a network or search to begin
+                  {/* Hero Content */}
+                  <div className="text-center mb-16">
+
+
+                    <h1 className="text-6xl md:text-8xl font-black text-slate-900 mb-6 tracking-tighter leading-[0.9]">
+                      they own <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-indigo-600">WHAT??</span>
+                    </h1>
+
+                    <p className="text-xl text-slate-500 max-w-2xl mx-auto font-medium leading-relaxed mb-12">
+                      Uncover hidden property networks, connect LLCs to real owners, and analyze portfolio value with AI-powered insights.
                     </p>
+
+                    <div className="max-w-2xl mx-auto relative group">
+                      <div className="absolute -inset-1 bg-gradient-to-r from-blue-500 to-indigo-500 rounded-2xl opacity-20 group-hover:opacity-30 blur transition duration-500"></div>
+                      <div className="relative bg-white rounded-xl shadow-xl border border-slate-100">
+                        <SearchBar onSearch={handleSearch} isLoading={loading} />
+                      </div>
+                    </div>
                   </div>
 
-                  <div className="mb-20">
-                    <SearchBar onSearch={handleSearch} isLoading={loading} />
-                    {searchResults && (
+                  {/* Results or Insights */}
+                  <div className="relative min-h-[400px]">
+                    {searchResults ? (
                       <SearchResults
                         results={searchResults}
                         onSelect={(id, type) => loadNetwork(id, type)}
                       />
+                    ) : (
+                      <div className="mt-8">
+                        {loadingInsights ? (
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                            {[1, 2, 3].map(i => (
+                              <div key={i} className="h-48 bg-white rounded-2xl border border-slate-100 shadow-sm animate-pulse"></div>
+                            ))}
+                          </div>
+                        ) : (
+                          <Insights data={insights} onSelect={(id, type) => loadNetwork(id, type)} />
+                        )}
+                      </div>
                     )}
                   </div>
-
-                  {/* Insights */}
-                  {!searchResults && (
-                    <div className="mt-20 text-left">
-                      {loadingInsights ? (
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 opacity-50">
-                          {[1, 2, 3].map(i => (
-                            <div key={i} className="h-32 bg-gray-200 rounded-xl animate-pulse"></div>
-                          ))}
-                        </div>
-                      ) : (
-                        <Insights data={insights} onSelect={(id, type) => loadNetwork(id, type)} />
-                      )}
-                    </div>
-                  )}
                 </motion.div>
               </div>
             </div>
@@ -302,24 +350,30 @@ function App() {
         {/* DASHBOARD VIEW */}
         {view === 'dashboard' && (
           <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="flex flex-col h-full w-full max-w-[1920px] mx-auto px-4 py-2 gap-2 overflow-hidden"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="flex flex-col h-full w-full max-w-[1920px] mx-auto px-4 py-3 gap-3 overflow-hidden bg-slate-50/50 backdrop-blur-sm lg:overflow-hidden overflow-y-auto"
           >
             {/* Stats Row */}
-            <div className="flex gap-2 mb-2 items-center">
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 flex-1">
-                <StatCard label="Properties" value={stats.totalProperties} />
-                <StatCard label="Total Assessed" value={`$${(stats.totalValue / 1000000).toFixed(1)}M`} highlight />
-                <StatCard label="Businesses" value={networkData.businesses.length} />
-                <StatCard label="Principals" value={networkData.principals.length} />
+            <div className="flex flex-col md:flex-row gap-3 items-stretch">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 flex-1">
+                <StatCard label="Properties" value={stats.totalProperties} icon={<Building2 className="w-4 h-4 text-slate-400" />} />
+                <StatCard label="Portfolio Value" value={`$${(stats.totalValue / 1000000).toFixed(1)}M`} highlight icon={<TrendingUp className="w-4 h-4 text-blue-200" />} />
+                <StatCard label="Businesses" value={networkData.businesses.length} icon={<Building2 className="w-4 h-4 text-slate-400" />} />
+                <StatCard label="Principals" value={networkData.principals.length} icon={<Users className="w-4 h-4 text-slate-400" />} />
               </div>
               <button
                 onClick={() => setShowAnalysis(true)}
-                className="h-full px-4 bg-gradient-to-br from-indigo-600 to-purple-700 text-white rounded-xl shadow-lg hover:shadow-xl transition-all flex flex-col items-center justify-center min-w-[80px]"
+                className="px-6 bg-slate-900 hover:bg-slate-800 text-white rounded-xl shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all flex items-center justify-center gap-2 min-w-[140px] group"
               >
-                <Sparkles className="w-5 h-5 mb-1" />
-                <span className="text-[10px] font-bold uppercase tracking-wider">AI Digest</span>
+                <div className="relative">
+                  <Sparkles className="w-5 h-5 text-indigo-400 group-hover:text-indigo-300 transition-colors" />
+                  <div className="absolute inset-0 bg-indigo-400/50 blur-sm opacity-50 animate-pulse"></div>
+                </div>
+                <div className="text-left">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 leading-none mb-0.5">Generate</div>
+                  <div className="text-sm font-bold">AI Digest</div>
+                </div>
               </button>
             </div>
 
@@ -332,25 +386,114 @@ function App() {
               onClearEntity={() => setSelectedEntityId(null)}
             />
 
-            {/* Main Content Grid - Fixed height container for desktop, auto for mobile */}
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 flex-1 min-h-0 overflow-hidden">
+            {/* --- MOBILE TAB LAYOUT (lg:hidden) --- */}
+            <div className="flex-1 min-h-0 flex flex-col lg:hidden relative border border-slate-200 rounded-xl overflow-hidden bg-white shadow-sm">
+
+              {/* Sticky Tab Header */}
+              <div className="flex items-center border-b border-gray-100 bg-white/95 backdrop-blur-md sticky top-0 z-30 shadow-sm">
+                <button
+                  onClick={() => setActiveMobileTab('properties')}
+                  className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider transition-colors border-b-2 ${activeMobileTab === 'properties' ? 'border-blue-500 text-blue-700 bg-blue-50/50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                >
+                  Properties
+                </button>
+                <button
+                  onClick={() => setActiveMobileTab('businesses')}
+                  className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider transition-colors border-b-2 ${activeMobileTab === 'businesses' ? 'border-emerald-500 text-emerald-700 bg-emerald-50/50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                >
+                  Businesses
+                </button>
+                <button
+                  onClick={() => setActiveMobileTab('principals')}
+                  className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider transition-colors border-b-2 ${activeMobileTab === 'principals' ? 'border-indigo-500 text-indigo-700 bg-indigo-50/50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                >
+                  Principals
+                </button>
+
+                {/* Start Over Button */}
+                <button
+                  onClick={handleReset}
+                  className="px-3 py-3 text-gray-400 hover:text-red-500 hover:bg-red-50 border-b-2 border-transparent transition-colors"
+                  title="Start Over"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                    <path d="M3 3v5h5" />
+                  </svg>
+                </button>
+              </div>
+
+              {/* Content Area - Auto Height for Page Scroll */}
+              <div className="bg-white min-h-[500px]">
+                {activeMobileTab === 'properties' && (
+                  <div className="flex flex-col">
+                    <PropertyTable
+                      properties={filteredProperties}
+                      highlightedEntityId={selectedEntityId}
+                      onSelectProperty={setSelectedProperty}
+                      forceExpanded={true}
+                    />
+                  </div>
+                )}
+
+                {activeMobileTab === 'businesses' && (
+                  <div className="flex flex-col">
+                    <NetworkView
+                      networkData={networkData}
+                      selectedEntityId={selectedEntityId}
+                      onSelectEntity={(id, type) => setSelectedEntityId(id === selectedEntityId ? null : id)}
+                      onViewDetails={(entity, type) => setSelectedDetailEntity({ entity, type })}
+                      mobileSection="businesses"
+                      autoHeight={true}
+                    />
+                  </div>
+                )}
+
+                {activeMobileTab === 'principals' && (
+                  <div className="flex flex-col">
+                    <NetworkView
+                      networkData={networkData}
+                      selectedEntityId={selectedEntityId}
+                      onSelectEntity={(id, type) => setSelectedEntityId(id === selectedEntityId ? null : id)}
+                      onViewDetails={(entity, type) => setSelectedDetailEntity({ entity, type })}
+                      mobileSection="principals"
+                      autoHeight={true}
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* --- DESKTOP GRID LAYOUT (hidden lg:grid) --- */}
+            <div className="hidden lg:grid grid-cols-12 gap-4 flex-1 min-h-0 overflow-hidden">
               {/* Left: Network List */}
-              <div className="lg:col-span-4 h-[500px] lg:h-full max-h-full overflow-hidden">
-                <NetworkView
-                  networkData={networkData}
-                  selectedEntityId={selectedEntityId}
-                  onSelectEntity={(id, type) => setSelectedEntityId(id === selectedEntityId ? null : id)}
-                  onViewDetails={(entity, type) => setSelectedDetailEntity({ entity, type })}
-                />
+              <div className="col-span-4 h-full bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
+                <div className="p-4 border-b border-slate-100 bg-slate-50/50">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">Ownership Network</h3>
+                </div>
+                <div className="flex-1 overflow-hidden">
+                  <NetworkView
+                    networkData={networkData}
+                    selectedEntityId={selectedEntityId}
+                    onSelectEntity={(id, type) => setSelectedEntityId(id === selectedEntityId ? null : id)}
+                    onViewDetails={(entity, type) => setSelectedDetailEntity({ entity, type })}
+                  />
+                </div>
               </div>
 
               {/* Right: Property Table */}
-              <div className="lg:col-span-8 h-[500px] lg:h-full max-h-full overflow-hidden flex flex-col min-h-0">
-                <PropertyTable
-                  properties={filteredProperties}
-                  highlightedEntityId={selectedEntityId}
-                  onSelectProperty={setSelectedProperty}
-                />
+              <div className="col-span-8 h-full bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
+                <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">Property Portfolio</h3>
+                  <div className="text-xs font-bold text-slate-400">{filteredProperties.length} Assets</div>
+                </div>
+                <div className="flex-1 overflow-hidden">
+                  <PropertyTable
+                    properties={filteredProperties}
+                    highlightedEntityId={selectedEntityId}
+                    onSelectProperty={setSelectedProperty}
+                  />
+                </div>
               </div>
             </div>
           </motion.div>
@@ -382,19 +525,21 @@ function App() {
 }
 
 function StatCard({ label, value, highlight, icon }) {
-  // Map string icon name to component if needed, or just pass component
   return (
-    <div className={`p-3 rounded-xl border flex flex-col justify-center ${highlight ? 'bg-blue-600 text-white border-blue-600 shadow-blue-200 shadow-lg' : 'bg-white border-gray-200 shadow-sm'}`}>
-      <div className={`text-xl font-bold ${highlight ? 'text-white' : 'text-gray-900'}`}>{value}</div>
-      <div className={`text-[10px] font-semibold uppercase tracking-wider ${highlight ? 'text-blue-100' : 'text-gray-500'}`}>{label}</div>
+    <div className={`p-4 rounded-xl border flex flex-col justify-center transition-all hover:shadow-md ${highlight
+      ? 'bg-gradient-to-br from-blue-600 to-indigo-700 text-white border-blue-600 shadow-lg shadow-blue-500/20'
+      : 'bg-white border-slate-200 text-slate-900'
+      }`}>
+      <div className="flex items-center gap-2 mb-1 opacity-80">
+        {icon}
+        <span className={`text-[10px] font-bold uppercase tracking-wider ${highlight ? 'text-blue-100' : 'text-slate-400'}`}>{label}</span>
+      </div>
+      <div className="text-2xl font-black tracking-tight">{value}</div>
     </div>
   );
 }
 
-
-
 function DashboardControls({ properties, selectedCity, onSelectCity, selectedEntityId, onClearEntity }) {
-  // Derive unique cities
   const cities = React.useMemo(() => {
     const set = new Set(properties.map(p => p.city).filter(Boolean));
     return ['All', ...Array.from(set).sort()];
@@ -403,50 +548,92 @@ function DashboardControls({ properties, selectedCity, onSelectCity, selectedEnt
   if (properties.length === 0) return null;
 
   return (
-    <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between bg-white p-4 rounded-xl border border-gray-200 shadow-sm animate-in fade-in slide-in-from-top-2 w-full">
-      <div className="flex items-center gap-2 w-full sm:w-auto">
-        <span className="text-xs font-bold text-gray-500 uppercase mr-2 whitespace-nowrap">Municipality:</span>
-
-        {/* Mobile Dropdown */}
-        <div className="sm:hidden w-full">
-          <select
-            value={selectedCity}
-            onChange={(e) => onSelectCity(e.target.value)}
-            className="w-full bg-gray-50 border border-gray-200 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5"
-          >
-            {cities.map(city => (
-              <option key={city} value={city}>{city}</option>
-            ))}
-          </select>
-        </div>
-
-        {/* Desktop Buttons */}
-        <div className="hidden sm:flex flex-wrap gap-2">
+    <div className="flex flex-col sm:flex-row gap-3 items-center justify-between bg-white px-4 py-3 rounded-xl border border-slate-200 shadow-sm">
+      <div className="flex items-center gap-3 overflow-x-auto w-full no-scrollbar">
+        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider whitespace-nowrap">Filter City:</span>
+        <div className="flex gap-1.5 flex-1">
           {cities.map(city => (
             <button
               key={city}
               onClick={() => onSelectCity(city)}
               className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-all ${selectedCity === city
-                ? 'bg-blue-600 text-white shadow-md'
-                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                ? 'bg-slate-900 text-white shadow-md'
+                : 'bg-slate-50 text-slate-500 hover:bg-slate-100'
                 }`}
             >
               {city}
             </button>
           ))}
         </div>
-
-        {selectedEntityId && (
-          <button
-            onClick={onClearEntity}
-            className="px-3 py-1.5 bg-amber-50 text-amber-700 text-xs font-bold rounded-lg border border-amber-200 hover:bg-amber-100 transition-colors flex items-center gap-2"
-          >
-            <span>Filter Active: Entity Selected</span>
-            <span className="bg-amber-200 px-1.5 rounded-md text-[10px]">✕</span>
-          </button>
-        )}
       </div>
+
+      {selectedEntityId && (
+        <button
+          onClick={onClearEntity}
+          className="ml-4 px-3 py-1.5 bg-amber-50 text-amber-700 text-xs font-bold rounded-lg border border-amber-200 hover:bg-amber-100 transition-colors flex items-center gap-2 whitespace-nowrap animate-in fade-in slide-in-from-right-2"
+        >
+          <span>Entity Filter Active</span>
+          <X size={12} />
+        </button>
+      )}
     </div>
+  );
+}
+
+// Simple X icon component for the filter button
+const X = ({ size = 16 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M18 6 6 18" /><path d="m6 6 12 12" />
+  </svg>
+);
+
+
+function LoadingScreen({ visible, entities, properties }) {
+  return (
+    <AnimatePresence>
+      {visible && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/80 backdrop-blur-xl"
+        >
+          <div className="text-center p-8 max-w-sm w-full relative">
+
+            <motion.div
+              animate={{ rotate: 360 }}
+              transition={{ repeat: Infinity, duration: 3, ease: "linear" }}
+              className="relative w-24 h-24 mx-auto mb-8"
+            >
+              <div className="absolute inset-0 rounded-full border-4 border-slate-700"></div>
+              <div className="absolute inset-0 rounded-full border-4 border-t-blue-500 border-r-transparent border-b-transparent border-l-transparent"></div>
+            </motion.div>
+
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.2 }}
+            >
+              <h3 className="text-2xl font-black text-white mb-2 tracking-tight">Building Network</h3>
+              <p className="text-sm text-slate-400 font-medium mb-8">
+                Tracing ownership links and aggregating property data...
+              </p>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="bg-white/5 p-4 rounded-2xl border border-white/10 backdrop-blur-md">
+                  <div className="text-3xl font-black text-blue-400">{entities}</div>
+                  <div className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Entities Found</div>
+                </div>
+                <div className="bg-white/5 p-4 rounded-2xl border border-white/10 backdrop-blur-md">
+                  <div className="text-3xl font-black text-indigo-400">{properties}</div>
+                  <div className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Properties Linked</div>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 }
 

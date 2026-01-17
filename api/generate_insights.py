@@ -25,6 +25,8 @@ CREATE TABLE IF NOT EXISTS {SCHEMA}.cached_insights (
     rank int NOT NULL,                 -- 1..N within the title bucket
     network_name text NOT NULL,        -- display label
     property_count int NOT NULL,       -- # properties
+    total_assessed_value numeric DEFAULT 0, -- Sum of assessed_value
+    total_appraised_value numeric DEFAULT 0, -- Sum of appraised_value
     primary_entity_id text NOT NULL,   -- principal or business id as text
     primary_entity_name text NOT NULL, -- display name of the primary entity
     primary_entity_type text NOT NULL CHECK (primary_entity_type IN ('principal','business')),
@@ -167,7 +169,9 @@ def compute_top_principals(cur, town_col: Optional[str], town_filter: Optional[s
             pr.{pr_id} AS principal_id,
             {pr_disp}  AS principal_name,
             {pr_state} AS principal_state,
-            COUNT(p.id) AS property_count
+            COUNT(p.id) AS property_count,
+            COALESCE(SUM(p.assessed_value), 0) AS total_assessed_value,
+            COALESCE(SUM(p.appraised_value), 0) AS total_appraised_value
         FROM {SCHEMA}.principals pr
         LEFT JOIN {SCHEMA}.properties p
           ON p.principal_id ~ '^[0-9]+$'
@@ -212,7 +216,9 @@ def compute_top_business_networks(cur, town_col: Optional[str], town_filter: Opt
         SELECT
             b.id AS business_id,
             b.{bname} AS business_name,
-            COUNT(DISTINCT p.id) AS property_count
+            COUNT(DISTINCT p.id) AS property_count,
+            COALESCE(SUM(p.assessed_value), 0) AS total_assessed_value,
+            COALESCE(SUM(p.appraised_value), 0) AS total_appraised_value
         FROM {SCHEMA}.entity_networks en
         JOIN {SCHEMA}.businesses b
           ON en.entity_type = 'business'
@@ -238,15 +244,17 @@ def insert_ranked_principals(cur, title: str, rows: List[Tuple[int, Dict]]):
         cur.execute(
             f"""
             INSERT INTO {SCHEMA}.cached_insights
-            (title, rank, network_name, property_count,
+            (title, rank, network_name, property_count, total_assessed_value, total_appraised_value,
              primary_entity_id, primary_entity_name, primary_entity_type)
-            VALUES (%s, %s, %s, %s, %s, %s, 'principal')
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'principal')
             """,
             (
                 title,
                 rank,
                 r.get("principal_name") or "[unknown]",
                 int(r.get("property_count") or 0),
+                float(r.get("total_assessed_value") or 0),
+                float(r.get("total_appraised_value") or 0),
                 str(r.get("principal_id")),
                 r.get("principal_name") or "[unknown]",
             ),
@@ -257,19 +265,22 @@ def insert_ranked_businesses(cur, title: str, rows: List[Tuple[int, Dict]]):
         cur.execute(
             f"""
             INSERT INTO {SCHEMA}.cached_insights
-            (title, rank, network_name, property_count,
+            (title, rank, network_name, property_count, total_assessed_value, total_appraised_value,
              primary_entity_id, primary_entity_name, primary_entity_type)
-            VALUES (%s, %s, %s, %s, %s, %s, 'business')
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'business')
             """,
             (
                 title,
                 rank,
                 r.get("business_name") or "[unknown]",
                 int(r.get("property_count") or 0),
+                float(r.get("total_assessed_value") or 0),
+                float(r.get("total_appraised_value") or 0),
                 str(r.get("business_id")),
                 r.get("business_name") or "[unknown]",
             ),
         )
+
 
 # ------------------------------- driver ---------------------------------
 

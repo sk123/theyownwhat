@@ -41,6 +41,27 @@ export default function AboutModal({ isOpen, onClose }) {
                             </p>
                         </section>
 
+                        <section className="bg-gradient-to-br from-indigo-50 to-blue-50 p-4 rounded-xl border border-blue-100">
+                            <h3 className="flex items-center gap-2 font-bold text-blue-900 mb-3 uppercase tracking-wider text-xs">
+                                <Zap size={14} className="text-blue-600" />
+                                Recent Updates (January 2026)
+                            </h3>
+                            <ul className="space-y-2 text-xs text-blue-900/80 font-medium">
+                                <li className="flex items-start gap-2">
+                                    <span className="mt-1 w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
+                                    <span><strong>Data Refresh:</strong> Ingested latest 2024/2025 datasets: 9.6M businesses, 1.7M principals, and 1.3M parcels.</span>
+                                </li>
+                                <li className="flex items-start gap-2">
+                                    <span className="mt-1 w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
+                                    <span><strong>UI Overhaul:</strong> Modernized interface with glassmorphism design, improved cards, and responsive layout.</span>
+                                </li>
+                                <li className="flex items-start gap-2">
+                                    <span className="mt-1 w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
+                                    <span><strong>Smart Search:</strong> Added instant autocomplete for businesses, owners, and addresses with real-time feedback.</span>
+                                </li>
+                            </ul>
+                        </section>
+
                         <section>
                             <h3 className="flex items-center gap-2 font-bold text-gray-900 mb-3 uppercase tracking-wider text-xs">
                                 <Globe size={14} className="text-blue-500" />

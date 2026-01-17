@@ -501,6 +501,86 @@ def get_ai_analysis(entity_name: str, entity_type: str):
 
 
 # ------------------------------------------------------------
+# AUTOCOMPLETE
+# ------------------------------------------------------------
+@app.get("/api/autocomplete")
+def autocomplete(q: str, type: str, conn=Depends(get_db_connection)):
+    """
+    Fast prefix matching for search suggestions.
+    type: 'business' | 'owner' | 'address'
+    """
+    if not q or len(q) < 2:
+        return []
+
+    limit = 10
+    t = q.upper() + "%" # Prefix match
+    results = []
+
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            if type == "business":
+                cursor.execute(
+                    "SELECT DISTINCT name FROM businesses WHERE upper(name) LIKE %s ORDER BY name ASC LIMIT %s",
+                    (t, limit)
+                )
+                results = [r["name"] for r in cursor.fetchall()]
+
+            elif type == "owner":
+                # 1. Search Principals
+                cursor.execute(
+                    "SELECT DISTINCT name_c AS name FROM principals WHERE name_c IS NOT NULL AND upper(name_c) LIKE %s ORDER BY name_c ASC LIMIT %s",
+                    (t, limit)
+                )
+                results.extend([r["name"] for r in cursor.fetchall()])
+                
+                # 2. Search Property Owners (if we need more)
+                if len(results) < limit:
+                    remaining = limit - len(results)
+                    cursor.execute(
+                        "SELECT DISTINCT owner AS name FROM properties WHERE owner IS NOT NULL AND upper(owner) LIKE %s ORDER BY owner ASC LIMIT %s",
+                        (t, remaining)
+                    )
+                    results.extend([r["name"] for r in cursor.fetchall() if r["name"] not in results])
+
+            elif type == "address":
+                # Search properties by location (address) and include City/Zip
+                cursor.execute(
+                    """
+                    SELECT DISTINCT location, property_city, property_zip 
+                    FROM properties 
+                    WHERE location IS NOT NULL AND location LIKE %s 
+                    ORDER BY location ASC 
+                    LIMIT %s
+                    """,
+                    (t, limit)
+                )
+                
+                results = []
+                for r in cursor.fetchall():
+                    parts = [r["location"]]
+                    if r.get("property_city"):
+                        parts.append(r["property_city"])
+                    
+                    # Force CT state
+                    parts.append("CT")
+
+                    if r.get("property_zip"):
+                        # Pad zip to 5 digits
+                        z = str(r["property_zip"]).strip()
+                        if len(z) < 5 and z.isdigit():
+                            z = z.zfill(5)
+                        parts.append(z)
+                        
+                    results.append(", ".join(parts))
+
+    except Exception as e:
+        logger.error(f"Autocomplete Error: {e}")
+        return []
+
+    return results[:limit]
+
+
+# ------------------------------------------------------------
 # SEARCH
 # ------------------------------------------------------------
 @app.get("/api/search", response_model=List[SearchResult])
@@ -524,11 +604,16 @@ def search_entities(type: str, term: str, conn=Depends(get_db_connection)):
                 return [SearchResult(id=str(r["id"]), name=r["name"], type="business", context=r.get("context")) for r in rows]
 
             elif type == "owner":
+                # UNIFIED SEARCH: "Owner" now means "All" (Principals, Businesses, Properties)
+                results: List[SearchResult] = []
+                t_exact = f"%{t}%"
+
+                # 1. Search Principals
+                # ------------------------------------------------------------------
                 name_vars = get_name_variations(term, "principal")
                 norm_set = list({ normalize_person_name_py(v) for v in name_vars if v })
-
-                results: Dict[str, Tuple[str, str, Optional[str]]] = {}
-
+                
+                # Direct Principal Match
                 cursor.execute(
                     """
                     SELECT DISTINCT name_c AS name
@@ -536,30 +621,139 @@ def search_entities(type: str, term: str, conn=Depends(get_db_connection)):
                     WHERE name_c IS NOT NULL AND upper(name_c) LIKE %s
                     LIMIT 50
                     """,
-                    (f"%{t}%",)
+                    (t_exact,)
                 )
                 for r in cursor.fetchall():
-                    nm = r["name"]
-                    if nm:
-                        results[nm] = ("principal", nm, None)
+                    if r["name"]:
+                        results.append(SearchResult(id=r["name"], name=r["name"], type="owner", context="Principal"))
 
+                # Property Owner Match (if we have normalized vars)
+                # Property Owner Match (if we have normalized vars)
+                # Strategy: 
+                # 1. Try strict match on owner_norm (indexed, fast)
+                # 2. If valid vars exist, also try a LIKE match on raw owner/co_owner columns for robustness
+                #    (This helps when normalization might be slightly off or for partial names)
+                
+                params = []
+                where_clauses = []
+                
                 if norm_set:
-                    cursor.execute(
-                        """
+                    where_clauses.append("owner_norm = ANY(%s)")
+                    params.append(norm_set)
+                    where_clauses.append("co_owner_norm = ANY(%s)")
+                    params.append(norm_set)
+                
+                # Also Add partial match on the input term itself against raw columns
+                where_clauses.append("upper(owner) LIKE %s")
+                params.append(t_exact)
+                where_clauses.append("upper(co_owner) LIKE %s")
+                params.append(t_exact)
+                
+                if where_clauses:
+                    sql = f"""
                         SELECT DISTINCT owner AS name
                         FROM properties
-                        WHERE owner_norm = ANY(%s) OR co_owner_norm = ANY(%s)
+                        WHERE {' OR '.join(where_clauses)}
                         LIMIT 50
-                        """,
-                        (norm_set, norm_set)
-                    )
+                    """
+                    cursor.execute(sql, params)
                     for r in cursor.fetchall():
-                        nm = r["name"]
-                        if nm:
-                            results.setdefault(nm, ("principal", nm, None))
+                        if r["name"]:
+                            # Avoid duplicates if possible, but list append is fast
+                            if not any(x.id == r["name"] and x.type == "owner" for x in results):
+                                results.append(SearchResult(id=r["name"], name=r["name"], type="owner", context="Property Owner"))
 
-                out = [SearchResult(id=name, name=name, type="owner", context=ctx) for name, (_, _, ctx) in results.items()]
-                return out[:50]
+
+                # 2. Search Businesses
+                # ------------------------------------------------------------------
+                cursor.execute(
+                    "SELECT id, name, business_address AS context FROM businesses WHERE upper(name) LIKE %s LIMIT 20",
+                    (t_exact,)
+                )
+                for r in cursor.fetchall():
+                    results.append(SearchResult(id=str(r["id"]), name=r["name"], type="business", context=r.get("context")))
+
+                # 3. Search Properties (Addresses)
+                # ------------------------------------------------------------------
+                # Use pg_trgm for fuzzy matching only if search term is long enough, otherwise simple LIKE
+                # Using the exact same logic as 'address' type but limiting count
+                cursor.execute(
+                    """
+                    SELECT location, owner, co_owner, property_city, business_id
+                    FROM properties
+                    WHERE location %% %s
+                    ORDER BY similarity(location, %s) DESC
+                    LIMIT 20
+                    """,
+                    (t, t)
+                )
+
+                prop_rows = cursor.fetchall()
+
+                # Resolve context for properties (Business vs Owner)
+                if prop_rows:
+                    # Batch collect business IDs
+                    business_ids = {str(r['business_id']) for r in prop_rows if r.get('business_id')}
+                    # If we really want full context we could fetch business names here, 
+                    # but for speed let's just stick to basic info or reuse the logic from type='address' block if strictly needed.
+                    # Simplified context generation:
+                    
+                    # Fetch business names if needed
+                    biz_map = {}
+                    if business_ids:
+                         cursor.execute("SELECT id, name FROM businesses WHERE id::text = ANY(%s)", (list(business_ids),))
+                         for b in cursor.fetchall():
+                             biz_map[str(b['id'])] = b['name']
+
+                    seen_locs = set()
+                    for r in prop_rows:
+                        loc = r['location']
+                        if loc in seen_locs: continue
+                        
+                        # Determine what ID to pass. 
+                        # Ideally, clicking an address should open the analysis for that PROPERTY's network.
+                        # The 'type' needs to be handled by frontend. 
+                        # If frontend receives type='property', does it work? 
+                        # Frontend `loadNetwork` usually expects `principal` or `business`.
+                        # However, the 'address' search block returns type='owner' or 'business' based on who owns the property.
+                        # We should mimic that so the graph loads the OWNER of the property.
+                        
+                        target_id = None
+                        target_type = None
+                        ctx = ""
+
+                        if r.get('business_id') and str(r['business_id']) in biz_map:
+                             target_id = str(r['business_id'])
+                             target_type = "business"
+                             ctx = f"Owned by {biz_map[target_id]}"
+                        elif r.get('owner'):
+                             target_id = r['owner']
+                             target_type = "owner"
+                             ctx = f"Owned by {target_id}"
+                        elif r.get('co_owner'):
+                             target_id = r['co_owner']
+                             target_type = "owner"
+                             ctx = f"Co-owned by {target_id}"
+                        
+                        if target_id:
+                            results.append(SearchResult(
+                                id=target_id,
+                                name=loc,          # Display the ADDRESS
+                                type=target_type,  # But link to the OWNER entity
+                                context=ctx
+                            ))
+                            seen_locs.add(loc)
+
+                # Deduplicate final list by ID+Type just in case
+                unique_results = []
+                seen_ids = set()
+                for res in results:
+                    key = f"{res.type}:{res.id}:{res.name}"
+                    if key not in seen_ids:
+                        unique_results.append(res)
+                        seen_ids.add(key)
+                
+                return unique_results[:50]
 
             elif type == "address":
                 # Use pg_trgm for fuzzy matching, order by similarity, and fetch co_owner.
@@ -1479,6 +1673,8 @@ def healthz():
 class DigestItem(BaseModel):
     name: str
     type: str
+    property_count: Optional[int] = 0
+    total_value: Optional[float] = 0.0
 
 class NetworkDigestRequest(BaseModel):
     entities: List[DigestItem]
@@ -1487,8 +1683,9 @@ class NetworkDigestRequest(BaseModel):
 @app.post("/api/network_digest")
 def create_network_digest(req: NetworkDigestRequest, conn=Depends(get_db_connection)):
     # 1. Generate Stable Hash (Cache Key)
+    # Include stats in hash so if data changes (e.g. value updates), we regenerate
     sorted_ents = sorted(req.entities, key=lambda x: (x.type, x.name))
-    blob = json.dumps([{"n": e.name, "t": e.type} for e in sorted_ents], sort_keys=True)
+    blob = json.dumps([{"n": e.name, "t": e.type, "c": e.property_count, "v": e.total_value} for e in sorted_ents], sort_keys=True)
     digest_hash = hashlib.md5(blob.encode("utf-8")).hexdigest()
     digest_id = f"DIGEST_{digest_hash}"
     
@@ -1555,7 +1752,6 @@ def create_network_digest(req: NetworkDigestRequest, conn=Depends(get_db_connect
 
         # Execute searches in parallel
         with ThreadPoolExecutor(max_workers=5) as executor:
-            # Limit to processing provided entities (Frontend should limit count if needed, but we handle parallel)
             # We'll rely on Frontend to send a reasonable number (e.g. top 10).
             results = list(executor.map(fetch_entity_context, req.entities))
             combined_context = [r["context"] for r in results]
@@ -1569,19 +1765,25 @@ def create_network_digest(req: NetworkDigestRequest, conn=Depends(get_db_connect
 
         full_text_context = "\n\n".join(combined_context)
         
+        # Calculate aggregate stats for the prompt
+        total_props = sum(e.property_count for e in req.entities)
+        total_val = sum(e.total_value for e in req.entities)
+        
         # 3. Summarize with OpenAI
         final_summary = "Analysis Unavailable."
-        title = f"AI Digest - {len(req.entities)} Entities"
+        title = f"AI Digest - Network of {len(req.entities)} Entities"
         
         if openai and OPENAI_API_KEY:
             prompt = (
-                "You are an investigative analyst. Analyze the following web search excerpts for a group of related Property Owners and Businesses.\n\n"
+                f"You are an investigative analyst. You are analyzing a property network consisting of {len(req.entities)} related entities (principals and businesses). "
+                f"Together, they own {total_props} properties with a total assessed value of ${total_val:,.0f}.\n\n"
+                "Analyze the following web search excerpts for this group.\n\n"
                 "STRUCTURE YOUR RESPONSE AS FOLLOWS:\n"
-                "1. OVERALL SUMMARY: A concise 3-4 sentence high-level overview of the entire network's footprint and reputation.\n"
-                "2. KEY RISKS & FINDINGS: Bullet points of major issues, complaints, or legal patterns.\n"
+                "1. OVERALL SUMMARY: A concise 3-4 sentence high-level overview of the entire network's footprint, reputation, and scale.\n"
+                "2. KEY RISKS & FINDINGS: Bullet points of major issues, complaints, eviction history, or legal patterns found in the news.\n"
                 "3. ENTITY BREAKDOWN: Brief notes on individual principals or businesses where specific info was found.\n\n"
                 "Focus on identifying problems, complaints, violations, poor conditions, or anything of interest to tenants/organizers.\n"
-                "Be specific. If no negative info is found, focus on the scale of the portfolio.\n\n"
+                "Be specific. If no negative info is found, focus on characterizing the portfolio based on the property count and value provided above.\n\n"
                 f"Web Search Data:\n{full_text_context}\n"
             )
             try:

@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { ArrowUpDown, Map, Download } from 'lucide-react';
 
-export default function PropertyTable({ properties, onSelectProperty }) {
+export default function PropertyTable({ properties, onSelectProperty, forceExpanded = false }) {
     const [sortConfig, setSortConfig] = useState({ key: 'address', direction: 'asc' });
     const [filter, setFilter] = useState('');
 
@@ -9,7 +9,7 @@ export default function PropertyTable({ properties, onSelectProperty }) {
     const [isExpanded, setIsExpanded] = useState(true);
 
     const toggleExpand = () => {
-        if (window.innerWidth >= 1024) return;
+        if (window.innerWidth >= 1024 || forceExpanded) return;
         setIsExpanded(!isExpanded);
     };
 
@@ -72,7 +72,7 @@ export default function PropertyTable({ properties, onSelectProperty }) {
     };
 
     return (
-        <div className={`bg-white rounded-xl border border-gray-200 shadow-sm flex flex-col overflow-hidden transition-all duration-300 w-full ${isExpanded ? 'h-[500px] lg:h-full' : 'h-14 lg:h-full'}`}>
+        <div className={`bg-white rounded-xl border border-gray-200 shadow-sm flex flex-col overflow-hidden transition-all duration-300 w-full ${forceExpanded ? 'min-h-[500px]' : (isExpanded ? 'h-[500px] lg:h-full' : 'h-14 lg:h-full')}`}>
             {/* Header / Toolbar */}
             <div
                 className="p-4 border-b border-gray-100 flex items-center justify-between gap-4 bg-gray-50/50 cursor-pointer lg:cursor-default"
