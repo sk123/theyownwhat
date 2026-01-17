@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Layers, ChevronDown, ChevronRight, User, Building, ArrowRight, MapPin, Info } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-export default function NetworkView({ networkData, onSelectEntity, selectedEntityId, onViewDetails, mobileSection = 'all' }) {
+export default function NetworkView({ networkData, onSelectEntity, selectedEntityId, onViewDetails, mobileSection = 'all', autoHeight = false }) {
     const [activeTab, setActiveTab] = useState('human');
     const [showInactive, setShowInactive] = useState(false);
 

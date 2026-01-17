@@ -387,7 +387,7 @@ function App() {
             />
 
             {/* --- MOBILE TAB LAYOUT (lg:hidden) --- */}
-            <div className="flex-1 min-h-0 flex flex-col lg:hidden relative border border-slate-200 rounded-xl overflow-hidden bg-white shadow-sm">
+            <div className="flex flex-col lg:hidden relative border border-slate-200 rounded-xl bg-white shadow-sm mt-2">
 
               {/* Sticky Tab Header */}
               <div className="flex items-center border-b border-gray-100 bg-white/95 backdrop-blur-md sticky top-0 z-30 shadow-sm">
