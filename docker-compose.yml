@@ -83,6 +83,10 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     container_name: ctdata_nginx
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
     ports:
       - "6262:80"
     volumes:
