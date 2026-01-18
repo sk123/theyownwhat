@@ -348,9 +348,13 @@ function App() {
                       </div>
                     </div>
 
-                    <div className="mt-6 flex items-center justify-center gap-2 text-slate-400 text-sm animate-fade-in-up delay-75">
-                      <div className="w-1.5 h-1.5 rounded-full bg-emerald-400"></div>
-                      <p><strong>Get Started:</strong> Click on a network below or search to begin discovery.</p>
+                    <div className="mt-8 flex items-center justify-center animate-fade-in-up delay-75">
+                      <div className="bg-white/80 backdrop-blur-sm border border-slate-200 shadow-sm rounded-full px-5 py-2 flex items-center gap-3">
+                        <div className="w-2.5 h-2.5 rounded-full bg-blue-500 animate-pulse"></div>
+                        <p className="text-slate-600 text-sm font-medium">
+                          <span className="text-slate-900 font-bold">New here?</span> Click on a network below or search to begin discovery.
+                        </p>
+                      </div>
                     </div>
                   </div>
 
