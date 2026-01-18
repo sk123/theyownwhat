@@ -18,6 +18,7 @@
 *   **Smart Search:** Added instant autocomplete for businesses, owners, and addresses with real-time feedback.
 *   **Accessibility:** Improved color contrast and screen reader support (ARIA labels) across the application.
 *   **API Compatibility:** FIXED: Updated backend to support OpenAI Python SDK v1.0.0+, resolving legacy API errors.
+*   **AI Digest:** FIXED: Resolved synthesis errors and added inline source citations `(Source: url)` for better verification.
 
 ## New Feature: AI Digest
 

@@ -31,7 +31,10 @@ function App() {
   });
   const [stats, setStats] = useState({
     totalValue: 0,
+    totalAppraised: 0,
     totalProperties: 0,
+    humanCount: 0,
+    entityCount: 0
   });
 
   // Dashboard State
@@ -173,9 +176,28 @@ function App() {
           return acc + val;
         }, 0);
 
+        const totalApp = newData.properties.reduce((acc, p) => {
+          const val = parseFloat(String(p.appraised_value || '0').replace(/[^0-9.]/g, ''));
+          return acc + val;
+        }, 0);
+
+        // Calculate Principal Breakdown
+        let hCount = 0;
+        let eCount = 0;
+        newData.principals.forEach(p => {
+          if (p.name && p.name.match(/(LLC|INC|CORP|LTD|GROUP|HOLDINGS|REALTY|MANAGEMENT|TRUST|LP|PARTNERSHIP)/i)) {
+            eCount++;
+          } else {
+            hCount++;
+          }
+        });
+
         setStats({
           totalProperties: newData.properties.length,
-          totalValue: totalVal
+          totalValue: totalVal,
+          totalAppraised: totalApp,
+          humanCount: hCount,
+          entityCount: eCount
         });
 
         setStreamingStatus(prev => ({ ...prev, active: false }));
@@ -358,9 +380,20 @@ function App() {
             <div className="flex flex-col md:flex-row gap-3 items-stretch">
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 flex-1">
                 <StatCard label="Properties" value={stats.totalProperties} icon={<Building2 className="w-4 h-4 text-slate-400" />} />
-                <StatCard label="Portfolio Value" value={`$${(stats.totalValue / 1000000).toFixed(1)}M`} highlight icon={<TrendingUp className="w-4 h-4 text-blue-200" />} />
+                <StatCard
+                  label="Portfolio Value"
+                  value={`$${(stats.totalValue / 1000000).toFixed(1)}M`}
+                  sub={`Appraised: $${(stats.totalAppraised / 1000000).toFixed(1)}M`}
+                  highlight
+                  icon={<TrendingUp className="w-4 h-4 text-blue-200" />}
+                />
                 <StatCard label="Businesses" value={networkData.businesses.length} icon={<Building2 className="w-4 h-4 text-slate-400" />} />
-                <StatCard label="Principals" value={networkData.principals.length} icon={<Users className="w-4 h-4 text-slate-400" />} />
+                <StatCard
+                  label="Principals"
+                  value={stats.humanCount + stats.entityCount}
+                  sub={`${stats.humanCount} Human / ${stats.entityCount} Entity`}
+                  icon={<Users className="w-4 h-4 text-slate-400" />}
+                />
               </div>
               {aiEnabled && (
                 <button
