@@ -1,10 +1,14 @@
 # they own WHAT??
 
+[![Open Source](https://img.shields.io/badge/Open%20Source-Love-red)](https://github.com/sk123/theyownwhat)
+
+**Published at:** [https://theyownwhat.net](https://theyownwhat.net)
+
 **Version 2.0 // 2025**
 
 ## The Mission
 
-**they own WHAT??** is an investigative and advocacy tool designed to bring transparency to Connecticut's property landscape. By linking fragmented public records, we reveal the hidden networks of ownership that shape our neighborhoods.
+**they own WHAT??** is an investigative and advocacy tool designed to bring transparency to **Connecticut's** property landscape. By linking fragmented public records, we reveal the hidden networks of ownership that shape our neighborhoods.
 
 ## Recent Updates (January 2026)
 
@@ -24,14 +28,19 @@ The **AI Digest** performs automated web searches across multiple entities simul
 
 ## Data Sources
 
-*   CT SOTS Business Registry
-*   Municipal Parcel & CAMA Records
+*   [CT Business Registry - Business Master](https://data.ct.gov/Business/Connecticut-Business-Registry-Business-Master/n7gp-d28j/about_data)
+*   [CT Business Registry - Principals](https://data.ct.gov/Business/Connecticut-Business-Registry-Principals/ka36-64k6/about_data)
+*   [Municipal Parcel & CAMA Records](https://geodata.ct.gov/datasets/ctmaps::connecticut-cama-and-parcel-layer/about)
 *   Real-time News Highlights
 *   2025 Assessment Data
 
 ## How it works
 
 Our system uses name normalization and link-analysis to connect principals to businesses, and businesses to properties, creating a "graph" of ownership that surpasses simple database lookups.
+
+## Installation & Setup
+
+Want to run this locally? See our [Installation Guide](INSTALLATION.md) for detailed instructions on how to download the required data and run the Docker containers.
 
 ## Transparency Notice
 
