@@ -40,3 +40,12 @@ This tool is for informational and advocacy purposes. While we strive for 100% a
 ## Contact
 
 Questions? Reach out to [salmunk@gmail.com](mailto:salmunk@gmail.com)
+
+## License
+
+This project is licensed under the **Creative Commons Attribution-NonCommercial 4.0 International License**.
+
+*   **Attribution**: You must give appropriate credit, provide a link to the license, and indicate if changes were made.
+*   **Non-Commercial**: You may not use the material for commercial purposes.
+
+See [LICENSE](LICENSE) for the full text.
