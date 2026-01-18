@@ -8,7 +8,7 @@
 
 ## The Mission
 
-**they own WHAT??** is an investigative and advocacy tool designed to bring transparency to **Connecticut's** property landscape. By linking fragmented public records, we reveal the hidden networks of ownership that shape our neighborhoods.
+**they own WHAT??** is an investigative and advocacy tool designed to bring transparency to **Connecticut's** property landscape. By linking fragmented public records, the tool reveals the hidden networks of ownership that shape our neighborhoods.
 
 ## Recent Updates (January 2026)
 
@@ -36,15 +36,15 @@ The **AI Digest** performs automated web searches across multiple entities simul
 
 ## How it works
 
-Our system uses name normalization and link-analysis to connect principals to businesses, and businesses to properties, creating a "graph" of ownership that surpasses simple database lookups.
+The system uses name normalization and link-analysis to connect principals to businesses, and businesses to properties, creating a "graph" of ownership that surpasses simple database lookups.
 
 ## Installation & Setup
 
-Want to run this locally? See our [Installation Guide](INSTALLATION.md) for detailed instructions on how to download the required data and run the Docker containers.
+Want to run this locally? See the [Installation Guide](INSTALLATION.md) for detailed instructions on how to download the required data and run the Docker containers.
 
 ## Transparency Notice
 
-This tool is for informational and advocacy purposes. While we strive for 100% accuracy in our linking logic, users should verify critical findings with primary municipal and state sources.
+This tool is for informational and advocacy purposes. While every effort is made for 100% accuracy in the linking logic, users should verify critical findings with primary municipal and state sources.
 
 ## Contact
 
