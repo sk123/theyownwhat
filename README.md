@@ -59,4 +59,4 @@ This project is licensed under the **Creative Commons Attribution-NonCommercial 
 *   **Attribution**: You must give appropriate credit, provide a link to the license, and indicate if changes were made.
 *   **Non-Commercial**: You may not use the material for commercial purposes.
 
-See [LICENSE](LICENSE) for the full text.
+See [LICENSE](https://github.com/sk123/theyownwhat/blob/main/LICENSE) for the full text.
