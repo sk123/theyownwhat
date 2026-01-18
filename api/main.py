@@ -48,7 +48,10 @@ app.add_middleware(
 
 @app.get("/api/health")
 def health_check():
-    return {"status": "ok", "timestamp": time.time()}
+    # Check if OpenAI key is present and NOT the placeholder
+    ai_key = os.environ.get("OPENAI_API_KEY", "")
+    ai_enabled = bool(ai_key and "REPLACE_WITH_API_KEY" not in ai_key)
+    return {"status": "ok", "timestamp": time.time(), "ai_enabled": ai_enabled}
 
 db_pool: Optional[pool.SimpleConnectionPool] = None
 

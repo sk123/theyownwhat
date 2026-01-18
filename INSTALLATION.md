@@ -7,7 +7,23 @@ This guide explains how to set up the **They Own What** project locally.
 *   [Docker Desktop](https://www.docker.com/products/docker-desktop) (or Docker Engine + Compose)
 *   Git
 
-## 2. Data Preparation
+## 2. Configuration (Optional)
+
+To enable the **AI Digest** feature (powered by OpenAI), you need to configure your API keys.
+
+1.  Rename the template file:
+    ```bash
+    mv ".env (RENAME TO .env)" .env
+    ```
+
+2.  Open `.env` and replace the placeholders with your actual API keys:
+    ```env
+    OPENAI_API_KEY="sk-..."
+    SERPAPI_API_KEY="..."
+    ```
+    *If you do not provide a valid OpenAI key, the AI features will be automatically disabled in the UI.*
+
+## 3. Data Preparation
 
 The application relies on specific datasets from the State of Connecticut. You must download these files, rename them, and place them in the `data/` directory.
 

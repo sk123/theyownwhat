@@ -38,6 +38,7 @@ function App() {
 
   // Mobile Tabs
   const [activeMobileTab, setActiveMobileTab] = useState('properties');
+  const [aiEnabled, setAiEnabled] = useState(false);
 
   const [loadingInsights, setLoadingInsights] = useState(true);
   const [streamingStatus, setStreamingStatus] = useState({
@@ -48,6 +49,14 @@ function App() {
 
   // Init Insights
   React.useEffect(() => {
+    api.get('/health')
+      .then(data => {
+        if (data && data.ai_enabled) {
+          setAiEnabled(true);
+        }
+      })
+      .catch(err => console.warn("Health check failed", err));
+
     setLoadingInsights(true);
     api.get('/insights')
       .then(data => {
@@ -362,19 +371,21 @@ function App() {
                 <StatCard label="Businesses" value={networkData.businesses.length} icon={<Building2 className="w-4 h-4 text-slate-400" />} />
                 <StatCard label="Principals" value={networkData.principals.length} icon={<Users className="w-4 h-4 text-slate-400" />} />
               </div>
-              <button
-                onClick={() => setShowAnalysis(true)}
-                className="px-6 bg-slate-900 hover:bg-slate-800 text-white rounded-xl shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all flex items-center justify-center gap-2 min-w-[140px] group"
-              >
-                <div className="relative">
-                  <Sparkles className="w-5 h-5 text-indigo-400 group-hover:text-indigo-300 transition-colors" />
-                  <div className="absolute inset-0 bg-indigo-400/50 blur-sm opacity-50 animate-pulse"></div>
-                </div>
-                <div className="text-left">
-                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 leading-none mb-0.5">Generate</div>
-                  <div className="text-sm font-bold">AI Digest</div>
-                </div>
-              </button>
+              {aiEnabled && (
+                <button
+                  onClick={() => setShowAnalysis(true)}
+                  className="px-6 bg-slate-900 hover:bg-slate-800 text-white rounded-xl shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all flex items-center justify-center gap-2 min-w-[140px] group"
+                >
+                  <div className="relative">
+                    <Sparkles className="w-5 h-5 text-indigo-400 group-hover:text-indigo-300 transition-colors" />
+                    <div className="absolute inset-0 bg-indigo-400/50 blur-sm opacity-50 animate-pulse"></div>
+                  </div>
+                  <div className="text-left">
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 leading-none mb-0.5">Generate</div>
+                    <div className="text-sm font-bold">AI Digest</div>
+                  </div>
+                </button>
+              )}
             </div>
 
             {/* Cross-Filtering & City Selection Controls */}
