@@ -1,4 +1,4 @@
-import React, { useState, Suspense } from 'react';
+import React, { useState, Suspense, useTransition } from 'react';
 import Header from './components/Header';
 import SearchBar from './components/SearchBar';
 import NetworkView from './components/NetworkView';
@@ -45,6 +45,13 @@ function App() {
 
   // Mobile Tabs
   const [activeMobileTab, setActiveMobileTab] = useState('properties');
+  const [isPending, startTransition] = useTransition();
+
+  const handleTabChange = (tab) => {
+    startTransition(() => {
+      setActiveMobileTab(tab);
+    });
+  };
   const [aiEnabled, setAiEnabled] = useState(false);
 
   const [loadingInsights, setLoadingInsights] = useState(true);
@@ -340,6 +347,11 @@ function App() {
                         <SearchBar onSearch={handleSearch} isLoading={loading} />
                       </div>
                     </div>
+
+                    <div className="mt-6 flex items-center justify-center gap-2 text-slate-400 text-sm animate-fade-in-up delay-75">
+                      <div className="w-1.5 h-1.5 rounded-full bg-emerald-400"></div>
+                      <p><strong>Get Started:</strong> Click on a network below or search to begin discovery.</p>
+                    </div>
                   </div>
 
                   {/* Results or Insights */}
@@ -427,19 +439,19 @@ function App() {
               {/* Sticky Tab Header */}
               <div className="flex items-center border-b border-gray-100 bg-white/95 backdrop-blur-md sticky top-0 z-30 shadow-sm">
                 <button
-                  onClick={() => setActiveMobileTab('properties')}
+                  onClick={() => handleTabChange('properties')}
                   className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider transition-colors border-b-2 ${activeMobileTab === 'properties' ? 'border-blue-500 text-blue-700 bg-blue-50/50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
                 >
                   Properties
                 </button>
                 <button
-                  onClick={() => setActiveMobileTab('businesses')}
+                  onClick={() => handleTabChange('businesses')}
                   className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider transition-colors border-b-2 ${activeMobileTab === 'businesses' ? 'border-emerald-500 text-emerald-700 bg-emerald-50/50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
                 >
                   Businesses
                 </button>
                 <button
-                  onClick={() => setActiveMobileTab('principals')}
+                  onClick={() => handleTabChange('principals')}
                   className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider transition-colors border-b-2 ${activeMobileTab === 'principals' ? 'border-indigo-500 text-indigo-700 bg-indigo-50/50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
                 >
                   Principals
@@ -460,7 +472,7 @@ function App() {
               </div>
 
               {/* Content Area - Auto Height for Page Scroll */}
-              <div className="bg-white min-h-[500px]">
+              <div className={`bg-white min-h-[500px] transition-opacity duration-200 ${isPending ? 'opacity-50' : 'opacity-100'}`}>
                 {activeMobileTab === 'properties' && (
                   <div className="flex flex-col">
                     <PropertyTable
