@@ -17,6 +17,7 @@
 *   **Mobile Experience:** Enhanced mobile usability with sticky tabs, page-level scrolling, and a "Start Over" reset button for easy navigation.
 *   **Smart Search:** Added instant autocomplete for businesses, owners, and addresses with real-time feedback.
 *   **Accessibility:** Improved color contrast and screen reader support (ARIA labels) across the application.
+*   **API Compatibility:** FIXED: Updated backend to support OpenAI Python SDK v1.0.0+, resolving legacy API errors.
 
 ## New Feature: AI Digest
 

@@ -1688,7 +1688,11 @@ def create_network_digest(req: NetworkDigestRequest, conn=Depends(get_db_connect
     # 1. Generate Stable Hash (Cache Key)
     # Include stats in hash so if data changes (e.g. value updates), we regenerate
     sorted_ents = sorted(req.entities, key=lambda x: (x.type, x.name))
-    blob = json.dumps([{"n": e.name, "t": e.type, "c": e.property_count, "v": e.total_value} for e in sorted_ents], sort_keys=True)
+    # v2: Updated to invalidate old cached errors/v0.28 format
+    CACHE_VERSION = "v3_20260117" 
+    blob = json.dumps([
+        {"n": e.name, "t": e.type, "c": e.property_count, "v": e.total_value} for e in sorted_ents
+    ] + [{"_v": CACHE_VERSION}], sort_keys=True)
     digest_hash = hashlib.md5(blob.encode("utf-8")).hexdigest()
     digest_id = f"DIGEST_{digest_hash}"
     
@@ -1738,7 +1742,7 @@ def create_network_digest(req: NetworkDigestRequest, conn=Depends(get_db_connect
                          snip = res.get("snippet", "")
                          link = res.get("link", "")
                          if title or snip:
-                             snippets.append(f"- {title}: {snip}")
+                             snippets.append(f"- {title}: {snip} (Source: {link})")
                          if link:
                              sources.append({"title": title, "url": link})
                 
@@ -1785,14 +1789,18 @@ def create_network_digest(req: NetworkDigestRequest, conn=Depends(get_db_connect
                 "1. OVERALL SUMMARY: A concise 3-4 sentence high-level overview of the entire network's footprint, reputation, and scale.\n"
                 "2. KEY RISKS & FINDINGS: Bullet points of major issues, complaints, eviction history, or legal patterns found in the news.\n"
                 "3. ENTITY BREAKDOWN: Brief notes on individual principals or businesses where specific info was found.\n\n"
+                "CITATIONS: When referencing specific details, include the source link inline formatted as (Source: <url>). Do NOT use markdown links.\n\n"
                 "Focus on identifying problems, complaints, violations, poor conditions, or anything of interest to tenants/organizers.\n"
                 "Be specific. If no negative info is found, focus on characterizing the portfolio based on the property count and value provided above.\n\n"
                 f"Web Search Data:\n{full_text_context}\n"
             )
             try:
                  # Check for v1.0+ vs older SDK
-                 if hasattr(openai, "ChatCompletion"):
-                     resp = openai.ChatCompletion.create(
+                try:
+                    # Try v1.0.0+ Client first
+                    from openai import OpenAI
+                    client = OpenAI(api_key=OPENAI_API_KEY)
+                    resp = client.chat.completions.create(
                         model="gpt-4o-mini",
                         messages=[
                             {"role": "system", "content": "You are a meticulous investigative analyst."},
@@ -1800,25 +1808,23 @@ def create_network_digest(req: NetworkDigestRequest, conn=Depends(get_db_connect
                         ],
                         temperature=0.3,
                         max_tokens=1500,
-                     )
-                     final_summary = resp["choices"][0]["message"]["content"].strip()
-                 else:
-                     # New style
-                     from openai import OpenAI
-                     client = OpenAI(api_key=OPENAI_API_KEY)
-                     resp = client.chat.completions.create(
-                        model="gpt-4o-mini",
+                    )
+                    final_summary = resp.choices[0].message.content.strip()
+                except ImportError:
+                    # Fallback to older <1.0.0 interface
+                    resp = openai.ChatCompletion.create(
+                        model="gpt-3.5-turbo",
                         messages=[
                             {"role": "system", "content": "You are a meticulous investigative analyst."},
                             {"role": "user", "content": prompt}
                         ],
                         temperature=0.3,
                         max_tokens=1500,
-                     )
-                     final_summary = resp.choices[0].message.content.strip()
+                    )
+                    final_summary = resp["choices"][0]["message"]["content"].strip()
             except Exception as e:
                 logger.error(f"OpenAI Digest Error: {e}")
-                final_summary = f"AI Synthesis Encountered an Error. Displaying raw search hits instead:\n\n{full_text_context}"
+                final_summary = f"AI Synthesis Encountered an Error. Displaying raw search hits instead:\n\n{full_text_context}\n\nDEBUG_ERROR_DETAILS: {repr(e)}"
         else:
              final_summary = "OpenAI API Key not configured. Displaying raw web search results:\n\n" + full_text_context
 
