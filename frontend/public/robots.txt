@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://theyownwhat.net/sitemap.xml
