@@ -146,7 +146,10 @@ export default function NetworkAnalysisModal({ isOpen, onClose, networkData, sta
                 body: JSON.stringify(payload)
             });
 
-            if (!res.ok) throw new Error("API Error");
+            if (!res.ok) {
+                const errText = await res.text();
+                throw new Error(`API Error: ${res.status} ${errText}`);
+            }
             const data = await res.json();
             setDigestData({
                 content: data.content,
@@ -260,13 +263,31 @@ export default function NetworkAnalysisModal({ isOpen, onClose, networkData, sta
                                             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
                                                 <div className="prose prose-sm prose-slate max-w-none">
                                                     {digestData.content.split('\n').map((line, idx) => {
+                                                        // Debug logging
+                                                        if (line.includes("DEBUG_ERROR_DETAILS:")) {
+                                                            console.error("AI GENERATION ERROR:", line.split("DEBUG_ERROR_DETAILS:")[1]);
+                                                            return null;
+                                                        }
+
                                                         const isHeader = line.match(/^[0-9]+\. [A-Z ]+:$/) || line.match(/^[A-Z &]+:$/);
                                                         const isBullet = line.trim().startsWith('-');
 
+                                                        // Parse links: (Source: url)
+                                                        const parseLinks = (text) => {
+                                                            const parts = text.split(/(\(Source: https?:\/\/[^\s)]+\))/g);
+                                                            return parts.map((part, i) => {
+                                                                const match = part.match(/\(Source: (https?:\/\/[^\s)]+)\)/);
+                                                                if (match) {
+                                                                    return <a key={i} href={match[1]} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline mx-1 text-xs font-bold" onClick={e => e.stopPropagation()}>{'(Source)'}</a>;
+                                                                }
+                                                                return part;
+                                                            });
+                                                        };
+
                                                         if (isHeader) return <h4 key={idx} className="text-indigo-900 font-bold mt-6 mb-2 text-xs uppercase tracking-wider">{line.replace(':', '')}</h4>;
-                                                        if (isBullet) return <li key={idx} className="text-slate-700 my-1 ml-4 list-disc">{line.replace('-', '').trim()}</li>;
+                                                        if (isBullet) return <li key={idx} className="text-slate-700 my-1 ml-4 list-disc">{parseLinks(line.replace('-', '').trim())}</li>;
                                                         if (!line.trim()) return <br key={idx} />;
-                                                        return <p key={idx} className="text-slate-600 leading-relaxed text-sm mb-2">{line}</p>;
+                                                        return <p key={idx} className="text-slate-600 leading-relaxed text-sm mb-2">{parseLinks(line)}</p>;
                                                     })}
                                                 </div>
 
