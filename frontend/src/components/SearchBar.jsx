@@ -29,7 +29,7 @@ export default function SearchBar({ onSearch, isLoading }) {
             }
         };
 
-        const timeoutId = setTimeout(fetchSuggestions, 300);
+        const timeoutId = setTimeout(fetchSuggestions, 100);
         return () => clearTimeout(timeoutId);
     }, [term, activeTab]);
 
