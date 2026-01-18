@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, Suspense } from 'react';
 import Header from './components/Header';
 import SearchBar from './components/SearchBar';
 import NetworkView from './components/NetworkView';
@@ -6,10 +6,14 @@ import PropertyTable from './components/PropertyTable';
 import { api } from './api';
 import Insights from './components/Insights';
 import SearchResults from './components/SearchResults';
-import PropertyDetailsModal from './components/PropertyDetailsModal';
-import EntityDetailsModal from './components/EntityDetailsModal';
-import NetworkAnalysisModal from './components/NetworkAnalysisModal';
-import AboutModal from './components/AboutModal';
+const PropertyDetailsModal = React.lazy(() => import('./components/PropertyDetailsModal'));
+const EntityDetailsModal = React.lazy(() => import('./components/EntityDetailsModal'));
+const NetworkAnalysisModal = React.lazy(() => import('./components/NetworkAnalysisModal'));
+const AboutModal = React.lazy(() => import('./components/AboutModal'));
+import LoadingScreen from './components/LoadingScreen';
+import DashboardControls from './components/DashboardControls';
+import StatCard from './components/StatCard';
+import BackgroundGrid from './components/BackgroundGrid';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Sparkles, Loader2, Search, ArrowRight, Building2, TrendingUp, Users } from 'lucide-react';
 
@@ -265,20 +269,7 @@ function App() {
   const [selectedProperty, setSelectedProperty] = useState(null);
   const [selectedDetailEntity, setSelectedDetailEntity] = useState(null);
 
-  // Background Grid Component
-  const BackgroundGrid = () => (
-    <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none">
-      <div className="absolute top-0 inset-x-0 h-px bg-gradient-to-r from-transparent via-slate-200 to-transparent opacity-50"></div>
-      <div className="absolute inset-0"
-        style={{
-          backgroundImage: 'radial-gradient(circle at 1px 1px, #e2e8f0 1px, transparent 0)',
-          backgroundSize: '40px 40px'
-        }}>
-      </div>
-      <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-blue-100/50 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2"></div>
-      <div className="absolute bottom-0 left-0 w-[500px] h-[500px] bg-indigo-100/50 rounded-full blur-3xl translate-y-1/3 -translate-x-1/4"></div>
-    </div>
-  );
+
 
   return (
     <div className="h-screen bg-slate-50 flex flex-col overflow-hidden font-sans text-slate-900 selection:bg-blue-100 selection:text-blue-900">
@@ -426,6 +417,7 @@ function App() {
                   onClick={handleReset}
                   className="px-3 py-3 text-gray-400 hover:text-red-500 hover:bg-red-50 border-b-2 border-transparent transition-colors"
                   title="Start Over"
+                  aria-label="Start Over"
                 >
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
@@ -510,141 +502,30 @@ function App() {
           </motion.div>
         )}
 
-        <PropertyDetailsModal
-          property={selectedProperty}
-          onClose={() => setSelectedProperty(null)}
-        />
-        <EntityDetailsModal
-          entity={selectedDetailEntity?.entity}
-          type={selectedDetailEntity?.type}
-          onClose={() => setSelectedDetailEntity(null)}
-        />
+        <Suspense fallback={null}>
+          <PropertyDetailsModal
+            property={selectedProperty}
+            onClose={() => setSelectedProperty(null)}
+          />
+          <EntityDetailsModal
+            entity={selectedDetailEntity?.entity}
+            type={selectedDetailEntity?.type}
+            onClose={() => setSelectedDetailEntity(null)}
+          />
 
-        <NetworkAnalysisModal
-          isOpen={showAnalysis}
-          onClose={() => setShowAnalysis(false)}
-          networkData={networkData}
-          stats={stats}
-        />
-        <AboutModal
-          isOpen={showAbout}
-          onClose={() => setShowAbout(false)}
-        />
+          <NetworkAnalysisModal
+            isOpen={showAnalysis}
+            onClose={() => setShowAnalysis(false)}
+            networkData={networkData}
+            stats={stats}
+          />
+          <AboutModal
+            isOpen={showAbout}
+            onClose={() => setShowAbout(false)}
+          />
+        </Suspense>
       </main>
     </div>
-  );
-}
-
-function StatCard({ label, value, highlight, icon }) {
-  return (
-    <div className={`p-4 rounded-xl border flex flex-col justify-center transition-all hover:shadow-md ${highlight
-      ? 'bg-gradient-to-br from-blue-600 to-indigo-700 text-white border-blue-600 shadow-lg shadow-blue-500/20'
-      : 'bg-white border-slate-200 text-slate-900'
-      }`}>
-      <div className="flex items-center gap-2 mb-1 opacity-80">
-        {icon}
-        <span className={`text-[10px] font-bold uppercase tracking-wider ${highlight ? 'text-blue-100' : 'text-slate-400'}`}>{label}</span>
-      </div>
-      <div className="text-2xl font-black tracking-tight">{value}</div>
-    </div>
-  );
-}
-
-function DashboardControls({ properties, selectedCity, onSelectCity, selectedEntityId, onClearEntity }) {
-  const cities = React.useMemo(() => {
-    const set = new Set(properties.map(p => p.city).filter(Boolean));
-    return ['All', ...Array.from(set).sort()];
-  }, [properties]);
-
-  if (properties.length === 0) return null;
-
-  return (
-    <div className="flex flex-col sm:flex-row gap-3 items-center justify-between bg-white px-4 py-3 rounded-xl border border-slate-200 shadow-sm">
-      <div className="flex items-center gap-3 overflow-x-auto w-full no-scrollbar">
-        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider whitespace-nowrap">Filter City:</span>
-        <div className="flex gap-1.5 flex-1">
-          {cities.map(city => (
-            <button
-              key={city}
-              onClick={() => onSelectCity(city)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-all ${selectedCity === city
-                ? 'bg-slate-900 text-white shadow-md'
-                : 'bg-slate-50 text-slate-500 hover:bg-slate-100'
-                }`}
-            >
-              {city}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {selectedEntityId && (
-        <button
-          onClick={onClearEntity}
-          className="ml-4 px-3 py-1.5 bg-amber-50 text-amber-700 text-xs font-bold rounded-lg border border-amber-200 hover:bg-amber-100 transition-colors flex items-center gap-2 whitespace-nowrap animate-in fade-in slide-in-from-right-2"
-        >
-          <span>Entity Filter Active</span>
-          <X size={12} />
-        </button>
-      )}
-    </div>
-  );
-}
-
-// Simple X icon component for the filter button
-const X = ({ size = 16 }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M18 6 6 18" /><path d="m6 6 12 12" />
-  </svg>
-);
-
-
-function LoadingScreen({ visible, entities, properties }) {
-  return (
-    <AnimatePresence>
-      {visible && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/80 backdrop-blur-xl"
-        >
-          <div className="text-center p-8 max-w-sm w-full relative">
-
-            <motion.div
-              animate={{ rotate: 360 }}
-              transition={{ repeat: Infinity, duration: 3, ease: "linear" }}
-              className="relative w-24 h-24 mx-auto mb-8"
-            >
-              <div className="absolute inset-0 rounded-full border-4 border-slate-700"></div>
-              <div className="absolute inset-0 rounded-full border-4 border-t-blue-500 border-r-transparent border-b-transparent border-l-transparent"></div>
-            </motion.div>
-
-            <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.2 }}
-            >
-              <h3 className="text-2xl font-black text-white mb-2 tracking-tight">Building Network</h3>
-              <p className="text-sm text-slate-400 font-medium mb-8">
-                Tracing ownership links and aggregating property data...
-              </p>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div className="bg-white/5 p-4 rounded-2xl border border-white/10 backdrop-blur-md">
-                  <div className="text-3xl font-black text-blue-400">{entities}</div>
-                  <div className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Entities Found</div>
-                </div>
-                <div className="bg-white/5 p-4 rounded-2xl border border-white/10 backdrop-blur-md">
-                  <div className="text-3xl font-black text-indigo-400">{properties}</div>
-                  <div className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Properties Linked</div>
-                </div>
-              </div>
-            </motion.div>
-          </div>
-        </motion.div>
-      )}
-    </AnimatePresence>
   );
 }
 

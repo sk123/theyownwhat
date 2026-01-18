@@ -16,6 +16,7 @@
 *   **UI Overhaul:** Modernized interface with glassmorphism design, improved cards, and responsive layout.
 *   **Mobile Experience:** Enhanced mobile usability with sticky tabs, page-level scrolling, and a "Start Over" reset button for easy navigation.
 *   **Smart Search:** Added instant autocomplete for businesses, owners, and addresses with real-time feedback.
+*   **Accessibility:** Improved color contrast and screen reader support (ARIA labels) across the application.
 
 ## New Feature: AI Digest
 

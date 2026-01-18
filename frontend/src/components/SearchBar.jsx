@@ -105,8 +105,9 @@ export default function SearchBar({ onSearch, isLoading }) {
                         onFocus={() => setShowSuggestions(true)}
                         onKeyDown={handleKeyDown}
                         placeholder={`Search by ${activeTab}...`}
-                        className="w-full pl-4 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-medium text-slate-900 placeholder:text-slate-400"
+                        className="w-full pl-4 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-medium text-slate-900 placeholder:text-slate-500"
                         autoFocus
+                        aria-label={`Search by ${activeTab}`}
                     />
 
                     {/* Autocomplete Dropdown */}
@@ -124,9 +125,9 @@ export default function SearchBar({ onSearch, isLoading }) {
                                         onClick={() => handleSelectSuggestion(item)}
                                         className="w-full text-left px-4 py-3 hover:bg-slate-50 text-sm font-medium text-slate-700 flex items-center gap-2 transition-colors border-b border-slate-50 last:border-0"
                                     >
-                                        <Search className="w-3.5 h-3.5 text-slate-400" />
+                                        <Search className="w-3.5 h-3.5 text-slate-500" />
                                         {item}
-                                        <span className="ml-auto text-xs text-slate-300 uppercase tracking-wider">{activeTab}</span>
+                                        <span className="ml-auto text-xs text-slate-400 uppercase tracking-wider">{activeTab}</span>
                                     </button>
                                 ))}
                             </motion.div>

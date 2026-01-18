@@ -96,6 +96,7 @@ export default function PropertyTable({ properties, onSelectProperty, forceExpan
                         onClick={exportCSV}
                         className="p-1.5 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
                         title="Export CSV"
+                        aria-label="Export CSV"
                     >
                         <Download className="w-4 h-4" />
                     </button>
@@ -135,6 +136,7 @@ export default function PropertyTable({ properties, onSelectProperty, forceExpan
                                         rel="noreferrer"
                                         className="inline-flex items-center justify-center w-6 h-6 rounded bg-gray-50 text-gray-400 hover:bg-blue-100 hover:text-blue-600 transition-colors"
                                         onClick={(e) => e.stopPropagation()}
+                                        aria-label="View on Google Maps"
                                     >
                                         <Map className="w-3 h-3" />
                                     </a>
