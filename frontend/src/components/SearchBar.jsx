@@ -11,6 +11,9 @@ export default function SearchBar({ onSearch, isLoading }) {
 
     // Debounced Autocomplete
     useEffect(() => {
+        const controller = new AbortController();
+        const signal = controller.signal;
+
         const fetchSuggestions = async () => {
             if (term.length < 2) {
                 setSuggestions([]);
@@ -19,18 +22,23 @@ export default function SearchBar({ onSearch, isLoading }) {
 
             try {
                 // Use the internal DB autocomplete endpoint
-                const res = await fetch(`/api/autocomplete?q=${encodeURIComponent(term)}&type=${activeTab}`);
+                const res = await fetch(`/api/autocomplete?q=${encodeURIComponent(term)}&type=${activeTab}`, { signal });
                 if (res.ok) {
                     const data = await res.json();
                     setSuggestions(data);
                 }
             } catch (err) {
-                console.error("Autocomplete error:", err);
+                if (err.name !== 'AbortError') {
+                    console.error("Autocomplete error:", err);
+                }
             }
         };
 
         const timeoutId = setTimeout(fetchSuggestions, 100);
-        return () => clearTimeout(timeoutId);
+        return () => {
+            clearTimeout(timeoutId);
+            controller.abort();
+        };
     }, [term, activeTab]);
 
     // Handle clicks outside to close suggestions
