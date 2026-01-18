@@ -12,7 +12,7 @@
 
 ## Recent Updates (January 2026)
 
-*   **Data Refresh:** Ingested latest 2024/2026 datasets: 9.6M businesses, 1.7M principals, and 1.3M parcels.
+*   **Data Refresh:** Ingested latest 2024/2025 datasets: 9.6M businesses, 1.7M principals, and 1.3M parcels.
 *   **UI Overhaul:** Modernized interface with glassmorphism design, improved cards, and responsive layout.
 *   **Mobile Experience:** Enhanced mobile usability with sticky tabs, page-level scrolling, and a "Start Over" reset button for easy navigation.
 *   **Smart Search:** Added instant autocomplete for businesses, owners, and addresses with real-time feedback.
@@ -35,7 +35,6 @@ The **AI Digest** performs automated web searches across multiple entities simul
 *   [CT Business Registry - Principals](https://data.ct.gov/Business/Connecticut-Business-Registry-Principals/ka36-64k6/about_data)
 *   [Municipal Parcel & CAMA Records](https://geodata.ct.gov/datasets/ctmaps::connecticut-cama-and-parcel-layer/about)
 *   Real-time News Highlights
-*   2026 Assessment Data
 
 ## How it works
 
