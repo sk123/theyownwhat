@@ -43,7 +43,7 @@ The system uses name normalization and link-analysis to connect principals to bu
 
 ## Installation & Setup
 
-Want to run this locally? See the [Installation Guide](INSTALLATION.md) for detailed instructions on how to download the required data and run the Docker containers.
+Want to run this locally? See the [Installation Guide](https://github.com/sk123/theyownwhat/blob/main/INSTALLATION.md) for detailed instructions on how to download the required data and run the Docker containers.
 
 ## Transparency Notice
 
