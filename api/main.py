@@ -430,6 +430,7 @@ class InsightItem(BaseModel):
     total_assessed_value: Optional[float] = None
     total_appraised_value: Optional[float] = None
     business_name: Optional[str] = None
+    business_count: Optional[int] = 0
     principals: Optional[List[PrincipalInfo]] = None
     businesses: Optional[List[BusinessInfo]] = None
 
@@ -1541,7 +1542,8 @@ def _calculate_and_cache_insights(cursor, town_col: Optional[str], town_filter: 
                 ptn.network_id,
                 COUNT(DISTINCT ptn.property_id) as property_count,
                 COALESCE(SUM(p.assessed_value), 0) as total_assessed_value,
-                COALESCE(SUM(p.appraised_value), 0) as total_appraised_value
+                COALESCE(SUM(p.appraised_value), 0) as total_appraised_value,
+                (SELECT COUNT(*) FROM entity_networks en WHERE en.network_id = ptn.network_id AND en.entity_type = 'business') as business_count
             FROM property_to_network ptn
             JOIN properties p ON ptn.property_id = p.id
             {town_where_clause}
@@ -1556,6 +1558,7 @@ def _calculate_and_cache_insights(cursor, town_col: Optional[str], town_filter: 
                 tn.property_count,
                 tn.total_assessed_value,
                 tn.total_appraised_value,
+                tn.business_count,
                 en.entity_id,
                 en.entity_type,
                 en.entity_name,
@@ -1577,6 +1580,7 @@ def _calculate_and_cache_insights(cursor, town_col: Optional[str], town_filter: 
             nde.property_count as value,
             nde.total_assessed_value,
             nde.total_appraised_value,
+            nde.business_count,
             nde.network_id
         FROM network_display_entity nde
         ORDER BY nde.property_count DESC

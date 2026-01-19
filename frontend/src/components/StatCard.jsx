@@ -1,7 +1,7 @@
 /* src/components/StatCard.jsx */
 import React from 'react';
 
-export default function StatCard({ label, value, highlight, icon }) {
+export default function StatCard({ label, value, highlight, icon, sub }) {
     return (
         <div className={`p-4 rounded-xl border flex flex-col justify-center transition-all hover:shadow-md ${highlight
             ? 'bg-gradient-to-br from-blue-600 to-indigo-700 text-white border-blue-600 shadow-lg shadow-blue-500/20'

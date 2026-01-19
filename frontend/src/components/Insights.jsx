@@ -100,6 +100,9 @@ export default function Insights({ data, onSelect }) {
                                 {network.businesses && network.businesses.length > 0 && (
                                     <div className="text-xs font-semibold text-slate-500 mt-1 uppercase tracking-wide truncate">
                                         {network.businesses[0].name}
+                                        {network.business_count > 1 && (
+                                            <span className="text-slate-400 font-medium normal-case"> and {network.business_count - 1} more</span>
+                                        )}
                                     </div>
                                 )}
                             </div>
@@ -111,10 +114,14 @@ export default function Insights({ data, onSelect }) {
                                     <div className="text-xl font-black text-slate-900">{network.value}</div>
                                 </div>
                                 <div className="space-y-0.5">
+                                    <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Businesses</div>
+                                    <div className="text-xl font-black text-slate-900">{network.business_count || 0}</div>
+                                </div>
+                                <div className="space-y-0.5">
                                     <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Est. Value (Assessed)</div>
                                     <div className="text-xl font-black text-slate-900">${(network.total_assessed_value / 1000000).toFixed(1)}M</div>
                                 </div>
-                                <div className="col-span-2 pt-2 border-t border-slate-50 mt-2">
+                                <div className="pt-2 border-t border-slate-50 mt-2">
                                     <div className="flex justify-between items-center">
                                         <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Appraised Value</span>
                                         <span className="text-sm font-bold text-slate-700">${(network.total_appraised_value / 1000000).toFixed(1)}M</span>

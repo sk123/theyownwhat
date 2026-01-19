@@ -136,11 +136,24 @@ export default function SearchBar({ onSearch, onSelect, isLoading }) {
                                     <button
                                         key={index}
                                         onClick={() => handleSelectSuggestion(item)}
-                                        className="w-full text-left px-4 py-3 hover:bg-slate-50 text-sm font-medium text-slate-700 flex items-center gap-2 transition-colors border-b border-slate-50 last:border-0"
+                                        className="w-full text-left px-4 py-3 hover:bg-slate-50 text-sm border-b border-slate-50 last:border-0 flex items-center gap-3 transition-colors"
                                     >
-                                        <Search className="w-3.5 h-3.5 text-slate-500" />
-                                        {item.value || item}
-                                        <span className="ml-auto text-xs text-slate-400 uppercase tracking-wider">{activeTab}</span>
+                                        <Search className="w-4 h-4 text-slate-400 shrink-0" />
+                                        <div className="flex-1 min-w-0">
+                                            <div className="font-medium text-slate-800 truncate">
+                                                {item.label || item.value || item}
+                                            </div>
+                                            {(item.context || item.type) && (
+                                                <div className="text-xs text-slate-500 truncate">
+                                                    {item.context}
+                                                </div>
+                                            )}
+                                        </div>
+                                        {item.type && (
+                                            <span className="shrink-0 text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full uppercase tracking-wider">
+                                                {item.type.replace('Property ', '').replace('Business ', '')}
+                                            </span>
+                                        )}
                                     </button>
                                 ))}
                             </motion.div>
