@@ -12,6 +12,11 @@ export default function StatCard({ label, value, highlight, icon }) {
                 <span className={`text-[10px] font-bold uppercase tracking-wider ${highlight ? 'text-blue-100' : 'text-slate-500'}`}>{label}</span>
             </div>
             <div className="text-2xl font-black tracking-tight">{value}</div>
+            {sub && (
+                <div className={`text-xs font-medium mt-0.5 ${highlight ? 'text-blue-100/80' : 'text-slate-400'}`}>
+                    {sub}
+                </div>
+            )}
         </div>
     );
 }

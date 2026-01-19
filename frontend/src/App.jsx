@@ -344,7 +344,25 @@ function App() {
                     <div className="max-w-2xl mx-auto relative group">
                       <div className="absolute -inset-1 bg-gradient-to-r from-blue-500 to-indigo-500 rounded-2xl opacity-20 group-hover:opacity-30 blur transition duration-500"></div>
                       <div className="relative bg-white rounded-xl shadow-xl border border-slate-100">
-                        <SearchBar onSearch={handleSearch} isLoading={loading} />
+                        <SearchBar
+                          onSearch={handleSearch}
+                          isLoading={loading}
+                          onSelect={(item) => {
+                            let type = 'owner';
+                            let id = item.value;
+
+                            if (item.type === 'Business') {
+                              type = 'business';
+                              id = item.id;
+                            } else if (item.type === 'Business Principal') {
+                              type = 'principal';
+                            }
+                            // Property Owner/Co-Owner fallback to 'owner' and use name (item.value)
+
+                            console.log("Direct load:", id, type);
+                            loadNetwork(id, type);
+                          }}
+                        />
                       </div>
                     </div>
 

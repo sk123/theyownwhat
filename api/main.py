@@ -101,7 +101,31 @@ def normalize_person_name_py(name: str) -> str:
         m = re.match(r"^\s*([^,]+)\s*,\s*([A-Z0-9\- ]+)", n)
         if m:
             n = f"{m.group(2).strip()} {m.group(1).strip()}"
-    return re.sub(r"\s+", " ", n).strip()
+    
+    # Specific typo fixes
+    n = n.replace("GUREVITOH", "GUREVITCH")
+    n = n.replace("MANACHEM", "MENACHEM")
+    n = n.replace("MENACHERM", "MENACHEM")
+    n = n.replace("MENAHEM", "MENACHEM")
+    n = n.replace("GURAVITCH", "GUREVITCH")
+    
+    # Collapse whitespace
+    n = re.sub(r"\s+", " ", n).strip()
+    
+    # Middle Initial Stripping Strategy:
+    # Only strip single-letter middle parts if the First and Last parts are robust (>1 char).
+    # This protects short business names like "A B LLC".
+    parts = n.split()
+    if len(parts) >= 3:
+        # Check if first and last name are likely real names (>1 char)
+        if len(parts[0]) > 1 and len(parts[-1]) > 1:
+            # Filter out single-letter middle tokens
+            middle = parts[1:-1]
+            # Keep middle tokens only if length > 1
+            middle_robust = [p for p in middle if len(p) > 1]
+            n = " ".join([parts[0]] + middle_robust + [parts[-1]])
+
+    return n
 
 def get_name_variations(name: str, entity_type: str) -> Set[str]:
     """Small set of useful variants (principal vs business)."""
@@ -512,38 +536,254 @@ def autocomplete(q: str, type: str, conn=Depends(get_db_connection)):
     Fast prefix matching for search suggestions.
     type: 'business' | 'owner' | 'address'
     """
-    if not q or len(q) < 2:
+    if not q: return []
+    q = q.strip()
+    
+    if len(q) < 2:
         return []
 
     limit = 10
-    t = q.upper() + "%" # Prefix match
+    limit_extended = 20 # Fetch more to allow for deduping
     results = []
-
+    
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            t_prefix = q.lower() + "%"
+            t_infix = "%" + q + "%"
+
             if type == "business":
                 cursor.execute(
-                    "SELECT DISTINCT name FROM businesses WHERE upper(name) LIKE %s ORDER BY name ASC LIMIT %s",
-                    (t, limit)
+                    "SELECT DISTINCT id, name FROM businesses WHERE lower(name) LIKE %s ORDER BY name ASC LIMIT %s",
+                    (t_prefix, limit)
                 )
-                results = [r["name"] for r in cursor.fetchall()]
+                results = [{"label": r["name"], "value": r["name"], "id": str(r["id"]), "type": "Business", "context": "Business Entity"} for r in cursor.fetchall()]
+                
+                if len(results) < limit:
+                    cursor.execute(
+                        "SELECT id, name FROM businesses WHERE name ILIKE %s LIMIT %s",
+                        (t_infix, limit - len(results))
+                    )
+                    existing = {x["value"] for x in results}
+                    for r in cursor.fetchall():
+                        if r["name"] not in existing:
+                            results.append({"label": r["name"], "value": r["name"], "id": str(r["id"]), "type": "Business", "context": "Business Entity"})
 
             elif type == "owner":
                 # 1. Search Principals
                 cursor.execute(
-                    "SELECT DISTINCT name_c AS name FROM principals WHERE name_c IS NOT NULL AND upper(name_c) LIKE %s ORDER BY name_c ASC LIMIT %s",
-                    (t, limit)
+                    """
+                    SELECT 
+                        mode() WITHIN GROUP (ORDER BY p.name_c) as name, 
+                        string_agg(DISTINCT b.name, '||') as businesses 
+                    FROM principals p 
+                    LEFT JOIN businesses b ON p.business_id = b.id
+                    WHERE p.name_c_norm IS NOT NULL AND lower(p.name_c_norm) LIKE %s 
+                    GROUP BY p.name_c_norm 
+                    ORDER BY lower(p.name_c_norm) ASC 
+                    LIMIT %s
+                    """,
+                    (t_prefix, limit)
                 )
-                results.extend([r["name"] for r in cursor.fetchall()])
+
+                def fmt_princ(biz):
+                    if not biz: return "Business Principal"
+                    bs = [x for x in biz.split('||') if x]
+                    if not bs: return "Business Principal"
+                    return bs[0] + (f" + {len(bs)-1} more" if len(bs)>1 else "")
+
+                results.extend([{
+                    "label": r["name"], "value": r["name"], 
+                    "type": "Business Principal", "context": fmt_princ(r["businesses"])
+                } for r in cursor.fetchall()])
                 
-                # 2. Search Property Owners (if we need more)
+                # Infix Principals
+                if len(results) < limit:
+                    cursor.execute(
+                        """
+                        SELECT 
+                            mode() WITHIN GROUP (ORDER BY p.name_c) as name, 
+                            string_agg(DISTINCT b.name, '||') as businesses 
+                        FROM principals p 
+                        LEFT JOIN businesses b ON p.business_id = b.id
+                        WHERE p.name_c_norm IS NOT NULL AND p.name_c_norm ILIKE %s 
+                        GROUP BY p.name_c_norm
+                        LIMIT %s
+                        """,
+                        (t_infix, limit - len(results))
+                    )
+                    existing = {x["value"].upper() for x in results} 
+                    for r in cursor.fetchall():
+                        if r["name"] and r["name"].upper() not in existing:
+                            results.append({
+                                "label": r["name"], "value": r["name"], 
+                                "type": "Business Principal", "context": fmt_princ(r["businesses"])
+                            })
+                            existing.add(r["name"].upper())
+
+                # 2. Search Property Owners
                 if len(results) < limit:
                     remaining = limit - len(results)
+                    
+                    def fmt_owner(loc, city, zip_code):
+                        parts = []
+                        if loc: parts.append(loc)
+                        if city: parts.append(city)
+                        parts.append("CT")
+                        if zip_code:
+                            z = str(zip_code).strip()
+                            if len(z) < 5 and z.isdigit(): z = z.zfill(5)
+                            parts.append(z)
+                        return ", ".join(parts) if loc else "Property Owner"
+
+                    # Prefix Property Owners
                     cursor.execute(
-                        "SELECT DISTINCT owner AS name FROM properties WHERE owner IS NOT NULL AND upper(owner) LIKE %s ORDER BY owner ASC LIMIT %s",
-                        (t, remaining)
+                        """
+                        SELECT 
+                            mode() WITHIN GROUP (ORDER BY owner) as name, 
+                            location as loc, property_city as city, property_zip as zip
+                        FROM properties 
+                        WHERE owner_norm IS NOT NULL AND lower(owner_norm) LIKE %s 
+                        GROUP BY owner_norm, location, property_city, property_zip
+                        ORDER BY lower(owner_norm) ASC 
+                        LIMIT %s
+                        """,
+                        (t_prefix, remaining)
                     )
-                    results.extend([r["name"] for r in cursor.fetchall() if r["name"] not in results])
+                    
+                    existing_keys = {x["value"].upper() + x.get("context","") for x in results}
+                    for r in cursor.fetchall():
+                        ctx = fmt_owner(r["loc"], r["city"], r["zip"])
+                        key = r["name"].upper() + ctx
+                        if key not in existing_keys:
+                            results.append({
+                                "label": r["name"], "value": r["name"], 
+                                "type": "Property Owner", "context": ctx
+                            })
+                            existing_keys.add(key)
+                    
+                    # Infix Property Owners (Multi-Word Support)
+                    if len(results) < limit:
+                        remaining = limit - len(results)
+                        parts = q.split()
+                        
+                        if len(parts) > 1:
+                            where_clauses = ["owner_norm IS NOT NULL"]
+                            params = [] 
+                            for part in parts:
+                                where_clauses.append("owner_norm ILIKE %s")
+                                params.append(f"%{part}%")
+                            
+                            sql = f"""
+                                SELECT 
+                                    mode() WITHIN GROUP (ORDER BY owner) as name, 
+                                    location as loc, property_city as city, property_zip as zip
+                                FROM properties 
+                                WHERE {' AND '.join(where_clauses)}
+                                GROUP BY owner_norm, location, property_city, property_zip
+                                LIMIT %s
+                            """
+                            params.append(remaining)
+                            cursor.execute(sql, tuple(params))
+                        else:
+                            cursor.execute(
+                                """
+                                SELECT 
+                                    mode() WITHIN GROUP (ORDER BY owner) as name, 
+                                    location as loc, property_city as city, property_zip as zip
+                                FROM properties 
+                                WHERE owner_norm IS NOT NULL AND owner_norm ILIKE %s 
+                                GROUP BY owner_norm, location, property_city, property_zip
+                                LIMIT %s
+                                """,
+                                (t_infix, remaining)
+                            )
+                        
+                        for r in cursor.fetchall():
+                            if not r["name"]: continue
+                            ctx = fmt_owner(r["loc"], r["city"], r["zip"])
+                            key = r["name"].upper() + ctx
+                            if key not in existing_keys:
+                                results.append({
+                                    "label": r["name"], "value": r["name"], 
+                                    "type": "Property Owner", "context": ctx
+                                })
+                                existing_keys.add(key)
+
+                # 3. Search Co-Owners
+                if len(results) < limit:
+                    remaining = limit - len(results)
+                    # Prefix Co-Owners
+                    cursor.execute(
+                        """
+                        SELECT 
+                            mode() WITHIN GROUP (ORDER BY co_owner) as name, 
+                            location as loc, property_city as city, property_zip as zip
+                        FROM properties 
+                        WHERE co_owner_norm IS NOT NULL AND lower(co_owner_norm) LIKE %s 
+                        GROUP BY co_owner_norm, location, property_city, property_zip
+                        ORDER BY lower(co_owner_norm) ASC 
+                        LIMIT %s
+                        """,
+                        (t_prefix, remaining)
+                    )
+                    existing_keys = {x["value"].upper() + x.get("context","") for x in results}
+                    for r in cursor.fetchall():
+                        if not r["name"]: continue
+                        ctx = fmt_owner(r["loc"], r["city"], r["zip"])
+                        key = r["name"].upper() + ctx
+                        if key not in existing_keys:
+                            results.append({
+                                "label": r["name"], "value": r["name"], 
+                                "type": "Property Co-Owner", "context": ctx
+                            })
+                            existing_keys.add(key)
+
+                    # Infix Co-Owners (Multi-Word)
+                    if len(results) < limit:
+                        remaining = limit - len(results)
+                        parts = q.split()
+                        if len(parts) > 1:
+                            where_clauses = ["co_owner_norm IS NOT NULL"]
+                            params = [] 
+                            for part in parts:
+                                where_clauses.append("co_owner_norm ILIKE %s")
+                                params.append(f"%{part}%")
+                            
+                            sql = f"""
+                                SELECT 
+                                    mode() WITHIN GROUP (ORDER BY co_owner) as name, 
+                                    location as loc, property_city as city, property_zip as zip
+                                FROM properties 
+                                WHERE {' AND '.join(where_clauses)}
+                                GROUP BY co_owner_norm, location, property_city, property_zip
+                                LIMIT %s
+                            """
+                            params.append(remaining)
+                            cursor.execute(sql, tuple(params))
+                        else:
+                            cursor.execute(
+                                """
+                                SELECT 
+                                    mode() WITHIN GROUP (ORDER BY co_owner) as name, 
+                                    location as loc, property_city as city, property_zip as zip
+                                FROM properties 
+                                WHERE co_owner_norm IS NOT NULL AND co_owner_norm ILIKE %s 
+                                GROUP BY co_owner_norm, location, property_city, property_zip
+                                LIMIT %s
+                                """,
+                                (t_infix, remaining)
+                            )
+                        
+                        for r in cursor.fetchall():
+                            if not r["name"]: continue
+                            ctx = fmt_owner(r["loc"], r["city"], r["zip"])
+                            key = r["name"].upper() + ctx
+                            if key not in existing_keys:
+                                results.append({
+                                    "label": r["name"], "value": r["name"], 
+                                    "type": "Property Co-Owner", "context": ctx
+                                })
+                                existing_keys.add(key)
 
             elif type == "address":
                 # Search properties by location (address) and include City/Zip
@@ -555,25 +795,18 @@ def autocomplete(q: str, type: str, conn=Depends(get_db_connection)):
                     ORDER BY location ASC 
                     LIMIT %s
                     """,
-                    (t, limit)
+                    (t_prefix, limit)
                 )
                 
                 results = []
                 for r in cursor.fetchall():
                     parts = [r["location"]]
-                    if r.get("property_city"):
-                        parts.append(r["property_city"])
-                    
-                    # Force CT state
+                    if r.get("property_city"): parts.append(r["property_city"])
                     parts.append("CT")
-
                     if r.get("property_zip"):
-                        # Pad zip to 5 digits
                         z = str(r["property_zip"]).strip()
-                        if len(z) < 5 and z.isdigit():
-                            z = z.zfill(5)
+                        if len(z) < 5 and z.isdigit(): z = z.zfill(5)
                         parts.append(z)
-                        
                     results.append(", ".join(parts))
 
     except Exception as e:

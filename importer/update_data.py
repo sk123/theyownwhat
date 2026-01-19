@@ -104,7 +104,8 @@ def add_principal_columns(cursor):
     # Note: 'address' (from Business Street Address 1), city, state, and zip exist.
     new_columns = [
         ("business_street_address_2", "TEXT"),
-        ("business_street_address_3", "TEXT")
+        ("business_street_address_3", "TEXT"),
+        ("name_c_norm", "TEXT")
     ]
     commands = [
         sql.SQL("ALTER TABLE principals ADD COLUMN IF NOT EXISTS {} {};")
@@ -135,6 +136,7 @@ def run_properties_update(conn, file_path, column_map):
     # Staging table must include join key, conditional fields, and new fields
     staging_cols_with_types = [
         ("serial_number", "TEXT"), ("owner", "TEXT"), ("co_owner", "TEXT"),
+        ("owner_norm", "TEXT"), ("co_owner_norm", "TEXT"),
         ("link", "TEXT"), ("account_number", "TEXT"), ("gis_tag", "TEXT"),
         ("map", "TEXT"), ("map_cut", "TEXT"), ("block", "TEXT"),
         ("block_cut", "TEXT"), ("lot", "TEXT"), ("lot_cut", "TEXT"),
@@ -171,6 +173,12 @@ def run_properties_update(conn, file_path, column_map):
             if 'number_of_units' in chunk.columns:
                 chunk['number_of_units'] = pd.to_numeric(chunk['number_of_units'], errors='coerce')
 
+            # Create normalized owner fields
+            if 'owner' in chunk.columns:
+                chunk['owner_norm'] = chunk['owner'].astype(str).str.strip().str.upper().replace(r'[^a-zA-Z0-9 ]', '', regex=True).replace(r'\s+', ' ', regex=True)
+            if 'co_owner' in chunk.columns:
+                chunk['co_owner_norm'] = chunk['co_owner'].astype(str).str.strip().str.upper().replace(r'[^a-zA-Z0-9 ]', '', regex=True).replace(r'\s+', ' ', regex=True)
+
             final_chunk = chunk.reindex(columns=staging_col_names)
 
             buffer = StringIO()
@@ -204,7 +212,9 @@ def run_properties_update(conn, file_path, column_map):
                 c.execute("""
                 UPDATE properties p SET
                     owner = s.owner,
-                    co_owner = s.co_owner
+                    co_owner = s.co_owner,
+                    owner_norm = s.owner_norm,
+                    co_owner_norm = s.co_owner_norm
                 FROM staging_properties_update s
                 WHERE p.serial_number = s.serial_number
                   AND s.owner IS NOT NULL
@@ -322,7 +332,8 @@ def run_principals_update(conn, file_path, column_map):
         ("business_street_address_3", "TEXT"),
         ("city", "TEXT"),
         ("state", "TEXT"),
-        ("zip", "TEXT")
+        ("zip", "TEXT"),
+        ("name_c_norm", "TEXT")
     ]
     staging_col_names = [col[0] for col in staging_cols_with_types]
 
@@ -356,6 +367,25 @@ def run_principals_update(conn, file_path, column_map):
             chunk.dropna(subset=['business_id', 'name_c'], inplace=True)
             chunk = chunk[chunk['name_c'] != '']
             
+            # Create normalized name field
+            # Define normalization helper
+            def clean_name(x):
+                if not isinstance(x, str): return ''
+                n = x.strip().upper()
+                n = re.sub(r'[^A-Z0-9 ]', '', n)
+                n = re.sub(r'\s+', ' ', n).strip()
+                # Typo fixes
+                n = n.replace('GUREVITOH', 'GUREVITCH').replace('MANACHEM', 'MENACHEM').replace('MENACHERM', 'MENACHEM').replace('MENAHEM', 'MENACHEM').replace('GURAVITCH', 'GUREVITCH')
+                # Middle initial strip
+                parts = n.split()
+                if len(parts) >= 3:
+                     if len(parts[0]) > 1 and len(parts[-1]) > 1:
+                         mid = [p for p in parts[1:-1] if len(p) > 1]
+                         n = " ".join([parts[0]] + mid + [parts[-1]])
+                return n
+
+            chunk['name_c_norm'] = chunk['name_c'].apply(clean_name)
+
             # Filter chunk to only columns we care about
             final_chunk = chunk.reindex(columns=staging_col_names)
 
@@ -379,7 +409,8 @@ def run_principals_update(conn, file_path, column_map):
                     business_street_address_3 = s.business_street_address_3,
                     city = s.city,
                     state = s.state,
-                    zip = s.zip
+                    zip = s.zip,
+                    name_c_norm = s.name_c_norm
                 FROM staging_principals_update s
                 WHERE p.business_id = s.business_id 
                   AND p.name_c = s.name_c;
@@ -429,6 +460,8 @@ def create_new_indices(cursor, table_name):
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_principals_bizid_name_composite ON principals (business_id, name_c);")
             print("⏳ Indexing principals (address)...")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_principals_address_gin ON principals USING gin (address gin_trgm_ops);")
+            print("⏳ Indexing principals (name_c_norm)...")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_principals_name_c_norm ON principals (name_c_norm);")
 
         print(f"✅ All new performance indexes for '{table_name}' created successfully.")
     

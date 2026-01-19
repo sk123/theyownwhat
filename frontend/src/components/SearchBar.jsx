@@ -2,71 +2,17 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Search, MapPin, Briefcase, User } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-export default function SearchBar({ onSearch, isLoading }) {
-    const [activeTab, setActiveTab] = useState('business');
-    const [term, setTerm] = useState('');
-    const [suggestions, setSuggestions] = useState([]);
-    const [showSuggestions, setShowSuggestions] = useState(false);
-    const searchRef = useRef(null);
-
-    // Debounced Autocomplete
-    useEffect(() => {
-        const controller = new AbortController();
-        const signal = controller.signal;
-
-        const fetchSuggestions = async () => {
-            if (term.length < 2) {
-                setSuggestions([]);
-                return;
-            }
-
-            try {
-                // Use the internal DB autocomplete endpoint
-                const res = await fetch(`/api/autocomplete?q=${encodeURIComponent(term)}&type=${activeTab}`, { signal });
-                if (res.ok) {
-                    const data = await res.json();
-                    setSuggestions(data);
-                }
-            } catch (err) {
-                if (err.name !== 'AbortError') {
-                    console.error("Autocomplete error:", err);
-                }
-            }
-        };
-
-        const timeoutId = setTimeout(fetchSuggestions, 100);
-        return () => {
-            clearTimeout(timeoutId);
-            controller.abort();
-        };
-    }, [term, activeTab]);
-
-    // Handle clicks outside to close suggestions
-    useEffect(() => {
-        const handleClickOutside = (event) => {
-            if (searchRef.current && !searchRef.current.contains(event.target)) {
-                setShowSuggestions(false);
-            }
-        };
-
-        document.addEventListener('mousedown', handleClickOutside);
-        return () => document.removeEventListener('mousedown', handleClickOutside);
-    }, []);
-
-    const handleSearch = () => {
-        if (term.length >= 3) {
-            onSearch(activeTab, term);
-            setShowSuggestions(false);
-        }
-    };
-
-    const handleKeyDown = (e) => {
-        if (e.key === 'Enter') handleSearch();
-    };
+export default function SearchBar({ onSearch, onSelect, isLoading }) {
+    // ...
 
     const handleSelectSuggestion = (suggestion) => {
-        setTerm(suggestion);
-        onSearch(activeTab, suggestion);
+        if (onSelect) {
+            onSelect(suggestion);
+        } else {
+            const val = suggestion.value || suggestion;
+            setTerm(val);
+            onSearch(activeTab, val);
+        }
         setShowSuggestions(false);
     };
 
