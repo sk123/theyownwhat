@@ -52,9 +52,10 @@ export default function PropertyTable({ properties, onSelectProperty, forceExpan
     }, [filteredProperties, sortConfig]);
 
     const exportCSV = () => {
-        const headers = ['Address', 'City', 'Owner', 'Assessed Value', 'Appraised Value'];
+        const headers = ['Address', 'Unit', 'City', 'Owner', 'Assessed Value', 'Appraised Value'];
         const rows = sortedProperties.map(p => [
             `"${p.address || ''}"`,
+            `"${p.unit || ''}"`,
             `"${p.city || ''}"`,
             `"${p.owner || ''}"`,
             `"${p.assessed_value || ''}"`,
@@ -122,7 +123,10 @@ export default function PropertyTable({ properties, onSelectProperty, forceExpan
                                 onClick={() => onSelectProperty(p)}
                                 className="hover:bg-blue-50/50 transition-colors group cursor-pointer"
                             >
-                                <td className="p-2 text-xs font-medium text-gray-900">{p.address}</td>
+                                <td className="p-2 text-xs font-medium text-gray-900">
+                                    {p.address}
+                                    {p.unit && <span className="ml-1 text-slate-500 font-normal">#{p.unit}</span>}
+                                </td>
                                 <td className="p-2 text-xs text-gray-600">{p.city}</td>
                                 <td className="p-2 text-xs text-gray-600 break-words max-w-[200px]">{p.owner}</td>
                                 <td className="p-2 text-xs text-gray-700 font-mono">

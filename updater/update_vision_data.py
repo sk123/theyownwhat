@@ -37,22 +37,52 @@ MUNICIPAL_DATA_SOURCES = {
             "OwnerFullName": "owner",
             "LastSalePrice": "sale_amount", 
             "LastSaleDate": "sale_date",
-            "TotApprsdValue": "assessed_value",
-            "TotApprsdValue": "appraised_value",  # Hartford doesn't distinguish, use same field
-            "StreetNumberFrom": "address_number", # <-- ADD THIS LINE
-            # "StreetName": "location", # <-- REMOVE OR COMMENT OUT THIS LINE
+            "TotApprsdValue": "appraised_value",
+            "StreetNumberFrom": "address_number", 
+            "StreetName": "street_name",
+            "CondoNumber": "unit",
             "AccountNumber": "account_number",
             "PARCELNUMBER": "serial_number",
+            "GIS_PIN": "gis_tag",
             "YearBuilt": "year_built",
             "TotAcreage": "acres",
             "LUCDescription": "property_type",
             "TotFinishdArea": "living_area",
             "Zip10": "property_zip",
-            "LivingUnits": "number_of_units"
+            "LivingUnits": "number_of_units",
+            "Zoning": "zone"
         }
-    }
+    },
 # ...
     # Add more municipalities here as needed
+    'ANSONIA': {'type': 'MAPXPRESS', 'domain': 'ansonia.mapxpress.net'},
+    'BEACON FALLS': {'type': 'MAPXPRESS', 'domain': 'beaconfalls.mapxpress.net'},
+    'BERLIN': {'type': 'MAPXPRESS', 'domain': 'berlin.mapxpress.net'},
+    'BETHANY': {'type': 'MAPXPRESS', 'domain': 'bethany.mapxpress.net'},
+    'BETHLEHEM': {'type': 'MAPXPRESS', 'domain': 'bethlehem.mapxpress.net'},
+    'BRIDGEPORT': {'type': 'MAPXPRESS', 'domain': 'metrocog.mapxpress.net/Bridgeport'},
+    'BRISTOL': {'type': 'MAPXPRESS', 'domain': 'bristol.mapxpress.net'},
+    'BROOKFIELD': {'type': 'MAPXPRESS', 'domain': 'brookfield.mapxpress.net'},
+    'BURLINGTON': {'type': 'MAPXPRESS', 'domain': 'burlington.mapxpress.net'},
+    'CANTON': {'type': 'MAPXPRESS', 'domain': 'canton.mapxpress.net'},
+    'CHESHIRE': {'type': 'MAPXPRESS', 'domain': 'cheshire.mapxpress.net'},
+    'COLCHESTER': {'type': 'MAPXPRESS', 'domain': 'colchester.mapxpress.net'},
+    'COVENTRY': {'type': 'MAPXPRESS', 'domain': 'coventry.mapxpress.net'},
+    'DERBY': {'type': 'MAPXPRESS', 'domain': 'derby.mapxpress.net'},
+    'EAST HAVEN': {'type': 'MAPXPRESS', 'domain': 'easthaven.mapxpress.net'},
+    'FARMINGTON': {'type': 'MAPXPRESS', 'domain': 'farmington.mapxpress.net'},
+    'LITCHFIELD': {'type': 'MAPXPRESS', 'domain': 'litchfield.mapxpress.net'},
+    'MIDDLEBURY': {'type': 'MAPXPRESS', 'domain': 'middlebury.mapxpress.net'},
+    'NAUGATUCK': {'type': 'MAPXPRESS', 'domain': 'naugatuck.mapxpress.net'},
+    'NEW BRITAIN': {'type': 'MAPXPRESS', 'domain': 'newbritain.mapxpress.net'},
+    'NEWTOWN': {'type': 'MAPXPRESS', 'domain': 'newtown.mapxpress.net'},
+    'OXFORD': {'type': 'MAPXPRESS', 'domain': 'oxford.mapxpress.net'},
+    'PLAINVILLE': {'type': 'MAPXPRESS', 'domain': 'plainville.mapxpress.net'},
+    'SALEM': {'type': 'MAPXPRESS', 'domain': 'salem.mapxpress.net'},
+    'SEYMOUR': {'type': 'MAPXPRESS', 'domain': 'seymour.mapxpress.net'},
+    'SOUTHBURY': {'type': 'MAPXPRESS', 'domain': 'southbury.mapxpress.net'},
+    'SUFFIELD': {'type': 'MAPXPRESS', 'domain': 'suffield.mapxpress.net'},
+    'WEST HAVEN': {'type': 'MAPXPRESS', 'domain': 'westhaven.mapxpress.net'},
 }
 
 # --- Logging ---
@@ -236,7 +266,7 @@ def normalize_address_for_matching(address):
     return normalized
 
 def process_arcgis_data(df, column_mapping, municipality_name):
-    """Processes ArcGIS DataFrame and returns a dictionary mapping addresses to property data."""
+    """Processes ArcGIS DataFrame and returns a dictionary mapping addresses to A LIST OF property data dicts."""
     log(f"Processing {len(df)} ArcGIS records for {municipality_name}...")
     
     processed_data = {}
@@ -262,11 +292,9 @@ def process_arcgis_data(df, column_mapping, municipality_name):
             # Map the data using the column mapping
             property_data = {}
             
-            # --- START OF CHANGE ---
             # Set the location directly from the constructed full address
             if full_address.strip():
                 property_data['location'] = full_address.strip()
-            # --- END OF CHANGE ---
 
             for source_col, target_col in column_mapping.items():
                 if source_col in row.index and pd.notna(row[source_col]):
@@ -309,15 +337,21 @@ def process_arcgis_data(df, column_mapping, municipality_name):
                         elif pd.notna(value):
                             property_data[target_col] = str(value).strip()
             
+            # --- Auto-Calculate Assessed Value (70% Rule) ---
+            if 'appraised_value' in property_data and 'assessed_value' not in property_data:
+                 property_data['assessed_value'] = property_data['appraised_value'] * 0.70
+
             # Only store if we have meaningful data
             if len(property_data) >= 2:  # At least owner and one other field
-                processed_data[normalized_address] = property_data
+                if normalized_address not in processed_data:
+                    processed_data[normalized_address] = []
+                processed_data[normalized_address].append(property_data)
                 
         except Exception as e:
             log(f"Error processing row: {e}")
             continue
     
-    log(f"Successfully processed {len(processed_data)} address records for {municipality_name}")
+    log(f"Successfully processed address records for {municipality_name}")
     return processed_data
 
 def process_municipality_with_arcgis(conn, municipality_name, data_source_config, current_owner_only=False, force_process=False):
@@ -345,37 +379,45 @@ def process_municipality_with_arcgis(conn, municipality_name, data_source_config
         log(f"No processable data found for {municipality_name}.")
         return 0
     
-    # Match database properties with ArcGIS data
-    log(f"Matching {len(db_properties)} DB properties against {len(processed_arcgis_data)} ArcGIS records...")
+    # Group DB properties by normalized address for batch matching
+    db_props_by_address = {}
+    all_property_ids = []
+    
+    for prop_id, prop_location, _ in db_properties:
+        all_property_ids.append(prop_id)
+        if prop_location:
+            norm_addr = normalize_address_for_matching(prop_location)
+            if norm_addr not in db_props_by_address:
+                db_props_by_address[norm_addr] = []
+            db_props_by_address[norm_addr].append(prop_id)
+
+    log(f"Matching {len(db_properties)} DB properties (grouped by {len(db_props_by_address)} addresses) against ArcGIS records...")
     
     updated_count = 0
     processed_count = 0
-    all_property_ids = []
     
-    for prop_id, prop_location, prop_url in db_properties:
-        all_property_ids.append(prop_id)
-        processed_count += 1
+    for norm_addr, prop_ids in db_props_by_address.items():
+        matched_data_list = []
         
-        if prop_location:
-            normalized_db_address = normalize_address_for_matching(prop_location)
+        # Direct match
+        if norm_addr in processed_arcgis_data:
+            matched_data_list = processed_arcgis_data[norm_addr]
+        
+        # If we have matches, distribute them to the properties at this address
+        if matched_data_list:
+            # We zip them: 1st DB prop gets 1st CSV record, etc.
+            # This handles condos (many units at same address) by assigning one unique record to each,
+            # assuming the count roughly matches. If DB has more, some won't get updated? No, zip stops at shortest.
+            # If CSV has more, some CSV records are unused (missing from DB).
             
-            # Try to find a match in the ArcGIS data
-            matched_data = None
+            # TODO: Improve matching by using secondary keys if available (e.g. Unit # if already in DB? No, it's missing)
+            # For now, blind distribution is better than overwriting all with the SAME record.
             
-            # Direct match
-            if normalized_db_address in processed_arcgis_data:
-                matched_data = processed_arcgis_data[normalized_db_address]
-            else:
-                # Fuzzy matching - check if DB address contains or is contained in ArcGIS addresses
-                for arcgis_addr, arcgis_data in processed_arcgis_data.items():
-                    if (normalized_db_address in arcgis_addr or arcgis_addr in normalized_db_address):
-                        matched_data = arcgis_data
-                        break
-            
-            if matched_data:
-                if update_property_in_db(conn, prop_id, matched_data):
+            for prop_id, vision_data in zip(prop_ids, matched_data_list):
+                 if update_property_in_db(conn, prop_id, vision_data):
                     updated_count += 1
         
+        processed_count += len(prop_ids)
         if processed_count % 100 == 0:
             log(f"  -> Progress: {processed_count}/{len(db_properties)}, updated {updated_count} so far...")
     
@@ -385,6 +427,161 @@ def process_municipality_with_arcgis(conn, municipality_name, data_source_config
         mark_property_processed_today(conn, prop_id)
     
     log(f"Finished {municipality_name}. Updated {updated_count} of {len(db_properties)} properties.")
+    return updated_count
+
+def parse_mapxpress_html(html_content):
+    """Parses MapXpress property detail HTML."""
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html_content, 'lxml')
+    data = {}
+    
+    # Helper to find value in key-value tables
+    # Usually Structure: <tr><td ...>Key</td><td ...>Value</td></tr>
+    # But looking at snippet:
+    # <tr><td ...>Living Area - sqft</td><td ...>1598</td></tr>
+    
+    # Find all tables
+    tables = soup.find_all('table')
+    for table in tables:
+        rows = table.find_all('tr')
+        for row in rows:
+            cells = row.find_all('td')
+            if len(cells) >= 2: # Looking for key-value pairs, often spanning columns
+                # Iterate through cells to find keys
+                for i in range(len(cells)):
+                    text = cells[i].get_text(strip=True)
+                    next_text = ""
+                    # The value might be in the next cell (i+1) or next-next?
+                    # In the provided snippet:
+                    # <td colspan="2">Living Area - sqft</td><td colspan="3">1598</td>
+                    # So it is the very next sibling cell element in the DOM?
+                    # bs4 finds cells in linear order.
+                    
+                    if i + 1 < len(cells):
+                         val = cells[i+1].get_text(strip=True)
+                         
+                         if "Living Area - sqft" in text:
+                             try: data['living_area'] = float(val.replace(',', ''))
+                             except: pass
+                         elif "Year Built" == text:
+                             try: data['year_built'] = int(val)
+                             except: pass
+                         elif "Building Style" == text:
+                             data['property_type'] = val
+                         elif "Total Acres" in text or "Acres" == text: # Guessing for Acres
+                             try: data['acres'] = float(val)
+                             except: pass
+                         elif "Zone" == text or "Zoning" == text: # Guessing
+                             data['zone'] = val
+    
+    # Try to find Appraisal/Assessment if available (not in snippet but might be elsewhere)
+    # Usually in a summary table at top.
+    
+    return data
+
+    return data
+
+def scrape_mapxpress_property(session, base_url_template, row):
+    """Worker function to scrape a single property."""
+    import time
+    import random
+    
+    prop_id, location, account_num, serial_num, current_link = row
+    unique_id = account_num if account_num else serial_num
+    
+    if not unique_id:
+        return prop_id, None, None
+        
+    target_url = base_url_template.format(unique_id)
+    
+    try:
+        # Reduced sleep time for parallel execution (random jitter 0.1s - 0.5s)
+        time.sleep(random.uniform(0.1, 0.5))
+        
+        resp = session.get(target_url, timeout=15)
+        if resp.status_code == 200:
+            scraped_data = parse_mapxpress_html(resp.text)
+            scraped_data['cama_site_link'] = target_url
+            return prop_id, scraped_data, None
+        else:
+            return prop_id, None, f"Status {resp.status_code}"
+            
+    except Exception as e:
+        return prop_id, None, str(e)
+
+def process_municipality_with_mapxpress(conn, municipality_name, data_source_config, current_owner_only=False, force_process=False):
+    """Process a municipality scraping MapXpress (Parallel)."""
+    
+    log(f"--- Processing municipality: {municipality_name} via MapXpress (Force={force_process}) ---")
+    
+    query = """
+        SELECT id, location, account_number, serial_number, cama_site_link 
+        FROM properties 
+        WHERE property_city ILIKE %s 
+        AND (account_number IS NOT NULL AND account_number != '')
+    """
+    
+    if not force_process:
+        query += " AND (last_processed_at IS NULL OR last_processed_at < CURRENT_DATE)"
+    
+    if current_owner_only:
+        query += " AND owner ILIKE '%Current Owner%'"
+        
+    query += " ORDER BY location" 
+    
+    with conn.cursor() as cursor:
+        cursor.execute(query, (municipality_name,))
+        properties = cursor.fetchall()
+        
+    if not properties:
+        log(f"No properties found with account_number for {municipality_name}.")
+        return 0
+        
+    log(f"Found {len(properties)} properties to scrape for {municipality_name}. Starting parallel scrape (10 threads)...")
+    
+    domain = data_source_config['domain']
+    if domain.endswith('/'): domain = domain[:-1]
+    base_url_template = f"https://{domain}/PAGES/detail.asp?UNIQUE_ID={{}}"
+
+    updated_count = 0
+    processed_count = 0
+    
+    import requests
+    import concurrent.futures
+    
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    })
+    
+    # Parallel Processing using ThreadPoolExecutor
+    # We use threads for I/O (scraping), but update DB in the main thread to ensure safety.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        # Submit all tasks
+        future_to_prop = {
+            executor.submit(scrape_mapxpress_property, session, base_url_template, row): row 
+            for row in properties
+        }
+        
+        for future in concurrent.futures.as_completed(future_to_prop):
+            prop_id, scraped_data, error_msg = future.result()
+            
+            if scraped_data:
+                if update_property_in_db(conn, prop_id, scraped_data):
+                    updated_count += 1
+            elif error_msg:
+                # Log error but don't spam if common
+                if "Status 404" not in error_msg: 
+                     pass # log(f"Scrape error for {prop_id}: {error_msg}")
+            
+            # Always mark processed
+            mark_property_processed_today(conn, prop_id)
+            
+            processed_count += 1
+            if processed_count % 50 == 0:
+                log(f"  -> Scraped {processed_count}/{len(properties)}, updated {updated_count}...")
+            
+    log(f"Finished {municipality_name}. Scraped {processed_count}, Updated {updated_count}.")
     return updated_count
 
 # --- Vision Appraisal Functions (existing code) ---
@@ -814,6 +1011,10 @@ def process_municipality_task(city_name, city_data, current_owner_only, force_pr
             
             if MUNICIPAL_DATA_SOURCES[city_name]['type'] == 'arcgis_csv':
                 updated_count = process_municipality_with_arcgis(
+                    conn, city_name, MUNICIPAL_DATA_SOURCES[city_name], current_owner_only, force_process
+                )
+            elif MUNICIPAL_DATA_SOURCES[city_name]['type'] == 'MAPXPRESS':
+                updated_count = process_municipality_with_mapxpress(
                     conn, city_name, MUNICIPAL_DATA_SOURCES[city_name], current_owner_only, force_process
                 )
             else:

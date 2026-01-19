@@ -43,6 +43,24 @@ export default function PropertyDetailsModal({ property, onClose }) {
                                 {property.address}
                             </h2>
                             <p className="text-gray-500 font-medium">{property.city}, CT {d.property_zip}</p>
+                            <button
+                                onClick={() => {
+                                    const fullAddress = `${property.address}${property.unit ? ` #${property.unit}` : ''}, ${property.city}, CT ${d.property_zip || ''}`;
+                                    navigator.clipboard.writeText(fullAddress);
+                                    // Visual feedback
+                                    const btn = document.getElementById('copy-addr-btn');
+                                    if (btn) {
+                                        const original = btn.innerHTML;
+                                        btn.innerHTML = '<span class="text-green-600 text-xs font-bold">Copied!</span>';
+                                        setTimeout(() => { btn.innerHTML = original; }, 2000);
+                                    }
+                                }}
+                                id="copy-addr-btn"
+                                className="mt-2 flex items-center gap-1.5 text-[10px] font-bold text-blue-600 bg-blue-50 hover:bg-blue-100 px-2.5 py-1.5 rounded-lg transition-colors"
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2" /><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" /></svg>
+                                Copy Address
+                            </button>
                         </div>
                         <button
                             onClick={onClose}
@@ -136,9 +154,15 @@ export default function PropertyDetailsModal({ property, onClose }) {
                                                 <span className="font-semibold text-gray-900">{d.zone || 'N/A'}</span>
                                             </div>
                                         </div>
+                                        {(property.unit || d.unit) && (
+                                            <div className="pt-2 border-t border-gray-200/50 mt-2">
+                                                <span className="block text-gray-500 text-xs mb-1">Unit / Apt</span>
+                                                <span className="font-semibold text-gray-900">{property.unit || d.unit}</span>
+                                            </div>
+                                        )}
                                         {d.num_units && (
                                             <div className="pt-2 border-t border-gray-200/50 mt-2">
-                                                <span className="block text-gray-500 text-xs mb-1">Units</span>
+                                                <span className="block text-gray-500 text-xs mb-1">Total Units in Bldg</span>
                                                 <span className="font-semibold text-gray-900">{d.num_units}</span>
                                             </div>
                                         )}

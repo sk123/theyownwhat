@@ -76,7 +76,22 @@ services:
       - ./updater:/app/updater
     environment:
       - DATABASE_URL=postgresql://user:password@db:5432/ctdata
-    command: python updater/update_vision_data.py -m "HARTFORD" "NEW HAVEN"
+    command: python updater/update_vision_data.py -m "NEW HAVEN"
+
+  updater2:
+    build:
+      context: .
+      dockerfile: Dockerfile.updater
+    container_name: ctdata_updater2
+    profiles: [ "tools" ] # Prevents this service from starting automatically
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./updater:/app/updater
+    environment:
+      - DATABASE_URL=postgresql://user:password@db:5432/ctdata
+    command: python updater/update_vision_data.py -m "FARMINGTON" -f
 
   nginx:
     build:

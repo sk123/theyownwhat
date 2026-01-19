@@ -75,6 +75,7 @@ def shape_property_row(p: dict) -> dict:
         "appraised_value": (
             f"${int(p['appraised_value']):,}" if p.get("appraised_value") is not None else None
         ),
+        "unit": p.get("unit"),
         "details": p,  # keep full row for drill-down
     }
 
@@ -373,6 +374,7 @@ class Entity(BaseModel):
 
 class PropertyItem(BaseModel):
     address: Optional[str]
+    unit: Optional[str] = None
     city: Optional[str]
     owner: Optional[str]
     assessed_value: Optional[float]
@@ -543,7 +545,7 @@ def autocomplete(q: str, type: str, conn=Depends(get_db_connection)):
     if len(q) < 2:
         return []
 
-    limit = 10
+    limit = 50
     limit_extended = 20 # Fetch more to allow for deduping
     results = []
     
@@ -1479,6 +1481,7 @@ def get_properties_batch(owner_names: str, conn=Depends(get_db_connection)):
             seen_ids.add(r["id"])
             props.append(PropertyItem(
                 address=r.get("location"),
+                unit=r.get("unit"),
                 city=r.get("property_city"),
                 owner=r.get("owner"),
                 assessed_value=r.get("assessed_value"),

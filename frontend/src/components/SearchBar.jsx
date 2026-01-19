@@ -151,7 +151,7 @@ export default function SearchBar({ onSearch, onSelect, isLoading }) {
                                         </div>
                                         {item.type && (
                                             <span className="shrink-0 text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full uppercase tracking-wider">
-                                                {item.type.replace('Property ', '').replace('Business ', '')}
+                                                {item.type}
                                             </span>
                                         )}
                                     </button>
