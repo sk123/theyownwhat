@@ -43,6 +43,8 @@ Download the following datasets (CSV format):
     *   *Action*: Download as CSV (or export the layer to CSV).
     *   *Rename to*: `new_parcels.csv`
 
+4.  **Supplemental Data**: Fresh & supplemental data scraped from VISION, MapXpress, and other municipal GIS sites (Internal Scraper).
+
 ### Step 2.2: Organize Files
 
 Create a `data` folder in the root of the repository if it doesn't exist, and move your renamed files there:
@@ -94,4 +96,17 @@ Once the containers are running, you need to populate the database with the CSV 
 
 ## 5. Updates
 
-To update the data in the future, simply replace the CSV files in the `data/` directory with fresh downloads (renaming them as before) and re-run the commands in Step 4.
+## 6. Scraping Municipal Data
+
+To enrich the database with detailed property information (listing details, zoning, year built, etc.) from municipal sites (VISION, MapXpress), run the updater:
+
+```bash
+# Run for all configured municipalities
+docker compose run --rm updater python updater/update_vision_data.py
+
+# Run for specific municipalities (e.g., ANSONIA and HARTFORD)
+docker compose run --rm updater python updater/update_vision_data.py -m "ANSONIA" "HARTFORD"
+
+# Force re-process all properties (ignoring last update date)
+docker compose run --rm updater python updater/update_vision_data.py -m "ANSONIA" -f
+```

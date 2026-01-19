@@ -34,6 +34,7 @@ The **AI Digest** performs automated web searches across multiple entities simul
 *   [CT Business Registry - Business Master](https://data.ct.gov/Business/Connecticut-Business-Registry-Business-Master/n7gp-d28j/about_data)
 *   [CT Business Registry - Principals](https://data.ct.gov/Business/Connecticut-Business-Registry-Principals/ka36-64k6/about_data)
 *   [Municipal Parcel & CAMA Records](https://geodata.ct.gov/datasets/ctmaps::connecticut-cama-and-parcel-layer/about)
+*   Fresh & supplemental data scraped from VISION, MapXpress, and other municipal GIS sites
 *   Real-time News Highlights
 
 ## How it works
