@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Map as MapIcon, Loader2, AlertCircle } from 'lucide-react';
+import { X, Map as MapIcon, Loader2, AlertCircle, User, DollarSign, Building2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import MarkerClusterGroup from 'react-leaflet-cluster';
@@ -219,8 +219,40 @@ export default function MultiPropertyMapModal({ properties, onClose }) {
                                     {markers.map((m, idx) => (
                                         <Marker key={idx} position={[m.lat, m.lon]}>
                                             <Popup>
-                                                <div className="font-medium">{m.address}</div>
-                                                <div className="text-xs text-gray-500">{m.city}</div>
+                                                <div className="min-w-[220px] p-1">
+                                                    <div className="flex items-start gap-3 mb-3 pb-2 border-b border-gray-100">
+                                                        <div className={`p-2 rounded-lg ${m.isComplex ? 'bg-indigo-50 text-indigo-600' : 'bg-blue-50 text-blue-600'}`}>
+                                                            <Building2 size={16} />
+                                                        </div>
+                                                        <div className="flex-1 min-w-0">
+                                                            <div className="text-sm font-bold text-gray-900 leading-tight truncate">
+                                                                {m.address}
+                                                            </div>
+                                                            <div className="flex items-center gap-2 mt-0.5">
+                                                                <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">{m.city}</span>
+                                                                {(m.unit || m.derivedUnit) && (
+                                                                    <span className="text-[9px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded font-black">
+                                                                        UNIT {m.derivedUnit || m.unit}
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="space-y-2">
+                                                        <div className="flex items-center gap-2 text-[11px] text-gray-600">
+                                                            <User size={12} className="text-gray-400 shrink-0" />
+                                                            <span className="truncate font-medium">{m.owner}</span>
+                                                        </div>
+                                                        {m.assessed_value && (
+                                                            <div className="flex items-center gap-2 text-xs font-bold text-slate-900 bg-gray-50 p-1.5 rounded-md border border-gray-100">
+                                                                <DollarSign size={12} className="text-green-600" />
+                                                                <span className="font-mono">{m.assessed_value}</span>
+                                                                <span className="text-[9px] text-gray-400 font-normal ml-auto">ASSESSED</span>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                </div>
                                             </Popup>
                                         </Marker>
                                     ))}
