@@ -2,7 +2,7 @@ import React from 'react';
 import { X, User, Building, MapPin, Calendar, Hash, Link as LinkIcon, AlertCircle, Info } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-export default function EntityDetailsModal({ entity, type, onClose }) {
+export default function EntityDetailsModal({ entity, type, networkData, onNavigate, onClose }) {
     if (!entity) return null;
 
     const d = entity.details || {};
@@ -12,6 +12,22 @@ export default function EntityDetailsModal({ entity, type, onClose }) {
     const formatKey = (key) => {
         return key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
     };
+
+    // Find related properties
+    const relatedProperties = networkData?.properties?.filter(p => {
+        if (isPrincipal) {
+            // Match by owner name
+            const entityName = (entity.name || entity.name_c || '').toUpperCase().trim();
+            const ownerNorm = (p.details?.owner_norm || p.owner || '').toUpperCase().trim();
+            const coOwnerNorm = (p.details?.co_owner_norm || '').toUpperCase().trim();
+            return ownerNorm.includes(entityName) || coOwnerNorm.includes(entityName);
+        } else {
+            // Match by business name
+            const entityName = (entity.name || '').toUpperCase().trim();
+            const ownerName = (p.owner || '').toUpperCase().trim();
+            return ownerName === entityName;
+        }
+    }) || [];
 
     return (
         <AnimatePresence>
@@ -33,14 +49,14 @@ export default function EntityDetailsModal({ entity, type, onClose }) {
                     className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col"
                 >
                     {/* Header */}
-                    <div className="p-6 border-b border-gray-100 flex items-start justify-between bg-gray-50/50">
+                    <div className="p-6 border-b border-gray-100 flex items-start justify-between bg-gray-50/50 shrink-0">
                         <div>
                             <div className="flex items-center gap-2 text-blue-600 mb-1">
                                 {isPrincipal ? <User size={16} /> : <Building size={16} />}
                                 <span className="text-xs font-bold uppercase tracking-wider">{type}</span>
                             </div>
                             <h2 className="text-2xl font-bold text-gray-900 leading-tight">
-                                {entity.name}
+                                {entity.name || entity.name_c}
                             </h2>
                             {/* Subtitle */}
                             <p className="text-gray-500 font-medium">
@@ -66,7 +82,7 @@ export default function EntityDetailsModal({ entity, type, onClose }) {
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                     {/* Render all detail fields except internal ones */}
                                     {Object.entries(d).map(([k, v]) => {
-                                        if (['id', 'name', 'address', 'principal_address', 'business_address', 'principal_id', 'business_id'].includes(k)) return null;
+                                        if (['id', 'name', 'name_c', 'address', 'principal_address', 'business_address', 'principal_id', 'business_id', 'owner_norm', 'co_owner_norm'].includes(k)) return null;
                                         if (!v) return null;
                                         return (
                                             <div key={k}>
@@ -85,7 +101,7 @@ export default function EntityDetailsModal({ entity, type, onClose }) {
                             {type === 'business' && (
                                 <div className="flex items-center gap-2 p-3 bg-blue-50 text-blue-800 rounded-lg text-sm">
                                     <Info size={16} />
-                                    <span>Business Status: <strong>{entity.status || 'Unknown'}</strong></span>
+                                    <span>Business Status: <strong>{entity.status || d.status || 'Unknown'}</strong></span>
                                 </div>
                             )}
 
@@ -102,7 +118,7 @@ export default function EntityDetailsModal({ entity, type, onClose }) {
                                             const myId = String(entity.id);
 
                                             // Find connections in links
-                                            networkData.links.forEach((l) => {
+                                            networkData.links?.forEach((l) => {
                                                 const s = String(l.source);
                                                 const t = String(l.target);
 
@@ -120,7 +136,7 @@ export default function EntityDetailsModal({ entity, type, onClose }) {
 
                                             // Filter actual entities
                                             const targetList = isPrincipal ? networkData.businesses : networkData.principals;
-                                            const relatedEntities = targetList.filter(item => relatedIds.has(String(item.id)));
+                                            const relatedEntities = targetList?.filter(item => relatedIds.has(String(item.id))) || [];
 
                                             if (relatedEntities.length === 0) {
                                                 return <div className="text-gray-400 italic">No related records found.</div>;
@@ -133,10 +149,33 @@ export default function EntityDetailsModal({ entity, type, onClose }) {
                                                     className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-200 rounded-lg hover:border-blue-400 hover:text-blue-700 transition-colors shadow-sm text-gray-700"
                                                 >
                                                     {isPrincipal ? <Building size={12} /> : <User size={12} />}
-                                                    <span className="font-medium">{rel.name}</span>
+                                                    <span className="font-medium">{rel.name || rel.name_c}</span>
                                                 </button>
                                             ));
                                         })()}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Related Properties Section */}
+                            {relatedProperties.length > 0 && (
+                                <div className="bg-gray-50 rounded-xl p-4 border border-gray-100 text-sm space-y-3">
+                                    <h3 className="font-bold text-gray-900 flex items-center gap-2">
+                                        <MapPin size={16} className="text-green-500" />
+                                        Associated Properties ({relatedProperties.length})
+                                    </h3>
+                                    <div className="space-y-2 max-h-60 overflow-y-auto">
+                                        {relatedProperties.map((prop, idx) => (
+                                            <div key={idx} className="flex items-start justify-between p-2 bg-white rounded-lg border border-gray-200 hover:border-blue-300 transition-colors">
+                                                <div className="flex-1">
+                                                    <div className="font-medium text-gray-900 text-sm">{prop.address || prop.location}</div>
+                                                    <div className="text-xs text-gray-500">{prop.city}</div>
+                                                </div>
+                                                <div className="text-right">
+                                                    <div className="text-xs font-mono font-bold text-gray-700">{prop.assessed_value}</div>
+                                                </div>
+                                            </div>
+                                        ))}
                                     </div>
                                 </div>
                             )}

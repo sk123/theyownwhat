@@ -16,7 +16,7 @@ function DetailItem({ icon: Icon, label, value }) {
     );
 }
 
-export default function PropertyDetailsModal({ property, networkData = {}, onClose }) {
+export default function PropertyDetailsModal({ property, networkData = {}, onClose, onViewEntity }) {
     if (!property) return null;
 
     const isComplex = property.isComplex;
@@ -35,16 +35,29 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
     }) || [];
 
     // Mailing address from business or property details
-    const mailingAddress = relatedBusiness?.details?.mail_address ||
+    // Check both top-level business fields and nested details
+    const mailingAddress =
+        relatedBusiness?.mail_address ||
+        relatedBusiness?.details?.mail_address ||
         details.mail_address ||
         details.mailing_address ||
-        (relatedBusiness?.details?.mail_city ?
-            `${relatedBusiness.details.mail_city}, ${relatedBusiness.details.mail_state || 'CT'} ${relatedBusiness.details.mail_zip || ''}`.trim()
-            : null);
+        (relatedBusiness?.mail_city ?
+            `${relatedBusiness.mail_city}, ${relatedBusiness.mail_state || 'CT'} ${relatedBusiness.mail_zip || ''}`.trim()
+            : (relatedBusiness?.details?.mail_city ?
+                `${relatedBusiness.details.mail_city}, ${relatedBusiness.details.mail_state || 'CT'} ${relatedBusiness.details.mail_zip || ''}`.trim()
+                : null));
 
     // CORRECTED: Use cama_site_link and building_photo from details
     const imageUrl = details.building_photo || property.image_url || details.image_url;
     const gisUrl = details.cama_site_link || details.link || property.gis_url || details.gis_url || property.vision_url;
+
+    // Handler to view entity details
+    const handleViewEntity = (entity, type) => {
+        if (onViewEntity) {
+            onClose(); // Close property modal
+            setTimeout(() => onViewEntity(entity, type), 100); // Small delay for smooth transition
+        }
+    };
 
     return (
         <AnimatePresence>
@@ -63,7 +76,7 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
                     onClick={e => e.stopPropagation()}
                 >
                     {/* Header */}
-                    <div className="p-6 border-b border-gray-100 flex justify-between items-start bg-gray-50/50">
+                    <div className="p-6 border-b border-gray-100 flex justify-between items-start bg-gray-50/50 shrink-0">
                         <div className="flex items-start gap-4">
                             <div className={`p-3 rounded-xl ${isComplex ? 'bg-indigo-100 text-indigo-600' : 'bg-blue-100 text-blue-600'}`}>
                                 {isComplex ? <Building2 size={24} /> : <MapPin size={24} />}
@@ -137,7 +150,13 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
                                 <User size={14} /> Ownership
                             </h3>
                             <div className="p-4 bg-gray-50 rounded-xl border border-gray-100">
-                                <div className="text-lg font-medium text-gray-900">{property.owner}</div>
+                                <div
+                                    className={`text-lg font-medium ${relatedBusiness ? 'text-blue-600 hover:text-blue-700 cursor-pointer underline decoration-2 decoration-blue-400/30 hover:decoration-blue-600' : 'text-gray-900'}`}
+                                    onClick={() => relatedBusiness && handleViewEntity(relatedBusiness, 'business')}
+                                    title={relatedBusiness ? 'Click to view business details' : ''}
+                                >
+                                    {property.owner}
+                                </div>
                                 {property.details?.co_owner && (
                                     <div className="text-sm text-gray-600 mt-1 flex items-center gap-1">
                                         <span className="text-xs font-bold text-gray-400">CO-OWNER:</span>
@@ -155,10 +174,15 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
                                         <span className="text-xs font-bold text-gray-400 block mb-2">PRINCIPALS</span>
                                         <div className="space-y-2">
                                             {relatedPrincipals.map((principal, idx) => (
-                                                <div key={idx} className="flex items-start gap-2 text-sm">
+                                                <div
+                                                    key={idx}
+                                                    className="flex items-start gap-2 text-sm cursor-pointer hover:bg-blue-50/50 p-2 rounded-lg transition-colors"
+                                                    onClick={() => handleViewEntity(principal, 'principal')}
+                                                    title="Click to view principal details"
+                                                >
                                                     <div className="w-1.5 h-1.5 rounded-full bg-indigo-400 mt-1.5 shrink-0"></div>
                                                     <div className="flex-1">
-                                                        <div className="font-medium text-gray-900">{principal.name || principal.name_c}</div>
+                                                        <div className="font-medium text-blue-600 hover:text-blue-700">{principal.name || principal.name_c}</div>
                                                         {principal.details?.title && (
                                                             <div className="text-xs text-gray-500">{principal.details.title}</div>
                                                         )}

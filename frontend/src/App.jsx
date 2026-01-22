@@ -580,6 +580,7 @@ function App() {
           <PropertyDetailsModal
             property={selectedProperty}
             networkData={networkData}
+            onViewEntity={(entity, type) => setSelectedDetailEntity({ entity, type })}
             onClose={() => setSelectedProperty(null)}
           />
           <EntityDetailsModal
