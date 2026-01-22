@@ -616,7 +616,7 @@ export default function PropertyTable({
                 </AnimatePresence>
 
                 {/* Content Area */}
-                <div className="flex-1 overflow-hidden bg-white min-h-0 relative">
+                <div className="flex-1 bg-white min-h-0 relative">
                     {viewMode === 'list' && (
                         <div className="w-full h-full overflow-auto">
                             <table className="w-full text-left border-collapse">
