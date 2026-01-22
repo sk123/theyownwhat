@@ -330,18 +330,19 @@ export default function PropertyTable({
             allIds.forEach(id => newSet.delete(id));
         } else {
             allIds.forEach(id => newSet.add(id));
+            allIds.forEach(id => newSet.add(id));
         }
         setSelectedIds(newSet);
     }
 
     const handleMapSelected = () => {
-        const allPropsMap = new Map();
-        properties.forEach(p => allPropsMap.set(p.id, p));
-        const selectedProps = [];
-        selectedIds.forEach(id => {
-            if (allPropsMap.has(id)) selectedProps.push(allPropsMap.get(id));
-        });
-        if (onMapSelected) onMapSelected(selectedProps);
+        if (selectedIds.size === 0) return;
+
+        // Collapse all complexes before mapping as requested
+        setExpandedComplexIds(new Set());
+
+        const toMap = properties.filter(p => selectedIds.has(p.id));
+        onMapSelected(toMap);
     };
 
     const renderRows = (list) => (
@@ -401,7 +402,7 @@ export default function PropertyTable({
                                             </span>
                                             {p.isComplex && (
                                                 <span className="text-[10px] text-white bg-indigo-500 px-1.5 py-0.5 rounded-full font-bold">
-                                                    {p.unit_count} Units
+                                                    {p.unit_count} Parcels
                                                 </span>
                                             )}
                                         </div>
@@ -410,7 +411,16 @@ export default function PropertyTable({
                                 </div>
                             </div>
                         </td>
-                        {viewMode === 'list' && <td className="p-2 text-xs text-gray-600">{p.city}</td>}
+                        {viewMode === 'list' && (
+                            <td className="p-2">
+                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${(p.city || '').toUpperCase() === 'NEW BRITAIN'
+                                    ? 'bg-blue-50 text-blue-600 border-blue-100'
+                                    : 'bg-gray-50 text-gray-600 border-gray-100'
+                                    }`}>
+                                    {p.city}
+                                </span>
+                            </td>
+                        )}
                         <td className="p-2 text-xs text-gray-600 break-words max-w-[200px]">{p.owner}</td>
                         <td className="p-2 text-xs text-gray-700 font-mono">
                             <div className="font-semibold">{p.assessed_value}</div>
@@ -488,17 +498,17 @@ export default function PropertyTable({
     );
 
     return (
-        <div className={`bg-white rounded-xl border border-gray-200 shadow-sm flex flex-col ${autoHeight ? '' : 'h-full overflow-hidden'}`}>
+        <div className={`bg-white rounded-xl border border-gray-200 shadow-sm flex flex-col ${autoHeight ? '' : 'h-full overflow-auto'}`}>
             {/* Header / Toolbar */}
             <div
-                className="p-4 border-b border-gray-100 flex flex-col gap-4 bg-gray-50/50"
+                className="p-4 border-b border-gray-100 flex flex-col gap-4 bg-gray-50/50 shrink-0"
             >
                 <div className="flex items-center justify-between cursor-pointer lg:cursor-default" onClick={toggleExpand}>
                     <div className="flex items-center gap-3">
                         <h3 className="font-bold text-gray-800">Properties</h3>
                         <div className="flex items-center gap-1">
                             <span className="text-xs font-bold text-gray-500 bg-gray-200/50 px-2 py-1 rounded-md">
-                                {properties.length} Units
+                                {properties.length} Parcels
                             </span>
                             {groupedProperties.length < properties.length && (
                                 <span className="text-xs font-bold text-indigo-500 bg-indigo-50 px-2 py-1 rounded-md">
@@ -617,9 +627,9 @@ export default function PropertyTable({
                 </AnimatePresence>
 
                 {/* Content Area */}
-                <div className={`flex-1 min-h-0 bg-white relative ${autoHeight ? '' : 'overflow-hidden'}`}>
+                <div className={`flex-1 flex flex-col min-h-0 bg-white relative ${autoHeight ? '' : 'h-full overflow-auto'}`}>
                     {viewMode === 'list' && (
-                        <div className={`w-full ${autoHeight ? 'overflow-visible' : 'h-full overflow-auto'}`}>
+                        <div className={`w-full ${autoHeight ? 'overflow-visible' : 'flex-1 overflow-auto bg-white min-h-0'}`}>
                             <table className="w-full text-left border-collapse">
                                 <thead className="bg-gray-50 sticky top-0 z-10 shadow-sm border-b border-gray-100">
                                     <tr>
@@ -648,7 +658,7 @@ export default function PropertyTable({
                     )}
 
                     {viewMode === 'grid' && (
-                        <div className={`w-full flex flex-col bg-slate-50 ${autoHeight ? '' : 'h-full overflow-hidden'}`}>
+                        <div className={`w-full flex flex-col bg-slate-50 ${autoHeight ? '' : 'h-full overflow-auto'}`}>
                             {/* Mobile Jump Navigation */}
                             <div className="md:hidden overflow-x-auto py-2 px-4 flex gap-2 bg-white border-b border-gray-200 shrink-0 no-scrollbar">
                                 <span className="text-[10px] uppercase font-bold text-gray-400 self-center mr-1">JUMP TO:</span>

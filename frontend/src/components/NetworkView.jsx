@@ -207,8 +207,8 @@ export default function NetworkView({ networkData, onSelectEntity, selectedEntit
                     <div className={`flex flex-col transition-all duration-300 min-h-0 ${mobileSection === 'all' ? 'flex-1 overflow-hidden' : (autoHeight ? '' : 'flex-1 overflow-hidden')
                         }`}>
                         <div className="bg-white z-10 px-3 py-1.5 border-b border-gray-50 flex items-center justify-between">
-                            <h4 className="text-[10px] font-black text-slate-800 uppercase tracking-widest flex items-center gap-2">
-                                Businesses
+                            <h4 className="text-[11px] font-black text-slate-900 uppercase tracking-widest flex items-center gap-2">
+                                BUSINESSES
                             </h4>
                             <span className="text-[10px] font-medium text-gray-400">{activeBusinesses.length} Active</span>
                         </div>

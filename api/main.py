@@ -494,7 +494,7 @@ def batch_geocode_properties(req: BatchGeocodeRequest, conn=Depends(get_db_conne
 
     # 2. Process in parallel
     if to_process:
-        with ThreadPoolExecutor(max_workers=10) as executor: # Higher workers for IO bound
+        with ThreadPoolExecutor(max_workers=50) as executor: # Higher workers for IO bound
             future_to_id = {}
             for row in to_process:
                 address_full = f"{row['location']}, {row['property_city'] or ''}, CT {row['property_zip'] or ''}".strip()

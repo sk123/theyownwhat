@@ -87,16 +87,21 @@ export default function MultiPropertyMapModal({ properties, onClose }) {
 
             // 2. Process uncached in parallel batches via Backend API
             const BATCH_SIZE = 100;
-
+            const batches = [];
             for (let i = 0; i < uncached.length; i += BATCH_SIZE) {
-                if (!isMounted) break;
+                batches.push(uncached.slice(i, i + BATCH_SIZE));
+            }
 
-                const batch = uncached.slice(i, i + BATCH_SIZE);
-                const propertyIds = batch.map(p => p.id).filter(id => id);
+            if (batches.length > 0) {
+                // Determine API URL (Docker vs Local)
+                const apiBase = window.location.hostname === 'localhost' ? 'http://localhost:8000' : '';
 
-                if (propertyIds.length > 0) {
+                await Promise.all(batches.map(async (batch) => {
+                    const propertyIds = batch.map(p => p.id).filter(id => id);
+                    if (propertyIds.length === 0 || !isMounted) return;
+
                     try {
-                        const res = await fetch('http://localhost:8000/api/geocoding/batch', {
+                        const res = await fetch(`${apiBase}/api/geocoding/batch`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ property_ids: propertyIds })
@@ -120,14 +125,13 @@ export default function MultiPropertyMapModal({ properties, onClose }) {
                     } catch (e) {
                         console.error("Batch Geocoding error", e);
                     }
-                }
 
-                processed += batch.length;
-
-                if (isMounted) {
-                    setGeoStatus(prev => ({ ...prev, current: processed }));
-                    setMarkers([...results]);
-                }
+                    processed += batch.length;
+                    if (isMounted) {
+                        setGeoStatus(prev => ({ ...prev, current: Math.min(processed, toGeocode.length) }));
+                        setMarkers([...results]);
+                    }
+                }));
             }
 
             if (isMounted) {
