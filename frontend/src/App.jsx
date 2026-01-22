@@ -551,12 +551,12 @@ function App() {
               </div>
 
               {/* Right: Property Table */}
-              <div className="col-span-8 h-full bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
-                <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
+              <div className="col-span-8 h-full bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col min-h-0">
+                <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center shrink-0">
                   <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">Property Portfolio</h3>
                   <div className="text-xs font-bold text-slate-400">{filteredProperties.length} Assets</div>
                 </div>
-                <div className="flex-1 overflow-hidden">
+                <div className="flex-1 min-h-0">
                   <PropertyTable
                     properties={filteredProperties}
                     highlightedEntityId={selectedEntityId}

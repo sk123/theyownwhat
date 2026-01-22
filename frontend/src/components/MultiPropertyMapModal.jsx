@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { X, Map as MapIcon, Loader2, AlertCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
-import MarkerCluster from 'react-leaflet-cluster';
+import MarkerClusterGroup from 'react-leaflet-cluster';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 
@@ -194,7 +194,7 @@ export default function MultiPropertyMapModal({ properties, onClose }) {
                                     attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                                     url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                                 />
-                                <MarkerCluster
+                                <MarkerClusterGroup
                                     chunkedLoading
                                     spiderfyOnMaxZoom={true}
                                     showCoverageOnHover={false}
@@ -220,7 +220,7 @@ export default function MultiPropertyMapModal({ properties, onClose }) {
                                             </Popup>
                                         </Marker>
                                     ))}
-                                </MarkerCluster>
+                                </MarkerClusterGroup>
                                 <MapBounds markers={markers} />
                             </MapContainer>
                         )}
