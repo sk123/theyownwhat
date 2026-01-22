@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { ArrowUpDown, Map, List, Columns, X, Check, Building2, MapPin, ChevronRight, ChevronDown } from 'lucide-react';
+import { ArrowUpDown, Map, List, Grid3X3, X, Check, Building2, MapPin, ChevronRight, ChevronDown, LayoutGrid, Sparkles } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 // Helper Components
@@ -47,13 +47,14 @@ export default function PropertyTable({
     selectedCity = 'All',
     onSelectCity,
     onClearEntity,
-    highlightedEntityId
+    highlightedEntityId,
+    onAiDigest
 }) {
     // Default Sort: Unit Count (Desc) -> City (Asc)
     const [sortConfig, setSortConfig] = useState({ key: 'unit_count', direction: 'desc' });
     const [filter, setFilter] = useState('');
     const [selectedIds, setSelectedIds] = useState(new Set());
-    const [viewMode, setViewMode] = useState('list'); // 'list' | 'columns'
+    const [viewMode, setViewMode] = useState('list'); // 'list' | 'grid'
 
     // Multi-Select Mode State
     const [isMultiSelectActive, setIsMultiSelectActive] = useState(false);
@@ -91,12 +92,11 @@ export default function PropertyTable({
 
         // Helper to normalize address and extract unit
         const normalizeAddress = (rawAddress) => {
-            const addr = (rawAddress || '').trim().toUpperCase(); // Normalize case first
+            const addr = (rawAddress || '').trim().toUpperCase();
 
             let base = addr;
             let unit = null;
 
-            // Strategy 0: #UD prefix (Special user request: "655 FITCH ST #UD13")
             const udMatch = addr.match(/^(.*?)\s+#UD([A-Z0-9-]+)$/);
             if (udMatch) {
                 base = udMatch[1];
@@ -104,7 +104,6 @@ export default function PropertyTable({
                 return { base, unit };
             }
 
-            // Strategy 1: Hyphenated Prefix (e.g. "1380-S302A EAST ST")
             const hyphenMatch = addr.match(/^(\d+)-([A-Z0-9]+)\s+(.*)$/);
             if (hyphenMatch) {
                 base = `${hyphenMatch[1]} ${hyphenMatch[3]}`;
@@ -112,7 +111,6 @@ export default function PropertyTable({
                 return { base, unit };
             }
 
-            // Strategy 2: Explicit "Unit", "Apt", "Ste", "#" regex
             const unitMatch = addr.match(/^(.*?)\s+(?:#|UNIT|APT|STE|SUITE)\s*([A-Z0-9-]+)$/);
             if (unitMatch) {
                 base = unitMatch[1];
@@ -120,8 +118,6 @@ export default function PropertyTable({
                 return { base, unit };
             }
 
-            // Strategy 3: Trailing Single Letter
-            // e.g. "1 TALCOTT FOREST RD I" -> "1 TALCOTT FOREST RD"
             const trailingCharMatch = addr.match(/^(.*?)\s+([A-Z])$/);
             if (trailingCharMatch) {
                 const candidateBase = trailingCharMatch[1];
@@ -135,7 +131,6 @@ export default function PropertyTable({
                 }
             }
 
-            // Strategy 4: Trailing Number (e.g. "2 FOREST PARK DR 10")
             const trailingNumMatch = addr.match(/^(\d+\s+.*)\s+(\d+)$/);
             if (trailingNumMatch) {
                 base = trailingNumMatch[1];
@@ -149,7 +144,6 @@ export default function PropertyTable({
         properties.forEach(p => {
             const { base, unit } = normalizeAddress(p.address || p.location);
 
-            // Use base + city as unique key
             const baseKey = base.trim().toLowerCase();
             const cityKey = (p.property_city || p.city || '').trim().toLowerCase();
             const key = `${baseKey}|${cityKey}`;
@@ -157,14 +151,13 @@ export default function PropertyTable({
             if (!groups[key]) {
                 groups[key] = {
                     key,
-                    rawAddress: base, // Display the normalized base address for the complex
+                    rawAddress: base,
                     rawCity: p.property_city || p.city,
                     units: [],
                     owners: new Set()
                 };
             }
 
-            // Attach derived unit to the property object for display/sorting
             const pWithUnit = { ...p, derivedUnit: unit || p.unit };
 
             groups[key].units.push(pWithUnit);
@@ -175,12 +168,10 @@ export default function PropertyTable({
         const currencyFmt = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 
         Object.values(groups).forEach(g => {
-            // A complex is defined as having more than 1 unit
             if (g.units.length > 1) {
                 let totalAssessed = 0;
                 let totalAppraised = 0;
 
-                // Sort units alphanumerically
                 g.units.sort((a, b) => {
                     const uA = a.derivedUnit || '';
                     const uB = b.derivedUnit || '';
@@ -203,7 +194,7 @@ export default function PropertyTable({
                 result.push({
                     id: `complex-${g.key}`,
                     isComplex: true,
-                    address: g.rawAddress, // Normalized Address
+                    address: g.rawAddress,
                     city: g.rawCity,
                     owner: ownerDisplay,
                     unit_count: g.units.length,
@@ -213,7 +204,6 @@ export default function PropertyTable({
                     representativeId: g.units[0].id
                 });
             } else {
-                // Single property - use original, but ensure unit_count is 1 for sorting
                 result.push({
                     ...g.units[0],
                     unit_count: 1,
@@ -244,11 +234,9 @@ export default function PropertyTable({
             let aVal = a[sortConfig.key];
             let bVal = b[sortConfig.key];
 
-            // Handle undefined/nulls safely
             if (aVal === undefined || aVal === null) aVal = '';
             if (bVal === undefined || bVal === null) bVal = '';
 
-            // Numeric sort for values and counts
             if (['assessed_value', 'appraised_value', 'unit_count'].includes(sortConfig.key)) {
                 aVal = parseFloat(String(aVal).replace(/[^0-9.-]+/g, "")) || 0;
                 bVal = parseFloat(String(bVal).replace(/[^0-9.-]+/g, "")) || 0;
@@ -257,7 +245,6 @@ export default function PropertyTable({
             if (aVal < bVal) return sortConfig.direction === 'asc' ? -1 : 1;
             if (aVal > bVal) return sortConfig.direction === 'asc' ? 1 : -1;
 
-            // Secondary Sort: City (unless we are already sorting by city)
             if (sortConfig.key !== 'city') {
                 const cityA = (a.city || '').toLowerCase();
                 const cityB = (b.city || '').toLowerCase();
@@ -269,16 +256,15 @@ export default function PropertyTable({
         return sorted;
     }, [filteredProperties, sortConfig]);
 
-    // Group properties by city for Column View (Group logic applied)
+    // Group properties by city for Grid View
     const groupedByCity = useMemo(() => {
-        if (viewMode !== 'columns') return null;
+        if (viewMode !== 'grid') return null;
         const groups = {};
         sortedProperties.forEach(p => {
             const city = p.city || 'Unknown';
             if (!groups[city]) groups[city] = [];
             groups[city].push(p);
         });
-        // Sort keys
         return Object.keys(groups).sort().reduce((acc, key) => {
             acc[key] = groups[key];
             return acc;
@@ -286,28 +272,21 @@ export default function PropertyTable({
     }, [sortedProperties, viewMode]);
 
 
-    // Selection Logic handles both single and complex items
     const toggleSelection = (e, item) => {
         e.stopPropagation();
         const newSet = new Set(selectedIds);
-
         const idsToToggle = item.isComplex ? item.subProperties.map(s => s.id) : [item.id];
-
-        // Determine if we are selecting or deselecting (based on first item state)
         const firstId = idsToToggle[0];
         const isSelected = newSet.has(firstId);
-
         idsToToggle.forEach(id => {
             if (isSelected) newSet.delete(id);
             else newSet.add(id);
         });
-
         setSelectedIds(newSet);
     };
 
     const isItemSelected = (item) => {
         if (item.isComplex) {
-            // Complex is selected if ALL its sub-properties are selected
             return item.subProperties.every(s => selectedIds.has(s.id));
         }
         return selectedIds.has(item.id);
@@ -315,8 +294,6 @@ export default function PropertyTable({
 
     const handleSelectAll = (subsetFn) => {
         const targetList = subsetFn ? subsetFn() : sortedProperties;
-
-        // Collect all real IDs
         let allIds = [];
         targetList.forEach(p => {
             if (p.isComplex) {
@@ -325,10 +302,8 @@ export default function PropertyTable({
                 allIds.push(p.id);
             }
         });
-
         const allSelected = allIds.every(id => selectedIds.has(id));
         const newSet = new Set(selectedIds);
-
         allIds.forEach(id => {
             if (allSelected) newSet.delete(id);
             else newSet.add(id);
@@ -337,8 +312,8 @@ export default function PropertyTable({
     };
 
     const handleSelectByCity = (city) => {
-        // Select all properties in this city
-        const targetList = sortedProperties.filter(p => (p.city || '').toLowerCase() === city.toLowerCase());
+        // Properties in this city that are currently visible (filtered)
+        const targetList = sortedProperties.filter(p => (p.city || p.rawCity || '').toLowerCase() === city.toLowerCase());
 
         let allIds = [];
         targetList.forEach(p => {
@@ -346,40 +321,37 @@ export default function PropertyTable({
             else allIds.push(p.id);
         });
 
-        // Add to selection (don't toggle, just add)
+        // Toggle Logic: If all items in this city are selected, deselect them. Otherwise, select them.
+        const allSelected = allIds.length > 0 && allIds.every(id => selectedIds.has(id));
         const newSet = new Set(selectedIds);
-        allIds.forEach(id => newSet.add(id));
+
+        if (allSelected) {
+            allIds.forEach(id => newSet.delete(id));
+        } else {
+            allIds.forEach(id => newSet.add(id));
+        }
         setSelectedIds(newSet);
     }
 
     const handleMapSelected = () => {
-        // Collect full property objects for verification/mapping
-        // We need to look up original properties from the IDs
-        // Efficient lookup:
         const allPropsMap = new Map();
         properties.forEach(p => allPropsMap.set(p.id, p));
-
         const selectedProps = [];
         selectedIds.forEach(id => {
             if (allPropsMap.has(id)) selectedProps.push(allPropsMap.get(id));
         });
-
         if (onMapSelected) onMapSelected(selectedProps);
     };
 
-    // Helper for table rows
     const renderRows = (list) => (
         list.map((p, i) => {
             const selected = isItemSelected(p);
             const isExpanded = p.isComplex && expandedComplexIds.has(p.id);
-
             return (
                 <React.Fragment key={p.id || i}>
                     <tr
                         onClick={(e) => {
                             if (e.target.tagName === "INPUT" || e.target.closest("a") || e.target.closest("button")) return;
-
-                            // Interaction Logic
                             if (isMultiSelectActive) {
                                 toggleSelection(e, p);
                             } else {
@@ -417,9 +389,8 @@ export default function PropertyTable({
                                         {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                                     </button>
                                 ) : (
-                                    <div className="w-6" /> // Spacer
+                                    <div className="w-6" />
                                 )}
-
                                 <div className="flex items-center gap-2">
                                     {p.isComplex && <Building2 className="w-4 h-4 text-indigo-500 shrink-0" />}
                                     <div className="flex flex-col">
@@ -433,7 +404,6 @@ export default function PropertyTable({
                                                 </span>
                                             )}
                                         </div>
-                                        {/* Show simple unit text for single properties without derivedUnit if needed */}
                                         {!p.isComplex && p.unit && <span className="text-[10px] text-slate-500">Unit #{p.unit}</span>}
                                     </div>
                                 </div>
@@ -465,8 +435,6 @@ export default function PropertyTable({
                             </td>
                         )}
                     </tr>
-
-                    {/* Render Sub-Properties if Expanded */}
                     <AnimatePresence>
                         {isExpanded && p.subProperties.map((sub, idx) => (
                             <motion.tr
@@ -494,9 +462,7 @@ export default function PropertyTable({
                                     </td>
                                 )}
                                 <td className="p-2 pl-12 relative">
-                                    {/* L-Shape Indentation Line */}
                                     <div className="absolute left-[2.25rem] top-0 bottom-1/2 w-4 border-l border-b border-gray-300 rounded-bl-xl"></div>
-
                                     <div className="flex items-center gap-2 ml-4">
                                         <div className="text-xs text-gray-600 font-medium bg-white border border-gray-200 px-1.5 py-0.5 rounded shadow-sm">
                                             #{sub.derivedUnit || sub.unit}
@@ -510,7 +476,6 @@ export default function PropertyTable({
                                 </td>
                                 {viewMode === 'list' && !isMultiSelectActive && (
                                     <td className="p-2">
-                                        {/* Placeholder for alignment */}
                                     </td>
                                 )}
                             </motion.tr>
@@ -532,7 +497,7 @@ export default function PropertyTable({
                         <h3 className="font-bold text-gray-800">Properties</h3>
                         <div className="flex items-center gap-1">
                             <span className="text-xs font-bold text-gray-500 bg-gray-200/50 px-2 py-1 rounded-md">
-                                {properties.length} Total Units
+                                {properties.length} Units
                             </span>
                             {groupedProperties.length < properties.length && (
                                 <span className="text-xs font-bold text-indigo-500 bg-indigo-50 px-2 py-1 rounded-md">
@@ -542,18 +507,29 @@ export default function PropertyTable({
                         </div>
 
                         {!isMultiSelectActive && (
-                            <button
-                                onClick={(e) => { e.stopPropagation(); setIsMultiSelectActive(true); }}
-                                className="ml-2 px-2 py-1 bg-white border border-gray-300 text-gray-700 text-xs font-bold rounded shadow-sm hover:bg-gray-50 transition-colors flex items-center gap-1"
-                            >
-                                <CheckSquare size={14} className="text-gray-500" />
-                                Map Multiple
-                            </button>
+                            <>
+                                {onAiDigest && (
+                                    <button
+                                        onClick={(e) => { e.stopPropagation(); onAiDigest(); }}
+                                        className="ml-2 px-2 py-1 bg-white border border-gray-300 text-indigo-600 text-xs font-bold rounded shadow-sm hover:bg-indigo-50 transition-colors flex items-center gap-1"
+                                    >
+                                        <Sparkles size={14} />
+                                        <span className="hidden sm:inline">AI Digest</span>
+                                    </button>
+                                )}
+                                <button
+                                    onClick={(e) => { e.stopPropagation(); setIsMultiSelectActive(true); }}
+                                    className="ml-2 px-2 py-1 bg-white border border-gray-300 text-gray-700 text-xs font-bold rounded shadow-sm hover:bg-gray-50 transition-colors flex items-center gap-1"
+                                >
+                                    <CheckSquare size={14} className="text-gray-500" />
+                                    <span className="hidden sm:inline">Map Multiple</span>
+                                </button>
+                            </>
                         )}
                         {isMultiSelectActive && (
                             <div className="flex items-center gap-2 ml-2 animate-in fade-in zoom-in duration-200">
                                 <span className="text-xs font-bold text-blue-600 bg-blue-50 px-2 py-1 rounded-md">
-                                    {selectedIds.size} Selected
+                                    {selectedIds.size}
                                 </span>
                                 <button
                                     onClick={(e) => { e.stopPropagation(); setIsMultiSelectActive(false); setSelectedIds(new Set()); }}
@@ -568,15 +544,38 @@ export default function PropertyTable({
                                         className="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded shadow-sm transition-colors flex items-center gap-1"
                                     >
                                         <Map className="w-3 h-3" />
-                                        Map Selected
+                                        Map
                                     </button>
                                 )}
                             </div>
                         )}
                     </div>
+
+                    {/* View Toggles */}
+                    <div className="flex items-center gap-2 bg-gray-100 rounded-lg p-1 ml-auto">
+                        <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider pl-2 hidden sm:inline">View:</span>
+                        <div className="flex">
+                            <button
+                                onClick={(e) => { e.stopPropagation(); setViewMode('list'); }}
+                                className={`flex items-center gap-1.5 px-2 py-1.5 rounded-md transition-all ${viewMode === 'list' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                                title="List View"
+                            >
+                                <List size={14} />
+                                <span className="text-xs font-bold hidden sm:inline">List</span>
+                            </button>
+                            <button
+                                onClick={(e) => { e.stopPropagation(); setViewMode('grid'); }}
+                                className={`flex items-center gap-1.5 px-2 py-1.5 rounded-md transition-all ${viewMode === 'grid' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                                title="City Grid View"
+                            >
+                                <LayoutGrid size={14} />
+                                <span className="text-xs font-bold whitespace-nowrap">City View</span>
+                            </button>
+                        </div>
+                    </div>
                 </div>
 
-                {/* Multi-Select Toolbar (Sub-header) */}
+                {/* Multi-Select Toolbar */}
                 <AnimatePresence>
                     {isMultiSelectActive && (
                         <motion.div
@@ -585,20 +584,15 @@ export default function PropertyTable({
                             exit={{ height: 0, opacity: 0 }}
                             className="bg-blue-50 border-b border-blue-100 px-4 py-2 flex flex-wrap items-center gap-2 overflow-hidden shadow-inner"
                         >
-                            <span className="text-xs font-bold text-blue-800 mr-2 uppercase tracking-wider">
-                                Quick Select:
-                            </span>
+                            {/* Simplified Toolbar Content */}
                             <button
                                 onClick={() => handleSelectAll()}
-                                className="bg-white border border-blue-200 hover:bg-blue-100 text-blue-700 text-xs font-semibold px-3 py-1.5 rounded-full shadow-sm transition-colors flex items-center gap-1 active:scale-95"
+                                className="bg-white border border-blue-200 hover:bg-blue-100 text-blue-700 text-xs font-semibold px-3 py-1.5 rounded-full shadow-sm active:scale-95"
                             >
-                                <Check size={12} className={selectedIds.size === sortedProperties.length && sortedProperties.length > 0 ? "opacity-100" : "opacity-40"} />
-                                Select All
+                                All
                             </button>
                             <div className="w-px h-4 bg-blue-200 mx-1"></div>
-                            {/* Dynamic City Buttons */}
                             {Array.from(new Set(sortedProperties.map(p => p.city || p.rawCity || 'Unknown'))).sort().map(city => {
-                                // Check if all properties in this city are selected to style the button
                                 const propsInCity = sortedProperties.filter(p => (p.city || p.rawCity) === city);
                                 const allCitySelected = propsInCity.length > 0 && propsInCity.every(p => {
                                     if (p.isComplex) return p.subProperties.every(s => selectedIds.has(s.id));
@@ -608,13 +602,12 @@ export default function PropertyTable({
                                     <button
                                         key={city}
                                         onClick={() => handleSelectByCity(city)}
-                                        className={`text-xs font-semibold px-3 py-1.5 rounded-full shadow-sm transition-colors flex items-center gap-1 active:scale-95 border ${allCitySelected
-                                            ? 'bg-blue-600 text-white border-blue-600 hover:bg-blue-700'
-                                            : 'bg-white text-blue-700 border-blue-200 hover:bg-blue-50'
+                                        className={`text-[10px] font-bold px-2 py-1 rounded-full border ${allCitySelected
+                                            ? 'bg-blue-600 text-white border-blue-600'
+                                            : 'bg-white text-blue-700 border-blue-200'
                                             }`}
                                     >
-                                        {allCitySelected ? <Check size={12} /> : <span>+</span>}
-                                        {city} ({propsInCity.length})
+                                        {city}
                                     </button>
                                 );
                             })}
@@ -624,119 +617,122 @@ export default function PropertyTable({
 
                 {/* Content Area */}
                 <div className="flex-1 overflow-hidden bg-white min-h-0 relative">
-                    {viewMode === 'list' ? (
-                        // Standard List View
+                    {viewMode === 'list' && (
                         <div className="w-full h-full overflow-auto">
                             <table className="w-full text-left border-collapse">
                                 <thead className="bg-gray-50 sticky top-0 z-10 shadow-sm border-b border-gray-100">
                                     <tr>
                                         {isMultiSelectActive && (
                                             <th className="p-2 w-10 text-center cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => handleSelectAll()}>
-                                                <div className="flex items-center justify-center">
-                                                    <input
-                                                        type="checkbox"
-                                                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
-                                                        checked={selectedIds.size > 0 && selectedIds.size === properties.length}
-                                                        onChange={(e) => { e.stopPropagation(); handleSelectAll(); }}
-                                                    />
-                                                </div>
+                                                <input
+                                                    type="checkbox"
+                                                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                                                    checked={selectedIds.size > 0 && selectedIds.size === properties.length}
+                                                    onChange={(e) => { e.stopPropagation(); handleSelectAll(); }}
+                                                />
                                             </th>
                                         )}
                                         <SortHeader label="Address" sortKey="address" currentSort={sortConfig} onSort={handleSort} />
-                                        {viewMode === 'list' && (
-                                            <SortHeader label="City" sortKey="city" currentSort={sortConfig} onSort={handleSort} />
-                                        )}
+                                        <SortHeader label="City" sortKey="city" currentSort={sortConfig} onSort={handleSort} />
                                         <SortHeader label="Owner" sortKey="owner" currentSort={sortConfig} onSort={handleSort} />
                                         <SortHeader label="Assessed" sortKey="assessed_value" currentSort={sortConfig} onSort={handleSort} />
-                                        {!isMultiSelectActive && <th className="p-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider w-12">Link</th>}
+                                        {!isMultiSelectActive && <th className="p-2 w-10"></th>}
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-gray-100">
                                     {renderRows(sortedProperties)}
-                                    {sortedProperties.length === 0 && (
-                                        <tr>
-                                            <td colSpan={6} className="p-8 text-center text-gray-500">
-                                                No properties found.
-                                            </td>
-                                        </tr>
-                                    )}
                                 </tbody>
                             </table>
                         </div>
-                    ) : (
-                        // Column View
-                        <div className="flex flex-row overflow-x-auto h-full p-4 gap-4 items-start bg-slate-50">
-                            {groupedByCity && Object.entries(groupedByCity).map(([city, props]) => (
-                                <div key={city} className="min-w-[400px] max-w-[400px] flex flex-col bg-white border border-gray-200 rounded-xl shadow-sm h-full max-h-full overflow-hidden shrink-0">
-                                    {/* Column Header */}
-                                    <div className="p-3 bg-gray-50 border-b border-gray-100 flex justify-between items-center">
-                                        <h4 className="font-bold text-gray-800 text-sm">{city}</h4>
-                                        <span className="text-xs bg-gray-200 text-gray-600 px-2 py-0.5 rounded-full">{props.length}</span>
-                                    </div>
-                                    {/* Column Table */}
-                                    <div className="flex-1 overflow-y-auto">
-                                        <table className="w-full text-left border-collapse">
-                                            <thead className="bg-white sticky top-0 z-10 shadow-sm border-b border-gray-100">
-                                                <tr>
-                                                    {isMultiSelectActive && (
-                                                        <th className="p-2 w-10 text-center bg-white border-b border-gray-100">
-                                                            <button
-                                                                onClick={() => handleSelectAll(() => props)}
-                                                                className="w-full flex items-center justify-center gap-2 py-1 rounded hover:bg-gray-100 transition-colors"
+                    )}
+
+                    {viewMode === 'grid' && (
+                        <div className="w-full h-full flex flex-col overflow-hidden bg-slate-50">
+                            {/* Mobile Jump Navigation */}
+                            <div className="md:hidden overflow-x-auto py-2 px-4 flex gap-2 bg-white border-b border-gray-200 shrink-0 no-scrollbar">
+                                <span className="text-[10px] uppercase font-bold text-gray-400 self-center mr-1">JUMP TO:</span>
+                                {groupedByCity && Object.keys(groupedByCity).sort().map(city => (
+                                    <button
+                                        key={city}
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            document.getElementById(`city-card-${city}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                                        }}
+                                        className="whitespace-nowrap px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-full transition-colors flex items-center gap-1.5"
+                                    >
+                                        {city}
+                                        <span className="bg-slate-300 text-[9px] px-1 rounded-sm text-slate-600">{groupedByCity[city].length}</span>
+                                    </button>
+                                ))}
+                            </div>
+
+                            <div className="flex-1 overflow-y-auto p-4">
+                                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6 pb-20 md:pb-0">
+                                    {groupedByCity && Object.entries(groupedByCity).map(([city, props]) => (
+                                        <div
+                                            key={city}
+                                            id={`city-card-${city}`}
+                                            className="bg-white border border-gray-200 rounded-xl shadow-sm flex flex-col md:h-[400px] h-auto scroll-mt-4"
+                                        >
+                                            <div className="p-3 bg-gray-50 border-b border-gray-100 flex justify-between items-center sticky top-0 z-10 rounded-t-xl">
+                                                <h4 className="font-bold text-gray-800 text-sm">{city}</h4>
+                                                <span className="text-xs bg-gray-200 text-gray-600 px-2 py-0.5 rounded-full">{props.length}</span>
+                                            </div>
+                                            {/* On mobile (default), allow auto height. On md+, fix height to 400px for grid alignment */}
+                                            <div className="overflow-visible md:flex-1 md:overflow-y-auto">
+                                                <table className="w-full text-left border-collapse">
+                                                    <thead className="bg-white md:sticky md:top-0 z-10 shadow-sm border-b border-gray-100 hidden md:table-header-group">
+                                                        <tr>
+                                                            {isMultiSelectActive && <th className="p-2 w-8">
+                                                                <input type="checkbox" readOnly checked={props.every(p => isItemSelected(p))} />
+                                                            </th>}
+                                                            <th className="p-2 text-[10px] font-bold text-gray-500 uppercase">Address</th>
+                                                            <th className="p-2 text-[10px] font-bold text-gray-500 uppercase text-right">Owner</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody className="divide-y divide-gray-100">
+                                                        {props.map((p, i) => (
+                                                            <tr
+                                                                key={p.id || i}
+                                                                className={`hover:bg-blue-50/50 cursor-pointer ${isItemSelected(p) && isMultiSelectActive ? 'bg-blue-50' : ''}`}
+                                                                onClick={(e) => {
+                                                                    if (e.target.tagName === "INPUT") return;
+                                                                    if (isMultiSelectActive) toggleSelection(e, p);
+                                                                    else onSelectProperty(p.isComplex ? p.subProperties[0] : p);
+                                                                }}
                                                             >
-                                                                <input
-                                                                    type="checkbox"
-                                                                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 pointer-events-none"
-                                                                    checked={props.every(p => isItemSelected(p))}
-                                                                    readOnly
-                                                                />
-                                                            </button>
-                                                        </th>
-                                                    )}
-                                                    <th className="p-2 text-[10px] font-bold text-gray-500 uppercase">Address</th>
-                                                    <th className="p-2 text-[10px] font-bold text-gray-500 uppercase">Owner/Value</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody className="divide-y divide-gray-100">
-                                                {props.map((p, i) => (
-                                                    <tr
-                                                        key={p.id || i}
-                                                        onClick={(e) => {
-                                                            if (e.target.tagName === "INPUT") return;
-                                                            if (isMultiSelectActive) toggleSelection(e, p);
-                                                            else onSelectProperty(p.isComplex ? p.subProperties[0] : p);
-                                                        }}
-                                                        className={`hover:bg-blue-50/50 cursor-pointer ${isItemSelected(p) && isMultiSelectActive ? 'bg-blue-50' : ''}`}
-                                                    >
-                                                        {isMultiSelectActive && (
-                                                            <td className="p-2 text-center" onClick={(e) => toggleSelection(e, p)}>
-                                                                <input
-                                                                    type="checkbox"
-                                                                    checked={isItemSelected(p)}
-                                                                    readOnly
-                                                                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 pointer-events-none"
-                                                                />
-                                                            </td>
-                                                        )}
-                                                        <td className="p-2">
-                                                            <div className="flex items-center gap-1">
-                                                                {p.isComplex && <Building2 className="w-3 h-3 text-blue-500" />}
-                                                                <div className="text-xs font-medium text-gray-900">{p.address}</div>
-                                                            </div>
-                                                            {p.unit && <div className="text-[10px] text-gray-500">#{p.unit}</div>}
-                                                            {p.isComplex && <div className="text-[10px] text-blue-600 font-bold">{p.unit_count} Units</div>}
-                                                        </td>
-                                                        <td className="p-2">
-                                                            <div className="text-[10px] text-gray-600 truncate max-w-[120px]">{p.owner}</div>
-                                                            <div className="text-xs font-mono font-semibold text-gray-800">{p.assessed_value}</div>
-                                                        </td>
-                                                    </tr>
-                                                ))}
-                                            </tbody>
-                                        </table>
-                                    </div>
+                                                                {isMultiSelectActive && (
+                                                                    <td className="p-2 text-center w-8" onClick={(e) => toggleSelection(e, p)}>
+                                                                        <input type="checkbox" checked={isItemSelected(p)} readOnly className="pointer-events-none rounded text-blue-600" />
+                                                                    </td>
+                                                                )}
+                                                                <td className="p-2">
+                                                                    <div className="flex flex-col gap-0.5">
+                                                                        <div className="text-xs font-medium text-gray-900 truncate" title={p.address}>{p.address}</div>
+                                                                        <div className="flex items-center gap-1 md:hidden">
+                                                                            <div className="text-[10px] text-gray-500 truncate">{p.owner}</div>
+                                                                        </div>
+                                                                        {p.isComplex ? <span className="text-[9px] text-indigo-600 font-bold inline-block">{p.unit_count} Units</span> : <span className="text-[9px] text-gray-400 inline-block">Unit #{p.unit}</span>}
+                                                                    </div>
+                                                                </td>
+                                                                {/* Hide Owner column on mobile to save space, show under address */}
+                                                                <td className="p-2 text-right hidden md:table-cell">
+                                                                    <div className="text-[10px] text-gray-500 truncate max-w-[100px]">{p.owner}</div>
+                                                                    <div className="text-[10px] font-mono">{p.assessed_value}</div>
+                                                                </td>
+                                                                {/* Mobile Only Value */}
+                                                                <td className="p-2 text-right md:hidden align-top">
+                                                                    <div className="text-[10px] font-mono font-bold text-slate-700">{p.assessed_value}</div>
+                                                                </td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    ))}
                                 </div>
-                            ))}
+                            </div>
                         </div>
                     )}
                 </div>

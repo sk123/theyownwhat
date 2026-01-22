@@ -196,13 +196,17 @@ def run_properties_update(conn, file_path, column_map):
                 # 1. UPDATE ALL NEW FIELDS
                 c.execute("""
                 UPDATE properties p SET
-                    link = s.link, account_number = s.account_number, gis_tag = s.gis_tag,
+                    link = COALESCE(p.link, s.link),
+                    account_number = s.account_number, gis_tag = s.gis_tag,
                     map = s.map, map_cut = s.map_cut, block = s.block, block_cut = s.block_cut,
-                    lot = s.lot, lot_cut = s.lot_cut, unit = s.unit, unit_cut = s.unit_cut,
+                    lot = s.lot, lot_cut = s.lot_cut,
+                    unit = COALESCE(p.unit, s.unit),
+                    unit_cut = s.unit_cut,
                     property_zip = s.property_zip, property_county = s.property_county,
                     street_name = s.street_name, address_number = s.address_number,
                     address_prefix = s.address_prefix, address_suffix = s.address_suffix,
-                    cama_site_link = s.cama_site_link, building_photo = s.building_photo,
+                    cama_site_link = COALESCE(p.cama_site_link, s.cama_site_link),
+                    building_photo = COALESCE(p.building_photo, s.building_photo),
                     number_of_units = s.number_of_units
                 FROM staging_properties_update s
                 WHERE p.serial_number = s.serial_number;

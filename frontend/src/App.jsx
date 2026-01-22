@@ -418,7 +418,7 @@ function App() {
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            className="flex flex-col h-full w-full max-w-[1920px] mx-auto px-4 py-3 gap-3 overflow-hidden bg-slate-50/50 backdrop-blur-sm lg:overflow-hidden overflow-y-auto"
+            className="flex flex-col h-full w-full max-w-[1920px] mx-auto px-4 py-3 gap-3 overflow-hidden bg-slate-50/50 backdrop-blur-sm"
           >
             {/* Stats Row */}
             <div className="flex flex-col md:flex-row gap-3 items-stretch">
@@ -439,21 +439,7 @@ function App() {
                   icon={<Users className="w-4 h-4 text-slate-400" />}
                 />
               </div>
-              {aiEnabled && (
-                <button
-                  onClick={() => setShowAnalysis(true)}
-                  className="px-6 bg-slate-900 hover:bg-slate-800 text-white rounded-xl shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all flex items-center justify-center gap-2 min-w-[140px] group"
-                >
-                  <div className="relative">
-                    <Sparkles className="w-5 h-5 text-indigo-400 group-hover:text-indigo-300 transition-colors" />
-                    <div className="absolute inset-0 bg-indigo-400/50 blur-sm opacity-50 animate-pulse"></div>
-                  </div>
-                  <div className="text-left">
-                    <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 leading-none mb-0.5">Generate</div>
-                    <div className="text-sm font-bold">AI Digest</div>
-                  </div>
-                </button>
-              )}
+              {/* Stats Row End */}
             </div>
 
             {/* Cross-Filtering & City Selection Controls - MOVED TO PROPERTY TABLE */}
@@ -507,6 +493,7 @@ function App() {
                       highlightedEntityId={selectedEntityId}
                       onSelectProperty={setSelectedProperty}
                       onMapSelected={setSelectedMapProperties}
+                      onAiDigest={aiEnabled ? () => setShowAnalysis(true) : null}
                       forceExpanded={true}
 
                       // Filter Props
@@ -575,6 +562,7 @@ function App() {
                     highlightedEntityId={selectedEntityId}
                     onSelectProperty={setSelectedProperty}
                     onMapSelected={setSelectedMapProperties}
+                    onAiDigest={aiEnabled ? () => setShowAnalysis(true) : null}
 
                     // Filter Props
                     cities={allCities}
@@ -591,6 +579,7 @@ function App() {
         <Suspense fallback={null}>
           <PropertyDetailsModal
             property={selectedProperty}
+            networkData={networkData}
             onClose={() => setSelectedProperty(null)}
           />
           <EntityDetailsModal
@@ -617,7 +606,7 @@ function App() {
           />
         </Suspense>
       </main>
-    </div>
+    </div >
   );
 }
 
