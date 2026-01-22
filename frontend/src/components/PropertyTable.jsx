@@ -488,10 +488,8 @@ export default function PropertyTable({
 
     return (
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm flex flex-col h-full overflow-hidden">
-            {/* Header / Toolbar */}
-            <div
-                className="p-4 border-b border-gray-100 flex flex-col gap-4 bg-gray-50/50"
-            >
+            {/* 1. Header / Toolbar (Fixed Height) */}
+            <div className="p-4 border-b border-gray-100 flex flex-col gap-4 bg-gray-50/50 shrink-0">
                 <div className="flex items-center justify-between cursor-pointer lg:cursor-default" onClick={toggleExpand}>
                     <div className="flex items-center gap-3">
                         <h3 className="font-bold text-gray-800">Properties</h3>
@@ -615,7 +613,7 @@ export default function PropertyTable({
                     )}
                 </AnimatePresence>
 
-                {/* Content Area */}
+                {/* 2. Content Area (Sibling to Header, fills remaining space) */}
                 <div className="flex-1 overflow-hidden min-h-0 bg-white relative">
                     {viewMode === 'list' && (
                         <div className="w-full h-full overflow-auto">
