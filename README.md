@@ -6,7 +6,7 @@
 
 **Version 2.0 // 2026**
 
-## The Mission
+## Purpose
 
 **they own WHAT??** is an investigative and advocacy tool designed to bring transparency to **Connecticut's** property landscape. By linking fragmented public records, the tool reveals the hidden networks of ownership that shape our neighborhoods.
 
