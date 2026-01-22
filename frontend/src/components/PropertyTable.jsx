@@ -487,7 +487,7 @@ export default function PropertyTable({
     );
 
     return (
-        <div className={`bg-white rounded-xl border border-gray-200 shadow-sm flex flex-col overflow-hidden transition-all duration-300 w-full ${forceExpanded ? 'min-h-[500px]' : (isExpanded ? 'h-[500px] lg:h-full' : 'h-14 lg:h-full')}`}>
+        <div className={`bg-white rounded-xl border border-gray-200 shadow-sm flex flex-col overflow-hidden transition-all duration-300 w-full ${forceExpanded ? 'flex-1 min-h-0' : (isExpanded ? 'flex-1 min-h-0 lg:flex-1' : 'h-14 lg:flex-1 lg:min-h-0')}`}>
             {/* Header / Toolbar */}
             <div
                 className="p-4 border-b border-gray-100 flex flex-col gap-4 bg-gray-50/50"

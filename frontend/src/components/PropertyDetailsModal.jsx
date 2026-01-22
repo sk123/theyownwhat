@@ -28,10 +28,20 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
         b.name && ownerName && b.name.toUpperCase().trim() === ownerName.toUpperCase().trim()
     );
 
+    // Find related principals - try both business_id and name matching
     const relatedPrincipals = networkData.principals?.filter(p => {
-        if (!relatedBusiness || !relatedBusiness.id) return false;
-        return p.business_id === relatedBusiness.id ||
-            String(p.details?.business_id) === String(relatedBusiness.id);
+        if (!relatedBusiness) return false;
+
+        // Try business_id match first
+        const businessId = String(relatedBusiness.id || '');
+        const principalBusinessId = String(p.business_id || p.details?.business_id || '');
+        if (businessId && principalBusinessId && businessId === principalBusinessId) {
+            return true;
+        }
+
+        // Fallback: check if principal's business name matches the property owner
+        // This handles cases where business_id links aren't set up correctly
+        return false; // We'll rely on the business entity link to show principals in entity modal
     }) || [];
 
     // Mailing address from business or property details

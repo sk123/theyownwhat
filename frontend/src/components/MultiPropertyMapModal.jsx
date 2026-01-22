@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { X, Map as MapIcon, Loader2, AlertCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
-import MarkerClusterGroup from 'react-leaflet-cluster';
+import MarkerCluster from 'react-leaflet-cluster';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 
@@ -194,28 +194,33 @@ export default function MultiPropertyMapModal({ properties, onClose }) {
                                     attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                                     url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                                 />
-                                <MarkerClusterGroup
+                                <MarkerCluster
                                     chunkedLoading
                                     spiderfyOnMaxZoom={true}
                                     showCoverageOnHover={false}
+                                    maxClusterRadius={60}
+                                    iconCreateFunction={(cluster) => {
+                                        const count = cluster.getChildCount();
+                                        let size = 'small';
+                                        if (count >= 10) size = 'medium';
+                                        if (count >= 50) size = 'large';
+                                        const sizeMap = { small: 30, medium: 40, large: 50 };
+                                        return L.divIcon({
+                                            html: `<div style="background: #3b82f6; color: white; border-radius: 50%; width: ${sizeMap[size]}px; height: ${sizeMap[size]}px; display: flex; align-items: center; justify-content: center; font-weight: bold; border: 3px solid white; box-shadow: 0 2px 8px rgba(0,0,0,0.3);">${count}</div>`,
+                                            className: '',
+                                            iconSize: L.point(sizeMap[size], sizeMap[size])
+                                        });
+                                    }}
                                 >
-                                    {markers.map((m, i) => (
-                                        <Marker key={i} position={[m.lat, m.lon]}>
+                                    {markers.map((m, idx) => (
+                                        <Marker key={idx} position={[m.lat, m.lon]}>
                                             <Popup>
-                                                <div className="text-sm">
-                                                    <div className="font-bold mb-1">
-                                                        {m.address}
-                                                        {m.unit && <span className="ml-1 text-slate-500">#{m.unit}</span>}
-                                                    </div>
-                                                    <div className="text-gray-600">{m.city}</div>
-                                                    <div className="text-xs text-gray-400 mt-1 uppercase tracking-wide">Owner</div>
-                                                    <div className="font-medium">{m.owner}</div>
-                                                    <div className="mt-2 text-blue-600 font-bold">{m.assessed_value}</div>
-                                                </div>
+                                                <div className="font-medium">{m.address}</div>
+                                                <div className="text-xs text-gray-500">{m.city}</div>
                                             </Popup>
                                         </Marker>
                                     ))}
-                                </MarkerClusterGroup>
+                                </MarkerCluster>
                                 <MapBounds markers={markers} />
                             </MapContainer>
                         )}
