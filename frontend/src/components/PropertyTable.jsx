@@ -487,7 +487,7 @@ export default function PropertyTable({
     );
 
     return (
-        <div className={`bg-white rounded-xl border border-gray-200 shadow-sm flex flex-col overflow-hidden transition-all duration-300 w-full ${forceExpanded ? 'flex-1 min-h-0' : (isExpanded ? 'flex-1 min-h-0 lg:flex-1' : 'h-14 lg:flex-1 lg:min-h-0')}`}>
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm flex flex-col h-full overflow-hidden">
             {/* Header / Toolbar */}
             <div
                 className="p-4 border-b border-gray-100 flex flex-col gap-4 bg-gray-50/50"
@@ -616,7 +616,7 @@ export default function PropertyTable({
                 </AnimatePresence>
 
                 {/* Content Area */}
-                <div className="flex-1 bg-white min-h-0 relative">
+                <div className="flex-1 overflow-hidden min-h-0 bg-white relative">
                     {viewMode === 'list' && (
                         <div className="w-full h-full overflow-auto">
                             <table className="w-full text-left border-collapse">
