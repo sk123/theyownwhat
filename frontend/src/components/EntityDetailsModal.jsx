@@ -88,6 +88,58 @@ export default function EntityDetailsModal({ entity, type, onClose }) {
                                     <span>Business Status: <strong>{entity.status || 'Unknown'}</strong></span>
                                 </div>
                             )}
+
+                            {/* Related Entities Section */}
+                            {networkData && (
+                                <div className="bg-gray-50 rounded-xl p-4 border border-gray-100 text-sm space-y-3">
+                                    <h3 className="font-bold text-gray-900 flex items-center gap-2">
+                                        <LinkIcon size={16} className="text-purple-500" />
+                                        {isPrincipal ? 'Related Businesses' : 'Related Principals'}
+                                    </h3>
+                                    <div className="flex flex-wrap gap-2">
+                                        {(() => {
+                                            const relatedIds = new Set();
+                                            const myId = String(entity.id);
+
+                                            // Find connections in links
+                                            networkData.links.forEach((l) => {
+                                                const s = String(l.source);
+                                                const t = String(l.target);
+
+                                                // Check for straight match or prefix match
+                                                const sClean = s.replace(/^(principal_|business_)/, '');
+                                                const tClean = t.replace(/^(principal_|business_)/, '');
+                                                const myIdClean = myId.replace(/^(principal_|business_)/, '');
+
+                                                if (sClean === myIdClean) {
+                                                    relatedIds.add(tClean);
+                                                } else if (tClean === myIdClean) {
+                                                    relatedIds.add(sClean);
+                                                }
+                                            });
+
+                                            // Filter actual entities
+                                            const targetList = isPrincipal ? networkData.businesses : networkData.principals;
+                                            const relatedEntities = targetList.filter(item => relatedIds.has(String(item.id)));
+
+                                            if (relatedEntities.length === 0) {
+                                                return <div className="text-gray-400 italic">No related records found.</div>;
+                                            }
+
+                                            return relatedEntities.map(rel => (
+                                                <button
+                                                    key={rel.id}
+                                                    onClick={() => onNavigate && onNavigate(rel, isPrincipal ? 'business' : 'principal')}
+                                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-200 rounded-lg hover:border-blue-400 hover:text-blue-700 transition-colors shadow-sm text-gray-700"
+                                                >
+                                                    {isPrincipal ? <Building size={12} /> : <User size={12} />}
+                                                    <span className="font-medium">{rel.name}</span>
+                                                </button>
+                                            ));
+                                        })()}
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     </div>
                 </motion.div>

@@ -44,7 +44,23 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 60s
+      start_period: 120s
+
+  geocoder:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ctdata_geocoder
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    volumes:
+      - ./api:/app/api
+    environment:
+      - DATABASE_URL=postgresql://user:password@db:5432/ctdata
+      - PYTHONUNBUFFERED=1
+    command: python -m api.background_geocoder
 
   importer:
     build:
@@ -91,7 +107,7 @@ services:
       - ./updater:/app/updater
     environment:
       - DATABASE_URL=postgresql://user:password@db:5432/ctdata
-    command: python updater/update_vision_data.py -m "FARMINGTON" -f
+    command: python updater/update_vision_data.py -m "DANBURY" -f
 
   nginx:
     build:

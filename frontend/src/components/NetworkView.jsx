@@ -106,6 +106,12 @@ export default function NetworkView({ networkData, onSelectEntity, selectedEntit
                 <div className="flex items-center gap-2">
                     <Layers className="w-5 h-5 text-blue-600" />
                     <h3 className="font-bold text-gray-800">Network Entities</h3>
+                    <div className="group relative">
+                        <Info className="w-3.5 h-3.5 text-gray-400 hover:text-blue-500 cursor-help" />
+                        <div className="absolute left-1/2 -translate-x-1/2 top-6 bg-slate-800 text-white text-[10px] px-2 py-1 rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-50 pointer-events-none">
+                            Select an entity to cross-filter the property list
+                        </div>
+                    </div>
                 </div>
                 <span className="text-xs font-bold text-gray-500 bg-gray-200/50 px-2 py-1 rounded-md">
                     {networkData.principals.length + networkData.businesses.length} Total

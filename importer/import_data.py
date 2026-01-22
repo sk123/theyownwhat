@@ -69,7 +69,9 @@ def create_schema(cursor):
         address_suffix TEXT,
         cama_site_link TEXT,
         building_photo TEXT,
-        number_of_units NUMERIC
+        number_of_units NUMERIC,
+        latitude NUMERIC,
+        longitude NUMERIC
     );
     """)
     print("✅ Schema created successfully.")
@@ -273,7 +275,9 @@ def main():
                 'address_suffix': 'address_suffix',
                 'cama_site_link': 'cama_site_link',
                 'building_photo': 'building_photo',
-                'number_of_units': 'number_of_units'
+                'number_of_units': 'number_of_units',
+                'latitude': 'latitude',
+                'longitude': 'longitude'
             }
             
             all_mappings = {

@@ -10,8 +10,9 @@ const PropertyDetailsModal = React.lazy(() => import('./components/PropertyDetai
 const EntityDetailsModal = React.lazy(() => import('./components/EntityDetailsModal'));
 const NetworkAnalysisModal = React.lazy(() => import('./components/NetworkAnalysisModal'));
 const AboutModal = React.lazy(() => import('./components/AboutModal'));
+const MultiPropertyMapModal = React.lazy(() => import('./components/MultiPropertyMapModal'));
 import LoadingScreen from './components/LoadingScreen';
-import DashboardControls from './components/DashboardControls';
+// import DashboardControls from './components/DashboardControls'; // Removed
 import StatCard from './components/StatCard';
 import BackgroundGrid from './components/BackgroundGrid';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -36,6 +37,9 @@ function App() {
     humanCount: 0,
     entityCount: 0
   });
+
+  // Map Selection State
+  const [selectedMapProperties, setSelectedMapProperties] = useState(null);
 
   // Dashboard State
   const [selectedCity, setSelectedCity] = useState('All');
@@ -295,6 +299,12 @@ function App() {
     });
   }, [networkData.properties, selectedCity, selectedEntityId, networkData.links]);
 
+  // Compute cities list for the filter, derived from ALL properties (unfiltered)
+  const allCities = React.useMemo(() => {
+    const set = new Set(networkData.properties.map(p => p.city).filter(Boolean));
+    return ['All', ...Array.from(set).sort()];
+  }, [networkData.properties]);
+
   const [selectedProperty, setSelectedProperty] = useState(null);
   const [selectedDetailEntity, setSelectedDetailEntity] = useState(null);
 
@@ -446,14 +456,9 @@ function App() {
               )}
             </div>
 
-            {/* Cross-Filtering & City Selection Controls */}
-            <DashboardControls
-              properties={networkData.properties}
-              selectedCity={selectedCity}
-              onSelectCity={setSelectedCity}
-              selectedEntityId={selectedEntityId}
-              onClearEntity={() => setSelectedEntityId(null)}
-            />
+            {/* Cross-Filtering & City Selection Controls - MOVED TO PROPERTY TABLE */}
+
+
 
             {/* --- MOBILE TAB LAYOUT (lg:hidden) --- */}
             <div className="flex flex-col lg:hidden relative border border-slate-200 rounded-xl bg-white shadow-sm mt-2">
@@ -501,7 +506,14 @@ function App() {
                       properties={filteredProperties}
                       highlightedEntityId={selectedEntityId}
                       onSelectProperty={setSelectedProperty}
+                      onMapSelected={setSelectedMapProperties}
                       forceExpanded={true}
+
+                      // Filter Props
+                      cities={allCities}
+                      selectedCity={selectedCity}
+                      onSelectCity={setSelectedCity}
+                      onClearEntity={() => setSelectedEntityId(null)}
                     />
                   </div>
                 )}
@@ -562,6 +574,13 @@ function App() {
                     properties={filteredProperties}
                     highlightedEntityId={selectedEntityId}
                     onSelectProperty={setSelectedProperty}
+                    onMapSelected={setSelectedMapProperties}
+
+                    // Filter Props
+                    cities={allCities}
+                    selectedCity={selectedCity}
+                    onSelectCity={setSelectedCity}
+                    onClearEntity={() => setSelectedEntityId(null)}
                   />
                 </div>
               </div>
@@ -577,6 +596,8 @@ function App() {
           <EntityDetailsModal
             entity={selectedDetailEntity?.entity}
             type={selectedDetailEntity?.type}
+            networkData={networkData}
+            onNavigate={(entity, type) => setSelectedDetailEntity({ entity, type })}
             onClose={() => setSelectedDetailEntity(null)}
           />
 
@@ -589,6 +610,10 @@ function App() {
           <AboutModal
             isOpen={showAbout}
             onClose={() => setShowAbout(false)}
+          />
+          <MultiPropertyMapModal
+            properties={selectedMapProperties}
+            onClose={() => setSelectedMapProperties(null)}
           />
         </Suspense>
       </main>

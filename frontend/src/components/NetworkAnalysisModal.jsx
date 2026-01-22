@@ -75,14 +75,16 @@ export default function NetworkAnalysisModal({ isOpen, onClose, networkData, sta
     };
 
     // --- Key Entities ---
-    const topPrincipals = [...networkData.principals]
+    const topPrincipals = [...(networkData.principals || [])]
+        .filter(p => p && typeof p === 'object')
         .map(p => ({ ...p, stats: getEntityStats(p) }))
-        .sort((a, b) => b.stats.count - a.stats.count)
+        .sort((a, b) => (b.stats?.count || 0) - (a.stats?.count || 0))
         .slice(0, 5);
 
-    const topBusinesses = [...networkData.businesses]
+    const topBusinesses = [...(networkData.businesses || [])]
+        .filter(b => b && typeof b === 'object')
         .map(b => ({ ...b, stats: getEntityStats(b) }))
-        .sort((a, b) => b.stats.count - a.stats.count)
+        .sort((a, b) => (b.stats?.count || 0) - (a.stats?.count || 0))
         .slice(0, 5);
 
     // --- Metrics ---

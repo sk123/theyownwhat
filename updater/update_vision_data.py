@@ -83,6 +83,66 @@ MUNICIPAL_DATA_SOURCES = {
     'SOUTHBURY': {'type': 'MAPXPRESS', 'domain': 'southbury.mapxpress.net'},
     'SUFFIELD': {'type': 'MAPXPRESS', 'domain': 'suffield.mapxpress.net'},
     'WEST HAVEN': {'type': 'MAPXPRESS', 'domain': 'westhaven.mapxpress.net'},
+    # PropertyRecordCards Municipalities
+    'ANSONIA': {'type': 'PROPERTYRECORDCARDS', 'towncode': '002'},
+    'ASHFORD': {'type': 'PROPERTYRECORDCARDS', 'towncode': '003'},
+    'BETHANY': {'type': 'PROPERTYRECORDCARDS', 'towncode': '008'},
+    'BOZRAH': {'type': 'PROPERTYRECORDCARDS', 'towncode': '013'},
+    'BRIDGEWATER': {'type': 'PROPERTYRECORDCARDS', 'towncode': '16'},
+    'CANAAN': {'type': 'PROPERTYRECORDCARDS', 'towncode': '21'},
+    'CHESHIRE': {'type': 'PROPERTYRECORDCARDS', 'towncode': '025'},
+    'CHESTER': {'type': 'PROPERTYRECORDCARDS', 'towncode': '026'},
+    'COLEBROOK': {'type': 'PROPERTYRECORDCARDS', 'towncode': '029'},
+    'COLUMBIA': {'type': 'PROPERTYRECORDCARDS', 'towncode': '030'},
+    'DANBURY': {'type': 'PROPERTYRECORDCARDS', 'towncode': '034'},
+    'DERBY': {'type': 'PROPERTYRECORDCARDS', 'towncode': 'DRB'},
+    'DURHAM': {'type': 'PROPERTYRECORDCARDS', 'towncode': '38'},
+    'EAST HAMPTON': {'type': 'PROPERTYRECORDCARDS', 'towncode': '42'},
+    'EAST HAVEN': {'type': 'PROPERTYRECORDCARDS', 'towncode': '044'},
+    'EASTFORD': {'type': 'PROPERTYRECORDCARDS', 'towncode': '039'},
+    'EASTON': {'type': 'PROPERTYRECORDCARDS', 'towncode': '046'},
+    'ELLINGTON': {'type': 'PROPERTYRECORDCARDS', 'towncode': '048'},
+    'FARMINGTON': {'type': 'PROPERTYRECORDCARDS', 'towncode': '052'},
+    'FRANKLIN': {'type': 'PROPERTYRECORDCARDS', 'towncode': '053'},
+    'GUILFORD': {'type': 'PROPERTYRECORDCARDS', 'towncode': '060'},
+    'HADDAM': {'type': 'PROPERTYRECORDCARDS', 'towncode': '061'},
+    'HEBRON': {'type': 'PROPERTYRECORDCARDS', 'towncode': '067'},
+    'KILLINGLY': {'type': 'PROPERTYRECORDCARDS', 'towncode': '069'},
+    'KILLINGWORTH': {'type': 'PROPERTYRECORDCARDS', 'towncode': '070'},
+    'MARLBOROUGH': {'type': 'PROPERTYRECORDCARDS', 'towncode': '079'},
+    'MONTVILLE': {'type': 'PROPERTYRECORDCARDS', 'towncode': '086'},
+    'NAUGATUCK': {'type': 'PROPERTYRECORDCARDS', 'towncode': '088'},
+    'NEW CANAAN': {'type': 'PROPERTYRECORDCARDS', 'towncode': '090'},
+    'NEWINGTON': {'type': 'PROPERTYRECORDCARDS', 'towncode': '094'},
+    'NORFOLK': {'type': 'PROPERTYRECORDCARDS', 'towncode': '098'},
+    'NORTH CANAAN': {'type': 'PROPERTYRECORDCARDS', 'towncode': '100'},
+    'NORTH HAVEN': {'type': 'PROPERTYRECORDCARDS', 'towncode': '101'},
+    'NORTH STONINGTON': {'type': 'PROPERTYRECORDCARDS', 'towncode': '102'},
+    'OXFORD': {'type': 'PROPERTYRECORDCARDS', 'towncode': '108'},
+    'PLAINVILLE': {'type': 'PROPERTYRECORDCARDS', 'towncode': '110'},
+    'PLYMOUTH': {'type': 'PROPERTYRECORDCARDS', 'towncode': '111'},
+    'PROSPECT': {'type': 'PROPERTYRECORDCARDS', 'towncode': '115'},
+    'RIDGEFIELD': {'type': 'PROPERTYRECORDCARDS', 'towncode': '118'},
+    'ROCKY HILL': {'type': 'PROPERTYRECORDCARDS', 'towncode': '119'},
+    'ROXBURY': {'type': 'PROPERTYRECORDCARDS', 'towncode': '120'},
+    'SALISBURY': {'type': 'PROPERTYRECORDCARDS', 'towncode': '122'},
+    'SCOTLAND': {'type': 'PROPERTYRECORDCARDS', 'towncode': '123'},
+    'SEYMOUR': {'type': 'PROPERTYRECORDCARDS', 'towncode': '124'},
+    'SHELTON': {'type': 'PROPERTYRECORDCARDS', 'towncode': '126'},
+    'SHERMAN': {'type': 'PROPERTYRECORDCARDS', 'towncode': '127', 'path_prefix': '/Sherman'},
+    'SIMSBURY': {'type': 'PROPERTYRECORDCARDS', 'towncode': '128'},
+    'SUFFIELD': {'type': 'PROPERTYRECORDCARDS', 'towncode': '139'},
+    'TORRINGTON': {'type': 'PROPERTYRECORDCARDS', 'towncode': '143'},
+    'VOLUNTOWN': {'type': 'PROPERTYRECORDCARDS', 'towncode': '147'},
+    'WARREN': {'type': 'PROPERTYRECORDCARDS', 'towncode': '149'},
+    'WASHINGTON': {'type': 'PROPERTYRECORDCARDS', 'towncode': '150'},
+    'WATERBURY': {'type': 'PROPERTYRECORDCARDS', 'towncode': '151'},
+    'WATERTOWN': {'type': 'PROPERTYRECORDCARDS', 'towncode': '153'},
+    'WESTON': {'type': 'PROPERTYRECORDCARDS', 'towncode': '157'},
+    'WILTON': {'type': 'PROPERTYRECORDCARDS', 'towncode': '161'},
+    'WINDSOR LOCKS': {'type': 'PROPERTYRECORDCARDS', 'towncode': '165'},
+    'WOODBRIDGE': {'type': 'PROPERTYRECORDCARDS', 'towncode': '167'},
+    'WOODBURY': {'type': 'PROPERTYRECORDCARDS', 'towncode': '168'},
 }
 
 # --- Logging ---
@@ -515,19 +575,20 @@ def process_municipality_with_mapxpress(conn, municipality_name, data_source_con
     log(f"--- Processing municipality: {municipality_name} via MapXpress (Force={force_process}) ---")
     
     query = """
-        SELECT id, location, account_number, serial_number, cama_site_link 
-        FROM properties 
-        WHERE property_city ILIKE %s 
-        AND (account_number IS NOT NULL AND account_number != '')
+        SELECT p.id, p.location, p.account_number, p.serial_number, p.cama_site_link 
+        FROM properties p
+        LEFT JOIN property_processing_log ppl ON p.id = ppl.property_id
+        WHERE p.property_city ILIKE %s 
+        AND (p.account_number IS NOT NULL AND p.account_number != '')
     """
     
     if not force_process:
-        query += " AND (last_processed_at IS NULL OR last_processed_at < CURRENT_DATE)"
+        query += " AND (ppl.last_processed_date IS NULL OR ppl.last_processed_date < CURRENT_DATE)"
     
     if current_owner_only:
-        query += " AND owner ILIKE '%Current Owner%'"
+        query += " AND p.owner ILIKE '%Current Owner%'"
         
-    query += " ORDER BY location" 
+    query += " ORDER BY p.location" 
     
     with conn.cursor() as cursor:
         cursor.execute(query, (municipality_name,))
@@ -578,6 +639,184 @@ def process_municipality_with_mapxpress(conn, municipality_name, data_source_con
             mark_property_processed_today(conn, prop_id)
             
             processed_count += 1
+            if processed_count % 50 == 0:
+                log(f"  -> Scraped {processed_count}/{len(properties)}, updated {updated_count}...")
+            
+    log(f"Finished {municipality_name}. Scraped {processed_count}, Updated {updated_count}.")
+    return updated_count
+
+# --- PropertyRecordCards Scraper ---
+
+def parse_propertyrecordcards_html(html_content):
+    """Parses PropertyRecordCards property detail HTML."""
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html_content, 'lxml')
+    data = {}
+    
+    # Helper to clean currency/number strings
+    def clean_number(val):
+        if not val: return None
+        return re.sub(r'[^\d.]', '', val)
+
+    # 1. Parse IDs (Acres, Zone, Values)
+    id_map = {
+        'acres': 'MainContent_tbgMapAcres',
+        'zone': 'MainContent_tbgMapZone',
+        'appraised_value': 'MainContent_tbgMapAppraisedValue',
+        'assessed_value': 'MainContent_tbgMapAssessedValue'
+    }
+
+    for db_field, html_id in id_map.items():
+        element = soup.find(id=html_id)
+        if element and element.get('value'):
+            val = element.get('value')
+            try:
+                if db_field in ['acres', 'appraised_value', 'assessed_value']:
+                    clean_val = clean_number(val)
+                    if clean_val:
+                        data[db_field] = float(clean_val)
+                else:
+                    data[db_field] = val
+            except: pass
+
+    # 2. Parse Tables (Living Area, Year Built, Style)
+    # Search for cells containing keys, then get next cell value
+    key_map = {
+        'Living Area:': 'living_area',
+        'Year Built:': 'year_built',
+        'Style:': 'property_type',
+        'Use Code:': 'property_type' # Fallback
+    }
+    
+    tables = soup.find_all('table')
+    for table in tables:
+        cells = table.find_all('td')
+        for i, cell in enumerate(cells):
+            text = cell.get_text(strip=True)
+            if text in key_map and i + 1 < len(cells):
+                val = cells[i+1].get_text(strip=True)
+                db_field = key_map[text]
+                
+                # Check if we already found it (prioritize first match?)
+                if db_field in data: continue
+                
+                try:
+                    if db_field == 'living_area':
+                         clean_val = clean_number(val)
+                         if clean_val: data[db_field] = float(clean_val)
+                    elif db_field == 'year_built':
+                        data[db_field] = int(val)
+                    else:
+                        data[db_field] = val
+                except: pass
+                
+    return data
+
+def scrape_propertyrecordcards_property(session, base_url_template, row):
+    """Worker function to scrape a single PropertyRecordCards property."""
+    import time
+    import random
+    
+    prop_id, location, account_num, serial_num, current_link = row
+    unique_id = account_num if account_num else serial_num
+    
+    if not unique_id:
+        return prop_id, None, None # Cannot scrape w/o ID
+        
+    target_url = base_url_template.format(unique_id)
+    
+    try:
+        # Respectful jitter
+        time.sleep(random.uniform(0.1, 0.5))
+        
+        resp = session.get(target_url, timeout=20)
+        
+        # Check for soft errors or redirect to search page (invalid ID)
+        if "SearchMaster.aspx" in resp.url and "propertyresults.aspx" not in resp.url:
+             return prop_id, None, "Redirected to Search (Invalid ID?)"
+
+        if resp.status_code == 200:
+            scraped_data = parse_propertyrecordcards_html(resp.text)
+            if scraped_data: # Ensure we actually got some data
+                scraped_data['cama_site_link'] = target_url
+                return prop_id, scraped_data, None
+            else:
+                return prop_id, None, "No data parsed"
+        else:
+            return prop_id, None, f"Status {resp.status_code}"
+            
+    except Exception as e:
+        return prop_id, None, str(e)
+
+def process_municipality_with_propertyrecordcards(conn, municipality_name, data_source_config, current_owner_only=False, force_process=False):
+    """Process a municipality using PropertyRecordCards (Parallel)."""
+    
+    log(f"--- Processing municipality: {municipality_name} via PropertyRecordCards (Force={force_process}) ---")
+    
+    # 1. Get Properties (same logic as MapXpress)
+    # 1. Get Properties (same logic as MapXpress)
+    query = """
+        SELECT p.id, p.location, p.account_number, p.serial_number, p.cama_site_link 
+        FROM properties p
+        LEFT JOIN property_processing_log ppl ON p.id = ppl.property_id
+        WHERE p.property_city ILIKE %s 
+        AND (p.account_number IS NOT NULL AND p.account_number != '')
+    """
+    if not force_process:
+        query += " AND (ppl.last_processed_date IS NULL OR ppl.last_processed_date < CURRENT_DATE)"
+    if current_owner_only:
+        query += " AND p.owner ILIKE '%Current Owner%'"
+    query += " ORDER BY p.location" 
+    
+    with conn.cursor() as cursor:
+        cursor.execute(query, (municipality_name,))
+        properties = cursor.fetchall()
+        
+    if not properties:
+        log(f"No properties found with account_number for {municipality_name}.")
+        return 0
+        
+    log(f"Found {len(properties)} properties to scrape for {municipality_name}. Starting parallel scrape (10 threads)...")
+    
+    # 2. Construct URL Template
+    towncode = data_source_config['towncode']
+    path_prefix = data_source_config.get('path_prefix', '') # e.g. /Sherman or empty
+    # URL Format: https://www.propertyrecordcards.com/Sherman/propertyresults.aspx?towncode=127&uniqueid=...
+    # OR Standard: https://www.propertyrecordcards.com/propertyresults.aspx?towncode=002&uniqueid=...
+    
+    base_url_template = f"https://www.propertyrecordcards.com{path_prefix}/propertyresults.aspx?towncode={towncode}&uniqueid={{}}"
+
+    updated_count = 0
+    processed_count = 0
+    
+    import requests
+    import concurrent.futures
+    
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    })
+    
+    # 3. Parallel Execution
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        future_to_prop = {
+            executor.submit(scrape_propertyrecordcards_property, session, base_url_template, row): row 
+            for row in properties
+        }
+        
+        for future in concurrent.futures.as_completed(future_to_prop):
+            prop_id, scraped_data, error_msg = future.result()
+            
+            if scraped_data:
+                if update_property_in_db(conn, prop_id, scraped_data):
+                    updated_count += 1
+            elif error_msg:
+                # log(f"Scrape error for {prop_id}: {error_msg}")
+                pass
+            
+            mark_property_processed_today(conn, prop_id)
+            processed_count += 1
+            
             if processed_count % 50 == 0:
                 log(f"  -> Scraped {processed_count}/{len(properties)}, updated {updated_count}...")
             
@@ -1015,6 +1254,10 @@ def process_municipality_task(city_name, city_data, current_owner_only, force_pr
                 )
             elif MUNICIPAL_DATA_SOURCES[city_name]['type'] == 'MAPXPRESS':
                 updated_count = process_municipality_with_mapxpress(
+                    conn, city_name, MUNICIPAL_DATA_SOURCES[city_name], current_owner_only, force_process
+                )
+            elif MUNICIPAL_DATA_SOURCES[city_name]['type'] == 'PROPERTYRECORDCARDS':
+                updated_count = process_municipality_with_propertyrecordcards(
                     conn, city_name, MUNICIPAL_DATA_SOURCES[city_name], current_owner_only, force_process
                 )
             else:
