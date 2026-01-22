@@ -43,6 +43,7 @@ export default function PropertyTable({
     onSelectProperty,
     onMapSelected,
     forceExpanded = false,
+    autoHeight = false,
     cities = [],
     selectedCity = 'All',
     onSelectCity,
@@ -487,7 +488,7 @@ export default function PropertyTable({
     );
 
     return (
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm flex flex-col h-full overflow-hidden">
+        <div className={`bg-white rounded-xl border border-gray-200 shadow-sm flex flex-col ${autoHeight ? '' : 'h-full overflow-hidden'}`}>
             {/* Header / Toolbar */}
             <div
                 className="p-4 border-b border-gray-100 flex flex-col gap-4 bg-gray-50/50"
@@ -616,9 +617,9 @@ export default function PropertyTable({
                 </AnimatePresence>
 
                 {/* Content Area */}
-                <div className="flex-1 overflow-hidden min-h-0 bg-white relative">
+                <div className={`flex-1 min-h-0 bg-white relative ${autoHeight ? '' : 'overflow-hidden'}`}>
                     {viewMode === 'list' && (
-                        <div className="w-full h-full overflow-auto">
+                        <div className={`w-full ${autoHeight ? 'overflow-visible' : 'h-full overflow-auto'}`}>
                             <table className="w-full text-left border-collapse">
                                 <thead className="bg-gray-50 sticky top-0 z-10 shadow-sm border-b border-gray-100">
                                     <tr>
@@ -647,7 +648,7 @@ export default function PropertyTable({
                     )}
 
                     {viewMode === 'grid' && (
-                        <div className="w-full h-full flex flex-col overflow-hidden bg-slate-50">
+                        <div className={`w-full flex flex-col bg-slate-50 ${autoHeight ? '' : 'h-full overflow-hidden'}`}>
                             {/* Mobile Jump Navigation */}
                             <div className="md:hidden overflow-x-auto py-2 px-4 flex gap-2 bg-white border-b border-gray-200 shrink-0 no-scrollbar">
                                 <span className="text-[10px] uppercase font-bold text-gray-400 self-center mr-1">JUMP TO:</span>
@@ -666,7 +667,7 @@ export default function PropertyTable({
                                 ))}
                             </div>
 
-                            <div className="flex-1 overflow-y-auto p-4">
+                            <div className={`p-4 ${autoHeight ? '' : 'flex-1 overflow-y-auto'}`}>
                                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6 pb-20 md:pb-0">
                                     {groupedByCity && Object.entries(groupedByCity).map(([city, props]) => (
                                         <div

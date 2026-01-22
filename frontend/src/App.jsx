@@ -488,16 +488,17 @@ function App() {
               <div className={`bg-white min-h-[500px] transition-opacity duration-200 ${isPending ? 'opacity-50' : 'opacity-100'}`}>
                 {activeMobileTab === 'properties' && (
                   <div className="flex flex-col">
-                    <PropertyTable
-                      properties={filteredProperties}
-                      highlightedEntityId={selectedEntityId}
-                      onSelectProperty={setSelectedProperty}
-                      onMapSelected={setSelectedMapProperties}
-                      onAiDigest={aiEnabled ? () => setShowAnalysis(true) : null}
-                      forceExpanded={true}
+                      <PropertyTable
+                        properties={filteredProperties}
+                        highlightedEntityId={selectedEntityId}
+                        onSelectProperty={setSelectedProperty}
+                        onMapSelected={setSelectedMapProperties}
+                        onAiDigest={aiEnabled ? () => setShowAnalysis(true) : null}
+                        forceExpanded={true}
+                        autoHeight={true}
 
-                      // Filter Props
-                      cities={allCities}
+                        // Filter Props
+                        cities={allCities}
                       selectedCity={selectedCity}
                       onSelectCity={setSelectedCity}
                       onClearEntity={() => setSelectedEntityId(null)}
