@@ -418,7 +418,7 @@ function App() {
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            className="flex flex-col h-full w-full max-w-[1920px] mx-auto px-4 py-3 gap-3 overflow-hidden bg-slate-50/50 backdrop-blur-sm"
+            className="flex flex-col h-full w-full max-w-[1920px] mx-auto px-4 py-3 gap-3 overflow-y-auto lg:overflow-hidden bg-slate-50/50 backdrop-blur-sm"
           >
             {/* Stats Row */}
             <div className="flex flex-col md:flex-row gap-3 items-stretch">
@@ -488,16 +488,17 @@ function App() {
               <div className={`bg-white min-h-[500px] transition-opacity duration-200 ${isPending ? 'opacity-50' : 'opacity-100'}`}>
                 {activeMobileTab === 'properties' && (
                   <div className="flex flex-col">
-                    <PropertyTable
-                      properties={filteredProperties}
-                      highlightedEntityId={selectedEntityId}
-                      onSelectProperty={setSelectedProperty}
-                      onMapSelected={setSelectedMapProperties}
-                      onAiDigest={aiEnabled ? () => setShowAnalysis(true) : null}
-                      forceExpanded={true}
+                      <PropertyTable
+                        properties={filteredProperties}
+                        highlightedEntityId={selectedEntityId}
+                        onSelectProperty={setSelectedProperty}
+                        onMapSelected={setSelectedMapProperties}
+                        onAiDigest={aiEnabled ? () => setShowAnalysis(true) : null}
+                        forceExpanded={true}
+                        autoHeight={true}
 
-                      // Filter Props
-                      cities={allCities}
+                        // Filter Props
+                        cities={allCities}
                       selectedCity={selectedCity}
                       onSelectCity={setSelectedCity}
                       onClearEntity={() => setSelectedEntityId(null)}
