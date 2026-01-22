@@ -12,12 +12,11 @@
 
 ## Recent Updates (January 2026)
 
-*   **Data Refresh:** Ingested latest 2024/2025 datasets: 9.6M businesses, 1.7M principals, and 1.3M parcels.
-*   **UI Overhaul:** Modernized interface with glassmorphism design, improved cards, and responsive layout.
-*   **Mobile Experience:** Enhanced mobile usability with sticky tabs, page-level scrolling, and a "Start Over" reset button for easy navigation.
-*   **Smart Search:** Added instant autocomplete for businesses, owners, and addresses with real-time feedback.
-*   **Accessibility:** Improved color contrast and screen reader support (ARIA labels) across the application.
-*   **API Compatibility:** FIXED: Updated backend to support OpenAI Python SDK v1.0.0+, resolving legacy API errors.
+*   **Smart Complex Grouping:** Significantly improved address normalization logic in the Property Table. Identical street addresses (e.g., `195 SIGOURNEY ST`) are now correctly consolidated into complexes even if their sub-unit formats differ.
+*   **Refined Expanded Views:** Redesigned the complex unit display with tree-style indentation, blue visual connectors, and clear "Unit X" labeling for better readability.
+*   **Enhanced Financial Details:** The property modal now features a robust "Owner Mailing Address" lookup with multiple data fallbacks, ensuring mailing information is visible even when entity links are missing.
+*   **Performance & Stability:** Fixed critical geocoding errors (422/500) and optimized the backend to handle large batch requests efficiently using the US Census and Nominatim APIs.
+*   **Home Page Polish:** Modernized the hero section with refined font scales and tightened spacing, ensuring "Top Networks" is visible on the first load without scrolling.
 *   **AI Digest:** FIXED: Resolved synthesis errors and added inline source citations `(Source: url)` for better verification.
 
 ## New Feature: AI Digest
