@@ -7,7 +7,7 @@ import logging
 import threading
 import requests
 import hashlib
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -459,7 +459,7 @@ class GeocodeResult(BaseModel):
     lon: float
 
 class BatchGeocodeRequest(BaseModel):
-    property_ids: List[str]
+    property_ids: List[int]
 
 @app.post("/api/geocoding/batch", response_model=List[GeocodeResult])
 def batch_geocode_properties(req: BatchGeocodeRequest, conn=Depends(get_db_connection)):
@@ -476,13 +476,17 @@ def batch_geocode_properties(req: BatchGeocodeRequest, conn=Depends(get_db_conne
     to_process = []
     
     with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        cursor.execute("""
-            SELECT id, location, property_city, property_zip, latitude, longitude
-            FROM properties
-            WHERE id = ANY(%s::int[])
-        """, (req.property_ids,))
-        
-        rows = cursor.fetchall()
+        try:
+            cursor.execute("""
+                SELECT id, location, property_city, property_zip, latitude, longitude
+                FROM properties
+                WHERE id = ANY(%s::bigint[])
+            """, (req.property_ids,))
+            
+            rows = cursor.fetchall()
+        except Exception as e:
+            logger.error(f"Database error in batch_geocode_properties: {e}")
+            raise HTTPException(status_code=500, detail="Database query failed during batch geocoding")
         
         for r in rows:
             # If already has coords, return them

@@ -174,8 +174,8 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
                                     </div>
                                 )}
                                 <div className="text-sm text-gray-500 mt-2 pt-2 border-t border-gray-200">
-                                    <span className="text-xs font-bold text-gray-400 block mb-0.5">MAILING ADDRESS</span>
-                                    {mailingAddress || 'N/A'}
+                                    <span className="text-xs font-bold text-gray-400 block mb-0.5">OWNER MAILING ADDRESS</span>
+                                    {mailingAddress || details.mail_address || details.mailing_address || details.owner_address || (details.mail_city ? `${details.mail_city}, ${details.mail_state || 'CT'} ${details.mail_zip || ''}`.trim() : 'N/A')}
                                 </div>
 
                                 {/* PRINCIPALS SECTION */}

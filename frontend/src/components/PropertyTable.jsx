@@ -94,37 +94,28 @@ export default function PropertyTable({
         // Helper to normalize address and extract unit
         const normalizeAddress = (rawAddress) => {
             const addr = (rawAddress || '').trim().toUpperCase();
-
             let base = addr;
             let unit = null;
 
-            const udMatch = addr.match(/^(.*?)\s+#UD([A-Z0-9-]+)$/);
-            if (udMatch) {
-                base = udMatch[1];
-                unit = udMatch[2];
-                return { base, unit };
-            }
-
-            const hyphenMatch = addr.match(/^(\d+)-([A-Z0-9]+)\s+(.*)$/);
-            if (hyphenMatch) {
-                base = `${hyphenMatch[1]} ${hyphenMatch[3]}`;
-                unit = hyphenMatch[2];
-                return { base, unit };
-            }
-
-            const unitMatch = addr.match(/^(.*?)\s+(?:#|UNIT|APT|STE|SUITE)\s*([A-Z0-9-]+)$/);
+            // Handle common "Unit X" or ", Unit X" at the end
+            // Patterns: "123 MAIN ST, UNIT 1", "123 MAIN ST #1", "123 MAIN ST UNIT 1"
+            const unitPattern = /^(.*?)(?:,\s*|\s+)(?:#|UNIT|APT|STE|SUITE|#UD)\s*([A-Z0-9-]+)$/i;
+            const unitMatch = addr.match(unitPattern);
             if (unitMatch) {
-                base = unitMatch[1];
+                base = unitMatch[1].replace(/,$/, '').trim();
                 unit = unitMatch[2];
                 return { base, unit };
             }
 
-            const trailingCharMatch = addr.match(/^(.*?)\s+([A-Z])$/);
-            if (trailingCharMatch) {
-                const candidateBase = trailingCharMatch[1];
-                const candidateUnit = trailingCharMatch[2];
+            // Handle trailing unit without prefix (e.g. "123 MAIN ST 4B")
+            // But avoid misidentifying directionals (N, S, E, W, etc.)
+            const trailingUnitPattern = /^(.*?)\s+([A-Z0-9]+)$/;
+            const trailingMatch = addr.match(trailingUnitPattern);
+            if (trailingMatch) {
+                const candidateBase = trailingMatch[1].replace(/,$/, '').trim();
+                const candidateUnit = trailingMatch[2];
+                const directionals = new Set(['N', 'S', 'E', 'W', 'NE', 'NW', 'SE', 'SW', 'NORTH', 'SOUTH', 'EAST', 'WEST']);
 
-                const directionals = new Set(['N', 'S', 'E', 'W', 'NE', 'NW', 'SE', 'SW']);
                 if (!directionals.has(candidateUnit)) {
                     base = candidateBase;
                     unit = candidateUnit;
@@ -132,14 +123,7 @@ export default function PropertyTable({
                 }
             }
 
-            const trailingNumMatch = addr.match(/^(\d+\s+.*)\s+(\d+)$/);
-            if (trailingNumMatch) {
-                base = trailingNumMatch[1];
-                unit = trailingNumMatch[2];
-                return { base, unit };
-            }
-
-            return { base: addr, unit: null };
+            return { base: addr.replace(/,$/, '').trim(), unit: null };
         };
 
         properties.forEach(p => {
@@ -395,14 +379,14 @@ export default function PropertyTable({
                                 )}
                                 <div className="flex items-center gap-2">
                                     {p.isComplex && <Building2 className="w-4 h-4 text-indigo-500 shrink-0" />}
-                                    <div className="flex flex-col">
-                                        <div className="flex items-center gap-2">
-                                            <span className={`text-sm font-medium ${p.isComplex ? 'text-indigo-900' : 'text-gray-900'}`}>
+                                    <div className="flex flex-col whitespace-nowrap min-w-0">
+                                        <div className="flex items-center gap-2 overflow-hidden">
+                                            <span className={`text-sm font-medium truncate ${p.isComplex ? 'text-indigo-900' : 'text-gray-900'}`}>
                                                 {p.address}
                                             </span>
                                             {p.isComplex && (
-                                                <span className="text-[10px] text-white bg-indigo-500 px-1.5 py-0.5 rounded-full font-bold">
-                                                    {p.unit_count} Parcels
+                                                <span className="shrink-0 text-[10px] text-white bg-indigo-500 px-1.5 py-0.5 rounded-full font-bold">
+                                                    {p.unit_count} Units
                                                 </span>
                                             )}
                                         </div>
@@ -428,21 +412,17 @@ export default function PropertyTable({
                         </td>
                         {viewMode === 'list' && !isMultiSelectActive && (
                             <td className="p-2">
-                                {!p.isComplex ? (
-                                    <a
-                                        href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${p.address}, ${p.city} CT`)}`}
-                                        target="_blank"
-                                        rel="noreferrer"
-                                        className="inline-flex items-center justify-center w-6 h-6 rounded bg-gray-50 text-gray-400 hover:bg-blue-100 hover:text-blue-600 transition-colors"
-                                        onClick={(e) => e.stopPropagation()}
-                                        aria-label="View on Google Maps"
-                                        title="Open in Google Maps"
-                                    >
-                                        <Map className="w-3 h-3" />
-                                    </a>
-                                ) : (
-                                    <div className='w-6 text-center text-gray-300'>-</div>
-                                )}
+                                <a
+                                    href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${p.address}, ${p.city} CT`)}`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="inline-flex items-center justify-center w-6 h-6 rounded bg-gray-50 text-gray-400 hover:bg-blue-100 hover:text-blue-600 transition-colors"
+                                    onClick={(e) => e.stopPropagation()}
+                                    aria-label="View on Google Maps"
+                                    title="Open in Google Maps"
+                                >
+                                    <Map className="w-3 h-3" />
+                                </a>
                             </td>
                         )}
                     </tr>
@@ -453,8 +433,8 @@ export default function PropertyTable({
                                 initial={{ opacity: 0, height: 0 }}
                                 animate={{ opacity: 1, height: 'auto' }}
                                 exit={{ opacity: 0, height: 0 }}
-                                className={`bg-gray-50/50 hover:bg-gray-100 border-b border-gray-100
-                                    ${selectedIds.has(sub.id) && isMultiSelectActive ? 'bg-blue-50/50' : ''}
+                                className={`bg-indigo-50/30 hover:bg-indigo-50/60 border-b border-indigo-100/50 transition-colors
+                                    ${selectedIds.has(sub.id) && isMultiSelectActive ? 'bg-blue-100/50' : ''}
                                 `}
                                 onClick={(e) => {
                                     if (e.target.tagName === "INPUT" || e.target.closest("a")) return;
@@ -463,30 +443,34 @@ export default function PropertyTable({
                                 }}
                             >
                                 {isMultiSelectActive && (
-                                    <td className="p-2 text-center bg-gray-50/30">
+                                    <td className="p-2 text-center">
                                         <input
                                             type="checkbox"
                                             checked={selectedIds.has(sub.id)}
                                             onChange={() => { }}
-                                            className="w-3 h-3 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer opacity-60"
+                                            className="w-3 h-3 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
                                         />
                                     </td>
                                 )}
-                                <td className="p-2 pl-12 relative">
-                                    <div className="absolute left-[2.25rem] top-0 bottom-1/2 w-4 border-l border-b border-gray-300 rounded-bl-xl"></div>
-                                    <div className="flex items-center gap-2 ml-4">
-                                        <div className="text-xs text-gray-600 font-medium bg-white border border-gray-200 px-1.5 py-0.5 rounded shadow-sm">
-                                            #{sub.derivedUnit || sub.unit}
+                                <td className="p-2 pl-12 relative" colSpan={viewMode === 'list' ? 4 : 1}>
+                                    <div className="absolute left-[2.25rem] top-0 bottom-1/2 w-4 border-l-2 border-b-2 border-indigo-100 rounded-bl"></div>
+                                    <div className="flex items-center justify-between gap-3 ml-4 bg-white/50 border border-indigo-50/50 py-1.5 px-3 rounded-lg shadow-sm">
+                                        <div className="flex items-center gap-3">
+                                            <span className="inline-flex items-center justify-center min-w-[3.5rem] text-[10px] font-bold text-indigo-700 bg-indigo-100/80 px-2 py-0.5 rounded-md border border-indigo-200">
+                                                Unit {sub.derivedUnit || sub.unit}
+                                            </span>
+                                            <span className="text-[11px] text-gray-500 font-medium truncate max-w-[200px]">{sub.owner}</span>
+                                        </div>
+                                        <div className="flex items-center gap-4">
+                                            <span className="text-xs text-gray-700 font-mono font-bold whitespace-nowrap">
+                                                {sub.assessed_value}
+                                            </span>
                                         </div>
                                     </div>
                                 </td>
-                                {viewMode === 'list' && <td className="p-2 text-xs text-gray-400">{sub.city}</td>}
-                                <td className="p-2 text-[10px] text-gray-500">{sub.owner}</td>
-                                <td className="p-2 text-[10px] text-gray-500 font-mono">
-                                    {sub.assessed_value}
-                                </td>
                                 {viewMode === 'list' && !isMultiSelectActive && (
                                     <td className="p-2">
+                                        {/* Individual map buttons removed as per user request */}
                                     </td>
                                 )}
                             </motion.tr>

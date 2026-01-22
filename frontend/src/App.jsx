@@ -331,7 +331,7 @@ function App() {
             <div className="h-full overflow-y-auto w-full relative">
               <BackgroundGrid />
 
-              <div className="container mx-auto px-4 pt-12 pb-24 relative z-10">
+              <div className="container mx-auto px-4 pt-8 pb-16 relative z-10">
                 <motion.div
                   initial={{ opacity: 0, y: 30 }}
                   animate={{ opacity: 1, y: 0 }}
@@ -339,15 +339,14 @@ function App() {
                   transition={{ duration: 0.6, ease: "easeOut" }}
                   className="max-w-5xl mx-auto"
                 >
-                  {/* Hero Content */}
-                  <div className="text-center mb-16">
+                  <div className="text-center mb-10">
 
 
-                    <h1 className="text-6xl md:text-8xl font-black text-slate-900 mb-6 tracking-tighter leading-[0.9]">
+                    <h1 className="text-5xl md:text-7xl font-black text-slate-900 mb-4 tracking-tighter leading-[0.9]">
                       they own <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-indigo-600">WHAT??</span>
                     </h1>
 
-                    <p className="text-xl text-slate-500 max-w-2xl mx-auto font-medium leading-relaxed mb-12">
+                    <p className="text-lg text-slate-500 max-w-xl mx-auto font-medium leading-relaxed mb-8">
                       Uncover hidden property networks, connect LLCs to real owners, and analyze portfolio value with AI-powered insights.
                     </p>
 

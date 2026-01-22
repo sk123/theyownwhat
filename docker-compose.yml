@@ -107,7 +107,7 @@ services:
       - ./updater:/app/updater
     environment:
       - DATABASE_URL=postgresql://user:password@db:5432/ctdata
-    command: python updater/update_vision_data.py -m "DANBURY" -f
+    command: python updater/update_vision_data.py -m "DANBURY" "MILFORD" "HARTFORD" -f
 
   nginx:
     build:
