@@ -2,7 +2,7 @@ import React from 'react';
 import { X, User, Building, MapPin, Calendar, Hash, Link as LinkIcon, AlertCircle, Info } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-export default function EntityDetailsModal({ entity, type, networkData, onNavigate, onClose }) {
+export default function EntityDetailsModal({ entity, type, networkData, onNavigate, onViewProperty, onClose }) {
     if (!entity) return null;
 
     const d = entity.details || {};
@@ -14,18 +14,15 @@ export default function EntityDetailsModal({ entity, type, networkData, onNaviga
     };
 
     // Find related properties
+    // Find related properties using precise ID matching
     const relatedProperties = networkData?.properties?.filter(p => {
+        const entityIdStr = String(entity.id);
         if (isPrincipal) {
-            // Match by owner name
-            const entityName = (entity.name || entity.name_c || '').toUpperCase().trim();
-            const ownerNorm = (p.details?.owner_norm || p.owner || '').toUpperCase().trim();
-            const coOwnerNorm = (p.details?.co_owner_norm || '').toUpperCase().trim();
-            return ownerNorm.includes(entityName) || coOwnerNorm.includes(entityName);
+            // Match principal by ID
+            return String(p.details?.principal_id) === entityIdStr;
         } else {
-            // Match by business name
-            const entityName = (entity.name || '').toUpperCase().trim();
-            const ownerName = (p.owner || '').toUpperCase().trim();
-            return ownerName === entityName;
+            // Match business by ID
+            return String(p.details?.business_id) === entityIdStr;
         }
     }) || [];
 
@@ -166,9 +163,18 @@ export default function EntityDetailsModal({ entity, type, networkData, onNaviga
                                     </h3>
                                     <div className="space-y-2 max-h-60 overflow-y-auto">
                                         {relatedProperties.map((prop, idx) => (
-                                            <div key={idx} className="flex items-start justify-between p-2 bg-white rounded-lg border border-gray-200 hover:border-blue-300 transition-colors">
+                                            <div
+                                                key={idx}
+                                                className="flex items-start justify-between p-2 bg-white rounded-lg border border-gray-200 hover:border-blue-300 hover:shadow-sm cursor-pointer transition-all group"
+                                                onClick={() => {
+                                                    if (onViewProperty) {
+                                                        onClose();
+                                                        setTimeout(() => onViewProperty(prop), 100);
+                                                    }
+                                                }}
+                                            >
                                                 <div className="flex-1">
-                                                    <div className="font-medium text-gray-900 text-sm">{prop.address || prop.location}</div>
+                                                    <div className="font-medium text-gray-900 text-sm group-hover:text-blue-600 transition-colors">{prop.address || prop.location}</div>
                                                     <div className="text-xs text-gray-500">{prop.city}</div>
                                                 </div>
                                                 <div className="text-right">

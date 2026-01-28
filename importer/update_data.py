@@ -31,6 +31,8 @@ def get_db_connection():
             time.sleep(5)
     raise Exception("❌ Could not connect to the database after multiple retries.")
 
+from api.shared_utils import normalize_person_name, normalize_business_name
+
 # --- Helper Function (from import_data.py) ---
 def construct_principal_name(row):
     """Helper to construct principal name, mirroring import script logic."""
@@ -57,7 +59,8 @@ def add_property_columns(cursor):
         ("unit", "TEXT"), ("unit_cut", "TEXT"), ("property_zip", "TEXT"),
         ("property_county", "TEXT"), ("street_name", "TEXT"), ("address_number", "TEXT"),
         ("address_prefix", "TEXT"), ("address_suffix", "TEXT"), ("cama_site_link", "TEXT"),
-        ("building_photo", "TEXT"), ("number_of_units", "NUMERIC")
+        ("building_photo", "TEXT"), ("number_of_units", "NUMERIC"),
+        ("complex_name", "TEXT"), ("management_company", "TEXT")
     ]
     commands = [
         sql.SQL("ALTER TABLE properties ADD COLUMN IF NOT EXISTS {} {};")
@@ -121,6 +124,39 @@ def add_principal_columns(cursor):
         print(f"❌ Error altering 'principals' schema: {e}")
         raise
 
+def ensure_management_schema(cursor):
+    """Ensures the complex_management table exists."""
+    print("🚀 Ensuring 'complex_management' table exists...")
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS complex_management (
+            street_address TEXT,
+            city TEXT,
+            management_name TEXT,
+            official_url TEXT,
+            phone TEXT,
+            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (street_address, city)
+        )
+    """)
+    print("✅ Complex management schema ensured.")
+    
+def ensure_subsidies_schema(cursor):
+    """Ensures the property_subsidies table exists."""
+    print("🚀 Ensuring 'property_subsidies' table exists...")
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS property_subsidies (
+            id SERIAL PRIMARY KEY,
+            property_id INTEGER REFERENCES properties(id),
+            program_name TEXT,
+            subsidy_type TEXT,
+            units_subsidized INTEGER,
+            expiry_date DATE,
+            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_subsidies_property_id ON property_subsidies(property_id);
+    """)
+    print("✅ Property subsidies schema ensured.")
+
 # =============================================================================
 # DATA UPDATE FUNCTIONS
 # =============================================================================
@@ -175,9 +211,9 @@ def run_properties_update(conn, file_path, column_map):
 
             # Create normalized owner fields
             if 'owner' in chunk.columns:
-                chunk['owner_norm'] = chunk['owner'].astype(str).str.strip().str.upper().replace(r'[^a-zA-Z0-9 ]', '', regex=True).replace(r'\s+', ' ', regex=True)
+                chunk['owner_norm'] = chunk['owner'].apply(normalize_business_name)
             if 'co_owner' in chunk.columns:
-                chunk['co_owner_norm'] = chunk['co_owner'].astype(str).str.strip().str.upper().replace(r'[^a-zA-Z0-9 ]', '', regex=True).replace(r'\s+', ' ', regex=True)
+                chunk['co_owner_norm'] = chunk['co_owner'].apply(normalize_business_name)
 
             final_chunk = chunk.reindex(columns=staging_col_names)
 
@@ -371,24 +407,7 @@ def run_principals_update(conn, file_path, column_map):
             chunk.dropna(subset=['business_id', 'name_c'], inplace=True)
             chunk = chunk[chunk['name_c'] != '']
             
-            # Create normalized name field
-            # Define normalization helper
-            def clean_name(x):
-                if not isinstance(x, str): return ''
-                n = x.strip().upper()
-                n = re.sub(r'[^A-Z0-9 ]', '', n)
-                n = re.sub(r'\s+', ' ', n).strip()
-                # Typo fixes
-                n = n.replace('GUREVITOH', 'GUREVITCH').replace('MANACHEM', 'MENACHEM').replace('MENACHERM', 'MENACHEM').replace('MENAHEM', 'MENACHEM').replace('GURAVITCH', 'GUREVITCH')
-                # Middle initial strip
-                parts = n.split()
-                if len(parts) >= 3:
-                     if len(parts[0]) > 1 and len(parts[-1]) > 1:
-                         mid = [p for p in parts[1:-1] if len(p) > 1]
-                         n = " ".join([parts[0]] + mid + [parts[-1]])
-                return n
-
-            chunk['name_c_norm'] = chunk['name_c'].apply(clean_name)
+            chunk['name_c_norm'] = chunk['name_c'].apply(normalize_person_name)
 
             # Filter chunk to only columns we care about
             final_chunk = chunk.reindex(columns=staging_col_names)
@@ -561,10 +580,11 @@ def main():
             # 1. Add new columns
             if target_table == 'properties':
                 add_property_columns(cursor)
-            elif target_table == 'businesses':
-                add_business_columns(cursor)
             elif target_table == 'principals':
                 add_principal_columns(cursor)
+            
+            ensure_management_schema(cursor)
+            ensure_subsidies_schema(cursor)
             conn.commit()
 
             # 2. Run the update data process

@@ -1,0 +1,112 @@
+[2026-01-27 14:09:48] Starting data update process...
+[2026-01-27 14:09:48] Settings: Parallel Municipalities=8, Force Reprocess=True
+[2026-01-27 14:09:48] Database connection successful.
+[2026-01-27 14:09:48] Ensured property_processing_log table exists for resumability.
+[2026-01-27 14:09:48] Scraping https://www.vgsi.com/connecticut-online-database/ for municipalities...
+[2026-01-27 14:09:48] Found 90 municipalities on the Vision Appraisal site.
+[2026-01-27 14:09:48] Added custom data source municipality: HARTFORD (ct_geodata_csv)
+[2026-01-27 14:09:48] Added custom data source municipality: ANSONIA (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: BEACON FALLS (MAPXPRESS)
+[2026-01-27 14:09:48] Added custom data source municipality: BETHANY (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: CHESHIRE (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: COLCHESTER (MAPXPRESS)
+[2026-01-27 14:09:48] Added custom data source municipality: DERBY (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: EAST HAVEN (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: FARMINGTON (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: LITCHFIELD (MAPXPRESS)
+[2026-01-27 14:09:48] Added custom data source municipality: NAUGATUCK (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: OXFORD (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: PLAINVILLE (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: SEYMOUR (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: SUFFIELD (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: ASHFORD (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: BOZRAH (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: CANAAN (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: CHESTER (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: COLEBROOK (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: COLUMBIA (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: DANBURY (ct_geodata_csv)
+[2026-01-27 14:09:48] Added custom data source municipality: DURHAM (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: EAST HAMPTON (ct_geodata_csv)
+[2026-01-27 14:09:48] Added custom data source municipality: EASTFORD (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: EASTON (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: ELLINGTON (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: FRANKLIN (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: GUILFORD (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: HADDAM (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: HEBRON (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: KILLINGLY (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: KILLINGWORTH (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: MARLBOROUGH (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: MONTVILLE (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: NEW CANAAN (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: NEWINGTON (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: NORFOLK (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: NORTH CANAAN (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: NORTH HAVEN (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: NORTH STONINGTON (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: PLYMOUTH (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: PROSPECT (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: RIDGEFIELD (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: ROCKY HILL (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: ROXBURY (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: SCOTLAND (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: SHELTON (ct_geodata_csv)
+[2026-01-27 14:09:48] Added custom data source municipality: SHERMAN (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: SIMSBURY (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: TORRINGTON (ct_geodata_csv)
+[2026-01-27 14:09:48] Added custom data source municipality: VOLUNTOWN (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: WARREN (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: WASHINGTON (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: WATERBURY (ct_geodata_csv)
+[2026-01-27 14:09:48] Added custom data source municipality: WATERTOWN (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: WESTON (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: WILTON (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: WINDSOR LOCKS (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: WOODBRIDGE (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: WOODBURY (PROPERTYRECORDCARDS)
+[2026-01-27 14:09:48] Added custom data source municipality: GREENWICH (ct_geodata_csv)
+[2026-01-27 14:09:48] Added custom data source municipality: EAST HARTFORD (ct_geodata_csv)
+[2026-01-27 14:09:48] Added custom data source municipality: CROMWELL (ct_geodata_csv)
+[2026-01-27 14:09:48] Added custom data source municipality: GROTON (ct_geodata_csv)
+[2026-01-27 14:09:48] --- Job Queue: 1 municipalities to process ---
+[2026-01-27 14:09:48]   - WEST HARTFORD (updated: 2026-01-27) [vision_appraisal]
+[2026-01-27 14:09:48] ---------------------------------------------------
+
+[2026-01-27 14:09:48] Setup complete. Closed main DB connection. Starting worker pool.
+[2026-01-27 14:09:48] WORKER_START: Starting job for WEST HARTFORD
+[2026-01-27 14:09:48] Submitted 1 municipality jobs to the thread pool with 8 workers...
+[2026-01-27 14:09:48] Database connection successful.
+[2026-01-27 14:09:48] --- Processing municipality: WEST HARTFORD (Force=True) ---
+[2026-01-27 14:09:48]   -> Data Source Last Updated: 2026-01-27. Normal update mode.
+[2026-01-27 14:09:48] Found 21442 all (force) properties in WEST HARTFORD.
+[2026-01-27 14:09:48] Total to process: 21442. Direct URL Mode: 0. Full Scrape Mode: 21442.
+[2026-01-27 14:09:48]   -> Starting SLOW PATH: Full street scrape required for 21442 properties...
+[2026-01-27 14:09:48]   -> Fetching street index for WEST HARTFORD...
+[2026-01-27 14:09:48]   -> Found 24 letter pages to scan for WEST HARTFORD.
+[2026-01-27 14:09:48]   -> discovering streets across 24 letters in parallel...
+[2026-01-27 14:09:49]   -> Total streets discovered: 676. Starting massive parallel scrape...
+[2026-01-27 14:10:24]   -> [Progress] Scraped 50/676 streets...
+[2026-01-27 14:11:02]   -> [Progress] Scraped 100/676 streets...
+[2026-01-27 14:11:37]   -> [Progress] Scraped 150/676 streets...
+[2026-01-27 14:12:08]   -> [Progress] Scraped 200/676 streets...
+[2026-01-27 14:12:43]   -> [Progress] Scraped 250/676 streets...
+[2026-01-27 14:13:20]   -> [Progress] Scraped 300/676 streets...
+[2026-01-27 14:13:51]   -> [Progress] Scraped 350/676 streets...
+[2026-01-27 14:14:32]   -> [Progress] Scraped 400/676 streets...
+[2026-01-27 14:15:02]   -> [Progress] Scraped 450/676 streets...
+[2026-01-27 14:15:25]   -> [Progress] Scraped 500/676 streets...
+[2026-01-27 14:15:58]   -> [Progress] Scraped 550/676 streets...
+[2026-01-27 14:16:31]   -> [Progress] Scraped 600/676 streets...
+[2026-01-27 14:17:08]   -> [Progress] Scraped 650/676 streets...
+[2026-01-27 14:18:05]   -> Scraped 0 properties total for WEST HARTFORD.
+[2026-01-27 14:18:05]   -> Full scrape returned no data. Skipping 21442 properties for WEST HARTFORD.
+[2026-01-27 14:18:05]   -> Finalizing: Marking all 21442 properties as processed for today.
+[2026-01-27 14:18:53] Finished WEST HARTFORD. Total Updated: 0 of 21442 properties.
+[2026-01-27 14:18:53] WORKER_DONE: Finished job for WEST HARTFORD. Updated 0 properties.
+[2026-01-27 14:18:53] WORKER_CLEANUP: Closed DB connection for WEST HARTFORD.
+[2026-01-27 14:18:53] COMPLETED: [1/1] Job for WEST HARTFORD finished, returned 0 updates.
+[2026-01-27 14:18:53] 
+--- PROCESS COMPLETE ---
+[2026-01-27 14:18:53] Updated 0 total all properties across 1 municipalities.
+[2026-01-27 14:18:53] Script finished.

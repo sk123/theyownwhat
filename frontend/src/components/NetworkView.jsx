@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Layers, ChevronDown, ChevronRight, User, Building, ArrowRight, MapPin, Info } from 'lucide-react';
+import { Layers, ChevronDown, ChevronRight, User, Users, Building, ArrowRight, MapPin, Info } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 export default function NetworkView({ networkData, onSelectEntity, selectedEntityId, onViewDetails, mobileSection = 'all', autoHeight = false }) {
@@ -35,18 +35,19 @@ export default function NetworkView({ networkData, onSelectEntity, selectedEntit
         if (n.includes(',')) {
             const parts = n.split(',').map(s => s.trim());
             if (parts.length >= 2) {
-                // "GUREVITCH, MENACHEM" -> "MENACHEM GUREVITCH" 
-                // Regex in python: ^\s*([^,]+)\s*,\s*([A-Z0-9\- ]+) -> group 2 group 1
-                // Implementation: last part before comma is group 1, part after is group 2
-                // Actually split is safer. 
                 const last = parts[0];
                 const first = parts[1];
-                // Note: Python regex captures "all before comma" as 1, "all after comma" as 2.
-                // So "GUREVITCH, MENACHEM" -> 1=GUREVITCH, 2=MENACHEM. Result: "MENACHEM GUREVITCH"
                 n = `${first} ${last}`;
             }
         }
-        return n.replace(/\s+/g, ' ').trim();
+        n = n.replace(/\s+/g, ' ').trim();
+
+        // Specific typo fixes matching backend
+        n = n.replace(/GUREVITOH/g, "GUREVITCH");
+        n = n.replace(/MANACHEM/g, "MENACHEM");
+        n = n.replace(/GURAVITCH/g, "GUREVITCH");
+
+        return n;
     };
 
     const getCount = (p) => {
@@ -118,27 +119,31 @@ export default function NetworkView({ networkData, onSelectEntity, selectedEntit
                 </span>
             </div>
 
+            {/* Network Summary / Identity Block - MOVED TO TOP HEADER */}
+            {/* <div className={`p-4 bg-gradient-to-br from-slate-900 to-slate-800 ...`}></div> */}
+
             {/* Content Container - Split vertically on desktop */}
             <div className={`flex-1 flex flex-col ${autoHeight ? '' : 'overflow-hidden min-h-0 h-full'}`}>
 
                 {/* Principals Section */}
                 {showPrincipals && (
-                    <div className={`flex flex-col border-b border-gray-100 transition-all duration-300 min-h-0 ${mobileSection === 'all' ? 'flex-shrink-0 lg:max-h-[50%] overflow-hidden flex-col flex' : (autoHeight ? '' : 'flex-1 overflow-hidden')
+                    <div className={`flex flex-col border-b border-gray-100 transition-all duration-300 min-h-0 border-l-4 border-blue-600/30 ${mobileSection === 'all' ? 'flex-shrink-0 lg:max-h-[45%] overflow-hidden flex-col flex' : (autoHeight ? '' : 'flex-1 overflow-hidden')
                         }`}>
-                        <div className="bg-white z-10 px-3 py-1.5 border-b border-gray-50 flex items-center justify-between">
-                            <h4 className="text-[10px] font-black text-slate-800 uppercase tracking-widest flex items-center gap-2">
+                        <div className="bg-gradient-to-r from-blue-600 to-indigo-600 px-3 py-2 flex items-center justify-between shadow-sm">
+                            <h4 className="text-[10px] font-black text-white uppercase tracking-widest flex items-center gap-2">
+                                <User className="w-3.5 h-3.5" />
                                 Principals
                             </h4>
-                            <div className="flex bg-gray-100 p-0.5 rounded-lg">
+                            <div className="flex bg-white/20 p-0.5 rounded-lg">
                                 <button
                                     onClick={() => setActiveTab('human')}
-                                    className={`px-1.5 py-0.5 text-[9px] font-bold rounded transition-all ${activeTab === 'human' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
+                                    className={`px-1.5 py-0.5 text-[9px] font-bold rounded transition-all ${activeTab === 'human' ? 'bg-white shadow-sm text-blue-600' : 'text-white/70 hover:text-white'}`}
                                 >
                                     Human ({humanPrincipals.length})
                                 </button>
                                 <button
                                     onClick={() => setActiveTab('entity')}
-                                    className={`px-1.5 py-0.5 text-[9px] font-bold rounded transition-all ${activeTab === 'entity' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
+                                    className={`px-1.5 py-0.5 text-[9px] font-bold rounded transition-all ${activeTab === 'entity' ? 'bg-white shadow-sm text-blue-600' : 'text-white/70 hover:text-white'}`}
                                 >
                                     Entity ({entityPrincipals.length})
                                 </button>
@@ -204,9 +209,9 @@ export default function NetworkView({ networkData, onSelectEntity, selectedEntit
 
                 {/* Businesses Section */}
                 {showBusinesses && (
-                    <div className={`flex flex-col transition-all duration-300 min-h-0 ${mobileSection === 'all' ? 'flex-1 overflow-hidden' : (autoHeight ? '' : 'flex-1 overflow-hidden')
+                    <div className={`flex flex-col transition-all duration-300 min-h-0 border-l-4 border-indigo-600/30 ${mobileSection === 'all' ? 'flex-1 overflow-hidden' : (autoHeight ? '' : 'flex-1 overflow-hidden')
                         }`}>
-                        <div className="bg-gradient-to-r from-blue-500 to-indigo-500 sticky top-0 z-20 px-3 py-2.5 flex items-center justify-between shadow-sm">
+                        <div className="bg-gradient-to-r from-blue-600 to-indigo-600 sticky top-0 z-20 px-3 py-2.5 flex items-center justify-between shadow-sm">
                             <h4 className="text-sm font-black text-white uppercase tracking-wider flex items-center gap-2">
                                 <Building className="w-4 h-4" />
                                 BUSINESSES

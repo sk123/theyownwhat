@@ -20,12 +20,16 @@ export const api = {
     },
 
     // Streaming helper for network loading
-    streamNetwork: async (entityId, entityType, onChunk, onComplete, onError) => {
+    streamNetwork: async (entityId, entityType, entityName, onChunk, onComplete, onError) => {
         try {
             const response = await fetch(`${API_BASE}/network/stream_load`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ entity_id: entityId, entity_type: entityType })
+                body: JSON.stringify({
+                    entity_id: entityId,
+                    entity_type: entityType,
+                    entity_name: entityName
+                })
             });
 
             if (!response.ok) throw new Error(`Stream Error: ${response.statusText}`);

@@ -6,3 +6,5 @@ uvicorn[standard]
 httpx
 python-dotenv
 openai
+beautifulsoup4
+lxml

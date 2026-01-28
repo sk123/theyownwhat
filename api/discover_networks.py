@@ -14,7 +14,7 @@ from typing import List, Set
 # Add the current directory to Python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from shared_utils import normalize_business_name, normalize_person_name
+from shared_utils import normalize_business_name, normalize_person_name, normalize_mailing_address
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -41,8 +41,8 @@ def get_norm_sql(col_name):
     norm_ops = f"UPPER({col_name})"
     norm_ops = f"REPLACE({norm_ops}, '&', 'AND')"
     norm_ops = f"REGEXP_REPLACE({norm_ops}, '[.,''`\"]', '', 'g')" # Remove punctuation
-    norm_ops = f"REGEXP_REPLACE({norm_ops}, '[^A-Z0-9\s-]', '', 'g')" # Remove special chars (keep hyphen)
-    norm_ops = f"TRIM(REGEXP_REPLACE({norm_ops}, '\s+', ' ', 'g'))" # Collapse whitespace
+    norm_ops = f"REGEXP_REPLACE({norm_ops}, '[^A-Z0-9\\s-]', '', 'g')" # Remove special chars (keep hyphen)
+    norm_ops = f"TRIM(REGEXP_REPLACE({norm_ops}, '\\s+', ' ', 'g'))" # Collapse whitespace
     return norm_ops
 
 # --- Helper Functions (Email Logic) ---
@@ -57,6 +57,7 @@ def load_email_rules(conn):
                 email_rules[row['domain']] = row['match_type']
             logger.info(f"Loaded {len(email_rules)} email rules (public, registrar, and custom).")
     except psycopg2.Error as e:
+        conn.rollback() # Reset transaction
         logger.warning(f"Could not load email rules (table might not exist): {e}")
     return email_rules
 
@@ -104,10 +105,23 @@ def setup_network_schema(conn):
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_entity_networks_network ON entity_networks(network_id);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_entity_networks_normalized ON entity_networks(normalized_name);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_properties_owner_upper ON properties(UPPER(owner));")
+        
+        # Ensure helper tables exist
+        cursor.execute("CREATE TABLE IF NOT EXISTS email_match_rules (domain TEXT PRIMARY KEY, match_type TEXT);")
+        cursor.execute("CREATE TABLE IF NOT EXISTS principal_ignore_list (normalized_name TEXT PRIMARY KEY);")
+    
     conn.commit()
     logger.info("Schema setup and migration complete.")
 
 # --- NEW STEP 1: Link Properties (Standalone) ---
+def flip_name(name):
+    """Simple flip for LAST FIRST <-> FIRST LAST."""
+    if not name: return None
+    parts = name.split()
+    if len(parts) == 2:
+        return f"{parts[1]} {parts[0]}"
+    return None
+
 def link_properties_standalone(conn):
     """
     Robustly matches properties directly to businesses and principals
@@ -121,40 +135,71 @@ def link_properties_standalone(conn):
         cursor.execute("UPDATE properties SET business_id = NULL, principal_id = NULL;")
         conn.commit()
 
-        # Link to Businesses
-        logger.info("Linking properties to Businesses...")
-        biz_norm_sql = get_norm_sql('b.name')
-        prop_norm_sql = get_norm_sql('p.owner')
-        cursor.execute(f"""
+        # A. Link to Businesses (Check both owner and co_owner)
+        logger.info("Linking properties to Businesses via owner_norm and co_owner_norm...")
+        
+        # Pass 1: Primary Owner -> Business Name
+        cursor.execute("""
             UPDATE properties p
             SET business_id = b.id
             FROM businesses b
-            WHERE {prop_norm_sql} = {biz_norm_sql}
-                AND p.owner IS NOT NULL AND b.name IS NOT NULL;
+            WHERE p.owner_norm = b.name_norm
+              AND p.owner_norm IS NOT NULL AND b.name_norm IS NOT NULL;
         """)
         biz_linked_count = cursor.rowcount
+        
+        # Pass 2: Co-Owner -> Business Name (only if not already linked)
+        cursor.execute("""
+            UPDATE properties p
+            SET business_id = b.id
+            FROM businesses b
+            WHERE p.business_id IS NULL 
+              AND p.co_owner_norm = b.name_norm
+              AND p.co_owner_norm IS NOT NULL AND b.name_norm IS NOT NULL;
+        """)
+        biz_linked_count += cursor.rowcount
         conn.commit()
         logger.info(f"✅ Linked {biz_linked_count:,} properties to businesses.")
 
-        # Link to Principals
+        # B. Link to Principals (Check both owner/co_owner and handle permutations)
         logger.info("Linking properties to Principals (where no business was matched)...")
-        prin_norm_sql = get_norm_sql('pr.name_c')
-        prop_norm_sql_prin = get_norm_sql('p.owner')
-
-        cursor.execute(f"""
-            WITH norm_principals AS (
-                SELECT DISTINCT ON ({prin_norm_sql}) 
-                       {prin_norm_sql} AS norm_name
-                FROM principals pr
-                WHERE pr.name_c IS NOT NULL AND pr.name_c != ''
-            )
+        
+        # 1. Prepare search keys (including flipped names for LAST FIRST matching)
+        cursor.execute("SELECT DISTINCT name_c_norm FROM principals WHERE name_c_norm IS NOT NULL AND name_c_norm != ''")
+        principals = [r[0] for r in cursor.fetchall()]
+        
+        output = StringIO()
+        for p in principals:
+            output.write(f"{p}\t{p}\n")
+            flipped = flip_name(p)
+            if flipped:
+                output.write(f"{flipped}\t{p}\n")
+        output.seek(0)
+        
+        cursor.execute("CREATE TEMP TABLE tmp_prin_search (search_key TEXT, canonical_name TEXT)")
+        cursor.copy_from(output, 'tmp_prin_search', columns=('search_key', 'canonical_name'))
+        cursor.execute("CREATE INDEX idx_tmp_prin_search ON tmp_prin_search(search_key)")
+        
+        # Pass 1: owner_norm -> Principal Search Key
+        cursor.execute("""
             UPDATE properties p
-            SET principal_id = np.norm_name -- Store the NORMALIZED name as the ID
-            FROM norm_principals np
-            WHERE {prop_norm_sql_prin} = np.norm_name
-                AND p.business_id IS NULL; -- Only link if a business didn't already match
+            SET principal_id = ts.canonical_name
+            FROM tmp_prin_search ts
+            WHERE p.business_id IS NULL
+              AND p.owner_norm = ts.search_key;
         """)
         prin_linked_count = cursor.rowcount
+        
+        # Pass 2: co_owner_norm -> Principal Search Key
+        cursor.execute("""
+            UPDATE properties p
+            SET principal_id = ts.canonical_name
+            FROM tmp_prin_search ts
+            WHERE p.business_id IS NULL AND p.principal_id IS NULL
+              AND p.co_owner_norm = ts.search_key;
+        """)
+        prin_linked_count += cursor.rowcount
+        
         conn.commit()
         logger.info(f"✅ Linked {prin_linked_count:,} properties to principals.")
         
@@ -198,7 +243,7 @@ def build_graph_from_owners(conn):
 
         # Add seed principals (get their raw name for display)
         if seed_prin_names:
-            prin_norm_col_sql = get_norm_sql('name_c')
+            prin_norm_col_sql = get_norm_sql('name_c') # Fallback to on-the-fly normalization
             cursor.execute(f"""
                 WITH norm_prins AS (
                     SELECT name_c, {prin_norm_col_sql} as norm_name
@@ -270,25 +315,136 @@ def build_graph_from_owners(conn):
     logger.info(f"✅ Property-Owner graph built: {len(graph)} entities, {total_edges} edges.")
     return graph, entity_info
 
+def build_address_edges(conn, existing_graph):
+    """
+    Finds businesses that share the same MAILING address.
+    Returns a list of edge tuples: [ (('business', id_A), ('business', id_B)), ... ]
+    """
+    logger.info("STEP 2.5: detecting hidden networks via shared mailing addresses...")
+    
+    # 1. Get all businesses currently in our graph (property owners & their connections)
+    # We only care about linking entities that are ALREADY relevant (i.e. own property or related to one)
+    relevant_biz_ids = {node[1] for node in existing_graph if node[0] == 'business'}
+    
+    if not relevant_biz_ids:
+        return []
+
+    from shared_utils import normalize_mailing_address
+
+    edges = []
+    
+    with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        # Fetch addresses for relevant businesses
+        cursor.execute(f"""
+            SELECT id, mail_address, business_address 
+            FROM businesses 
+            WHERE id = ANY(%s) 
+            AND (mail_address IS NOT NULL OR business_address IS NOT NULL)
+        """, (list(relevant_biz_ids),))
+        
+        # Group businesses by normalized address
+        addr_map = defaultdict(list)
+        
+        # JUNK LIST: Common placeholders that shouldn't link businesses
+        JUNK_ADDRS = {
+            'NO INFORMATION PROVIDED', 'NONE', 'UNKNOWN', '.', '',
+            'NOT PROVIDED', 'N/A', 'NULL', 'CONNECTICUT', 'CT', 'USA',
+            '2389 MAIN STREET #100 GLASTONBURY COURT UNITED STATES 06033',
+            '2389 MAIN STREET GLASTONBURY COURT UNITED STATES 06033',
+            '2389 MAIN ST STE 100 GLASTONBURY CT UNITED STATES 06033',
+            'C T CORP SYSTEMS 799 MAIN STREET HARTFORD COURT 06103'
+        }
+        
+        for row in cursor.fetchall():
+            # Prioritize mailing address, fall back to business address
+            raw = row['mail_address'] or row['business_address']
+            norm = normalize_mailing_address(raw)
+            # Filter out junk and extremely short strings
+            if norm and norm not in JUNK_ADDRS and len(norm) > 10: 
+                addr_map[norm].append(row['id'])
+
+        # Create edges for clusters
+        ignored_clusters = 0
+        linked_clusters = 0
+        
+        for addr, biz_ids in addr_map.items():
+            if len(biz_ids) < 2:
+                continue
+                
+            # SAFETY VALVE: Ignore addresses shared by too many businesses (Registered Agents, Lawyers)
+            # Raised threshold to 100 to capture Gurevitch's PO Box (58 units)
+            # while still filtering out massive agent hubs.
+            if len(biz_ids) > 100: 
+                ignored_clusters += 1
+                logger.info(f"Ignoring high-freq address (potential agent): {addr} ({len(biz_ids)} businesses)")
+                continue
+
+            linked_clusters += 1
+            # Link all businesses in this cluster to each other
+            for b1, b2 in combinations(biz_ids, 2):
+                edges.append((('business', b1), ('business', b2)))
+
+    logger.info(f"Found {len(edges)} hidden edges across {linked_clusters} shared addresses (Ignored {ignored_clusters} high-freq addresses).")
+    return edges
+
 # --- DISCOVERY & STORAGE ---
-def discover_networks(graph):
-    logger.info("STEP 3: Discovering connected components (BFS)...")
-    visited_globally = set()
+def discover_networks_depth_limited(graph, max_depth=3):
+    """
+    Discovers networks using DEPTH-LIMITED BFS from each property-owning entity.
+    This prevents distant/weak connections from merging unrelated portfolios.
+    
+    max_depth=3 means:
+    - Level 0: Starting entity
+    - Level 1: Businesses they're in / Principals they're connected to
+    - Level 2: Principals of those businesses / Businesses of those principals
+    - Level 3: Businesses of level-2 principals
+    """
+    logger.info(f"STEP 3: Discovering networks with depth-limited BFS (max_depth={max_depth})...")
+    
+    # Track which entities have been used as starting points
+    used_as_seed = set()
     networks = []
-    for start_node in graph:
-        if start_node in visited_globally: continue
-        network_component = set(); queue = deque([start_node])
-        visited_globally.add(start_node); network_component.add(start_node)
+    
+    # Only start from property-owning entities (our seed nodes)
+    # Sort for deterministic results
+    seed_nodes = sorted(graph.keys())
+    
+    for start_node in seed_nodes:
+        if start_node in used_as_seed:
+            continue
+            
+        # BFS with depth tracking
+        network_component = set()
+        queue = deque([(start_node, 0)])  # (node, depth)
+        visited_local = {start_node}
+        network_component.add(start_node)
+        
         while queue:
-            current_node = queue.popleft()
+            current_node, depth = queue.popleft()
+            
+            # Don't expand beyond max_depth
+            if depth >= max_depth:
+                continue
+                
             for neighbor in graph.get(current_node, []):
-                if neighbor not in visited_globally:
-                    visited_globally.add(neighbor); network_component.add(neighbor)
-                    queue.append(neighbor)
-        if len(network_component) > 1: networks.append(list(network_component))
+                if neighbor not in visited_local:
+                    visited_local.add(neighbor)
+                    network_component.add(neighbor)
+                    queue.append((neighbor, depth + 1))
+        
+        # Mark all entities in this network as "used"
+        used_as_seed.update(network_component)
+        
+        if len(network_component) > 1:
+            networks.append(list(network_component))
+    
     networks.sort(key=len, reverse=True)
     logger.info(f"Discovered {len(networks)} distinct networks (size > 1).")
     return networks
+
+def discover_networks(graph):
+    """Wrapper to maintain compatibility"""
+    return discover_networks_depth_limited(graph, max_depth=3)
 
 def store_networks(conn, networks, entity_info):
     logger.info("STEP 4: Storing networks in database...")
@@ -356,6 +512,15 @@ def main():
             logger.info("STEP 1: Properties already linked. Skipping linking step. (Use --force to re-link).")
 
         graph, entity_info = build_graph_from_owners(conn)
+        
+        # --- NEW: Shared Address Linking ---
+        # Determine which businesses (nodes in our graph) share a physical/mailing address
+        address_edges = build_address_edges(conn, graph)
+        for u, v in address_edges:
+            graph[u].add(v)
+            graph[v].add(u)
+        # -----------------------------------
+
         networks = discover_networks(graph)
         
         if networks:

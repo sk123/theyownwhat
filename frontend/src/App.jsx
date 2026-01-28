@@ -5,12 +5,13 @@ import NetworkView from './components/NetworkView';
 import PropertyTable from './components/PropertyTable';
 import { api } from './api';
 import Insights from './components/Insights';
+import NetworkProfileCard from './components/NetworkProfileCard';
 import SearchResults from './components/SearchResults';
 const PropertyDetailsModal = React.lazy(() => import('./components/PropertyDetailsModal'));
 const EntityDetailsModal = React.lazy(() => import('./components/EntityDetailsModal'));
-const NetworkAnalysisModal = React.lazy(() => import('./components/NetworkAnalysisModal'));
 const AboutModal = React.lazy(() => import('./components/AboutModal'));
 const MultiPropertyMapModal = React.lazy(() => import('./components/MultiPropertyMapModal'));
+const FreshnessModal = React.lazy(() => import('./components/FreshnessModal'));
 import LoadingScreen from './components/LoadingScreen';
 // import DashboardControls from './components/DashboardControls'; // Removed
 import StatCard from './components/StatCard';
@@ -44,8 +45,8 @@ function App() {
   // Dashboard State
   const [selectedCity, setSelectedCity] = useState('All');
   const [selectedEntityId, setSelectedEntityId] = useState(null);
-  const [showAnalysis, setShowAnalysis] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
+  const [showFreshness, setShowFreshness] = useState(false);
 
   // Mobile Tabs
   const [activeMobileTab, setActiveMobileTab] = useState('properties');
@@ -108,14 +109,14 @@ function App() {
   };
 
   // Load Network Stream
-  const loadNetwork = async (id, type) => {
+  const loadNetwork = async (id, type, name) => {
     setLoading(true);
     setStreamingStatus({ entities: 0, properties: 0, active: true });
 
     const newData = { principals: [], businesses: [], properties: [], links: [] };
     const seenEntities = new Set();
 
-    api.streamNetwork(id, type,
+    api.streamNetwork(id, type, name,
       (chunk) => {
         if (chunk.type === 'entities') {
           if (chunk.data.entities) {
@@ -132,7 +133,7 @@ function App() {
 
                 // Simple heurustic
                 if (e.type === 'principal') {
-                  e.isEntity = e.name && e.name.match(/(LLC|INC|CORP|LTD|GROUP|HOLDINGS)/i);
+                  e.isEntity = e.name && e.name.match(/(LLC|INC|CORP|LTD|GROUP|HOLDINGS|REALTY|MANAGEMENT|TRUST|LP|PARTNERSHIP|FUND|INVESTMENT)/i);
                 }
                 // Extract connections if present
                 if (e.details && e.details.connections && Array.isArray(e.details.connections)) {
@@ -172,7 +173,15 @@ function App() {
               properties: prev.properties + chunk.data.length
             }));
             for (const prop of chunk.data) {
-              newData.properties.push(prop);
+              if (prop.is_complex && Array.isArray(prop.units)) {
+                // Flatten backend complexes back into units for the PropertyTable
+                // which handles its own grouping logic
+                for (const unit of prop.units) {
+                  newData.properties.push(unit);
+                }
+              } else {
+                newData.properties.push(prop);
+              }
             }
           }
         }
@@ -368,8 +377,8 @@ function App() {
                             }
                             // Property Owner/Co-Owner fallback to 'owner' and use name (item.value)
 
-                            console.log("Direct load:", id, type);
-                            loadNetwork(id, type);
+                            console.log("Direct load:", id, type, item.value);
+                            loadNetwork(id, type, item.value);
                           }}
                         />
                       </div>
@@ -390,7 +399,7 @@ function App() {
                     {searchResults ? (
                       <SearchResults
                         results={searchResults}
-                        onSelect={(id, type) => loadNetwork(id, type)}
+                        onSelect={(id, type, name) => loadNetwork(id, type, name)}
                       />
                     ) : (
                       <div className="mt-8">
@@ -401,7 +410,7 @@ function App() {
                             ))}
                           </div>
                         ) : (
-                          <Insights data={insights} onSelect={(id, type) => loadNetwork(id, type)} />
+                          <Insights data={insights} onSelect={(id, type, name) => loadNetwork(id, type, name)} />
                         )}
                       </div>
                     )}
@@ -419,27 +428,106 @@ function App() {
             animate={{ opacity: 1 }}
             className="flex flex-col h-full w-full max-w-[1920px] mx-auto px-4 py-3 gap-3 overflow-y-auto bg-slate-50/50 backdrop-blur-sm"
           >
-            {/* Stats Row */}
-            <div className="flex flex-col md:flex-row gap-3 items-stretch">
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 flex-1">
-                <StatCard label="Properties" value={stats.totalProperties} icon={<Building2 className="w-4 h-4 text-slate-400" />} />
-                <StatCard
-                  label="Portfolio Value"
-                  value={`$${(stats.totalValue / 1000000).toFixed(1)}M`}
-                  sub={`Appraised: $${(stats.totalAppraised / 1000000).toFixed(1)}M`}
-                  highlight
-                  icon={<TrendingUp className="w-4 h-4 text-blue-200" />}
-                />
-                <StatCard label="Businesses" value={networkData.businesses.length} icon={<Building2 className="w-4 h-4 text-slate-400" />} />
-                <StatCard
-                  label="Principals"
-                  value={stats.humanCount + stats.entityCount}
-                  sub={`${stats.humanCount} Human / ${stats.entityCount} Entity`}
-                  icon={<Users className="w-4 h-4 text-slate-400" />}
-                />
+
+
+            {/* Dashboard Header with Global Actions */}
+            <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm flex flex-col md:flex-row justify-between items-center gap-4">
+              <div className="flex items-center gap-4">
+                <div className="p-3 bg-slate-900 text-white rounded-xl shadow-xl shadow-slate-900/10">
+                  <TrendingUp size={24} />
+                </div>
+                <div>
+                  <h2 className="text-3xl font-black text-slate-900 tracking-tighter leading-none mb-1">
+                    {(() => {
+                      // Determine Network Manager for Header - ROBUST SYNCED LOGIC
+                      // Helper to calculate connection count
+                      const principalCounts = new Map();
+                      if (networkData.links) {
+                        networkData.links.forEach(l => {
+                          const s = String(l.source);
+                          const t = String(l.target);
+                          principalCounts.set(s, (principalCounts.get(s) || 0) + 1);
+                          principalCounts.set(t, (principalCounts.get(t) || 0) + 1);
+                        });
+                      }
+
+                      const normalizeId = (id) => {
+                        if (!id) return '';
+                        return String(id).toUpperCase().trim().replace(/[`"'.]/g, '').replace(/\s+/g, ' ');
+                      };
+
+                      const getCount = (p) => {
+                        if (!p) return 0;
+                        const candidates = new Set();
+                        if (p.id) candidates.add(String(p.id));
+                        if (p.name) {
+                          candidates.add(p.name);
+                          candidates.add(normalizeId(p.name));
+                        }
+
+                        let max = 0;
+                        candidates.forEach(c => {
+                          max = Math.max(max, principalCounts.get(c) || 0);
+                          max = Math.max(max, principalCounts.get(`principal_${c}`) || 0);
+                          max = Math.max(max, principalCounts.get(`principal_${normalizeId(c)}`) || 0);
+                        });
+
+                        // Fallback to property count if links are 0
+                        if (max === 0 && p.details?.property_count) return p.details.property_count;
+                        return max;
+                      };
+
+                      // Sort Humans then Entities
+                      const human = networkData.principals
+                        .filter(p => !p.isEntity)
+                        .sort((a, b) => getCount(b) - getCount(a));
+
+                      const entity = networkData.principals
+                        .filter(p => p.isEntity)
+                        .sort((a, b) => getCount(b) - getCount(a));
+
+                      if (human.length > 0) return human[0].name;
+                      if (entity.length > 0) return entity[0].name;
+                      return networkData.businesses[0]?.name || "Network Analysis";
+                    })()
+                    }
+                  </h2>
+
+
+                  {/* Network Profile Card moved here */}
+                  <NetworkProfileCard networkData={networkData} stats={stats} />
+                </div>
               </div>
-              {/* Stats Row End */}
+
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => {
+                    const csvContent = "data:text/csv;charset=utf-8,"
+                      + "Address,City,Owner,Assessed Value,Appraised Value\n"
+                      + networkData.properties.map(p => `"${p.location}","${p.city}","${p.owner}","${p.assessed_value}","${p.appraised_value}"`).join("\n");
+                    const encodedUri = encodeURI(csvContent);
+                    const link = document.createElement("a");
+                    link.setAttribute("href", encodedUri);
+                    link.setAttribute("download", "portfolio_export.csv");
+                    document.body.appendChild(link);
+                    link.click();
+                  }}
+                  className="px-5 py-2.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold rounded-xl transition-all flex items-center gap-2 shadow-sm"
+                >
+                  <TrendingUp size={18} />
+                  Export
+                </button>
+                <button
+                  onClick={handleReset}
+                  className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-lg shadow-blue-500/20 transition-all flex items-center gap-2"
+                >
+                  <Search size={18} />
+                  New Search
+                </button>
+              </div>
             </div>
+
+
 
             {/* Cross-Filtering & City Selection Controls - MOVED TO PROPERTY TABLE */}
 
@@ -538,7 +626,7 @@ function App() {
               {/* Left: Network List */}
               <div className="col-span-4 h-full bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
                 <div className="p-4 border-b border-slate-100 bg-slate-50/50">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">Ownership Network</h3>
+
                 </div>
                 <div className="flex-1 overflow-hidden">
                   <NetworkView
@@ -553,7 +641,7 @@ function App() {
               {/* Right: Property Table */}
               <div className="col-span-8 flex-1 overflow-auto flex flex-col min-h-0">
                 <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center shrink-0">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">Property Portfolio</h3>
+
                   <div className="text-xs font-bold text-slate-400">{filteredProperties.length} Assets</div>
                 </div>
                 <div className="flex-1 flex flex-col min-h-0 overflow-auto">
@@ -562,7 +650,6 @@ function App() {
                     highlightedEntityId={selectedEntityId}
                     onSelectProperty={setSelectedProperty}
                     onMapSelected={setSelectedMapProperties}
-                    onAiDigest={aiEnabled ? () => setShowAnalysis(true) : null}
 
                     // Filter Props
                     cities={allCities}
@@ -588,18 +675,22 @@ function App() {
             type={selectedDetailEntity?.type}
             networkData={networkData}
             onNavigate={(entity, type) => setSelectedDetailEntity({ entity, type })}
+            onViewProperty={setSelectedProperty}
             onClose={() => setSelectedDetailEntity(null)}
           />
 
-          <NetworkAnalysisModal
-            isOpen={showAnalysis}
-            onClose={() => setShowAnalysis(false)}
-            networkData={networkData}
-            stats={stats}
-          />
           <AboutModal
             isOpen={showAbout}
             onClose={() => setShowAbout(false)}
+            onShowFreshness={() => {
+              setShowAbout(false);
+              setShowFreshness(true);
+            }}
+            networkData={networkData}
+          />
+          <FreshnessModal
+            isOpen={showFreshness}
+            onClose={() => setShowFreshness(false)}
           />
           <MultiPropertyMapModal
             properties={selectedMapProperties}
@@ -610,5 +701,6 @@ function App() {
     </div >
   );
 }
+
 
 export default App;

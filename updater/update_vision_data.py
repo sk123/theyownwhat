@@ -1,3 +1,4 @@
+import threading
 import os
 import time
 import psycopg2
@@ -10,10 +11,10 @@ import urllib3
 import concurrent.futures
 from requests.compat import urljoin
 import sys
-import argparse
-import traceback
-import pandas as pd
 from io import StringIO
+import argparse
+# Add scripts directory to path for sibling imports
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 # Suppress only the single InsecureRequestWarning from urllib3 needed for this script
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -22,8 +23,8 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 DATABASE_URL = os.environ.get("DATABASE_URL")
 VISION_BASE_URL = "https://www.vgsi.com"
 CONNECTICUT_DATABASE_URL = f"{VISION_BASE_URL}/connecticut-online-database/"
-MAX_WORKERS = 6  # Workers for streets *within* one municipality OR for direct URL scraping
-DEFAULT_MUNI_WORKERS = 4 # How many municipalities to process in parallel
+MAX_WORKERS = 20  # Increased workers for faster scraping
+DEFAULT_MUNI_WORKERS = 8 # Process more municipalities in parallel
 
 # --- Municipality-specific data sources ---
 MUNICIPAL_DATA_SOURCES = {
@@ -31,33 +32,15 @@ MUNICIPAL_DATA_SOURCES = {
 
 # ... inside MUNICIPAL_DATA_SOURCES dictionary ...
     "HARTFORD": {
-        "type": "arcgis_csv",
-        "url": "https://hub.arcgis.com/api/v3/datasets/8b4937b538f14e838c08ed86838c493b_42/downloads/data?format=csv&spatialRefId=2234&where=1%3D1",
-        "column_mapping": {
-            "OwnerFullName": "owner",
-            "LastSalePrice": "sale_amount", 
-            "LastSaleDate": "sale_date",
-            "TotApprsdValue": "appraised_value",
-            "StreetNumberFrom": "address_number", 
-            "StreetName": "street_name",
-            "CondoNumber": "unit",
-            "AccountNumber": "account_number",
-            "PARCELNUMBER": "serial_number",
-            "GIS_PIN": "gis_tag",
-            "YearBuilt": "year_built",
-            "TotAcreage": "acres",
-            "LUCDescription": "property_type",
-            "TotFinishdArea": "living_area",
-            "Zip10": "property_zip",
-            "LivingUnits": "number_of_units",
-            "Zoning": "zone"
-        }
+        'type': 'ct_geodata_csv',
+        'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0',
+        'town_filter': 'Hartford'
     },
 # ...
     # Add more municipalities here as needed
     'ANSONIA': {'type': 'MAPXPRESS', 'domain': 'ansonia.mapxpress.net'},
     'BEACON FALLS': {'type': 'MAPXPRESS', 'domain': 'beaconfalls.mapxpress.net'},
-    'BERLIN': {'type': 'MAPXPRESS', 'domain': 'berlin.mapxpress.net'},
+    # 'BERLIN': {'type': 'MAPXPRESS', 'domain': 'berlin.mapxpress.net'},
     'BETHANY': {'type': 'MAPXPRESS', 'domain': 'bethany.mapxpress.net'},
     'BETHLEHEM': {'type': 'MAPXPRESS', 'domain': 'bethlehem.mapxpress.net'},
     'BRIDGEPORT': {'type': 'MAPXPRESS', 'domain': 'metrocog.mapxpress.net/Bridgeport'},
@@ -143,7 +126,45 @@ MUNICIPAL_DATA_SOURCES = {
     'WINDSOR LOCKS': {'type': 'PROPERTYRECORDCARDS', 'towncode': '165'},
     'WOODBRIDGE': {'type': 'PROPERTYRECORDCARDS', 'towncode': '167'},
     'WOODBURY': {'type': 'PROPERTYRECORDCARDS', 'towncode': '168'},
+    # CT Geodata Portal (Statewide 2025)
+    # 'NEW HAVEN': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'New Haven'},
+    'WATERBURY': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Waterbury'},
+    'BRIDGEPORT': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Bridgeport'},
+    'HARTFORD': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Hartford'},
+    'STAMFORD': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Stamford'},
+    'NORWALK': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Norwalk'},
+    'DANBURY': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Danbury'},
+    'NEW BRITAIN': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'New Britain'},
+    # 'WEST HARTFORD': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'West Hartford'},
+    'GREENWICH': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Greenwich'},
+    'HAMDEN': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Hamden'},
+    'MERIDEN': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Meriden'},
+    'BRISTOL': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Bristol'},
+    'WEST HAVEN': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'West Haven'},
+    'MIDDLETOWN': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Middletown'},
+    'ENFIELD': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Enfield'},
+    'MILFORD': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Milford'},
+    'STRATFORD': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Stratford'},
+    'EAST HARTFORD': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'East Hartford'},
+    'MANCHESTER': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Manchester'},
+    'CLINTON': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Clinton'},
+    'EAST HAMPTON': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'East Hampton'},
+    'CROMWELL': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Cromwell'},
+    'OLD LYME': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Old Lyme'},
+    'ESSEX': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Essex'},
+    'LYME': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Lyme'},
+    'NORWICH': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Norwich'},
+    'GROTON': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Groton'},
+    'SOUTHINGTON': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Southington'},
+    'WALLINGFORD': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Wallingford'},
+    'SHELTON': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Shelton'},
+    'TORRINGTON': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Torrington'},
+    'TRUMBULL': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Trumbull'},
 }
+
+# --- Shared Cache for Large CSVs ---
+GEODATA_CACHE = {}
+GEODATA_LOCK = threading.Lock()
 
 # --- Logging ---
 def log(message):
@@ -397,12 +418,23 @@ def process_arcgis_data(df, column_mapping, municipality_name):
                         elif pd.notna(value):
                             property_data[target_col] = str(value).strip()
             
-            # --- Auto-Calculate Assessed Value (70% Rule) ---
-            if 'appraised_value' in property_data and 'assessed_value' not in property_data:
-                 property_data['assessed_value'] = property_data['appraised_value'] * 0.70
+            # --- Auto-Calculate missing values ---
+            if 'appraised_value' in property_data and property_data['appraised_value'] > 0:
+                if 'assessed_value' not in property_data or not property_data['assessed_value']:
+                    property_data['assessed_value'] = round(property_data['appraised_value'] * 0.70, 2)
+            elif 'assessed_value' in property_data and property_data['assessed_value'] > 0:
+                if 'appraised_value' not in property_data or not property_data['appraised_value']:
+                    property_data['appraised_value'] = round(property_data['assessed_value'] / 0.70, 2)
 
             # Only store if we have meaningful data
             if len(property_data) >= 2:  # At least owner and one other field
+                # Fallback: Inference for missing unit
+                if 'unit' not in property_data or not property_data['unit']:
+                    import re
+                    m = re.search(r'\s([A-Z]|\d{1,4})$', full_address)
+                    if m:
+                        property_data['unit'] = m.group(1)
+
                 if normalized_address not in processed_data:
                     processed_data[normalized_address] = []
                 processed_data[normalized_address].append(property_data)
@@ -489,6 +521,198 @@ def process_municipality_with_arcgis(conn, municipality_name, data_source_config
     log(f"Finished {municipality_name}. Updated {updated_count} of {len(db_properties)} properties.")
     return updated_count
 
+# --- NEW: CT Geodata CSV Handler ---
+def download_ct_geodata_csv(url):
+    """Downloads (or loads from local file) and caches CT Geodata CSV."""
+    with GEODATA_LOCK:
+        if url in GEODATA_CACHE:
+            return GEODATA_CACHE[url]
+        
+        log(f"Loading CT Geodata CSV from source...")
+        try:
+            # Check for local cache first (pre-downloaded for speed/stability)
+            local_path = "/tmp/ct_geodata.csv"
+            if "geodata.ct.gov" in url and os.path.exists(local_path):
+                log(f"  -> Using local file: {local_path}")
+                df = pd.read_csv(local_path, low_memory=False)
+            else:
+                log(f"  -> Downloading from: {url}")
+                headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+                response = requests.get(url, headers=headers, timeout=300)
+                response.raise_for_status()
+                df = pd.read_csv(StringIO(response.text), low_memory=False)
+            
+            GEODATA_CACHE[url] = df
+            log(f"Successfully loaded {len(df)} records into cache.")
+            return df
+        except Exception as e:
+            log(f"Error loading CT Geodata CSV: {e}")
+            return None
+
+def process_municipality_with_ct_geodata(conn, municipality_name, config, current_owner_only=False, force_process=False):
+    """Process municipality using CT Geodata CSV."""
+    log(f"--- Processing {municipality_name} via CT Geodata CSV ---")
+    
+    # 1. Get properties
+    if current_owner_only:
+        db_properties = get_unprocessed_current_owner_properties(conn, municipality_name, force_process)
+    else:
+        db_properties = get_unprocessed_properties(conn, municipality_name, force_process)
+    
+    if not db_properties:
+        log(f"No properties to process for {municipality_name}.")
+        return 0
+    
+    # 2. Get CSV
+    df_all = download_ct_geodata_csv(config['url'])
+    if df_all is None: return 0
+    
+    # 3. Filter for this town
+    town_filter = config.get('town_filter', municipality_name)
+    df = df_all[df_all['Town Name'].str.upper() == town_filter.upper()].copy()
+    log(f"Found {len(df)} records for {town_filter}")
+    
+    # 4. Map columns
+    # OBJECTID,Town Name,Location,CAMA_Link,Parcel_ID,Parcel Type,Unit_Type,Link,Collection_year,Editor,Editor Comment,Edit_Date,Link_From_CAMA,Location_CAMA,Property_City,Property_Zip,Owner,Co_Owner,Mailing_Address,Mailing_City,Mailing_State,Mailing_Zip,Assessed_Total,Assessed_Land,Assessed_Building,Pre_Yr_Assessed_Total,Appraised_Land,Appraised_Building,Appraised_Outbuilding,Valuation_Year,Land_Acres,Zone,State_Use,State_Use_Description,EYB,AYB,Model,Condition,Living_Area,Effective_Area,Total_Rooms,Number_of_Bedroom,Number_of_Baths,Number_of_Half_Baths,Sale_Price,Sale_Date,Prior_Sale_Date,Prior_Book_Page,Prior_Sale_Price,Occupancy,FIPS Code,CouncilsOfGovernments,Shape__Area,Shape__Length
+    
+    mapping = {
+        'Owner': 'owner',
+        'Co_Owner': 'co_owner',
+        'Assessed_Total': 'assessed_value',
+        'Land_Acres': 'acres',
+        'Zone': 'zone',
+        'State_Use_Description': 'property_type',
+        'AYB': 'year_built',
+        'Living_Area': 'living_area',
+        'Sale_Price': 'sale_amount',
+        'Sale_Date': 'sale_date',
+        'Mailing_Address': 'mailing_address',
+        'Mailing_City': 'mailing_city',
+        'Mailing_State': 'mailing_state',
+        'Mailing_Zip': 'mailing_zip',
+        'CAMA_Link': 'cama_site_link',
+        'Location': 'location',
+        'Unit_Type': 'unit',
+        'Occupancy': 'number_of_units'
+    }
+    
+    # Pre-calculate appraised_value
+    df['appraised_value'] = df[['Appraised_Land', 'Appraised_Building', 'Appraised_Outbuilding']].sum(axis=1)
+    
+    # Custom process data logic
+    processed_data = {}
+    for _, row in df.iterrows():
+        try:
+            loc1 = str(row.get('Location', '')).strip()
+            loc2 = str(row.get('Location_CAMA', '')).strip()
+            
+            # Heuristic: Pick the one that looks more like a full address (New Haven fix)
+            # If both are just "93" or numeric, try to recover from Mailing Address or Owner Name
+            if loc1.isdigit() and len(loc1) < 4:
+                # "93" artifact case
+                if pd.notna(row.get('Mailing_Address')) and str(row.get('Mailing_City')).upper() == 'NEW HAVEN':
+                     loc = str(row['Mailing_Address']).strip()
+                elif pd.notna(row.get('Owner')):
+                     # Try to extract address from Owner if it looks like "123 MAIN ST LLC"
+                     owner = str(row['Owner']).upper()
+                     if ' LLC' in owner:
+                         possible_addr = owner.split(' LLC')[0]
+                         if possible_addr[0].isdigit():
+                             loc = possible_addr
+                else:
+                     loc = loc2 if len(loc2) > len(loc1) else loc1
+            elif len(loc2) > len(loc1) and ' ' in loc2:
+                loc = loc2
+            elif len(loc1) > 0:
+                loc = loc1
+            else:
+                loc = loc2
+                
+            if not loc: continue
+            
+            norm_addr = normalize_address_for_matching(loc)
+            
+            p_data = {}
+            for src, target in mapping.items():
+                val = row.get(src)
+                if pd.notna(val):
+                    if target == 'sale_date':
+                         try: p_data[target] = pd.to_datetime(val).date()
+                         except: pass
+                    else:
+                         p_data[target] = val
+            
+            p_data['appraised_value'] = row['appraised_value']
+            
+            # --- Auto-Calculate missing values (70% Rule) ---
+            if p_data.get('appraised_value', 0) > 0:
+                if 'assessed_value' not in p_data or not p_data['assessed_value']:
+                    p_data['assessed_value'] = round(p_data['appraised_value'] * 0.70, 2)
+            elif p_data.get('assessed_value', 0) > 0:
+                if 'appraised_value' not in p_data or not p_data['appraised_value']:
+                    p_data['appraised_value'] = round(p_data['assessed_value'] / 0.70, 2)
+            
+            if 'cama_site_link' not in p_data and pd.notna(row.get('Link_From_CAMA')):
+                p_data['cama_site_link'] = row['Link_From_CAMA']
+
+            # Fallback: Inference for missing unit
+            if 'unit' not in p_data or not p_data['unit']:
+                import re
+                m = re.search(r'\s([A-Z]|\d{1,4})$', loc)
+                if m:
+                    p_data['unit'] = m.group(1)
+
+            if norm_addr not in processed_data: processed_data[norm_addr] = []
+            processed_data[norm_addr].append(p_data)
+        except: continue
+        
+    # 5. Update DB
+    updated_count = 0
+    processed_count = 0
+    for prop_id, prop_location, _ in db_properties:
+        processed_count += 1
+        if not prop_location: 
+            mark_property_processed_today(conn, prop_id)
+            continue
+            
+        norm_addr = normalize_address_for_matching(prop_location)
+        matches = processed_data.get(norm_addr)
+        if matches:
+            v_data = matches[0] 
+            if update_property_in_db(conn, prop_id, v_data):
+                updated_count += 1
+        mark_property_processed_today(conn, prop_id)
+        
+        if processed_count % 100 == 0:
+            log(f"    -> Progress for {municipality_name}: {processed_count}/{len(db_properties)}, updated {updated_count}...")
+        
+    log(f"Finished {municipality_name}. Updated {updated_count}.")
+
+    # --- NEW: Hartford Enrichment Trigger ---
+    if municipality_name.upper() == 'HARTFORD':
+        try:
+            from api.hartford_enrichment import run_enrichment
+            log("  -> Triggering Hartford Unit Enrichment (Multi-Threaded Backfill)...")
+            enriched = run_enrichment()
+            log(f"  -> Hartford Enrichment Complete. Enriched {enriched} properties.")
+        except Exception as e:
+            log(f"  -> Error triggering Hartford enrichment: {e}")
+
+    # --- NEW: Unit Collapse Detection ---
+    potential_collapses = []
+    for addr, rows in processed_data.items():
+        if len(rows) > 30: # Heuristic: More than 30 units matching one address record is suspicious
+            potential_collapses.append(f"{addr} ({len(rows)} records)")
+    
+    if potential_collapses:
+        log(f"  [WARNING] Unit Collapse potential detected for {municipality_name} in source data:")
+        for pc in potential_collapses[:5]: # Show top 5
+            log(f"    - {pc}")
+        if len(potential_collapses) > 5:
+            log(f"    - ... and {len(potential_collapses) - 5} more")
+
+    return updated_count
+
 def parse_mapxpress_html(html_content):
     """Parses MapXpress property detail HTML."""
     from bs4 import BeautifulSoup
@@ -533,6 +757,13 @@ def parse_mapxpress_html(html_content):
                              except: pass
                          elif "Zone" == text or "Zoning" == text: # Guessing
                              data['zone'] = val
+                         elif "Unit" in text or "Apt" in text:
+                             data['unit'] = val
+                         elif "Unit" in text or "Apt" in text:
+                             data['unit'] = val
+                         elif "Occupancy" in text:
+                             try: data['number_of_units'] = int(float(val))
+                             except: pass
     
     # Try to find Appraisal/Assessment if available (not in snippet but might be elsewhere)
     # Usually in a summary table at top.
@@ -685,7 +916,8 @@ def parse_propertyrecordcards_html(html_content):
         'Living Area:': 'living_area',
         'Year Built:': 'year_built',
         'Style:': 'property_type',
-        'Use Code:': 'property_type' # Fallback
+        'Use Code:': 'property_type', # Fallback
+        'Unit:': 'unit'
     }
     
     tables = soup.find_all('table')
@@ -738,6 +970,16 @@ def scrape_propertyrecordcards_property(session, base_url_template, row):
         if resp.status_code == 200:
             scraped_data = parse_propertyrecordcards_html(resp.text)
             if scraped_data: # Ensure we actually got some data
+                # Fallback: If unit is missing, try to infer from location
+                if 'unit' not in scraped_data or not scraped_data['unit']:
+                    # Extract unit from location if predictable (Space + Single Letter or Digits)
+                    # Regex: Space followed by (Single Uppercase Letter OR 1-4 Digits) at end of string
+                    # Excludes street suffixes like AV, RD, ST (2 letters).
+                    import re # Ensure re is available (module level usually imports it but safer here)
+                    m = re.search(r'\s([A-Z]|\d{1,4})$', location)
+                    if m:
+                         scraped_data['unit'] = m.group(1)
+
                 scraped_data['cama_site_link'] = target_url
                 return prop_id, scraped_data, None
             else:
@@ -907,8 +1149,10 @@ def normalize_address(address):
 
 def scrape_individual_property_page(prop_page_url, session, referer):
     """Scrapes data from a single property detail page."""
+    # print(f"DEBUG: START Scraping {prop_page_url}", flush=True) # Commented out to avoid spam, uncomment if needed
     try:
-        time.sleep(0.4)  # Respectful delay
+        # User requested silence, but I need to see errors.
+        # time.sleep(0.4)  # Respectful delay
         headers = {
             'Referer': referer,
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -916,30 +1160,105 @@ def scrape_individual_property_page(prop_page_url, session, referer):
         response = session.get(prop_page_url, verify=False, timeout=20, headers=headers)
         response.raise_for_status()
         soup = BeautifulSoup(response.content, 'html.parser')
+        # print(f"DEBUG: Scraped URL {prop_page_url} - Payload Size: {len(response.content)} - Title: {soup.title.text.strip() if soup.title else 'No Title'}", flush=True)
 
-        data = {}
+    except Exception as e:
+        print(f"DEBUG: EXCEPTION fetching {prop_page_url}: {e}", flush=True)
+        return None
+
+    data = {}
+    
+    # Vision Appraisal specific selectors (primary strategy)
+    selectors = {
+        'owner': ['span[id*="lblGenOwner"]', 'span[id*="lblOwner"]'],
+        'sale_amount': ['span[id*="lblPrice"]'],
+        'sale_date': ['span[id*="lblSaleDate"]'],
+        'assessed_value': ['*[id*="lblGenAssessment"]', '*[id="MainContent_lblGenAssessment"]'],
+        'appraised_value': ['*[id*="lblGenAppraisal"]', '*[id="MainContent_lblGenAppraisal"]'],
+        'unit': ['*[id*="lblUnit"]', '*[id*="lblApt"]', '*[id*="lblSuite"]'],
+        'building_photo': ['img[id*="imgPhoto"]', 'img[id*="MainContent_imgPhoto"]'],
+        'location': ['*[id="MainContent_lblLocation"]', '*[id*="lblLocation"]', '*[id*="lblGenLocation"]'],
+        'property_type': ['span[id*="lblUseCode"]', 'span[id*="lblGenUseCode"]']
+    }
+    
+    # Add a specific check for "Occupancy" and "Style" in the attributes table
+    for label in ['Occupancy', 'Style']:
+        label_td = soup.find('td', string=re.compile(f'^{label}$', re.IGNORECASE))
+        if not label_td:
+             label_td = soup.find(lambda tag: tag.name == 'td' and label.lower() in tag.text.lower().strip())
         
-        # Vision Appraisal specific selectors (primary strategy)
-        selectors = {
-            'owner': ['span[id*="lblGenOwner"]', 'span[id*="lblOwner"]'],
-            'sale_amount': ['span[id*="lblPrice"]'],
-            'sale_date': ['span[id*="lblSaleDate"]'],
-            'assessed_value': ['span[id*="lblGenAssessment"]', 'span#MainContent_lblGenAssessment'],
-            'appraised_value': ['span[id*="lblGenAppraisal"]', 'span#MainContent_lblGenAppraisal']
+        if label_td:
+            val_td = label_td.find_next_sibling('td')
+            if val_td:
+                val_text = val_td.text.strip()
+                if label == 'Occupancy':
+                    try:
+                        data['number_of_units'] = int(float(val_text))
+                    except ValueError:
+                        pass
+                elif label == 'Style':
+                    data['property_type'] = val_text
+    
+    for field, field_selectors in selectors.items():
+        for selector in field_selectors:
+            element = soup.select_one(selector)
+            if not element:
+                continue
+            
+            if field == 'building_photo':
+                img_src = element.get('src')
+                if img_src:
+                    data[field] = urljoin(prop_page_url, img_src)
+            elif element.text.strip():
+                text = element.text.strip()
+                if field == 'owner':
+                    data[field] = text
+                elif field == 'location':
+                    data[field] = text
+                elif field in ['sale_amount', 'assessed_value', 'appraised_value']:
+                    cleaned = re.sub(r'[$,]', '', text)
+                    if cleaned.replace('.', '', 1).replace('-', '').isdigit():
+                        value = float(cleaned)
+                        if value > 0:
+                            data[field] = value
+                elif field == 'sale_date':
+                    try:
+                        data[field] = datetime.strptime(text, '%m/%d/%Y').date()
+                    except ValueError:
+                        pass
+                if field in data:
+                    break
+    
+    # Fallback strategy: Generic table/dl search
+    if len(data) < 2:
+        fallback_keywords = {
+            'owner': 'Owner',
+            'sale_amount': 'Sale Price',
+            'sale_date': 'Sale Date',
+            'assessed_value': 'Assessment',
+            'appraised_value': 'Appraisal',
+            'location': 'Location',
+            'unit': 'Unit'
         }
-        
-        for field, field_selectors in selectors.items():
-            for selector in field_selectors:
-                element = soup.select_one(selector)
-                if element and element.text.strip():
-                    text = element.text.strip()
+
+        for field, keyword in fallback_keywords.items():
+            if field in data:
+                continue
+
+            keyword_element = soup.find(['td', 'dt'], string=re.compile(f'^{re.escape(keyword)}', re.IGNORECASE))
+            if not keyword_element:
+                 keyword_element = soup.find(['td', 'dt'], string=re.compile(f'{re.escape(keyword)}', re.IGNORECASE))
+                 
+            if keyword_element:
+                next_element = keyword_element.find_next_sibling(['td', 'dd'])
+                if next_element and next_element.text.strip():
+                    text = next_element.text.strip()
                     if field == 'owner':
                         data[field] = text
                     elif field in ['sale_amount', 'assessed_value', 'appraised_value']:
                         cleaned = re.sub(r'[$,]', '', text)
                         if cleaned.replace('.', '', 1).replace('-', '').isdigit():
                             value = float(cleaned)
-                            # Only store meaningful monetary values
                             if value > 0:
                                 data[field] = value
                     elif field == 'sale_date':
@@ -947,46 +1266,31 @@ def scrape_individual_property_page(prop_page_url, session, referer):
                             data[field] = datetime.strptime(text, '%m/%d/%Y').date()
                         except ValueError:
                             pass
-                    if field in data:
-                        break
-        
-        # Fallback strategy: Generic table search
-        if len(data) < 2:  # If we didn't get much data, try fallback
-            fallback_keywords = {
-                'owner': 'Owner',
-                'sale_amount': 'Sale Price',
-                'sale_date': 'Sale Date',
-                'assessed_value': 'Assessment',
-                'appraised_value': 'Appraisal'
-            }
+    
+    if 'location' in data and 'unit' not in data:
+        loc = data['location'].strip()
+        match = re.search(r'(?:,|,\s*|\s+)(?:UNIT|#|APT|STE|SUITE|#UD|FL|FLOOR|RM|ROOM)\.?\s*([A-Z0-9-]+)$', loc, re.IGNORECASE)
+        if match:
+            data['unit'] = match.group(1)
+        else:
+            parts = loc.split()
+            if len(parts) > 1:
+                last_part = parts[-1]
+                reserved = {
+                    'N', 'S', 'E', 'W', 'NE', 'NW', 'SE', 'SW', 'NORTH', 'SOUTH', 'EAST', 'WEST',
+                    'ST', 'AVE', 'RD', 'CT', 'BLVD', 'LN', 'DR', 'WAY', 'PL', 'TER', 'CIR', 'HWY', 'PKWY', 'TPKE', 'EXT',
+                    'STREET', 'AVENUE', 'ROAD', 'COURT', 'BOULEVARD', 'LANE', 'DRIVE', 'PLACE', 'TERRACE', 'CIRCLE'
+                }
+                if last_part.upper() not in reserved and len(last_part) < 6 and re.match(r'^[A-Z0-9]+$', last_part):
+                    data['unit'] = last_part
 
-            for field, keyword in fallback_keywords.items():
-                if field in data:
-                    continue
-
-                keyword_element = soup.find(['td', 'dt'], string=re.compile(f'{re.escape(keyword)}', re.IGNORECASE))
-                if keyword_element:
-                    next_element = keyword_element.find_next_sibling(['td', 'dd'])
-                    if next_element and next_element.text.strip():
-                        text = next_element.text.strip()
-                        if field == 'owner':
-                            data[field] = text
-                        elif field in ['sale_amount', 'assessed_value', 'appraised_value']:
-                            cleaned = re.sub(r'[$,]', '', text)
-                            if cleaned.replace('.', '', 1).replace('-', '').isdigit():
-                                value = float(cleaned)
-                                if value > 0:
-                                    data[field] = value
-                        elif field == 'sale_date':
-                            try:
-                                data[field] = datetime.strptime(text, '%m/%d/%Y').date()
-                            except ValueError:
-                                pass
-        
-        return data if data else None
-
-    except Exception:
+    if 'location' not in data or not data['location']:
         return None
+    if 'owner' not in data or not data['owner']:
+        return None
+        
+    return data if data else None
+
 
 def scrape_street_properties(street_link, municipality_url, referer):
     """Scrapes all properties on a single street page."""
@@ -1000,6 +1304,11 @@ def scrape_street_properties(street_link, municipality_url, referer):
             soup = BeautifulSoup(response.content, 'html.parser')
             
             prop_links = soup.select("a[href*='.aspx?pid='], a[href*='.aspx?acct=']")
+            # print(f"DEBUG: Street {street_link} found {len(prop_links)} property links.", flush=True) # Too verbose? yes.
+            # Log only if 0? No, log first few.
+            if len(prop_links) == 0:
+                 print(f"DEBUG: Street {street_link} found 0 property links. Status: {response.status_code}. Content Len: {len(response.text)}. Title: {soup.title}. History: {response.history}", flush=True)
+
             for prop_link in prop_links:
                 raw_address = prop_link.text.strip()
                 # Clean address: remove "Mblu:" and other extraneous data
@@ -1010,9 +1319,20 @@ def scrape_street_properties(street_link, municipality_url, referer):
                 if not href or not address:
                     continue
                 
-                prop_page_url = urljoin(municipality_url, href)
+                # Filter out malformed links like "Map.aspx?pid=" or "Parcel.aspx?pid=" without a value
+                if re.search(r'(pid|acct)=\s*$', href, re.I):
+                    continue
                 
+                prop_page_url = urljoin(municipality_url, href)
+                # print(f"DEBUG: Scraping property {prop_page_url}", flush=True)
                 prop_details = scrape_individual_property_page(prop_page_url, session, street_link)
+                
+                if prop_details:
+                    # print(f"DEBUG: Scraped {prop_details.get('location')}", flush=True)
+                    street_props[address] = prop_details
+                else:
+                    print(f"DEBUG: Failed to scrape details for {prop_page_url}. ", flush=True)
+                
                 if prop_details:
                     # *** KEY ADDITION ***
                     # Add the specific parcel URL to the data dict so it can be saved in the DB
@@ -1037,7 +1357,12 @@ def scrape_all_properties_by_address(municipality_url, municipality_name):
             response.raise_for_status()
             soup = BeautifulSoup(response.content, 'html.parser')
             
-            letter_links = { urljoin(municipality_url, a['href']) for a in soup.select("a[href^='Streets.aspx?Letter=']") }
+            # More robust selector: any link containing Streets.aspx?Letter=
+            letter_links = { urljoin(municipality_url, a['href']) for a in soup.find_all('a', href=re.compile(r'Streets\.aspx\?Letter=', re.I)) }
+            if not letter_links:
+                 # Fallback: maybe just Letter=
+                 letter_links = { urljoin(municipality_url, a['href']) for a in soup.find_all('a', href=re.compile(r'Letter=', re.I)) }
+            
             if not letter_links:
                 log(f"  -> No A-Z letter links found for {municipality_name}.")
                 return {}
@@ -1047,50 +1372,153 @@ def scrape_all_properties_by_address(municipality_url, municipality_name):
 
         log(f"  -> Found {len(letter_links)} letter pages to scan for {municipality_name}.")
 
-        for letter_link in sorted(list(letter_links)):
-            letter = re.search(r'Letter=([A-Z])', letter_link).group(1) if re.search(r'Letter=([A-Z])', letter_link) else '?'
-            
+        # --- OPTIMIZATION: Discover ALL streets for ALL letters in parallel ---
+        all_street_links = []
+        
+        def get_streets_for_letter(letter_link):
+            """Helper to fetch street links for a single letter."""
+            local_streets = []
             try:
-                time.sleep(0.5)
-                response = main_session.get(letter_link, verify=False, timeout=20, headers={'Referer': street_list_base_url})
-                soup = BeautifulSoup(response.content, 'html.parser')
-                street_links = [ urljoin(municipality_url, a['href']) for a in soup.select("a[href^='Streets.aspx?Name=']") ]
+                # We need a new session or at least careful error handling per thread if we reused one.
+                # Since this is low volume (26 requests), simple requests.get is fine or we create a session.
+                # Reuse main_session with caution or just new requests.
+                # Let's use a new request to be thread-safe/simple.
+                with requests.Session() as s:
+                    s.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
+                    resp = s.get(letter_link, verify=False, timeout=20, headers={'Referer': street_list_base_url})
+                    l_soup = BeautifulSoup(resp.content, 'html.parser')
+                    
+                    # More robust selector: any link containing Streets.aspx?Name=
+                    links = [ urljoin(municipality_url, a['href']) for a in l_soup.find_all('a', href=re.compile(r'Streets\.aspx\?Name=', re.I)) ]
+                    if not links:
+                        # Fallback: maybe just Name=
+                        links = [ urljoin(municipality_url, a['href']) for a in l_soup.find_all('a', href=re.compile(r'Name=', re.I)) ]
+                    return (letter_link, links)
             except Exception as e:
-                log(f"  -> Failed to get streets for letter {letter}: {e}")
-                continue
+                return (letter_link, [])
 
-            if not street_links: 
-                continue
+        log(f"  -> discovering streets across {len(letter_links)} letters in parallel...")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            future_to_letter = {executor.submit(get_streets_for_letter, link): link for link in letter_links}
+            for future in concurrent.futures.as_completed(future_to_letter):
+                ll, s_links = future.result()
+                if s_links:
+                    all_street_links.extend([(link, ll) for link in s_links]) # Tuple of (StreetLink, Referer)
+
+        log(f"  -> Total streets discovered: {len(all_street_links)}. Starting massive parallel scrape...")
+
+        # --- PROCESS ALL STREETS ---
+        # Shuffle slightly to reduce contention on specific letter pages if that matters? 
+        # Probability low. Just submit all.
+        
+        chunk_size = 500
+        total_processed = 0
+        
+        # We can submit ALL, but for huge lists, maybe chunking helps avoid memory spikes?
+        # 1000 streets is fine.
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            # We pass the specific letter link as referer for each street
+            future_to_street = {executor.submit(scrape_street_properties, s_link, municipality_url, referer): s_link for s_link, referer in all_street_links}
             
-            log(f"  ->  Processing {len(street_links)} streets for letter '{letter}'...")
-            with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                future_to_street = {executor.submit(scrape_street_properties, link, municipality_url, letter_link): link for link in street_links}
-                for future in concurrent.futures.as_completed(future_to_street):
-                    street_data = future.result()
-                    if street_data:
-                        all_props_data.update(street_data)
+            for i, future in enumerate(concurrent.futures.as_completed(future_to_street)):
+                street_data = future.result()
+                if street_data:
+                    all_props_data.update(street_data)
+                
+                if (i + 1) % 50 == 0:
+                    log(f"  -> [Progress] Scraped {i + 1}/{len(all_street_links)} streets...")
 
     log(f"  -> Scraped {len(all_props_data)} properties total for {municipality_name}.")
     return all_props_data
 
 # --- Database & Matching Functions ---
-def update_property_in_db(conn, property_db_id, vision_data):
-    """Updates a property record in the database with new information."""
+def update_property_in_db(conn, property_db_id, vision_data, restricted_mode=False):
+    """
+    Updates a property record in the database with new information.
+    restricted_mode (bool): If True, only update fields that are currently empty or 'Current Owner'.
+                            Exceptions: 'cama_site_link', 'building_photo', 'unit', 'unit_cut' are always updated.
+    """
     if not vision_data or not any(v is not None for v in vision_data.values()): 
         return False
+
+    # Fetch current state if in restricted mode
+    current_state = {}
+    if restricted_mode:
+        try:
+            with conn.cursor() as cursor:
+                # Fetch only the columns we might want to update (plus owner for the 'Current Owner' check)
+                # We can construct the SELECT dynamically based on vision_data keys
+                cols_to_fetch = [k for k in vision_data.keys() if k in ['owner', 'sale_amount', 'sale_date', 'assessed_value', 'appraised_value', 'year_built', 'living_area', 'property_type', 'acres', 'zone', 'location', 'number_of_units']]
+                # Always fetch account_number to check if property was enriched
+                if 'account_number' not in cols_to_fetch:
+                    cols_to_fetch.append('account_number')
+
+                select_sql = sql.SQL("SELECT {} FROM properties WHERE id = %s").format(
+                    sql.SQL(", ").join(map(sql.Identifier, cols_to_fetch))
+                )
+                cursor.execute(select_sql, (property_db_id,))
+                row = cursor.fetchone()
+                if row:
+                    current_state = dict(zip(cols_to_fetch, row))
+                else:
+                    return False # ID not found?
+        except psycopg2.Error as e:
+            log(f"DB fetch error for property ID {property_db_id}: {e}")
+            return False
 
     update_fields = []
     values = []
     
-    # Dynamically build update query from the vision_data dict keys
-    # This now automatically handles 'cama_site_link' if it's in the dict
-    for key, value in vision_data.items():
-        if value is not None:
-            # Assume key is a valid column name (like 'owner', 'sale_date', 'cama_site_link')
-            update_fields.append(sql.SQL(f"{key} = %s"))
-            values.append(value)
+    # Fields that ARE NEVER allowed to be overwritten by the scraper if they already have data
+    # unless the new data is substantially "better" (not handled automatically here)
+    PROTECTED_FIELDS = {
+        'latitude', 'longitude', 'normalized_address', 
+        'unit', 'unit_cut', 'owner', 'co_owner', 'location', 'account_number'
+    }
+
+    for key, new_value in vision_data.items():
+        if new_value is None or str(new_value).strip() == '':
+            continue
+            
+        should_update = True
+        current_val = current_state.get(key)
+        
+        # 1. Placeholder logic: Always update if current is placeholder
+        is_placeholder = (
+            current_val is None or
+            str(current_val).strip() == '' or 
+            str(current_val).strip().upper() in ['CURRENT OWNER', 'NULL', 'NONE'] or
+            (key == 'location' and str(current_val).strip().replace(' ', '').isdigit() and len(str(current_val).strip()) < 6)
+        )
+
+        # 2. Field-specific logic
+        if key in PROTECTED_FIELDS:
+            # Special logic for enriched data (Hartford)
+            # If account_number is set, we consider the current unit/location to be high-quality
+            if current_state.get('account_number') and key in ['unit', 'location']:
+                should_update = False
+            
+            # Standard protection: Only update if it's currently a placeholder
+            elif not is_placeholder:
+                # Special Case: If new owner is "Current Owner", do NOT overwrite a specific name
+                if 'OWNER' in key.upper() and str(new_value).strip().upper() == 'CURRENT OWNER':
+                    should_update = False
+                else:
+                    # If we already have data, skip unless restricted_mode is false and we explicitly want to overwrite
+                    if restricted_mode:
+                        should_update = False
+        
+        if should_update:
+            print(f"DEBUG DB: Planning to update field {key} to {new_value} (current: {current_val})", flush=True)
+            update_fields.append(sql.SQL("{} = %s").format(sql.Identifier(key)))
+            values.append(new_value)
+        else:
+            # print(f"DEBUG DB: Skipping field {key} because should_update is False", flush=True)
+            pass
     
-    if not update_fields: 
+    if not update_fields:
+        print(f"DEBUG DB: No fields to update for property {property_db_id}", flush=True)
         return False
 
     # Use psycopg2.sql to safely format identifiers and structure
@@ -1129,11 +1557,20 @@ def find_match_for_property(prop_address, scraped_properties_dict):
                 
     return None
 
-def process_municipality_with_realtime_updates(conn, municipality_name, municipality_url, current_owner_only=False, force_process=False):
+def process_municipality_with_realtime_updates(conn, municipality_name, municipality_url, last_updated_date=None, current_owner_only=False, force_process=False):
     """
     Process a municipality with real-time database updates, resumability, and direct URL optimization.
     """
     log(f"--- Processing municipality: {municipality_name} (Force={force_process}) ---")
+    
+    # Determine Restricted Mode based on last_updated_date
+    restricted_mode = False
+    if last_updated_date and last_updated_date.year < 2026:
+        log(f"  -> Data Source Last Updated: {last_updated_date.strftime('%Y-%m-%d')} (< 2026). ENABLED RESTRICTED MODE.")
+        log("  -> In Restricted Mode, only empty or 'Current Owner' fields will be updated (except URLs/Photos/Units).")
+        restricted_mode = True
+    else:
+        log(f"  -> Data Source Last Updated: {last_updated_date.strftime('%Y-%m-%d') if last_updated_date else 'Unknown'}. Normal update mode.")
     
     # Get properties to update from database
     if current_owner_only:
@@ -1152,7 +1589,7 @@ def process_municipality_with_realtime_updates(conn, municipality_name, municipa
 
     for prop_id, prop_location, prop_url in db_properties:
         all_processed_ids.append(prop_id)
-        if prop_url:
+        if prop_url and str(prop_url).strip().lower().startswith('http'):
             props_with_urls.append((prop_id, prop_url))
         else:
             props_without_urls.append((prop_id, prop_location))
@@ -1180,7 +1617,7 @@ def process_municipality_with_realtime_updates(conn, municipality_name, municipa
                     prop_id = future_to_id[future]
                     vision_data = future.result()
                     if vision_data:
-                        if update_property_in_db(conn, prop_id, vision_data):
+                        if update_property_in_db(conn, prop_id, vision_data, restricted_mode=restricted_mode):
                             group1_updated_count += 1
                     
                     group1_processed_count += 1 # <--- INCREMENT COUNTER
@@ -1205,18 +1642,51 @@ def process_municipality_with_realtime_updates(conn, municipality_name, municipa
             log(f"  -> SLOW PATH: Matching {len(props_without_urls)} DB properties against {len(scraped_properties)} scraped results...")
             group2_updated_count = 0
             processed_in_group = 0
+            matched_addresses = set()  # Track which scraped properties we've matched
             
+            # First pass: Try address-based matching for properties with locations
             for prop_db_id, prop_address in props_without_urls:
                 vision_data = find_match_for_property(prop_address, scraped_properties)
                 
                 if vision_data:
                     # This update will save owner, sales, AND the new 'cama_site_link'
-                    if update_property_in_db(conn, prop_db_id, vision_data):
+                    if update_property_in_db(conn, prop_db_id, vision_data, restricted_mode=restricted_mode):
                         group2_updated_count += 1
+                        # Track the address we matched so we know which scraped properties are "used"
+                        for addr, data in scraped_properties.items():
+                            if data == vision_data:
+                                matched_addresses.add(addr)
+                                break
                 
                 processed_in_group += 1
                 if processed_in_group % 100 == 0:
                     log(f"    -> Matched {processed_in_group}/{len(props_without_urls)}, updated {group2_updated_count} so far...")
+
+            def is_placeholder_address(addr):
+                if not addr or addr.strip() == '' or addr.strip().upper() == 'NULL':
+                    return True
+                # Numeric placeholders like "93"
+                if addr.strip().replace(' ', '').isdigit() and len(addr.strip()) < 6:
+                    return True
+                return False
+
+            unmatched_db_props = [(pid, addr) for pid, addr in props_without_urls 
+                                  if is_placeholder_address(addr)]
+            unmatched_scraped = {addr: data for addr, data in scraped_properties.items() 
+                                if addr not in matched_addresses}
+            
+            if unmatched_db_props and unmatched_scraped:
+                log(f"  -> Populating {len(unmatched_db_props)} empty-location properties from {len(unmatched_scraped)} unmatched scraped records...")
+                scraped_items = list(unmatched_scraped.items())
+                for i, (prop_db_id, _) in enumerate(unmatched_db_props):
+                    if i < len(scraped_items):
+                        addr, vision_data = scraped_items[i]
+                        # Add the address to the vision_data so it gets saved to location field
+                        vision_data['location'] = addr
+                        # In limited mode, we STILL want to populate empty records, so restricted_mode is fine 
+                        # because update_property_in_db allows updates if current val is empty.
+                        if update_property_in_db(conn, prop_db_id, vision_data, restricted_mode=restricted_mode):
+                            group2_updated_count += 1
 
             log(f"  -> SLOW PATH complete. Updated {group2_updated_count} properties (and populated their URLs).")
             total_updated_count += group2_updated_count
@@ -1260,13 +1730,17 @@ def process_municipality_task(city_name, city_data, current_owner_only, force_pr
                 updated_count = process_municipality_with_propertyrecordcards(
                     conn, city_name, MUNICIPAL_DATA_SOURCES[city_name], current_owner_only, force_process
                 )
+            elif MUNICIPAL_DATA_SOURCES[city_name]['type'] == 'ct_geodata_csv':
+                updated_count = process_municipality_with_ct_geodata(
+                    conn, city_name, MUNICIPAL_DATA_SOURCES[city_name], current_owner_only, force_process
+                )
             else:
                 log(f"Unknown data source type for {city_name}: {MUNICIPAL_DATA_SOURCES[city_name]['type']}")
                 updated_count = 0
         else:
             # Use traditional Vision Appraisal scraping
             updated_count = process_municipality_with_realtime_updates(
-                conn, city_name, city_data['url'], current_owner_only, force_process
+                conn, city_name, city_data['url'], last_updated_date=city_data.get('last_updated'), current_owner_only=current_owner_only, force_process=force_process
             )
         
         log(f"WORKER_DONE: Finished job for {city_name}. Updated {updated_count} properties.")
