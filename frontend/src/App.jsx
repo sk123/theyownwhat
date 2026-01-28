@@ -355,349 +355,351 @@ function App() {
                       they own <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-indigo-600">WHAT??</span>
                     </h1>
 
-                    <p className="text-lg text-slate-500 max-w-xl mx-auto font-medium leading-relaxed mb-8">
-                      Uncover hidden property networks, connect LLCs to real owners, and analyze portfolio value with AI-powered insights.
-                    </p>
+                    Uncover hidden property networks.
+                  </p>
 
-                    <div className="max-w-2xl mx-auto relative group">
-                      <div className="absolute -inset-1 bg-gradient-to-r from-blue-500 to-indigo-500 rounded-2xl opacity-20 group-hover:opacity-30 blur transition duration-500"></div>
-                      <div className="relative bg-white rounded-xl shadow-xl border border-slate-100">
-                        <SearchBar
-                          onSearch={handleSearch}
-                          isLoading={loading}
-                          onSelect={(item) => {
-                            let type = 'owner';
-                            let id = item.value;
+                  <div className="max-w-2xl mx-auto relative group">
+                    <div className="absolute -inset-1 bg-gradient-to-r from-blue-500 to-indigo-500 rounded-2xl opacity-20 group-hover:opacity-30 blur transition duration-500"></div>
+                    <div className="relative bg-white rounded-xl shadow-xl border border-slate-100">
+                      <SearchBar
+                        onSearch={handleSearch}
+                        isLoading={loading}
+                        onSelect={(item) => {
+                          let type = 'owner';
+                          let id = item.value;
 
-                            if (item.type === 'Business') {
-                              type = 'business';
-                              id = item.id;
-                            } else if (item.type === 'Business Principal') {
-                              type = 'principal';
-                            }
-                            // Property Owner/Co-Owner fallback to 'owner' and use name (item.value)
+                          if (item.type === 'Business') {
+                            type = 'business';
+                            id = item.id;
+                          } else if (item.type === 'Business Principal') {
+                            type = 'principal';
+                          }
+                          // Property Owner/Co-Owner fallback to 'owner' and use name (item.value)
 
-                            console.log("Direct load:", id, type, item.value);
-                            loadNetwork(id, type, item.value);
-                          }}
-                        />
-                      </div>
-                    </div>
-
-                    <div className="mt-8 flex items-center justify-center animate-fade-in-up delay-75">
-                      <div className="bg-white/80 backdrop-blur-sm border border-slate-200 shadow-sm rounded-full px-5 py-2 flex items-center gap-3">
-                        <div className="w-2.5 h-2.5 rounded-full bg-blue-500 animate-pulse"></div>
-                        <p className="text-slate-600 text-sm font-medium">
-                          <span className="text-slate-900 font-bold">New here?</span> Click on a network below or search to begin discovery.
-                        </p>
-                      </div>
+                          console.log("Direct load:", id, type, item.value);
+                          loadNetwork(id, type, item.value);
+                        }}
+                      />
                     </div>
                   </div>
 
-                  {/* Results or Insights */}
-                  <div className="relative min-h-[400px]">
-                    {searchResults ? (
-                      <SearchResults
-                        results={searchResults}
-                        onSelect={(id, type, name) => loadNetwork(id, type, name)}
-                      />
-                    ) : (
-                      <div className="mt-8">
-                        {loadingInsights ? (
-                          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                            {[1, 2, 3].map(i => (
-                              <div key={i} className="h-48 bg-white rounded-2xl border border-slate-100 shadow-sm animate-pulse"></div>
-                            ))}
-                          </div>
-                        ) : (
-                          <Insights data={insights} onSelect={(id, type, name) => loadNetwork(id, type, name)} />
-                        )}
+                  <div className="mt-8 flex items-center justify-center animate-fade-in-up delay-75">
+                    <div className="bg-white/80 backdrop-blur-sm border border-slate-200 shadow-sm rounded-full px-5 py-2 flex items-center gap-3">
+                      <div className="w-2.5 h-2.5 rounded-full bg-blue-500 animate-pulse"></div>
+                      <p className="text-slate-600 text-sm font-medium">
+                        <span className="text-slate-900 font-bold">New here?</span> Click on a network below or search to begin discovery.
+                      </p>
+                    </div>
+                  </div>
+              </div>
+
+              {/* Results or Insights */}
+              <div className="relative min-h-[400px]">
+                {searchResults ? (
+                  <SearchResults
+                    results={searchResults}
+                    onSelect={(id, type, name) => loadNetwork(id, type, name)}
+                  />
+                ) : (
+                  <div className="mt-8">
+                    {loadingInsights ? (
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        {[1, 2, 3].map(i => (
+                          <div key={i} className="h-48 bg-white rounded-2xl border border-slate-100 shadow-sm animate-pulse"></div>
+                        ))}
                       </div>
+                    ) : (
+                      <Insights data={insights} onSelect={(id, type, name) => loadNetwork(id, type, name)} />
                     )}
                   </div>
-                </motion.div>
+                )}
               </div>
+            </motion.div>
+              </div>
+    </div>
+  )
+}
+        </AnimatePresence >
+
+  {/* DASHBOARD VIEW */ }
+{
+  view === 'dashboard' && (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      className="flex flex-col h-full w-full max-w-[1920px] mx-auto px-4 py-3 gap-3 overflow-y-auto bg-slate-50/50 backdrop-blur-sm"
+    >
+
+
+      {/* Dashboard Header with Global Actions */}
+      <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm flex flex-col md:flex-row justify-between items-center gap-4">
+        <div className="flex items-center gap-4">
+          <div className="p-3 bg-slate-900 text-white rounded-xl shadow-xl shadow-slate-900/10">
+            <TrendingUp size={24} />
+          </div>
+          <div>
+            <h2 className="text-3xl font-black text-slate-900 tracking-tighter leading-none mb-1">
+              {(() => {
+                // Determine Network Manager for Header - ROBUST SYNCED LOGIC
+                // Helper to calculate connection count
+                const principalCounts = new Map();
+                if (networkData.links) {
+                  networkData.links.forEach(l => {
+                    const s = String(l.source);
+                    const t = String(l.target);
+                    principalCounts.set(s, (principalCounts.get(s) || 0) + 1);
+                    principalCounts.set(t, (principalCounts.get(t) || 0) + 1);
+                  });
+                }
+
+                const normalizeId = (id) => {
+                  if (!id) return '';
+                  return String(id).toUpperCase().trim().replace(/[`"'.]/g, '').replace(/\s+/g, ' ');
+                };
+
+                const getCount = (p) => {
+                  if (!p) return 0;
+                  const candidates = new Set();
+                  if (p.id) candidates.add(String(p.id));
+                  if (p.name) {
+                    candidates.add(p.name);
+                    candidates.add(normalizeId(p.name));
+                  }
+
+                  let max = 0;
+                  candidates.forEach(c => {
+                    max = Math.max(max, principalCounts.get(c) || 0);
+                    max = Math.max(max, principalCounts.get(`principal_${c}`) || 0);
+                    max = Math.max(max, principalCounts.get(`principal_${normalizeId(c)}`) || 0);
+                  });
+
+                  // Fallback to property count if links are 0
+                  if (max === 0 && p.details?.property_count) return p.details.property_count;
+                  return max;
+                };
+
+                // Sort Humans then Entities
+                const human = networkData.principals
+                  .filter(p => !p.isEntity)
+                  .sort((a, b) => getCount(b) - getCount(a));
+
+                const entity = networkData.principals
+                  .filter(p => p.isEntity)
+                  .sort((a, b) => getCount(b) - getCount(a));
+
+                if (human.length > 0) return human[0].name;
+                if (entity.length > 0) return entity[0].name;
+                return networkData.businesses[0]?.name || "Network Analysis";
+              })()
+              }
+            </h2>
+
+
+            {/* Network Profile Card moved here */}
+            <NetworkProfileCard networkData={networkData} stats={stats} />
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => {
+              const csvContent = "data:text/csv;charset=utf-8,"
+                + "Address,City,Owner,Assessed Value,Appraised Value\n"
+                + networkData.properties.map(p => `"${p.location}","${p.city}","${p.owner}","${p.assessed_value}","${p.appraised_value}"`).join("\n");
+              const encodedUri = encodeURI(csvContent);
+              const link = document.createElement("a");
+              link.setAttribute("href", encodedUri);
+              link.setAttribute("download", "portfolio_export.csv");
+              document.body.appendChild(link);
+              link.click();
+            }}
+            className="px-5 py-2.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold rounded-xl transition-all flex items-center gap-2 shadow-sm"
+          >
+            <TrendingUp size={18} />
+            Export
+          </button>
+          <button
+            onClick={handleReset}
+            className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-lg shadow-blue-500/20 transition-all flex items-center gap-2"
+          >
+            <Search size={18} />
+            New Search
+          </button>
+        </div>
+      </div>
+
+
+
+      {/* Cross-Filtering & City Selection Controls - MOVED TO PROPERTY TABLE */}
+
+
+
+      {/* --- MOBILE TAB LAYOUT (lg:hidden) --- */}
+      <div className="flex flex-col lg:hidden relative border border-slate-200 rounded-xl bg-white shadow-sm mt-2">
+
+        {/* Sticky Tab Header */}
+        <div className="flex items-center border-b border-gray-100 bg-white/95 backdrop-blur-md sticky top-0 z-30 shadow-sm">
+          <button
+            onClick={() => handleTabChange('properties')}
+            className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider transition-colors border-b-2 ${activeMobileTab === 'properties' ? 'border-blue-500 text-blue-700 bg-blue-50/50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+          >
+            Properties
+          </button>
+          <button
+            onClick={() => handleTabChange('businesses')}
+            className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider transition-colors border-b-2 ${activeMobileTab === 'businesses' ? 'border-emerald-500 text-emerald-700 bg-emerald-50/50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+          >
+            Businesses
+          </button>
+          <button
+            onClick={() => handleTabChange('principals')}
+            className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider transition-colors border-b-2 ${activeMobileTab === 'principals' ? 'border-indigo-500 text-indigo-700 bg-indigo-50/50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+          >
+            Principals
+          </button>
+
+          {/* Start Over Button */}
+          <button
+            onClick={handleReset}
+            className="px-3 py-3 text-gray-400 hover:text-red-500 hover:bg-red-50 border-b-2 border-transparent transition-colors"
+            title="Start Over"
+            aria-label="Start Over"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+              <path d="M3 3v5h5" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Content Area - Auto Height for Page Scroll */}
+        <div className={`bg-white min-h-[500px] transition-opacity duration-200 ${isPending ? 'opacity-50' : 'opacity-100'}`}>
+          {activeMobileTab === 'properties' && (
+            <div className="flex flex-col">
+              <PropertyTable
+                properties={filteredProperties}
+                highlightedEntityId={selectedEntityId}
+                onSelectProperty={setSelectedProperty}
+                onMapSelected={setSelectedMapProperties}
+                onAiDigest={aiEnabled ? () => setShowAnalysis(true) : null}
+                forceExpanded={true}
+                autoHeight={true}
+
+                // Filter Props
+                cities={allCities}
+                selectedCity={selectedCity}
+                onSelectCity={setSelectedCity}
+                onClearEntity={() => setSelectedEntityId(null)}
+              />
             </div>
           )}
-        </AnimatePresence>
 
-        {/* DASHBOARD VIEW */}
-        {view === 'dashboard' && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="flex flex-col h-full w-full max-w-[1920px] mx-auto px-4 py-3 gap-3 overflow-y-auto bg-slate-50/50 backdrop-blur-sm"
-          >
-
-
-            {/* Dashboard Header with Global Actions */}
-            <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm flex flex-col md:flex-row justify-between items-center gap-4">
-              <div className="flex items-center gap-4">
-                <div className="p-3 bg-slate-900 text-white rounded-xl shadow-xl shadow-slate-900/10">
-                  <TrendingUp size={24} />
-                </div>
-                <div>
-                  <h2 className="text-3xl font-black text-slate-900 tracking-tighter leading-none mb-1">
-                    {(() => {
-                      // Determine Network Manager for Header - ROBUST SYNCED LOGIC
-                      // Helper to calculate connection count
-                      const principalCounts = new Map();
-                      if (networkData.links) {
-                        networkData.links.forEach(l => {
-                          const s = String(l.source);
-                          const t = String(l.target);
-                          principalCounts.set(s, (principalCounts.get(s) || 0) + 1);
-                          principalCounts.set(t, (principalCounts.get(t) || 0) + 1);
-                        });
-                      }
-
-                      const normalizeId = (id) => {
-                        if (!id) return '';
-                        return String(id).toUpperCase().trim().replace(/[`"'.]/g, '').replace(/\s+/g, ' ');
-                      };
-
-                      const getCount = (p) => {
-                        if (!p) return 0;
-                        const candidates = new Set();
-                        if (p.id) candidates.add(String(p.id));
-                        if (p.name) {
-                          candidates.add(p.name);
-                          candidates.add(normalizeId(p.name));
-                        }
-
-                        let max = 0;
-                        candidates.forEach(c => {
-                          max = Math.max(max, principalCounts.get(c) || 0);
-                          max = Math.max(max, principalCounts.get(`principal_${c}`) || 0);
-                          max = Math.max(max, principalCounts.get(`principal_${normalizeId(c)}`) || 0);
-                        });
-
-                        // Fallback to property count if links are 0
-                        if (max === 0 && p.details?.property_count) return p.details.property_count;
-                        return max;
-                      };
-
-                      // Sort Humans then Entities
-                      const human = networkData.principals
-                        .filter(p => !p.isEntity)
-                        .sort((a, b) => getCount(b) - getCount(a));
-
-                      const entity = networkData.principals
-                        .filter(p => p.isEntity)
-                        .sort((a, b) => getCount(b) - getCount(a));
-
-                      if (human.length > 0) return human[0].name;
-                      if (entity.length > 0) return entity[0].name;
-                      return networkData.businesses[0]?.name || "Network Analysis";
-                    })()
-                    }
-                  </h2>
-
-
-                  {/* Network Profile Card moved here */}
-                  <NetworkProfileCard networkData={networkData} stats={stats} />
-                </div>
-              </div>
-
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={() => {
-                    const csvContent = "data:text/csv;charset=utf-8,"
-                      + "Address,City,Owner,Assessed Value,Appraised Value\n"
-                      + networkData.properties.map(p => `"${p.location}","${p.city}","${p.owner}","${p.assessed_value}","${p.appraised_value}"`).join("\n");
-                    const encodedUri = encodeURI(csvContent);
-                    const link = document.createElement("a");
-                    link.setAttribute("href", encodedUri);
-                    link.setAttribute("download", "portfolio_export.csv");
-                    document.body.appendChild(link);
-                    link.click();
-                  }}
-                  className="px-5 py-2.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold rounded-xl transition-all flex items-center gap-2 shadow-sm"
-                >
-                  <TrendingUp size={18} />
-                  Export
-                </button>
-                <button
-                  onClick={handleReset}
-                  className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-lg shadow-blue-500/20 transition-all flex items-center gap-2"
-                >
-                  <Search size={18} />
-                  New Search
-                </button>
-              </div>
+          {activeMobileTab === 'businesses' && (
+            <div className="flex flex-col">
+              <NetworkView
+                networkData={networkData}
+                selectedEntityId={selectedEntityId}
+                onSelectEntity={(id, type) => setSelectedEntityId(id === selectedEntityId ? null : id)}
+                onViewDetails={(entity, type) => setSelectedDetailEntity({ entity, type })}
+                mobileSection="businesses"
+                autoHeight={true}
+              />
             </div>
+          )}
 
-
-
-            {/* Cross-Filtering & City Selection Controls - MOVED TO PROPERTY TABLE */}
-
-
-
-            {/* --- MOBILE TAB LAYOUT (lg:hidden) --- */}
-            <div className="flex flex-col lg:hidden relative border border-slate-200 rounded-xl bg-white shadow-sm mt-2">
-
-              {/* Sticky Tab Header */}
-              <div className="flex items-center border-b border-gray-100 bg-white/95 backdrop-blur-md sticky top-0 z-30 shadow-sm">
-                <button
-                  onClick={() => handleTabChange('properties')}
-                  className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider transition-colors border-b-2 ${activeMobileTab === 'properties' ? 'border-blue-500 text-blue-700 bg-blue-50/50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
-                >
-                  Properties
-                </button>
-                <button
-                  onClick={() => handleTabChange('businesses')}
-                  className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider transition-colors border-b-2 ${activeMobileTab === 'businesses' ? 'border-emerald-500 text-emerald-700 bg-emerald-50/50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
-                >
-                  Businesses
-                </button>
-                <button
-                  onClick={() => handleTabChange('principals')}
-                  className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider transition-colors border-b-2 ${activeMobileTab === 'principals' ? 'border-indigo-500 text-indigo-700 bg-indigo-50/50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
-                >
-                  Principals
-                </button>
-
-                {/* Start Over Button */}
-                <button
-                  onClick={handleReset}
-                  className="px-3 py-3 text-gray-400 hover:text-red-500 hover:bg-red-50 border-b-2 border-transparent transition-colors"
-                  title="Start Over"
-                  aria-label="Start Over"
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-                    <path d="M3 3v5h5" />
-                  </svg>
-                </button>
-              </div>
-
-              {/* Content Area - Auto Height for Page Scroll */}
-              <div className={`bg-white min-h-[500px] transition-opacity duration-200 ${isPending ? 'opacity-50' : 'opacity-100'}`}>
-                {activeMobileTab === 'properties' && (
-                  <div className="flex flex-col">
-                    <PropertyTable
-                      properties={filteredProperties}
-                      highlightedEntityId={selectedEntityId}
-                      onSelectProperty={setSelectedProperty}
-                      onMapSelected={setSelectedMapProperties}
-                      onAiDigest={aiEnabled ? () => setShowAnalysis(true) : null}
-                      forceExpanded={true}
-                      autoHeight={true}
-
-                      // Filter Props
-                      cities={allCities}
-                      selectedCity={selectedCity}
-                      onSelectCity={setSelectedCity}
-                      onClearEntity={() => setSelectedEntityId(null)}
-                    />
-                  </div>
-                )}
-
-                {activeMobileTab === 'businesses' && (
-                  <div className="flex flex-col">
-                    <NetworkView
-                      networkData={networkData}
-                      selectedEntityId={selectedEntityId}
-                      onSelectEntity={(id, type) => setSelectedEntityId(id === selectedEntityId ? null : id)}
-                      onViewDetails={(entity, type) => setSelectedDetailEntity({ entity, type })}
-                      mobileSection="businesses"
-                      autoHeight={true}
-                    />
-                  </div>
-                )}
-
-                {activeMobileTab === 'principals' && (
-                  <div className="flex flex-col">
-                    <NetworkView
-                      networkData={networkData}
-                      selectedEntityId={selectedEntityId}
-                      onSelectEntity={(id, type) => setSelectedEntityId(id === selectedEntityId ? null : id)}
-                      onViewDetails={(entity, type) => setSelectedDetailEntity({ entity, type })}
-                      mobileSection="principals"
-                      autoHeight={true}
-                    />
-                  </div>
-                )}
-              </div>
+          {activeMobileTab === 'principals' && (
+            <div className="flex flex-col">
+              <NetworkView
+                networkData={networkData}
+                selectedEntityId={selectedEntityId}
+                onSelectEntity={(id, type) => setSelectedEntityId(id === selectedEntityId ? null : id)}
+                onViewDetails={(entity, type) => setSelectedDetailEntity({ entity, type })}
+                mobileSection="principals"
+                autoHeight={true}
+              />
             </div>
+          )}
+        </div>
+      </div>
 
-            {/* --- DESKTOP GRID LAYOUT (hidden lg:grid) --- */}
-            <div className="hidden lg:grid grid-cols-12 gap-4 flex-1 min-h-0 overflow-auto">
-              {/* Left: Network List */}
-              <div className="col-span-4 h-full bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
-                <div className="p-4 border-b border-slate-100 bg-slate-50/50">
+      {/* --- DESKTOP GRID LAYOUT (hidden lg:grid) --- */}
+      <div className="hidden lg:grid grid-cols-12 gap-4 flex-1 min-h-0 overflow-auto">
+        {/* Left: Network List */}
+        <div className="col-span-4 h-full bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
+          <div className="p-4 border-b border-slate-100 bg-slate-50/50">
 
-                </div>
-                <div className="flex-1 overflow-hidden">
-                  <NetworkView
-                    networkData={networkData}
-                    selectedEntityId={selectedEntityId}
-                    onSelectEntity={(id, type) => setSelectedEntityId(id === selectedEntityId ? null : id)}
-                    onViewDetails={(entity, type) => setSelectedDetailEntity({ entity, type })}
-                  />
-                </div>
-              </div>
+          </div>
+          <div className="flex-1 overflow-hidden">
+            <NetworkView
+              networkData={networkData}
+              selectedEntityId={selectedEntityId}
+              onSelectEntity={(id, type) => setSelectedEntityId(id === selectedEntityId ? null : id)}
+              onViewDetails={(entity, type) => setSelectedDetailEntity({ entity, type })}
+            />
+          </div>
+        </div>
 
-              {/* Right: Property Table */}
-              <div className="col-span-8 flex-1 overflow-auto flex flex-col min-h-0">
-                <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center shrink-0">
+        {/* Right: Property Table */}
+        <div className="col-span-8 flex-1 overflow-auto flex flex-col min-h-0">
+          <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center shrink-0">
 
-                  <div className="text-xs font-bold text-slate-400">{filteredProperties.length} Assets</div>
-                </div>
-                <div className="flex-1 flex flex-col min-h-0 overflow-auto">
-                  <PropertyTable
-                    properties={filteredProperties}
-                    highlightedEntityId={selectedEntityId}
-                    onSelectProperty={setSelectedProperty}
-                    onMapSelected={setSelectedMapProperties}
+            <div className="text-xs font-bold text-slate-400">{filteredProperties.length} Assets</div>
+          </div>
+          <div className="flex-1 flex flex-col min-h-0 overflow-auto">
+            <PropertyTable
+              properties={filteredProperties}
+              highlightedEntityId={selectedEntityId}
+              onSelectProperty={setSelectedProperty}
+              onMapSelected={setSelectedMapProperties}
 
-                    // Filter Props
-                    cities={allCities}
-                    selectedCity={selectedCity}
-                    onSelectCity={setSelectedCity}
-                    onClearEntity={() => setSelectedEntityId(null)}
-                  />
-                </div>
-              </div>
-            </div>
-          </motion.div>
-        )}
+              // Filter Props
+              cities={allCities}
+              selectedCity={selectedCity}
+              onSelectCity={setSelectedCity}
+              onClearEntity={() => setSelectedEntityId(null)}
+            />
+          </div>
+        </div>
+      </div>
+    </motion.div>
+  )
+}
 
-        <Suspense fallback={null}>
-          <PropertyDetailsModal
-            property={selectedProperty}
-            networkData={networkData}
-            onViewEntity={(entity, type) => setSelectedDetailEntity({ entity, type })}
-            onClose={() => setSelectedProperty(null)}
-          />
-          <EntityDetailsModal
-            entity={selectedDetailEntity?.entity}
-            type={selectedDetailEntity?.type}
-            networkData={networkData}
-            onNavigate={(entity, type) => setSelectedDetailEntity({ entity, type })}
-            onViewProperty={setSelectedProperty}
-            onClose={() => setSelectedDetailEntity(null)}
-          />
+<Suspense fallback={null}>
+  <PropertyDetailsModal
+    property={selectedProperty}
+    networkData={networkData}
+    onViewEntity={(entity, type) => setSelectedDetailEntity({ entity, type })}
+    onClose={() => setSelectedProperty(null)}
+  />
+  <EntityDetailsModal
+    entity={selectedDetailEntity?.entity}
+    type={selectedDetailEntity?.type}
+    networkData={networkData}
+    onNavigate={(entity, type) => setSelectedDetailEntity({ entity, type })}
+    onViewProperty={setSelectedProperty}
+    onClose={() => setSelectedDetailEntity(null)}
+  />
 
-          <AboutModal
-            isOpen={showAbout}
-            onClose={() => setShowAbout(false)}
-            onShowFreshness={() => {
-              setShowAbout(false);
-              setShowFreshness(true);
-            }}
-            networkData={networkData}
-          />
-          <FreshnessModal
-            isOpen={showFreshness}
-            onClose={() => setShowFreshness(false)}
-          />
-          <MultiPropertyMapModal
-            properties={selectedMapProperties}
-            onClose={() => setSelectedMapProperties(null)}
-          />
-        </Suspense>
-      </main>
+  <AboutModal
+    isOpen={showAbout}
+    onClose={() => setShowAbout(false)}
+    onShowFreshness={() => {
+      setShowAbout(false);
+      setShowFreshness(true);
+    }}
+    networkData={networkData}
+  />
+  <FreshnessModal
+    isOpen={showFreshness}
+    onClose={() => setShowFreshness(false)}
+  />
+  <MultiPropertyMapModal
+    properties={selectedMapProperties}
+    onClose={() => setSelectedMapProperties(null)}
+  />
+</Suspense>
+      </main >
     </div >
   );
 }

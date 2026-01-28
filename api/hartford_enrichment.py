@@ -42,7 +42,7 @@ def enrich_property(prop_id, pid, old_loc, conn_params):
     # print(f"Processing Prop ID {prop_id}: {old_loc} ({formatted_pid})...")
 
     try:
-        # 1. Search for Parcel
+        # 1. Search for Parcel to set session
         payload = {
             "SearchParcel": formatted_pid,
             "SearchSubmitted": "yes",
@@ -50,15 +50,15 @@ def enrich_property(prop_id, pid, old_loc, conn_params):
         }
         res = session.post(RESULTS_PAGE, data=payload, timeout=15)
         
-        # 2. Extract Account Number from Results
+        # 2. Extract Account Number
         soup = BeautifulSoup(res.text, 'lxml')
         links = soup.find_all('a', href=re.compile(r'Summary\.asp\?AccountNumber='))
         
         if not links:
             if "Summary.asp" in res.url:
-                link_href = res.url
+               link_href = res.url
             else:
-                return prop_id, False, "No results found"
+               return prop_id, False, "No results found"
         else:
             link_href = links[0]['href']
         
@@ -68,13 +68,36 @@ def enrich_property(prop_id, pid, old_loc, conn_params):
         
         acc_num = acc_match.group(1)
         
-        # 3. Hit the main summary page to ensure session is synced to this account
+        # 3. Hit Summary to ensure session context
         session.get(f"{BASE_URL}/Summary.asp?AccountNumber={acc_num}", timeout=15)
         
         # 4. Fetch Summary Bottom for data
         sum_res = session.get(f"{SUMMARY_URL}?AccountNumber={acc_num}", timeout=15)
         sum_soup = BeautifulSoup(sum_res.text, 'lxml')
         
+        new_data = {"account_number": acc_num}
+        
+        # Scrape Values
+        total_val_td = sum_soup.find(string=re.compile("Total\s+Value"))
+        if total_val_td:
+            val_td = total_val_td.find_parent('td').find_next_sibling('td')
+            if val_td:
+                val_str = val_td.get_text(strip=True).replace(',', '').replace('$', '')
+                try:
+                new_data['assessed_value'] = float(val_str)
+                # Hartford condos/units in these complexes often have a 36.75% ratio
+                new_data['appraised_value'] = round(new_data['assessed_value'] / 0.3675, 2)
+            except:
+                pass
+
+        # Scrape Image - Store source URL instead of downloading
+        img_tag = sum_soup.find('img', src=re.compile('showimage'))
+        if img_tag:
+             # Storing the absolute URL on the assessor's site. 
+             # Note: This may require a valid session to display in the browser.
+             new_data['building_photo'] = f"{BASE_URL}/showimage.asp"
+        
+        # Scrape Location/Unit
         new_unit = None
         new_location = None
         
@@ -97,23 +120,18 @@ def enrich_property(prop_id, pid, old_loc, conn_params):
                      if parsed_val and not new_unit:
                          new_unit = parsed_val
 
-        if not new_location:
-            return prop_id, False, "Could not find location in summary"
+        if new_location:
+            new_data['location'] = new_location
+            new_data['unit'] = new_unit
         
-        # Update DB using a fresh connection for this thread if needed, or pass it in.
-        # Since we use execute_values or similar in main updater, here we just return the data.
-        return prop_id, True, {
-            "location": new_location,
-            "unit": new_unit,
-            "account_number": acc_num
-        }
+        return prop_id, True, new_data
 
     except Exception as e:
         return prop_id, False, str(e)
 
 def run_enrichment(limit=None):
     if not DATABASE_URL:
-        print("No DATABASE_URL set")
+        # ... existing ...
         return
 
     conn = psycopg2.connect(DATABASE_URL)
@@ -124,10 +142,10 @@ def run_enrichment(limit=None):
         SELECT id, link, location 
         FROM properties 
         WHERE property_city = 'Hartford' 
+        AND location ILIKE '%%WEBSTER%%'
         AND link IS NOT NULL 
-        AND account_number IS NULL
-        ORDER BY location
     """
+    # ... rest ...
     if limit:
         query += f" LIMIT {limit}"
         
@@ -152,9 +170,22 @@ def run_enrichment(limit=None):
                     with update_conn.cursor() as update_cur:
                         update_cur.execute("""
                             UPDATE properties 
-                            SET location = %s, unit = %s, account_number = %s
+                            SET location = COALESCE(%s, location), 
+                                unit = COALESCE(%s, unit), 
+                                account_number = %s,
+                                assessed_value = COALESCE(%s, assessed_value),
+                                appraised_value = COALESCE(%s, appraised_value),
+                                building_photo = COALESCE(%s, building_photo)
                             WHERE id = %s
-                        """, (data["location"], data["unit"], data["account_number"], prop_id))
+                        """, (
+                            data.get("location"), 
+                            data.get("unit"), 
+                            data.get("account_number"),
+                            data.get("assessed_value"),
+                            data.get("appraised_value"),
+                            data.get("building_photo"),
+                            prop_id
+                        ))
                 updated_count += 1
                 if i % 10 == 0:
                     print(f"Progress: {i}/{len(rows)} updated. Current: {data['location']}")

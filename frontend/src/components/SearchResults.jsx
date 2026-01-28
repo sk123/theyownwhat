@@ -22,7 +22,7 @@ export default function SearchResults({ results, onSelect }) {
                 {results.map((result) => (
                     <div
                         key={result.id}
-                        onClick={() => onSelect(result.id, result.type)}
+                        onClick={() => onSelect(result.id, result.type, result.name)}
                         className="flex items-center justify-between px-6 py-4 hover:bg-blue-50 cursor-pointer transition-colors group"
                     >
                         <div className="flex items-center gap-4">

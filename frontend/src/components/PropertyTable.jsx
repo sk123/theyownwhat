@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { ArrowUpDown, Map, List, Grid3X3, X, Check, Building2, MapPin, ChevronRight, ChevronDown, LayoutGrid, Sparkles, Download, Share2, ExternalLink } from 'lucide-react';
+import { ArrowUpDown, Map, List, Grid3X3, X, Check, Building2, MapPin, ChevronRight, ChevronDown, LayoutGrid, Sparkles, Download, Share2, ExternalLink, Copy } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 // Helper Components
@@ -527,27 +527,48 @@ export default function PropertyTable({
                                                             {p.property_type}
                                                         </span>
                                                     )}
+                                                    {p.subsidies && p.subsidies.length > 0 && (
+                                                        <span className="text-[9px] bg-amber-50 text-amber-600 font-bold px-1.5 py-0.5 rounded uppercase border border-amber-100 flex items-center gap-1">
+                                                            <span className="text-[8px]">$</span> Preservation
+                                                        </span>
+                                                    )}
                                                 </div>
                                             </div>
                                         )}
                                     </div>
                                     {!p.isMultiSelectActive && (
-                                        <button
-                                            onClick={(e) => {
-                                                e.stopPropagation();
-                                                const addr = `${p.address}${!p.isComplex && p.derivedUnit ? ' #' + p.derivedUnit : ''}, ${p.city} CT`;
-                                                navigator.clipboard.writeText(addr);
-                                                // Visual feedback
-                                                const el = e.currentTarget;
-                                                const original = el.innerHTML;
-                                                el.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
-                                                setTimeout(() => { if (el) el.innerHTML = original; }, 1000);
-                                            }}
-                                            className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-blue-600 transition-all border border-transparent hover:border-slate-200 shadow-sm"
-                                            title="Copy Full Address"
-                                        >
-                                            <Share2 size={12} />
-                                        </button>
+                                        <div className="flex items-center gap-1">
+                                            <button
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    const addr = `${p.address}${!p.isComplex && p.derivedUnit ? ' #' + p.derivedUnit : ''}, ${p.city} CT`;
+                                                    navigator.clipboard.writeText(addr);
+                                                    const el = e.currentTarget;
+                                                    const original = el.innerHTML;
+                                                    el.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+                                                    setTimeout(() => { if (el) el.innerHTML = original; }, 1000);
+                                                }}
+                                                className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-blue-600 transition-all border border-transparent hover:border-slate-200 shadow-sm"
+                                                title="Copy Full Address"
+                                            >
+                                                <Copy size={12} />
+                                            </button>
+                                            <button
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    const addr = `${p.address}${!p.isComplex && p.derivedUnit ? ' #' + p.derivedUnit : ''}, ${p.city} CT`;
+                                                    navigator.clipboard.writeText(addr);
+                                                    const el = e.currentTarget;
+                                                    const original = el.innerHTML;
+                                                    el.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+                                                    setTimeout(() => { if (el) el.innerHTML = original; }, 1000);
+                                                }}
+                                                className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-blue-600 transition-all border border-transparent hover:border-slate-200 shadow-sm hidden"
+                                                title="Old Share Button"
+                                            >
+                                                <Share2 size={12} />
+                                            </button>
+                                        </div>
                                     )}
                                 </div>
                                 {!p.isComplex && p.derivedUnit && <span className="text-[10px] text-slate-500">Unit #{p.derivedUnit}</span>}

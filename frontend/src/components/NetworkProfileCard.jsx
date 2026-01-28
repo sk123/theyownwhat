@@ -86,11 +86,11 @@ export default function NetworkProfileCard({ networkData, stats }) {
         <div className="bg-slate-900 text-white rounded-2xl p-6 shadow-xl shadow-slate-900/10 flex flex-col md:flex-row gap-8 items-stretch justify-between border border-slate-700/50">
             {/* Left: Identity & Context */}
             <div className="flex flex-col gap-3 max-w-xl">
-                <div className="flex items-center gap-2 mb-1">
-                    <div className="p-1.5 bg-blue-500/20 rounded-md">
-                        <Users className="w-4 h-4 text-blue-300" />
+                <div className="flex items-center gap-3 mb-1">
+                    <div className="p-2 bg-blue-500/20 rounded-lg">
+                        <Users className="w-5 h-5 text-blue-300" />
                     </div>
-                    <span className="text-xs font-bold text-blue-200 uppercase tracking-widest">Network Profile</span>
+                    <h2 className="text-2xl lg:text-3xl font-black text-white tracking-tight">{managerName}</h2>
                 </div>
 
                 {/* Removed redundant Huge Title. Using smaller section header style. */}

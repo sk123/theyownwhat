@@ -75,8 +75,25 @@ def create_schema(cursor):
         mailing_address TEXT,
         mailing_city TEXT,
         mailing_state TEXT,
-        mailing_zip TEXT
+        mailing_zip TEXT,
+        complex_name TEXT,
+        management_company TEXT,
+        nhpd_id INTEGER
     );
+    CREATE TABLE IF NOT EXISTS property_subsidies (
+        id SERIAL PRIMARY KEY,
+        property_id INTEGER REFERENCES properties(id),
+        program_name TEXT,
+        subsidy_type TEXT,
+        units_subsidized INTEGER,
+        expiry_date DATE,
+        source_url TEXT,
+        last_updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_properties_complex_name_gin ON properties USING gin (complex_name gin_trgm_ops);
+    CREATE INDEX IF NOT EXISTS idx_properties_management_company_gin ON properties USING gin (management_company gin_trgm_ops);
+    CREATE INDEX IF NOT EXISTS idx_property_subsidies_property_id ON property_subsidies(property_id);
+    ALTER TABLE property_subsidies ADD COLUMN IF NOT EXISTS source_url TEXT;
     """)
     print("✅ Schema created successfully.")
 

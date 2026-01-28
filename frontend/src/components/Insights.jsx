@@ -12,13 +12,8 @@ export default function Insights({ data, onSelect }) {
         'Waterbury', 'Norwalk', 'Danbury', 'New Britain'
     ];
 
-    const [showBusinessesOnly, setShowBusinessesOnly] = React.useState(false);
-
-    // Filter cities to only show major ones that exist in the data
-    const filteredCities = React.useMemo(() => {
-        const availableCities = new Set(Object.keys(data).map(k => k.trim().toUpperCase()));
-        return ['Statewide', ...majorCities.filter(c => availableCities.has(c.toUpperCase()))];
-    }, [data]);
+    // Always show these cities
+    const filteredCities = ['Statewide', ...majorCities];
 
     // Flatten logic (memoized)
     const allNetworks = React.useMemo(() => {
@@ -28,12 +23,11 @@ export default function Insights({ data, onSelect }) {
 
     // Filter based on selection
     const displayedNetworks = React.useMemo(() => {
-        let lookupKey = selectedCity.toUpperCase();
-        if (showBusinessesOnly && lookupKey !== 'STATEWIDE') {
-            lookupKey = `${lookupKey} – BUSINESSES`;
-        } else if (showBusinessesOnly && lookupKey === 'STATEWIDE') {
-            lookupKey = 'STATEWIDE – BUSINESSES';
-        }
+        const lookupKey = selectedCity.toUpperCase();
+        const uppercaseData = {};
+        Object.keys(data).forEach(k => {
+            uppercaseData[k.toUpperCase()] = data[k];
+        });
 
         if (lookupKey === 'STATEWIDE') {
             const seen = new Map();
@@ -46,8 +40,8 @@ export default function Insights({ data, onSelect }) {
             return Array.from(seen.values()).sort((a, b) => b.value - a.value).slice(0, 9);
         }
 
-        return data[lookupKey] ? data[lookupKey].sort((a, b) => b.value - a.value) : [];
-    }, [selectedCity, allNetworks, data, showBusinessesOnly]);
+        return uppercaseData[lookupKey] ? uppercaseData[lookupKey].sort((a, b) => b.value - a.value) : [];
+    }, [selectedCity, allNetworks, data]);
 
     return (
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -57,8 +51,6 @@ export default function Insights({ data, onSelect }) {
                         <TrendingUp className="w-6 h-6 text-blue-600" />
                         Top Networks
                     </h3>
-
-
                 </div>
 
                 <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
@@ -76,28 +68,6 @@ export default function Insights({ data, onSelect }) {
                                 {city}
                             </button>
                         ))}
-                    </div>
-
-                    {/* Business Toggle */}
-                    <div className="flex bg-white/50 backdrop-blur-sm border border-slate-200 rounded-xl p-1 gap-1">
-                        <button
-                            onClick={() => setShowBusinessesOnly(false)}
-                            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${!showBusinessesOnly
-                                ? 'bg-blue-600 text-white shadow-md'
-                                : 'text-slate-500 hover:bg-white hover:shadow-sm'
-                                }`}
-                        >
-                            All Entities
-                        </button>
-                        <button
-                            onClick={() => setShowBusinessesOnly(true)}
-                            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${showBusinessesOnly
-                                ? 'bg-blue-600 text-white shadow-md'
-                                : 'text-slate-500 hover:bg-white hover:shadow-sm'
-                                }`}
-                        >
-                            Businesses Only
-                        </button>
                     </div>
                 </div>
             </div>
@@ -127,10 +97,18 @@ export default function Insights({ data, onSelect }) {
                                 </div>
                             </div>
 
-                            <div className="mb-4 min-h-[5rem]">
-                                <h4 className="font-bold text-lg text-slate-900 leading-snug line-clamp-2 group-hover:text-blue-700 transition-colors mb-2">
-                                    {network.network_name || network.entity_name}
-                                </h4>
+                            <div className="mb-4 min-h-[6rem]">
+                                <div className="space-y-1 mb-3">
+                                    <h4 className="font-black text-xl lg:text-2xl text-slate-900 leading-tight tracking-tight group-hover:text-blue-600 transition-colors">
+                                        {network.network_name || network.entity_name}
+                                    </h4>
+                                    {network.controlling_business_name && network.controlling_business_name !== network.entity_name && (
+                                        <div className="text-[11px] font-extrabold text-slate-400 uppercase tracking-[0.15em] flex items-center gap-1.5 mt-1.5">
+                                            <Building2 size={10} className="text-slate-300" />
+                                            {network.controlling_business_name}
+                                        </div>
+                                    )}
+                                </div>
 
                                 {network.representative_entities && network.representative_entities.length > 0 && (
                                     <div className="space-y-1">
@@ -201,6 +179,6 @@ export default function Insights({ data, onSelect }) {
                     </div>
                 )}
             </div>
-        </div>
+        </div >
     );
 }

@@ -103,9 +103,10 @@ def main():
         # 4. Re-generate networks
         print("Step 4: Re-generating networks and refreshing insights...")
         if not args.dry_run:
-            run_script("refresh_insights.py")
+            # We must use --force to link any newly imported properties that are currently orphaned
+            run_script("api/discover_networks.py", ["--force"])
         else:
-            print("Dry-run: Skipping network re-generation")
+            print("Dry-run: Skipping network re-generation (would run api/discover_networks.py --force)")
             
         print(f"--- Nightly Sync Worker Completed at {datetime.now()} ---")
     except Exception as e:

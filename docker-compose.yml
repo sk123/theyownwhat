@@ -75,6 +75,7 @@ services:
     volumes:
       - ./importer:/app/importer
       - ./data:/app/data
+      - ./scripts:/app/scripts
     environment:
       - DATABASE_URL=postgresql://user:password@db:5432/ctdata
       - PYTHONUNBUFFERED=1
