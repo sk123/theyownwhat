@@ -1496,9 +1496,13 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
 
                 elif entity_type == "address":
                     # Lookup property by exact location (assuming entity_id passed is the address string)
+                    # Fetch owner details too so we can fall back to isolated view if no network
                     cursor.execute(
-                        "SELECT business_id, principal_id, owner_norm FROM properties WHERE location = %s LIMIT 1",
-                        (entity_id,)  # entity_id here is the address string from autocomplete value
+                        "SELECT p.business_id, p.principal_id, p.owner_norm, p.owner, p.co_owner, b.name as business_name "
+                        "FROM properties p "
+                        "LEFT JOIN businesses b ON p.business_id = b.id "
+                        "WHERE p.location = %s LIMIT 1",
+                        (entity_id,) 
                     )
                     prop = cursor.fetchone()
                     if prop:
@@ -1521,6 +1525,18 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                              cursor.execute("SELECT network_id FROM entity_networks WHERE entity_type='principal' AND entity_id=%s", (prop["owner_norm"],))
                              row = cursor.fetchone()
                              if row: network_ids = [row["network_id"]]
+                        
+                         # --- FALLBACK: If no network found, redirect to Isolated Owner View ---
+                         if not network_ids:
+                             if prop["business_id"]:
+                                 entity_type = "business"
+                                 entity_id = str(prop["business_id"])
+                                 entity_name = prop.get("business_name")
+                             else:
+                                 entity_type = "principal"
+                                 # Use explicit owner name for the isolated view title
+                                 entity_name = prop.get("owner") or prop.get("co_owner") or "Unknown Owner"
+                                 entity_id = entity_name
 
                 else:
                     pname_norm = normalize_person_name_py(entity_name or entity_id)

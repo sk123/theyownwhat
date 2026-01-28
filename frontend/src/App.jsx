@@ -374,6 +374,8 @@ function App() {
                               id = item.id;
                             } else if (item.type === 'Business Principal') {
                               type = 'principal';
+                            } else if (item.type === 'Address') {
+                              type = 'address';
                             }
                             // Property Owner/Co-Owner fallback to 'owner' and use name (item.value)
 

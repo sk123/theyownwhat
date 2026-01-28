@@ -12,21 +12,27 @@
 
 ## Recent Updates (January 2026)
 
-*   **Smart Complex Grouping:** Significantly improved address normalization logic in the Property Table. Identical street addresses (e.g., `195 SIGOURNEY ST`) are now correctly consolidated into complexes even if their sub-unit formats differ.
-*   **Refined Expanded Views:** Redesigned the complex unit display with tree-style indentation, blue visual connectors, and clear "Unit X" labeling for better readability.
-*   **Enhanced Financial Details:** The property modal now features a robust "Owner Mailing Address" lookup with multiple data fallbacks, ensuring mailing information is visible even when entity links are missing.
-*   **Performance & Stability:** Fixed critical geocoding errors (422/500) and optimized the backend to handle large batch requests efficiently using the US Census and Nominatim APIs.
-*   **Home Page Polish:** Modernized the hero section with refined font scales and tightened spacing, ensuring "Top Networks" is visible on the first load without scrolling.
-*   **AI Digest:** FIXED: Resolved synthesis errors and added inline source citations `(Source: url)` for better verification.
+*   **Subsidized Housing Integration:** Integrated the **National Housing Preservation Database (NHPD)**. The system now automatically flags properties with active subsidies (Section 8, LIHTC, etc.) and displays detailed program info (units, expiration dates) in the property modal.
+*   **Search Interface Refactor:** Streamlined the discovery experience by merging the search bar and button into a unified, minimal interface with robust autocomplete and clear "No results" messaging.
+*   **Smart Complex Grouping:** significantly improved address normalization logic in the Property Table.
+*   **Performance & Stability:** Fixed critical geocoding errors and optimized the backend to handle large batch requests efficiently.
+*   **Home Page Polish:** Modernized the hero section and refined the "Top Networks" display for immediate insight.
 
-## New Feature: AI Digest
+## Key Features
 
+### 🕸️ Network Discovery
+Our improved "Top Networks" engine visualizes the hidden connections between shell companies. It now supports:
+*   **Graph Visualization:** See the web of business and principal connections.
+*   **Portfolio Analysis:** Automatically aggregates total assessed value and property counts for discovered networks.
+
+### 🤖 AI Digest
 The **AI Digest** performs automated web searches across multiple entities simultaneously to identify:
-
 *   Systemic tenant complaints and property condition issues.
 *   Legal violations and court case patterns.
 *   Corporate footprints and out-of-state investment trends.
-*   Verified news sources and public documentation links.
+
+### 💰 Subsidy Tracking
+[NEW] We now track and display active housing subsidies for properties, helping advocates identify at-risk affordable housing stock. Source: NHPD.
 
 ## Data Sources
 
