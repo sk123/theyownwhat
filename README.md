@@ -12,18 +12,18 @@
 
 ## Recent Updates (January 2026)
 
-*   **Subsidized Housing Integration:** Integrated the **National Housing Preservation Database (NHPD)**. The system now automatically flags properties with active subsidies (Section 8, LIHTC, etc.) and displays detailed program info (units, expiration dates) in the property modal.
-*   **Search Interface Refactor:** Streamlined the discovery experience by merging the search bar and button into a unified, minimal interface with robust autocomplete and clear "No results" messaging.
-*   **Smart Complex Grouping:** significantly improved address normalization logic in the Property Table.
-*   **Performance & Stability:** Fixed critical geocoding errors and optimized the backend to handle large batch requests efficiently.
-*   **Home Page Polish:** Modernized the hero section and refined the "Top Networks" display for immediate insight.
+*   **Subsidized Housing Integration:** Integrated the **National Housing Preservation Database (NHPD)**. The system flags properties with active subsidies (Section 8, LIHTC, etc.) and displays program info in the property modal.
+*   **Search Interface:** Merged the search bar and button into a unified interface with autocomplete and "No results" messaging.
+*   **Complex Grouping:** Updated address normalization logic in the Property Table.
+*   **Performance & Stability:** Fixed geocoding errors and updated the backend to handle batch requests.
+*   **Home Page:** Updated the hero section and the "Top Networks" display.
 
 ## Key Features
 
 ### 🕸️ Network Discovery
-Our improved "Top Networks" engine visualizes the hidden connections between shell companies. It now supports:
-*   **Graph Visualization:** See the web of business and principal connections.
-*   **Portfolio Analysis:** Automatically aggregates total assessed value and property counts for discovered networks.
+The "Top Networks" engine visualizes connections between shell companies. It supports:
+*   **Graph Visualization:** Displays business and principal connections.
+*   **Portfolio Analysis:** Aggregates total assessed value and property counts for discovered networks.
 
 ### 🤖 AI Digest
 The **AI Digest** performs automated web searches across multiple entities simultaneously to identify:
