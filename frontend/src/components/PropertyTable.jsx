@@ -768,8 +768,9 @@ export default function PropertyTable({
                                 {selectedIds.size > 0 && (
                                     <button
                                         onClick={(e) => { e.stopPropagation(); handleMapSelected(); }}
-                                        disabled={selectedIds.size > 500}
-                                        className="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded shadow-sm transition-colors flex items-center gap-1"
+                                        disabled={selectedIds.size > 2500}
+                                        className={`px-3 py-1 bg-blue-600 text-white text-xs font-bold rounded shadow-sm transition-colors flex items-center gap-1 ${selectedIds.size > 2500 ? 'opacity-50 cursor-not-allowed' : 'hover:bg-blue-700'}`}
+                                        title={selectedIds.size > 2500 ? "Selection limit (2500) exceeded" : "Map selected properties"}
                                     >
                                         <Map className="w-3 h-3" />
                                         Map

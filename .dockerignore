@@ -10,8 +10,8 @@ Thumbs.db
 
 # --- CRITICAL ADDITIONS FOR DOCKER ---
 # Ignore local dependencies (Docker should install its own)
-node_modules/
-jspm_packages/
+**/node_modules/
+**/jspm_packages/
 
 # Ignore local build outputs
 dist/
@@ -21,3 +21,13 @@ build/
 # Ignore git metadata
 .git
 .gitignore
+
+# --- LOGS & DEBUG OUTPUTS ---
+*.log
+*.html
+nohup.out
+*.json
+!package.json
+!package-lock.json
+!tsconfig.json
+!database.json

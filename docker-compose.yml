@@ -1,7 +1,6 @@
-version: '3.8'
-
 services:
-  api:
+  # --- TENANT TOOLBOX STACK (Port 6263) ---
+  api_toolbox:
     build:
       context: .
       dockerfile: Dockerfile
@@ -16,6 +15,7 @@ services:
       - DATABASE_URL=postgresql://user:password@ctdata_db:5432/ctdata
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - SERPAPI_API_KEY=${SERPAPI_API_KEY}
+      - TOOLBOX_ENABLED=true
     command: python -m uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/api/health" ]
@@ -26,36 +26,46 @@ services:
     networks:
       - default
 
-  geocoder:
+  nginx_toolbox:
     build:
       context: .
-      dockerfile: Dockerfile
-    container_name: ctdata_geocoder_toolbox
+      dockerfile: frontend/Dockerfile
+    container_name: ctdata_nginx_toolbox
     restart: unless-stopped
     depends_on:
-      api:
+      api_toolbox:
         condition: service_healthy
+    ports:
+      - "6263:80"
     volumes:
-      - ./api:/app/api
-    environment:
-      - DATABASE_URL=postgresql://user:password@ctdata_db:5432/ctdata
-      - PYTHONUNBUFFERED=1
-    command: python -m api.background_geocoder
+      - ./nginx_toolbox.conf:/etc/nginx/conf.d/default.conf:ro
     networks:
       - default
 
-  updater:
+  # --- LIVE SITE STACK (Port 6262) ---
+  api:
     build:
       context: .
-      dockerfile: Dockerfile.updater
-    container_name: ctdata_updater_toolbox
-    profiles: [ "tools" ]
+      dockerfile: Dockerfile
+    container_name: ctdata_api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
     volumes:
-      - ./updater:/app/updater
-      - ./scripts:/app/scripts
+      - ./api:/app/api
+      - ./reporter:/app/reporter
     environment:
       - DATABASE_URL=postgresql://user:password@ctdata_db:5432/ctdata
-    command: python updater/update_vision_data.py -m "HAMDEN"
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - SERPAPI_API_KEY=${SERPAPI_API_KEY}
+      - TOOLBOX_ENABLED=false
+    command: python -m uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/api/health" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 120s
     networks:
       - default
 
@@ -63,13 +73,13 @@ services:
     build:
       context: .
       dockerfile: frontend/Dockerfile
-    container_name: ctdata_nginx_toolbox
+    container_name: ctdata_nginx
     restart: unless-stopped
     depends_on:
       api:
         condition: service_healthy
     ports:
-      - "6263:80"
+      - "6262:80"
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
     networks:

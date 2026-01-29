@@ -57,7 +57,7 @@ export default function AboutModal({ isOpen, onClose, onShowFreshness }) {
                         <div className="mt-10 pt-6 border-t border-gray-100 flex items-center justify-between">
                             <div className="flex flex-col">
                                 <span className="text-xs font-bold text-gray-400 uppercase tracking-widest">Transparency</span>
-                                <span className="text-sm text-gray-500">View our data update logs and source freshness.</span>
+                                <span className="text-sm text-gray-500">View data update logs and source freshness.</span>
                             </div>
                             <button
                                 onClick={onShowFreshness}
