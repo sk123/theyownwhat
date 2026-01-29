@@ -160,43 +160,43 @@ export default function NetworkProfileCard({ networkData, stats }) {
                     aria-label="Portfolio Statistics"
                 >
                     <div
-                        className="bg-white/5 rounded-xl p-2.5 md:p-3 lg:p-4 border border-white/10 backdrop-blur-sm flex flex-col justify-center h-full min-w-[90px] md:min-w-[100px]"
+                        className="bg-white/5 rounded-xl p-2 md:p-3 lg:p-4 border border-white/10 backdrop-blur-sm flex flex-col justify-center min-w-[90px] md:min-w-[100px]"
                         role="listitem"
                     >
-                        <div className="flex items-center gap-2 mb-1">
-                            <Building2 className="w-3.5 h-3.5 text-slate-400" aria-hidden="true" />
-                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Properties</span>
+                        <div className="flex items-center gap-1.5 mb-0.5">
+                            <Building2 className="w-3 h-3 text-slate-400" aria-hidden="true" />
+                            <span className="text-[9px] md:text-[10px] font-bold text-slate-400 uppercase tracking-wider">Properties</span>
                         </div>
-                        <div className="text-xl md:text-2xl font-black text-white" aria-label={`${propCount} Properties`}>
+                        <div className="text-lg md:text-xl lg:text-2xl font-black text-white" aria-label={`${propCount} Properties`}>
                             {propCount}
                         </div>
                     </div>
 
                     <div
-                        className="bg-white/5 rounded-xl p-4 border border-white/10 backdrop-blur-sm flex flex-col justify-center h-full min-w-[100px]"
+                        className="bg-white/5 rounded-xl p-2 md:p-3 lg:p-4 border border-white/10 backdrop-blur-sm flex flex-col justify-center min-w-[90px] md:min-w-[100px]"
                         role="listitem"
                     >
-                        <div className="flex items-center gap-2 mb-1">
-                            <Building2 className="w-3.5 h-3.5 text-slate-400" aria-hidden="true" />
-                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Linked Entities</span>
+                        <div className="flex items-center gap-1.5 mb-0.5">
+                            <Building2 className="w-3 h-3 text-slate-400" aria-hidden="true" />
+                            <span className="text-[9px] md:text-[10px] font-bold text-slate-400 uppercase tracking-wider">Linked Entities</span>
                         </div>
-                        <div className="text-xl md:text-2xl font-black text-white" aria-label={`${networkData.businesses.length + entityPrincipals.length} Linked Entities`}>
+                        <div className="text-lg md:text-xl lg:text-2xl font-black text-white" aria-label={`${networkData.businesses.length + entityPrincipals.length} Linked Entities`}>
                             {networkData.businesses.length + entityPrincipals.length}
                         </div>
                     </div>
 
                     <div
-                        className="bg-blue-600/20 rounded-xl p-2.5 md:p-3 lg:p-4 border border-blue-500/30 backdrop-blur-sm col-span-2 sm:col-span-1 flex flex-col justify-center h-full min-w-[120px] md:min-w-[140px]"
+                        className="bg-blue-600/20 rounded-xl p-2 md:p-3 lg:p-4 border border-blue-500/30 backdrop-blur-sm col-span-2 sm:col-span-1 flex flex-col justify-center min-w-[120px] md:min-w-[140px]"
                         role="listitem"
                     >
-                        <div className="flex items-center gap-2 mb-1">
-                            <TrendingUp className="w-3.5 h-3.5 text-blue-300" aria-hidden="true" />
-                            <span className="text-[10px] font-bold text-blue-300 uppercase tracking-wider">Valuation</span>
+                        <div className="flex items-center gap-1.5 mb-0.5">
+                            <TrendingUp className="w-3 h-3 text-blue-300" aria-hidden="true" />
+                            <span className="text-[9px] md:text-[10px] font-bold text-blue-300 uppercase tracking-wider">Valuation</span>
                         </div>
-                        <div className="text-xl lg:text-2xl font-black text-white truncate" title={`$${(safeStats.totalValue / 1000000).toFixed(1)}M`}>
+                        <div className="text-lg md:text-xl lg:text-2xl font-black text-white truncate" title={`$${(safeStats.totalValue / 1000000).toFixed(1)}M`}>
                             ${(safeStats.totalValue / 1000000).toFixed(1)}M
                         </div>
-                        <div className="text-[10px] font-bold text-blue-200/60 mt-0.5 truncate">
+                        <div className="text-[9px] md:text-[10px] font-bold text-blue-200/60 mt-0 truncate">
                             Appraised: ${(safeStats.totalAppraised / 1000000).toFixed(1)}M
                         </div>
                     </div>
