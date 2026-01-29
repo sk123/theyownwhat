@@ -119,21 +119,21 @@ export default function NetworkProfileCard({ networkData, stats }) {
         <>
             <section
                 aria-label="Network Profile Summary"
-                className="bg-slate-900 text-white rounded-2xl p-6 shadow-xl shadow-slate-900/10 flex flex-col xl:flex-row gap-6 items-start xl:items-stretch justify-between border border-slate-700/50 w-full"
+                className="bg-slate-900 text-white rounded-2xl p-3 md:p-4 lg:p-6 shadow-xl shadow-slate-900/10 flex flex-col xl:flex-row gap-3 md:gap-4 lg:gap-6 items-start xl:items-stretch justify-between border border-slate-700/50 w-full"
             >
                 {/* Left: Identity & Context */}
-                <div className="flex flex-col gap-3 max-w-xl w-full">
-                    <div className="flex items-center gap-3 mb-1">
-                        <div className="p-2 bg-blue-500/20 rounded-lg shrink-0">
-                            <Users className="w-5 h-5 text-blue-300" aria-hidden="true" />
+                <div className="flex flex-col gap-2 md:gap-3 max-w-xl w-full">
+                    <div className="flex items-center gap-2 md:gap-3 mb-0">
+                        <div className="p-1.5 md:p-2 bg-blue-500/20 rounded-lg shrink-0">
+                            <Users className="w-4 h-4 md:w-5 md:h-5 text-blue-300" aria-hidden="true" />
                         </div>
-                        <h2 className="text-2xl lg:text-3xl font-black text-white tracking-tight break-words line-clamp-2" title={managerName}>
+                        <h2 className="text-xl md:text-2xl lg:text-3xl font-black text-white tracking-tight break-words line-clamp-2" title={managerName}>
                             {managerName}
                         </h2>
                     </div>
 
                     {activeBusinesses.length > 0 && (
-                        <div className="mt-3 p-3 bg-white/5 rounded-lg border border-white/5 text-sm text-slate-300">
+                        <div className="mt-2 md:mt-3 p-2 md:p-3 bg-white/5 rounded-lg border border-white/5 text-xs md:text-sm text-slate-300">
                             <span className="font-bold text-slate-400 text-xs uppercase tracking-wider block mb-1">
                                 Portfolio Controls {activeBusinesses.length + entityPrincipals.length} Entities
                             </span>
@@ -146,7 +146,7 @@ export default function NetworkProfileCard({ networkData, stats }) {
 
                     <button
                         onClick={handleGenerateReport}
-                        className="mt-4 flex items-center gap-2 text-xs font-bold text-amber-300 hover:text-amber-200 transition-colors uppercase tracking-widest bg-amber-500/10 hover:bg-amber-500/20 px-4 py-2 rounded-lg w-fit border border-amber-500/20"
+                        className="mt-2 md:mt-4 flex items-center gap-1.5 md:gap-2 text-[10px] md:text-xs font-bold text-amber-300 hover:text-amber-200 transition-colors uppercase tracking-widest bg-amber-500/10 hover:bg-amber-500/20 px-3 md:px-4 py-1.5 md:py-2 rounded-lg w-fit border border-amber-500/20"
                     >
                         <Sparkles size={14} />
                         Generate AI Report
@@ -155,19 +155,19 @@ export default function NetworkProfileCard({ networkData, stats }) {
 
                 {/* Right: Stats Grid */}
                 <div
-                    className="grid grid-cols-2 sm:grid-cols-3 gap-3 w-full xl:w-auto"
+                    className="grid grid-cols-2 sm:grid-cols-3 gap-2 md:gap-3 w-full xl:w-auto"
                     role="list"
                     aria-label="Portfolio Statistics"
                 >
                     <div
-                        className="bg-white/5 rounded-xl p-4 border border-white/10 backdrop-blur-sm flex flex-col justify-center h-full min-w-[100px]"
+                        className="bg-white/5 rounded-xl p-2.5 md:p-3 lg:p-4 border border-white/10 backdrop-blur-sm flex flex-col justify-center h-full min-w-[90px] md:min-w-[100px]"
                         role="listitem"
                     >
                         <div className="flex items-center gap-2 mb-1">
                             <Building2 className="w-3.5 h-3.5 text-slate-400" aria-hidden="true" />
                             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Properties</span>
                         </div>
-                        <div className="text-2xl font-black text-white" aria-label={`${propCount} Properties`}>
+                        <div className="text-xl md:text-2xl font-black text-white" aria-label={`${propCount} Properties`}>
                             {propCount}
                         </div>
                     </div>
@@ -180,13 +180,13 @@ export default function NetworkProfileCard({ networkData, stats }) {
                             <Building2 className="w-3.5 h-3.5 text-slate-400" aria-hidden="true" />
                             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Linked Entities</span>
                         </div>
-                        <div className="text-2xl font-black text-white" aria-label={`${networkData.businesses.length + entityPrincipals.length} Linked Entities`}>
+                        <div className="text-xl md:text-2xl font-black text-white" aria-label={`${networkData.businesses.length + entityPrincipals.length} Linked Entities`}>
                             {networkData.businesses.length + entityPrincipals.length}
                         </div>
                     </div>
 
                     <div
-                        className="bg-blue-600/20 rounded-xl p-4 border border-blue-500/30 backdrop-blur-sm col-span-2 sm:col-span-1 flex flex-col justify-center h-full min-w-[140px]"
+                        className="bg-blue-600/20 rounded-xl p-2.5 md:p-3 lg:p-4 border border-blue-500/30 backdrop-blur-sm col-span-2 sm:col-span-1 flex flex-col justify-center h-full min-w-[120px] md:min-w-[140px]"
                         role="listitem"
                     >
                         <div className="flex items-center gap-2 mb-1">
