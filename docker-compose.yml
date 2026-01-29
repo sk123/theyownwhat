@@ -44,6 +44,21 @@ services:
     networks:
       - default
 
+  updater:
+    build:
+      context: .
+      dockerfile: Dockerfile.updater
+    container_name: ctdata_updater_toolbox
+    profiles: [ "tools" ]
+    volumes:
+      - ./updater:/app/updater
+      - ./scripts:/app/scripts
+    environment:
+      - DATABASE_URL=postgresql://user:password@ctdata_db:5432/ctdata
+    command: python updater/update_vision_data.py -m "HAMDEN"
+    networks:
+      - default
+
   nginx:
     build:
       context: .

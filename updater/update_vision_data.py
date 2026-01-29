@@ -11,6 +11,8 @@ import urllib3
 import concurrent.futures
 from requests.compat import urljoin
 import sys
+import random
+import traceback
 from io import StringIO
 import argparse
 # Add scripts directory to path for sibling imports
@@ -43,8 +45,8 @@ MUNICIPAL_DATA_SOURCES = {
     # 'BERLIN': {'type': 'MAPXPRESS', 'domain': 'berlin.mapxpress.net'},
     'BETHANY': {'type': 'MAPXPRESS', 'domain': 'bethany.mapxpress.net'},
     'BETHLEHEM': {'type': 'MAPXPRESS', 'domain': 'bethlehem.mapxpress.net'},
-    'BRIDGEPORT': {'type': 'MAPXPRESS', 'domain': 'metrocog.mapxpress.net/Bridgeport'},
-    'BRISTOL': {'type': 'MAPXPRESS', 'domain': 'bristol.mapxpress.net'},
+    'BRIDGEPORT': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/bridgeportct/'},
+    'BRISTOL': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/bristolct/'},
     'BROOKFIELD': {'type': 'MAPXPRESS', 'domain': 'brookfield.mapxpress.net'},
     'BURLINGTON': {'type': 'MAPXPRESS', 'domain': 'burlington.mapxpress.net'},
     'CANTON': {'type': 'MAPXPRESS', 'domain': 'canton.mapxpress.net'},
@@ -85,7 +87,7 @@ MUNICIPAL_DATA_SOURCES = {
     'EASTFORD': {'type': 'PROPERTYRECORDCARDS', 'towncode': '039'},
     'EASTON': {'type': 'PROPERTYRECORDCARDS', 'towncode': '046'},
     'ELLINGTON': {'type': 'PROPERTYRECORDCARDS', 'towncode': '048'},
-    'FARMINGTON': {'type': 'PROPERTYRECORDCARDS', 'towncode': '052'},
+    # 'FARMINGTON': {'type': 'PROPERTYRECORDCARDS', 'towncode': '052'},
     'FRANKLIN': {'type': 'PROPERTYRECORDCARDS', 'towncode': '053'},
     'GUILFORD': {'type': 'PROPERTYRECORDCARDS', 'towncode': '060'},
     'HADDAM': {'type': 'PROPERTYRECORDCARDS', 'towncode': '061'},
@@ -129,7 +131,7 @@ MUNICIPAL_DATA_SOURCES = {
     # CT Geodata Portal (Statewide 2025)
     # 'NEW HAVEN': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'New Haven'},
     'WATERBURY': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Waterbury'},
-    'BRIDGEPORT': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Bridgeport'},
+    # 'BRIDGEPORT': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Bridgeport'},
     'HARTFORD': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Hartford'},
     'STAMFORD': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/stamfordct/'},
     'NORWALK': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Norwalk'},
@@ -167,10 +169,11 @@ GEODATA_CACHE = {}
 GEODATA_LOCK = threading.Lock()
 
 # --- Logging ---
-def log(message):
-    """Prints a message with a timestamp."""
+def log(message, municipality=None):
+    """Prints a message with a timestamp and optional municipality prefix."""
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    print(f"[{timestamp}] {message}")
+    prefix = f"[{municipality}] " if municipality else ""
+    print(f"[{timestamp}] {prefix}{message}", flush=True)
     sys.stdout.flush()
 
 # --- Database Connection ---
@@ -765,12 +768,20 @@ def parse_mapxpress_html(html_content):
                              try: data['number_of_units'] = int(float(val))
                              except: pass
     
-    # Try to find Appraisal/Assessment if available (not in snippet but might be elsewhere)
+    # Try to find Appraisal/Assessment if available
     # Usually in a summary table at top.
+    
+    # --- MapXpress Photo Extraction ---
+    # Look for image with 'Photo' in ID or src, or residing in a photo container
+    photo_img = soup.find('img', id=re.compile(r'Photo|MainImage', re.I))
+    if not photo_img:
+        photo_img = soup.find('img', src=re.compile(r'/photos/|/images/prop', re.I))
+    
+    if photo_img and photo_img.get('src'):
+        data['building_photo'] = photo_img.get('src')
     
     return data
 
-    return data
 
 def scrape_mapxpress_property(session, base_url_template, row):
     """Worker function to scrape a single property."""
@@ -779,6 +790,10 @@ def scrape_mapxpress_property(session, base_url_template, row):
     
     prop_id, location, account_num, serial_num, current_link = row
     unique_id = account_num if account_num else serial_num
+    
+    # Fallback: Use cama_site_link if it looks like an ID (common in Bridgeport import)
+    if not unique_id and current_link and not current_link.startswith('http'):
+        unique_id = current_link
     
     if not unique_id:
         return prop_id, None, None
@@ -792,6 +807,11 @@ def scrape_mapxpress_property(session, base_url_template, row):
         resp = session.get(target_url, timeout=15)
         if resp.status_code == 200:
             scraped_data = parse_mapxpress_html(resp.text)
+            
+            # Resolve relative photo URL if found
+            if 'building_photo' in scraped_data:
+                scraped_data['building_photo'] = resp.url.rsplit('/', 1)[0] + '/' + scraped_data['building_photo'] if not scraped_data['building_photo'].startswith('http') else scraped_data['building_photo']
+
             scraped_data['cama_site_link'] = target_url
             return prop_id, scraped_data, None
         else:
@@ -800,17 +820,21 @@ def scrape_mapxpress_property(session, base_url_template, row):
     except Exception as e:
         return prop_id, None, str(e)
 
+
 def process_municipality_with_mapxpress(conn, municipality_name, data_source_config, current_owner_only=False, force_process=False):
     """Process a municipality scraping MapXpress (Parallel)."""
     
-    log(f"--- Processing municipality: {municipality_name} via MapXpress (Force={force_process}) ---")
+    log(f"--- Processing municipality: {municipality_name} via MapXpress (Force={force_process}) ---", municipality=municipality_name)
     
     query = """
         SELECT p.id, p.location, p.account_number, p.serial_number, p.cama_site_link 
         FROM properties p
         LEFT JOIN property_processing_log ppl ON p.id = ppl.property_id
         WHERE p.property_city ILIKE %s 
-        AND (p.account_number IS NOT NULL AND p.account_number != '')
+        AND (
+            (p.account_number IS NOT NULL AND p.account_number != '') 
+            OR (p.cama_site_link IS NOT NULL AND p.cama_site_link != '')
+        )
     """
     
     if not force_process:
@@ -826,10 +850,10 @@ def process_municipality_with_mapxpress(conn, municipality_name, data_source_con
         properties = cursor.fetchall()
         
     if not properties:
-        log(f"No properties found with account_number for {municipality_name}.")
+        log(f"No properties found with account_number for {municipality_name}.", municipality=municipality_name)
         return 0
         
-    log(f"Found {len(properties)} properties to scrape for {municipality_name}. Starting parallel scrape (10 threads)...")
+    log(f"Found {len(properties)} properties to scrape for {municipality_name}. Starting parallel scrape (10 threads)...", municipality=municipality_name)
     
     domain = data_source_config['domain']
     if domain.endswith('/'): domain = domain[:-1]
@@ -837,9 +861,6 @@ def process_municipality_with_mapxpress(conn, municipality_name, data_source_con
 
     updated_count = 0
     processed_count = 0
-    
-    import requests
-    import concurrent.futures
     
     session = requests.Session()
     session.headers.update({
@@ -859,7 +880,7 @@ def process_municipality_with_mapxpress(conn, municipality_name, data_source_con
             prop_id, scraped_data, error_msg = future.result()
             
             if scraped_data:
-                if update_property_in_db(conn, prop_id, scraped_data):
+                if update_property_in_db(conn, prop_id, scraped_data, municipality_name=municipality_name):
                     updated_count += 1
             elif error_msg:
                 # Log error but don't spam if common
@@ -871,9 +892,9 @@ def process_municipality_with_mapxpress(conn, municipality_name, data_source_con
             
             processed_count += 1
             if processed_count % 50 == 0:
-                log(f"  -> Scraped {processed_count}/{len(properties)}, updated {updated_count}...")
+                log(f"  -> Scraped {processed_count}/{len(properties)}, updated {updated_count}...", municipality=municipality_name)
             
-    log(f"Finished {municipality_name}. Scraped {processed_count}, Updated {updated_count}.")
+    log(f"Finished {municipality_name}. Scraped {processed_count}, Updated {updated_count}.", municipality=municipality_name)
     return updated_count
 
 # --- PropertyRecordCards Scraper ---
@@ -993,7 +1014,7 @@ def scrape_propertyrecordcards_property(session, base_url_template, row):
 def process_municipality_with_propertyrecordcards(conn, municipality_name, data_source_config, current_owner_only=False, force_process=False):
     """Process a municipality using PropertyRecordCards (Parallel)."""
     
-    log(f"--- Processing municipality: {municipality_name} via PropertyRecordCards (Force={force_process}) ---")
+    log(f"--- Processing municipality: {municipality_name} via PropertyRecordCards (Force={force_process}) ---", municipality=municipality_name)
     
     # 1. Get Properties (same logic as MapXpress)
     # 1. Get Properties (same logic as MapXpress)
@@ -1015,10 +1036,10 @@ def process_municipality_with_propertyrecordcards(conn, municipality_name, data_
         properties = cursor.fetchall()
         
     if not properties:
-        log(f"No properties found with account_number for {municipality_name}.")
+        log(f"No properties found with account_number for {municipality_name}.", municipality=municipality_name)
         return 0
         
-    log(f"Found {len(properties)} properties to scrape for {municipality_name}. Starting parallel scrape (10 threads)...")
+    log(f"Found {len(properties)} properties to scrape for {municipality_name}. Starting parallel scrape (10 threads)...", municipality=municipality_name)
     
     # 2. Construct URL Template
     towncode = data_source_config['towncode']
@@ -1030,9 +1051,6 @@ def process_municipality_with_propertyrecordcards(conn, municipality_name, data_
 
     updated_count = 0
     processed_count = 0
-    
-    import requests
-    import concurrent.futures
     
     session = requests.Session()
     session.headers.update({
@@ -1050,7 +1068,7 @@ def process_municipality_with_propertyrecordcards(conn, municipality_name, data_
             prop_id, scraped_data, error_msg = future.result()
             
             if scraped_data:
-                if update_property_in_db(conn, prop_id, scraped_data):
+                if update_property_in_db(conn, prop_id, scraped_data, municipality_name=municipality_name):
                     updated_count += 1
             elif error_msg:
                 # log(f"Scrape error for {prop_id}: {error_msg}")
@@ -1060,9 +1078,9 @@ def process_municipality_with_propertyrecordcards(conn, municipality_name, data_
             processed_count += 1
             
             if processed_count % 50 == 0:
-                log(f"  -> Scraped {processed_count}/{len(properties)}, updated {updated_count}...")
+                log(f"  -> Scraped {processed_count}/{len(properties)}, updated {updated_count}...", municipality=municipality_name)
             
-    log(f"Finished {municipality_name}. Scraped {processed_count}, Updated {updated_count}.")
+    log(f"Finished {municipality_name}. Scraped {processed_count}, Updated {updated_count}.", municipality=municipality_name)
     return updated_count
 
 # --- Vision Appraisal Functions (existing code) ---
@@ -1292,55 +1310,59 @@ def scrape_individual_property_page(prop_page_url, session, referer):
     return data if data else None
 
 
-def scrape_street_properties(street_link, municipality_url, referer):
+def scrape_street_properties(street_link, municipality_url, referer, session=None, municipality_name=None):
     """Scrapes all properties on a single street page."""
     street_props = {}
-    with requests.Session() as session:
-        session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
-        try:
-            time.sleep(0.5)
-            response = session.get(street_link, verify=False, timeout=20, headers={'Referer': referer})
-            response.raise_for_status()
-            soup = BeautifulSoup(response.content, 'html.parser')
+    
+    # Random jitter to avoid strict pattern detection
+    # Use smaller jitter if we are sharing a session to keep things fast but safe
+    time.sleep(random.uniform(0.1, 0.5) if session else random.uniform(0.5, 1.5))
+
+    try:
+        if session:
+            # When sharing a session, we stay in the same "ASP.NET Session"
+            response = session.get(street_link, headers={'Referer': referer} if referer else {}, verify=False, timeout=30)
+        else:
+            with requests.Session() as s:
+                s.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
+                response = s.get(street_link, verify=False, timeout=30)
+
+        response.raise_for_status()
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # FIX: Use regex for case-insensitive and robust link finding
+        prop_links = soup.find_all("a", href=re.compile(r'\.aspx\?(pid|acct|uniqueid)=', re.I))
+        
+        if len(prop_links) == 0:
+             log(f"Street {street_link} found 0 property links. Status: {response.status_code}. Len: {len(response.text)}. Resolved URL: {response.url}", municipality=municipality_name)
+
+        for prop_link in prop_links:
+            raw_address = prop_link.text.strip()
+            # Clean address: remove "Mblu:" and other extraneous data
+            address = re.sub(r'\s+Mblu:.*', '', raw_address, flags=re.IGNORECASE).strip()
+            address = normalize_address(address)
+
+            href = prop_link.get('href')
+            if not href or not address:
+                continue
             
-            prop_links = soup.select("a[href*='.aspx?pid='], a[href*='.aspx?acct=']")
-            # print(f"DEBUG: Street {street_link} found {len(prop_links)} property links.", flush=True) # Too verbose? yes.
-            # Log only if 0? No, log first few.
-            if len(prop_links) == 0:
-                 print(f"DEBUG: Street {street_link} found 0 property links. Status: {response.status_code}. Content Len: {len(response.text)}. Title: {soup.title}. History: {response.history}", flush=True)
-
-            for prop_link in prop_links:
-                raw_address = prop_link.text.strip()
-                # Clean address: remove "Mblu:" and other extraneous data
-                address = re.sub(r'\s+Mblu:.*', '', raw_address, flags=re.IGNORECASE).strip()
-                address = normalize_address(address)
-
-                href = prop_link.get('href')
-                if not href or not address:
-                    continue
-                
-                # Filter out malformed links like "Map.aspx?pid=" or "Parcel.aspx?pid=" without a value
-                if re.search(r'(pid|acct)=\s*$', href, re.I):
-                    continue
-                
-                prop_page_url = urljoin(municipality_url, href)
-                # print(f"DEBUG: Scraping property {prop_page_url}", flush=True)
-                prop_details = scrape_individual_property_page(prop_page_url, session, street_link)
-                
-                if prop_details:
-                    # print(f"DEBUG: Scraped {prop_details.get('location')}", flush=True)
-                    street_props[address] = prop_details
-                else:
-                    print(f"DEBUG: Failed to scrape details for {prop_page_url}. ", flush=True)
-                
-                if prop_details:
-                    # *** KEY ADDITION ***
-                    # Add the specific parcel URL to the data dict so it can be saved in the DB
-                    prop_details['cama_site_link'] = prop_page_url
-                    street_props[address] = prop_details
-                        
-        except Exception:
-            pass
+            # Filter out malformed links or template artifacts
+            if re.search(r'(pid|acct)=\s*$', href, re.I) or '<%' in href:
+                continue
+            
+            prop_page_url = urljoin(municipality_url, href)
+            # Use provided session for individual property scraping too
+            prop_details = scrape_individual_property_page(prop_page_url, session, street_link)
+            
+            if prop_details:
+                # Add the specific parcel URL to the data dict so it can be saved in the DB
+                prop_details['cama_site_link'] = prop_page_url
+                street_props[address] = prop_details
+            else:
+                log(f"Failed to scrape details for {prop_page_url}", municipality=municipality_name)
+                    
+    except Exception as e:
+        log(f"Error scraping street {street_link}: {e}", municipality=municipality_name)
         
     return street_props
 
@@ -1389,12 +1411,14 @@ def scrape_all_properties_by_address(municipality_url, municipality_name):
                     l_soup = BeautifulSoup(resp.content, 'html.parser')
                     
                     # More robust selector: any link containing Streets.aspx?Name=
-                    links = [ urljoin(municipality_url, a['href']) for a in l_soup.find_all('a', href=re.compile(r'Streets\.aspx\?Name=', re.I)) ]
+                    # CRITICAL FIX: Strip trailing spaces from href which cause 0 results in VGSI
+                    links = [ urljoin(municipality_url, a['href'].strip()) for a in l_soup.find_all('a', href=re.compile(r'Streets\.aspx\?Name=', re.I)) ]
                     if not links:
                         # Fallback: maybe just Name=
-                        links = [ urljoin(municipality_url, a['href']) for a in l_soup.find_all('a', href=re.compile(r'Name=', re.I)) ]
+                        links = [ urljoin(municipality_url, a['href'].strip()) for a in l_soup.find_all('a', href=re.compile(r'Name=', re.I)) ]
                     return (letter_link, links)
             except Exception as e:
+                log(f"  !!! ERROR in get_streets_for_letter for {letter_link}: {e}")
                 return (letter_link, [])
 
         log(f"  -> discovering streets across {len(letter_links)} letters in parallel...")
@@ -1418,8 +1442,8 @@ def scrape_all_properties_by_address(municipality_url, municipality_name):
         # 1000 streets is fine.
         
         with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            # We pass the specific letter link as referer for each street
-            future_to_street = {executor.submit(scrape_street_properties, s_link, municipality_url, referer): s_link for s_link, referer in all_street_links}
+            # We pass the specific letter link as referer for each street AND use the main_session
+            future_to_street = {executor.submit(scrape_street_properties, s_link, municipality_url, referer, main_session, municipality_name): s_link for s_link, referer in all_street_links}
             
             for i, future in enumerate(concurrent.futures.as_completed(future_to_street)):
                 street_data = future.result()
@@ -1427,13 +1451,13 @@ def scrape_all_properties_by_address(municipality_url, municipality_name):
                     all_props_data.update(street_data)
                 
                 if (i + 1) % 50 == 0:
-                    log(f"  -> [Progress] Scraped {i + 1}/{len(all_street_links)} streets...")
+                    log(f"  -> [Progress] Scraped {i + 1}/{len(all_street_links)} streets...", municipality=municipality_name)
 
     log(f"  -> Scraped {len(all_props_data)} properties total for {municipality_name}.")
     return all_props_data
 
 # --- Database & Matching Functions ---
-def update_property_in_db(conn, property_db_id, vision_data, restricted_mode=False):
+def update_property_in_db(conn, property_db_id, vision_data, restricted_mode=False, municipality_name=None):
     """
     Updates a property record in the database with new information.
     restricted_mode (bool): If True, only update fields that are currently empty or 'Current Owner'.
@@ -1464,7 +1488,7 @@ def update_property_in_db(conn, property_db_id, vision_data, restricted_mode=Fal
                 else:
                     return False # ID not found?
         except psycopg2.Error as e:
-            log(f"DB fetch error for property ID {property_db_id}: {e}")
+            log(f"DB fetch error for property ID {property_db_id}: {e}", municipality=municipality_name)
             return False
 
     update_fields = []
@@ -1510,7 +1534,7 @@ def update_property_in_db(conn, property_db_id, vision_data, restricted_mode=Fal
                         should_update = False
         
         if should_update:
-            print(f"DEBUG DB: Planning to update field {key} to {new_value} (current: {current_val})", flush=True)
+            log(f"Planning to update field {key} to {new_value} (current: {current_val})", municipality=municipality_name)
             update_fields.append(sql.SQL("{} = %s").format(sql.Identifier(key)))
             values.append(new_value)
         else:
@@ -1617,7 +1641,7 @@ def process_municipality_with_realtime_updates(conn, municipality_name, municipa
                     prop_id = future_to_id[future]
                     vision_data = future.result()
                     if vision_data:
-                        if update_property_in_db(conn, prop_id, vision_data, restricted_mode=restricted_mode):
+                        if update_property_in_db(conn, prop_id, vision_data, restricted_mode=restricted_mode, municipality_name=municipality_name):
                             group1_updated_count += 1
                     
                     group1_processed_count += 1 # <--- INCREMENT COUNTER
@@ -1650,7 +1674,7 @@ def process_municipality_with_realtime_updates(conn, municipality_name, municipa
                 
                 if vision_data:
                     # This update will save owner, sales, AND the new 'cama_site_link'
-                    if update_property_in_db(conn, prop_db_id, vision_data, restricted_mode=restricted_mode):
+                    if update_property_in_db(conn, prop_db_id, vision_data, restricted_mode=restricted_mode, municipality_name=municipality_name):
                         group2_updated_count += 1
                         # Track the address we matched so we know which scraped properties are "used"
                         for addr, data in scraped_properties.items():
