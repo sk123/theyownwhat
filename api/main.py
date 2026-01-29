@@ -1023,8 +1023,14 @@ def autocomplete(q: str, type: str, conn=Depends(get_db_connection)):
                     if r.get("property_city"): parts.append(r["property_city"])
                     parts.append("CT")
                     if r.get("property_zip"):
-                        z = str(r["property_zip"]).strip()
-                        if len(z) < 5 and z.isdigit(): z = z.zfill(5)
+                        # Handle float-like zips from DB (e.g. 6107.0)
+                        raw_zip = r["property_zip"]
+                        try:
+                            z_int = int(float(raw_zip))
+                            z = f"{z_int:05d}"
+                        except Exception:
+                            z = str(raw_zip).strip()
+                            if len(z) < 5 and z.isdigit(): z = z.zfill(5)
                         parts.append(z)
                     results.append({
                         "label": ", ".join(parts),
@@ -1480,6 +1486,7 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
         return f"principal_{normalize_person_name_py(name)}"
 
     def generate_network_data():
+        nonlocal entity_type, entity_id, entity_name
         try:
             with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 network_ids = []
