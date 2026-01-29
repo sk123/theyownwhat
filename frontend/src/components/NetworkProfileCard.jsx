@@ -119,88 +119,50 @@ export default function NetworkProfileCard({ networkData, stats }) {
         <>
             <section
                 aria-label="Network Profile Summary"
-                className="bg-slate-900 text-white rounded-lg md:rounded-2xl p-2 md:p-3 lg:p-6 shadow-xl shadow-slate-900/10 flex flex-col md:flex-row gap-2 md:gap-3 lg:gap-6 items-start md:items-stretch justify-between border border-slate-700/50 w-full"
+                className="bg-slate-900 text-white rounded-xl py-2 px-3 lg:px-4 shadow-lg shadow-slate-900/10 flex flex-row items-center justify-between border border-slate-700/50 w-full min-h-[56px] lg:min-h-[64px]"
             >
-                {/* Left: Identity & Context */}
-                <div className="flex flex-col gap-1 md:gap-2 lg:gap-3 max-w-xl w-full">
-                    <div className="flex items-center gap-1.5 md:gap-2 lg:gap-3 mb-0">
-                        <div className="p-1 md:p-1.5 lg:p-2 bg-blue-500/20 rounded-lg shrink-0">
-                            <Users className="w-3.5 h-3.5 md:w-4 md:h-4 lg:w-5 lg:h-5 text-blue-300" aria-hidden="true" />
-                        </div>
-                        <h2 className="text-base md:text-xl lg:text-2xl xl:text-3xl font-black text-white tracking-tight break-words line-clamp-1" title={managerName}>
+                {/* Left: Identity */}
+                <div className="flex items-center gap-2 lg:gap-4 flex-1 min-w-0">
+                    <div className="p-1.5 bg-blue-500/20 rounded-lg shrink-0 hidden sm:block">
+                        <Users className="w-4 h-4 lg:w-5 lg:h-5 text-blue-300" aria-hidden="true" />
+                    </div>
+                    <div className="flex flex-col lg:flex-row lg:items-baseline lg:gap-3 min-w-0">
+                        <h2 className="text-sm md:text-base lg:text-xl font-black text-white tracking-tight truncate" title={managerName}>
                             {managerName}
                         </h2>
-                    </div>
-
-                    {/* Hide entity list on small screens to save space */}
-                    {activeBusinesses.length > 0 && (
-                        <div className="hidden md:block mt-2 lg:mt-3 p-2 md:p-3 bg-white/5 rounded-lg border border-white/5 text-xs md:text-sm text-slate-300">
-                            <span className="font-bold text-slate-400 text-xs uppercase tracking-wider block mb-1">
-                                Portfolio Controls {activeBusinesses.length + entityPrincipals.length} Entities
+                        {activeBusinesses.length > 0 && (
+                            <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider truncate max-w-[200px] hidden md:block">
+                                {activeBusinesses.length + entityPrincipals.length} Entities
                             </span>
-                            <div className="line-clamp-2">
-                                {businessList}
-                                {activeBusinesses.length > 4 && <span>... and {activeBusinesses.length + entityPrincipals.length - 4} others.</span>}
-                            </div>
+                        )}
+                    </div>
+                </div>
+
+                {/* Right: Stats & Actions Combined */}
+                <div className="flex items-center gap-3 lg:gap-6 shrink-0">
+                    <div className="hidden sm:flex items-center gap-4 border-r border-white/10 pr-4 mr-1">
+                        <div className="flex flex-col items-center">
+                            <span className="text-[10px] font-bold text-slate-500 uppercase leading-none mb-1">Assets</span>
+                            <span className="text-sm lg:text-base font-black text-white leading-none">{propCount}</span>
                         </div>
-                    )}
+                        <div className="flex flex-col items-center">
+                            <span className="text-[10px] font-bold text-slate-500 uppercase leading-none mb-1">Entities</span>
+                            <span className="text-sm lg:text-base font-black text-white leading-none">{networkData.businesses.length + entityPrincipals.length}</span>
+                        </div>
+                        <div className="flex flex-col items-end">
+                            <span className="text-[10px] font-bold text-blue-400 uppercase leading-none mb-1">Valuation</span>
+                            <span className="text-sm lg:text-base font-black text-white leading-none">${(safeStats.totalValue / 1000000).toFixed(1)}M</span>
+                        </div>
+                    </div>
 
                     <button
                         onClick={handleGenerateReport}
-                        className="hidden md:flex mt-2 lg:mt-4 items-center gap-1.5 md:gap-2 text-[10px] md:text-xs font-bold text-amber-300 hover:text-amber-200 transition-colors uppercase tracking-widest bg-amber-500/10 hover:bg-amber-500/20 px-3 md:px-4 py-1.5 md:py-2 rounded-lg w-fit border border-amber-500/20"
+                        className="flex items-center gap-1.5 text-[10px] font-bold text-amber-300 hover:text-amber-200 transition-all uppercase tracking-widest bg-amber-500/10 hover:bg-amber-500/20 px-3 py-1.5 rounded-lg border border-amber-500/20 shrink-0"
                     >
-                        <Sparkles size={14} />
-                        Generate AI Report
+                        <Sparkles size={12} className="shrink-0" />
+                        <span className="hidden lg:inline">AI Report</span>
+                        <span className="lg:hidden">Digest</span>
                     </button>
-                </div>
-
-                {/* Right: Stats Grid */}
-                <div
-                    className="grid grid-cols-3 gap-1.5 md:gap-2 lg:gap-3 w-full md:w-auto"
-                    role="list"
-                    aria-label="Portfolio Statistics"
-                >
-                    <div
-                        className="bg-white/5 rounded-xl p-2 md:p-3 lg:p-4 border border-white/10 backdrop-blur-sm flex flex-col justify-center min-w-[90px] md:min-w-[100px]"
-                        role="listitem"
-                    >
-                        <div className="flex items-center gap-1.5 mb-0.5">
-                            <Building2 className="w-3 h-3 text-slate-400" aria-hidden="true" />
-                            <span className="text-[9px] md:text-[10px] font-bold text-slate-400 uppercase tracking-wider">Properties</span>
-                        </div>
-                        <div className="text-lg md:text-xl lg:text-2xl font-black text-white" aria-label={`${propCount} Properties`}>
-                            {propCount}
-                        </div>
-                    </div>
-
-                    <div
-                        className="bg-white/5 rounded-xl p-2 md:p-3 lg:p-4 border border-white/10 backdrop-blur-sm flex flex-col justify-center min-w-[90px] md:min-w-[100px]"
-                        role="listitem"
-                    >
-                        <div className="flex items-center gap-1.5 mb-0.5">
-                            <Building2 className="w-3 h-3 text-slate-400" aria-hidden="true" />
-                            <span className="text-[9px] md:text-[10px] font-bold text-slate-400 uppercase tracking-wider">Linked Entities</span>
-                        </div>
-                        <div className="text-lg md:text-xl lg:text-2xl font-black text-white" aria-label={`${networkData.businesses.length + entityPrincipals.length} Linked Entities`}>
-                            {networkData.businesses.length + entityPrincipals.length}
-                        </div>
-                    </div>
-
-                    <div
-                        className="bg-blue-600/20 rounded-xl p-2 md:p-3 lg:p-4 border border-blue-500/30 backdrop-blur-sm col-span-2 sm:col-span-1 flex flex-col justify-center min-w-[120px] md:min-w-[140px]"
-                        role="listitem"
-                    >
-                        <div className="flex items-center gap-1.5 mb-0.5">
-                            <TrendingUp className="w-3 h-3 text-blue-300" aria-hidden="true" />
-                            <span className="text-[9px] md:text-[10px] font-bold text-blue-300 uppercase tracking-wider">Valuation</span>
-                        </div>
-                        <div className="text-lg md:text-xl lg:text-2xl font-black text-white truncate" title={`$${(safeStats.totalValue / 1000000).toFixed(1)}M`}>
-                            ${(safeStats.totalValue / 1000000).toFixed(1)}M
-                        </div>
-                        <div className="text-[9px] md:text-[10px] font-bold text-blue-200/60 mt-0 truncate">
-                            Appraised: ${(safeStats.totalAppraised / 1000000).toFixed(1)}M
-                        </div>
-                    </div>
                 </div>
             </section >
 

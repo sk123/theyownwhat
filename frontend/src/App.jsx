@@ -448,35 +448,11 @@ function App() {
               >
 
 
-                {/* Dashboard Header with Global Actions */}
-                <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm flex flex-col xl:flex-row justify-between items-center gap-6">
-                  <div className="flex items-center gap-4 w-full xl:w-auto">
-                    <div className="p-3 bg-slate-900 text-white rounded-xl shadow-xl shadow-slate-900/10 shrink-0">
-                      <TrendingUp size={24} aria-hidden="true" />
-                    </div>
-                    <div className="w-full xl:w-auto">
-                      <h2 className="text-3xl font-black text-slate-900 tracking-tighter leading-none mb-4 sr-only">
-                        Network Dashboard
-                      </h2>
-                      {/* Network Name Display - Handled inside Card now? No, kept as H2 in original but visually we rely on Card. 
-                          The original H2 was calculating the name.
-                          The Card assumes it gets data.
-                          Let's clean this up. The H2 logic is redundant if the Card shows the name. 
-                          But the layout had H2 then Card.
-                          Actually, in the previous code, the H2 block ended at line 503.
-                          Then the Card was rendered.
-                          So we had: Icon -> H2 (Name) -> Card.
-                          Wait, the Card shows the Manager Name big. 
-                          Having H2 above it with the same name is redundant. 
-                          Let's hide the redundant H2 or remove it if the Card is present.
-                      */}
+                {/* Compact Dashboard Header Strip */}
+                <div className="flex flex-col xl:flex-row justify-between items-center gap-3 shrink-0">
+                  <NetworkProfileCard networkData={networkData} stats={stats} />
 
-                      {/* Network Profile Card moved here */}
-                      <NetworkProfileCard networkData={networkData} stats={stats} />
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-3 w-full xl:w-auto justify-end">
+                  <div className="flex items-center gap-2 w-full xl:w-auto justify-end shrink-0">
                     <button
                       onClick={() => {
                         const csvContent = "data:text/csv;charset=utf-8,"
@@ -489,18 +465,18 @@ function App() {
                         document.body.appendChild(link);
                         link.click();
                       }}
-                      className="px-5 py-2.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold rounded-xl transition-all flex items-center gap-2 shadow-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                      className="px-4 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold rounded-lg transition-all flex items-center gap-2 shadow-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
                       aria-label="Export portfolio as CSV"
                     >
-                      <TrendingUp size={18} aria-hidden="true" />
+                      <TrendingUp size={14} aria-hidden="true" />
                       Export
                     </button>
                     <button
                       onClick={handleReset}
-                      className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-lg shadow-blue-500/20 transition-all flex items-center gap-2 focus:ring-2 focus:ring-blue-500 focus:outline-none focus:ring-offset-2"
+                      className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg shadow-md transition-all flex items-center gap-2 focus:ring-2 focus:ring-blue-500 focus:outline-none focus:ring-offset-2"
                       aria-label="Start a new search"
                     >
-                      <Search size={18} aria-hidden="true" />
+                      <Search size={14} aria-hidden="true" />
                       New Search
                     </button>
                   </div>
