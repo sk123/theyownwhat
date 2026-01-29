@@ -8,7 +8,7 @@
 
 ## Purpose
 
-**they own WHAT??** is an investigative and advocacy tool designed to bring transparency to **Connecticut's** property landscape. By linking fragmented public records, the tool reveals the hidden networks of ownership that shape our neighborhoods.
+**they own WHAT??** is an investigative and advocacy tool designed to bring transparency to **Connecticut's** property landscape. By linking fragmented public records, the tool reveals the hidden networks of ownership that shape neighborhoods.
 
 ## Recent Updates (January 2026)
 
@@ -32,7 +32,8 @@ The **AI Digest** performs automated web searches across multiple entities simul
 *   Corporate footprints and out-of-state investment trends.
 
 ### 💰 Subsidy Tracking
-[NEW] We now track and display active housing subsidies for properties, helping advocates identify at-risk affordable housing stock. Source: NHPD.
+### 💰 Subsidy Tracking
+[NEW] Active housing subsidies are now tracked and displayed for properties, helping advocates identify at-risk affordable housing stock. Source: NHPD.
 
 ## Data Sources
 
