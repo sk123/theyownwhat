@@ -1,42 +1,19 @@
 version: '3.8'
 
 services:
-  db:
-    image: postgres:15-alpine
-    container_name: ctdata_db
-    environment:
-      POSTGRES_DB: ctdata
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-    shm_size: '512m'
-    healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U user -d ctdata" ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    command: postgres -c max_wal_size=4GB
-    restart: unless-stopped
-
   api:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: ctdata_api
+    container_name: ctdata_api_toolbox
     restart: unless-stopped
-    depends_on:
-      db:
-        condition: service_healthy
     ports:
-      - "8000:8000"
+      - "8001:8000"
     volumes:
       - ./api:/app/api
-      - ./reporter:/app/reporter # Mount reporter for web interface
+      - ./reporter:/app/reporter
     environment:
-      - DATABASE_URL=postgresql://user:password@db:5432/ctdata
+      - DATABASE_URL=postgresql://user:password@ctdata_db:5432/ctdata
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - SERPAPI_API_KEY=${SERPAPI_API_KEY}
     command: python -m uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
@@ -46,12 +23,14 @@ services:
       timeout: 5s
       retries: 5
       start_period: 120s
+    networks:
+      - default
 
   geocoder:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: ctdata_geocoder
+    container_name: ctdata_geocoder_toolbox
     restart: unless-stopped
     depends_on:
       api:
@@ -59,88 +38,44 @@ services:
     volumes:
       - ./api:/app/api
     environment:
-      - DATABASE_URL=postgresql://user:password@db:5432/ctdata
+      - DATABASE_URL=postgresql://user:password@ctdata_db:5432/ctdata
       - PYTHONUNBUFFERED=1
     command: python -m api.background_geocoder
-
-  importer:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: ctdata_importer
-    profiles: [ "tools" ] # Prevents this service from starting automatically
-    depends_on:
-      db:
-        condition: service_healthy
-    volumes:
-      - ./importer:/app/importer
-      - ./data:/app/data
-      - ./scripts:/app/scripts
-    environment:
-      - DATABASE_URL=postgresql://user:password@db:5432/ctdata
-      - PYTHONUNBUFFERED=1
-    command: python importer/update_data.py
+    networks:
+      - default
 
   updater:
     build:
       context: .
       dockerfile: Dockerfile.updater
-    container_name: ctdata_updater
-    profiles: [ "tools" ] # Prevents this service from starting automatically
-    depends_on:
-      db:
-        condition: service_healthy
+    container_name: ctdata_updater_toolbox
+    profiles: [ "tools" ]
     volumes:
       - ./updater:/app/updater
+      - ./scripts:/app/scripts
     environment:
-      - DATABASE_URL=postgresql://user:password@db:5432/ctdata
-    command: python updater/update_vision_data.py -m "HARTFORD"
-
-  updater2:
-    build:
-      context: .
-      dockerfile: Dockerfile.updater
-    container_name: ctdata_updater2
-    profiles: [ "tools" ] # Prevents this service from starting automatically
-    depends_on:
-      db:
-        condition: service_healthy
-    volumes:
-      - ./updater:/app/updater
-    environment:
-      - DATABASE_URL=postgresql://user:password@db:5432/ctdata
-    command: python updater/update_vision_data.py -m "DANBURY" "MILFORD" "HARTFORD" -f
+      - DATABASE_URL=postgresql://user:password@ctdata_db:5432/ctdata
+    command: python updater/update_vision_data.py -m "HAMDEN"
+    networks:
+      - default
 
   nginx:
     build:
       context: .
       dockerfile: frontend/Dockerfile
-    container_name: ctdata_nginx
+    container_name: ctdata_nginx_toolbox
     restart: unless-stopped
     depends_on:
       api:
         condition: service_healthy
     ports:
-      - "6262:80"
+      - "6263:80"
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - default
 
-  nominatim:
-    image: mediagis/nominatim:4.2
-    container_name: ctdata_nominatim
-    restart: unless-stopped
-    ports:
-      - "8080:8080"
-    environment:
-      - PBF_URL=https://download.geofabrik.de/north-america/us/connecticut-latest.osm.pbf
-      - REPLICATION_URL=https://download.geofabrik.de/north-america/us/connecticut-updates/
-      - NOMINATIM_PASSWORD=password
-    volumes:
-      - nominatim_data:/var/lib/postgresql/data
-    shm_size: '1gb'
-
-volumes:
-  postgres_data:
-  nominatim_data:
-
-
+networks:
+  default:
+    name: theyownwhat_default
+    external: true
