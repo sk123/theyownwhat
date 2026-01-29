@@ -131,35 +131,35 @@ MUNICIPAL_DATA_SOURCES = {
     'WATERBURY': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Waterbury'},
     'BRIDGEPORT': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Bridgeport'},
     'HARTFORD': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Hartford'},
-    'STAMFORD': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Stamford'},
+    'STAMFORD': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/stamfordct/'},
     'NORWALK': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Norwalk'},
     'DANBURY': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Danbury'},
     'NEW BRITAIN': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'New Britain'},
     # 'WEST HARTFORD': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'West Hartford'},
     'GREENWICH': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Greenwich'},
-    'HAMDEN': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Hamden'},
-    'MERIDEN': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Meriden'},
-    'BRISTOL': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Bristol'},
-    'WEST HAVEN': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'West Haven'},
-    'MIDDLETOWN': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Middletown'},
-    'ENFIELD': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Enfield'},
-    'MILFORD': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Milford'},
-    'STRATFORD': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Stratford'},
+    'HAMDEN': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/hamdenct/'},
+    'MERIDEN': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/meridenct/'},
+    'BRISTOL': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/bristolct/'},
+    'WEST HAVEN': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/westhavenct/'},
+    'MIDDLETOWN': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/middletownct/'},
+    'ENFIELD': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/enfieldct/'},
+    'MILFORD': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/milfordct/'},
+    'STRATFORD': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/stratfordct/'},
     'EAST HARTFORD': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'East Hartford'},
-    'MANCHESTER': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Manchester'},
-    'CLINTON': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Clinton'},
+    'MANCHESTER': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/manchesterct/'},
+    'CLINTON': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/clintonct/'},
     'EAST HAMPTON': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'East Hampton'},
     'CROMWELL': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Cromwell'},
-    'OLD LYME': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Old Lyme'},
-    'ESSEX': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Essex'},
-    'LYME': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Lyme'},
-    'NORWICH': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Norwich'},
+    'OLD LYME': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/oldlymect/'},
+    'ESSEX': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/essexct/'},
+    'LYME': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/lymect/'},
+    'NORWICH': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/norwichct/'},
     'GROTON': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Groton'},
-    'SOUTHINGTON': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Southington'},
-    'WALLINGFORD': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Wallingford'},
+    'SOUTHINGTON': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/southingtonct/'},
+    'WALLINGFORD': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/wallingfordct/'},
     'SHELTON': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Shelton'},
     'TORRINGTON': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Torrington'},
-    'TRUMBULL': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Trumbull'},
+    'TRUMBULL': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/trumbullct/'},
 }
 
 # --- Shared Cache for Large CSVs ---
@@ -1733,6 +1733,10 @@ def process_municipality_task(city_name, city_data, current_owner_only, force_pr
             elif MUNICIPAL_DATA_SOURCES[city_name]['type'] == 'ct_geodata_csv':
                 updated_count = process_municipality_with_ct_geodata(
                     conn, city_name, MUNICIPAL_DATA_SOURCES[city_name], current_owner_only, force_process
+                )
+            elif MUNICIPAL_DATA_SOURCES[city_name]['type'] == 'vision_appraisal':
+                updated_count = process_municipality_with_realtime_updates(
+                    conn, city_name, MUNICIPAL_DATA_SOURCES[city_name]['url'], last_updated_date=None, current_owner_only=current_owner_only, force_process=force_process
                 )
             else:
                 log(f"Unknown data source type for {city_name}: {MUNICIPAL_DATA_SOURCES[city_name]['type']}")
