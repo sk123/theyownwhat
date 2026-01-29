@@ -55,7 +55,27 @@ export default function PropertyTable({
     const [sortConfig, setSortConfig] = useState({ key: 'unit_count', direction: 'desc' });
     const [filter, setFilter] = useState('');
     const [selectedIds, setSelectedIds] = useState(new Set());
-    const [viewMode, setViewMode] = useState('list'); // 'list' | 'grid'
+
+    // Default to 'grid' (City View) on large screens
+    const getInitialViewMode = () => {
+        if (typeof window !== 'undefined') {
+            return window.innerWidth >= 1024 ? 'grid' : 'list';
+        }
+        return 'list';
+    };
+    const [viewMode, setViewMode] = useState(getInitialViewMode());
+
+    // Update view mode on window resize
+    React.useEffect(() => {
+        const handleResize = () => {
+            // Only auto-switch if user hasn't manually changed view
+            const newDefaultView = window.innerWidth >= 1024 ? 'grid' : 'list';
+            // You could add logic here to preserve user preference
+            // For now, we'll set it on initial load only via getInitialViewMode
+        };
+        window.addEventListener('resize', handleResize);
+        return () => window.removeEventListener('resize', handleResize);
+    }, []);
 
     // Multi-Select Mode State
     const [isMultiSelectActive, setIsMultiSelectActive] = useState(false);
@@ -895,13 +915,13 @@ export default function PropertyTable({
                                 ))}
                             </div>
 
-                            <div className={`p-4 ${autoHeight ? '' : 'flex-1 overflow-y-auto'}`}>
-                                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6 pb-20 md:pb-0">
+                            <div className="p-3 ${autoHeight ? '' : 'flex-1 overflow-y-auto'}">
+                                <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-4 pb-20 md:pb-0">
                                     {groupedByCity && Object.entries(groupedByCity).map(([city, props]) => (
                                         <div
                                             key={city}
                                             id={`city-card-${city}`}
-                                            className="bg-white border border-gray-200 rounded-xl shadow-sm flex flex-col md:h-[400px] h-auto scroll-mt-4"
+                                            className="bg-white border border-gray-200 rounded-xl shadow-sm flex flex-col lg:h-[450px] h-auto scroll-mt-4"
                                         >
                                             <div className="p-3 bg-gray-50 border-b border-gray-100 flex justify-between items-center sticky top-0 z-10 rounded-t-xl">
                                                 <h4 className="font-bold text-gray-800 text-sm">{city}</h4>

@@ -142,8 +142,8 @@ def run_enrichment(limit=None):
         SELECT id, link, location 
         FROM properties 
         WHERE property_city = 'Hartford' 
-        AND location ILIKE '%%WEBSTER%%'
         AND link IS NOT NULL 
+        AND (owner = 'Current Owner' OR assessed_value = 0 OR unit IS NULL OR unit LIKE '%CNDASC%')
     """
     # ... rest ...
     if limit:

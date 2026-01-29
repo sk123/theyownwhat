@@ -606,6 +606,11 @@ def process_municipality_with_ct_geodata(conn, municipality_name, config, curren
     processed_data = {}
     for _, row in df.iterrows():
         try:
+            # Skip CNDASC placeholder units (Condo Association administrative records)
+            unit_type = str(row.get('Unit_Type', '')).upper()
+            if 'CNDASC' in unit_type or 'CONDO ASC' in unit_type:
+                continue
+            
             loc1 = str(row.get('Location', '')).strip()
             loc2 = str(row.get('Location_CAMA', '')).strip()
             
