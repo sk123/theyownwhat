@@ -730,7 +730,7 @@ export default function PropertyTable({
         <div className={`bg-white rounded-xl border border-gray-200 shadow-sm flex flex-col ${autoHeight ? '' : 'h-full overflow-auto'}`}>
             {/* Header / Toolbar */}
             <div
-                className="bg-gradient-to-r from-blue-600 to-indigo-600 p-4 border-b border-white/10 flex flex-col gap-4 shadow-sm shrink-0"
+                className="bg-gradient-to-r from-blue-600 to-indigo-600 p-3 md:p-4 border-b border-white/10 flex flex-col gap-2 md:gap-4 shadow-sm shrink-0"
             >
                 <div className="flex items-center justify-between cursor-pointer lg:cursor-default" onClick={toggleExpand}>
                     <div className="flex items-center gap-3">
@@ -869,7 +869,7 @@ export default function PropertyTable({
                     {viewMode === 'list' && (
                         <div className={`w-full ${autoHeight ? 'overflow-visible' : 'flex-1 overflow-auto bg-white min-h-0'}`}>
                             <table className="w-full text-left border-collapse">
-                                <thead className="bg-gray-50 sticky top-0 z-10 shadow-sm border-b border-gray-100">
+                                <thead className="bg-gray-50 sticky top-0 z-20 shadow-sm border-b border-gray-100">
                                     <tr>
                                         {isMultiSelectActive && (
                                             <th className="p-2 w-10 text-center cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => handleSelectAll()}>
@@ -898,7 +898,7 @@ export default function PropertyTable({
                     {viewMode === 'grid' && (
                         <div className={`w-full flex flex-col bg-slate-50 ${autoHeight ? '' : 'h-full overflow-auto'}`}>
                             {/* Mobile Jump Navigation */}
-                            <div className="md:hidden overflow-x-auto py-2 px-4 flex gap-2 bg-white border-b border-gray-200 shrink-0 no-scrollbar">
+                            <div className="md:hidden overflow-x-auto py-1.5 px-3 flex gap-1.5 bg-white border-b border-gray-200 shrink-0 no-scrollbar">
                                 <span className="text-[10px] uppercase font-bold text-gray-400 self-center mr-1">JUMP TO:</span>
                                 {groupedByCity && Object.keys(groupedByCity).sort().map(city => (
                                     <button
@@ -915,15 +915,15 @@ export default function PropertyTable({
                                 ))}
                             </div>
 
-                            <div className="p-3 ${autoHeight ? '' : 'flex-1 overflow-y-auto'}">
-                                <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-4 pb-20 md:pb-0">
+                            <div className="p-2 md:p-3 ${autoHeight ? '' : 'flex-1 overflow-y-auto'}">
+                                <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3 md:gap-4 pb-16 md:pb-0">
                                     {groupedByCity && Object.entries(groupedByCity).map(([city, props]) => (
                                         <div
                                             key={city}
                                             id={`city-card-${city}`}
-                                            className="bg-white border border-gray-200 rounded-xl shadow-sm flex flex-col lg:h-[450px] h-auto scroll-mt-4"
+                                            className="bg-white border border-gray-200 rounded-lg md:rounded-xl shadow-sm flex flex-col lg:h-[450px] h-auto scroll-mt-4"
                                         >
-                                            <div className="p-3 bg-gray-50 border-b border-gray-100 flex justify-between items-center sticky top-0 z-10 rounded-t-xl">
+                                            <div className="p-2 md:p-3 bg-gray-50 border-b border-gray-100 flex justify-between items-center sticky top-0 z-10 rounded-t-lg md:rounded-t-xl">
                                                 <h4 className="font-bold text-gray-800 text-sm">{city}</h4>
                                                 <span className="text-xs bg-gray-200 text-gray-600 px-2 py-0.5 rounded-full">{props.length}</span>
                                             </div>
