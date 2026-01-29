@@ -9,3 +9,8 @@ openai
 beautifulsoup4
 lxml
 openpyxl
+authlib
+itsdangerous
+python-jose[cryptography]
+python-multipart
+starlette

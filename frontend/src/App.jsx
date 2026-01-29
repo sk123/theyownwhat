@@ -13,7 +13,7 @@ const AboutModal = React.lazy(() => import('./components/AboutModal'));
 const MultiPropertyMapModal = React.lazy(() => import('./components/MultiPropertyMapModal'));
 const FreshnessModal = React.lazy(() => import('./components/FreshnessModal'));
 import LoadingScreen from './components/LoadingScreen';
-// import DashboardControls from './components/DashboardControls'; // Removed
+import ToolboxDashboard from './components/ToolboxDashboard';
 import StatCard from './components/StatCard';
 import BackgroundGrid from './components/BackgroundGrid';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -21,7 +21,7 @@ import { Sparkles, Loader2, Search, ArrowRight, Building2, TrendingUp, Users } f
 
 // NOTE: This is a simplified App.jsx. In a real scenario we'd use React Router.
 function App() {
-  const [view, setView] = useState('home'); // home | dashboard
+  const [view, setView] = useState('home'); // home | dashboard | toolbox
   const [loading, setLoading] = useState(false);
   const [insights, setInsights] = useState(null);
   const [searchResults, setSearchResults] = useState(null);
@@ -58,6 +58,7 @@ function App() {
     });
   };
   const [aiEnabled, setAiEnabled] = useState(false);
+  const [toolboxEnabled, setToolboxEnabled] = useState(false);
 
   const [loadingInsights, setLoadingInsights] = useState(true);
   const [streamingStatus, setStreamingStatus] = useState({
@@ -72,6 +73,9 @@ function App() {
       .then(data => {
         if (data && data.ai_enabled) {
           setAiEnabled(true);
+        }
+        if (data && data.toolbox_enabled !== undefined) {
+          setToolboxEnabled(data.toolbox_enabled);
         }
       })
       .catch(err => console.warn("Health check failed", err));
@@ -325,6 +329,8 @@ function App() {
         onHome={handleReset}
         onReset={view === 'dashboard' ? handleReset : null}
         onAbout={() => setShowAbout(true)}
+        OnOpenToolbox={() => setView('toolbox')}
+        toolboxEnabled={toolboxEnabled}
       />
 
       <LoadingScreen
@@ -353,7 +359,7 @@ function App() {
 
                     <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 border border-blue-100 text-blue-600 text-xs font-bold uppercase tracking-widest mb-6">
                       <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
-                      CT Property Explorer
+                      Connecticut Property Explorer
                     </div>
 
                     <h1 className="text-5xl md:text-7xl font-black text-slate-900 mb-4 tracking-tighter leading-[0.9]">
@@ -417,7 +423,11 @@ function App() {
                             ))}
                           </div>
                         ) : (
-                          <Insights data={insights} onSelect={(id, type, name) => loadNetwork(id, type, name)} />
+                          <Insights
+                            data={insights}
+                            onSelect={(id, type, name) => loadNetwork(id, type, name)}
+                            toolboxEnabled={toolboxEnabled}
+                          />
                         )}
                       </div>
                     )}
@@ -439,75 +449,34 @@ function App() {
 
 
                 {/* Dashboard Header with Global Actions */}
-                <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm flex flex-col md:flex-row justify-between items-center gap-4">
-                  <div className="flex items-center gap-4">
-                    <div className="p-3 bg-slate-900 text-white rounded-xl shadow-xl shadow-slate-900/10">
-                      <TrendingUp size={24} />
+                <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm flex flex-col xl:flex-row justify-between items-center gap-6">
+                  <div className="flex items-center gap-4 w-full xl:w-auto">
+                    <div className="p-3 bg-slate-900 text-white rounded-xl shadow-xl shadow-slate-900/10 shrink-0">
+                      <TrendingUp size={24} aria-hidden="true" />
                     </div>
-                    <div>
-                      <h2 className="text-3xl font-black text-slate-900 tracking-tighter leading-none mb-1">
-                        {(() => {
-                          // Determine Network Manager for Header - ROBUST SYNCED LOGIC
-                          // Helper to calculate connection count
-                          const principalCounts = new Map();
-                          if (networkData.links) {
-                            networkData.links.forEach(l => {
-                              const s = String(l.source);
-                              const t = String(l.target);
-                              principalCounts.set(s, (principalCounts.get(s) || 0) + 1);
-                              principalCounts.set(t, (principalCounts.get(t) || 0) + 1);
-                            });
-                          }
-
-                          const normalizeId = (id) => {
-                            if (!id) return '';
-                            return String(id).toUpperCase().trim().replace(/[`"'.]/g, '').replace(/\s+/g, ' ');
-                          };
-
-                          const getCount = (p) => {
-                            if (!p) return 0;
-                            const candidates = new Set();
-                            if (p.id) candidates.add(String(p.id));
-                            if (p.name) {
-                              candidates.add(p.name);
-                              candidates.add(normalizeId(p.name));
-                            }
-
-                            let max = 0;
-                            candidates.forEach(c => {
-                              max = Math.max(max, principalCounts.get(c) || 0);
-                              max = Math.max(max, principalCounts.get(`principal_${c}`) || 0);
-                              max = Math.max(max, principalCounts.get(`principal_${normalizeId(c)}`) || 0);
-                            });
-
-                            // Fallback to property count if links are 0
-                            if (max === 0 && p.details?.property_count) return p.details.property_count;
-                            return max;
-                          };
-
-                          // Sort Humans then Entities
-                          const human = networkData.principals
-                            .filter(p => !p.isEntity)
-                            .sort((a, b) => getCount(b) - getCount(a));
-
-                          const entity = networkData.principals
-                            .filter(p => p.isEntity)
-                            .sort((a, b) => getCount(b) - getCount(a));
-
-                          if (human.length > 0) return human[0].name;
-                          if (entity.length > 0) return entity[0].name;
-                          return networkData.businesses[0]?.name || "Network Analysis";
-                        })()
-                        }
+                    <div className="w-full xl:w-auto">
+                      <h2 className="text-3xl font-black text-slate-900 tracking-tighter leading-none mb-4 sr-only">
+                        Network Dashboard
                       </h2>
-
+                      {/* Network Name Display - Handled inside Card now? No, kept as H2 in original but visually we rely on Card. 
+                          The original H2 was calculating the name.
+                          The Card assumes it gets data.
+                          Let's clean this up. The H2 logic is redundant if the Card shows the name. 
+                          But the layout had H2 then Card.
+                          Actually, in the previous code, the H2 block ended at line 503.
+                          Then the Card was rendered.
+                          So we had: Icon -> H2 (Name) -> Card.
+                          Wait, the Card shows the Manager Name big. 
+                          Having H2 above it with the same name is redundant. 
+                          Let's hide the redundant H2 or remove it if the Card is present.
+                      */}
 
                       {/* Network Profile Card moved here */}
                       <NetworkProfileCard networkData={networkData} stats={stats} />
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3 w-full xl:w-auto justify-end">
                     <button
                       onClick={() => {
                         const csvContent = "data:text/csv;charset=utf-8,"
@@ -520,16 +489,18 @@ function App() {
                         document.body.appendChild(link);
                         link.click();
                       }}
-                      className="px-5 py-2.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold rounded-xl transition-all flex items-center gap-2 shadow-sm"
+                      className="px-5 py-2.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold rounded-xl transition-all flex items-center gap-2 shadow-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                      aria-label="Export portfolio as CSV"
                     >
-                      <TrendingUp size={18} />
+                      <TrendingUp size={18} aria-hidden="true" />
                       Export
                     </button>
                     <button
                       onClick={handleReset}
-                      className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-lg shadow-blue-500/20 transition-all flex items-center gap-2"
+                      className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-lg shadow-blue-500/20 transition-all flex items-center gap-2 focus:ring-2 focus:ring-blue-500 focus:outline-none focus:ring-offset-2"
+                      aria-label="Start a new search"
                     >
-                      <Search size={18} />
+                      <Search size={18} aria-hidden="true" />
                       New Search
                     </button>
                   </div>
@@ -671,6 +642,16 @@ function App() {
               </motion.div>
             )
           }
+
+          {view === 'toolbox' && (
+            <motion.div
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              className="h-full w-full"
+            >
+              <ToolboxDashboard onBack={() => setView('home')} />
+            </motion.div>
+          )}
         </AnimatePresence>
 
         <Suspense fallback={null}>

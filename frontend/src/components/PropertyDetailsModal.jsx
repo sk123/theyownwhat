@@ -1,5 +1,5 @@
 import React from 'react';
-import { X, Building2, MapPin, DollarSign, User, ExternalLink, Link as LinkIcon, Copy, Check } from 'lucide-react';
+import { X, Building2, MapPin, DollarSign, User, ExternalLink, Link as LinkIcon, Copy, Check, FolderPlus, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 // Helper to safely render a detail field
@@ -132,6 +132,48 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
         }
     };
 
+    // Toolbox State
+    const [userGroups, setUserGroups] = React.useState([]);
+    const [showGroupSelector, setShowGroupSelector] = React.useState(false);
+    const [isAdding, setIsAdding] = React.useState(false);
+    const [addedSuccess, setAddedSuccess] = React.useState(false);
+
+    React.useEffect(() => {
+        if (property) {
+            fetch('/api/auth/me')
+                .then(res => res.json())
+                .then(data => {
+                    if (data.authenticated) {
+                        fetch('/api/groups')
+                            .then(res => res.json())
+                            .then(setUserGroups);
+                    }
+                });
+        }
+    }, [property]);
+
+    const handleAddToGroup = async (groupId) => {
+        setIsAdding(true);
+        try {
+            const res = await fetch(`/api/groups/${groupId}/properties`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ property_id: property.id })
+            });
+            if (res.ok) {
+                setAddedSuccess(true);
+                setTimeout(() => {
+                    setAddedSuccess(false);
+                    setShowGroupSelector(false);
+                }, 2000);
+            }
+        } catch (err) {
+            console.error("Failed to add to group", err);
+        } finally {
+            setIsAdding(false);
+        }
+    };
+
     return (
         <AnimatePresence>
             <motion.div
@@ -210,12 +252,57 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
                                 </div>
                             </div>
                         </div>
-                        <button
-                            onClick={onClose}
-                            className="p-2 hover:bg-gray-200 rounded-full transition-colors text-gray-500"
-                        >
-                            <X size={20} />
-                        </button>
+                        <div className="flex items-center gap-2">
+                            {userGroups.length > 0 && (
+                                <div className="relative">
+                                    <button
+                                        onClick={() => setShowGroupSelector(!showGroupSelector)}
+                                        className={`flex items-center gap-2 px-3 py-2 rounded-xl font-bold text-sm transition-all shadow-sm border ${addedSuccess ? 'bg-green-500 text-white border-green-600' : 'bg-white text-blue-600 border-blue-100 hover:bg-blue-50'}`}
+                                    >
+                                        {addedSuccess ? <Check size={18} /> : (isAdding ? <Loader2 size={18} className="animate-spin" /> : <FolderPlus size={18} />)}
+                                        {addedSuccess ? 'Added!' : 'Add to Group'}
+                                    </button>
+
+                                    <AnimatePresence>
+                                        {showGroupSelector && !addedSuccess && (
+                                            <motion.div
+                                                initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                                                animate={{ opacity: 1, y: 0, scale: 1 }}
+                                                exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                                                className="absolute right-0 mt-2 w-64 bg-white rounded-2xl shadow-2xl border border-slate-100 p-2 z-[60]"
+                                            >
+                                                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest p-2 border-b border-slate-50 mb-1">
+                                                    Select Group
+                                                </div>
+                                                <div className="max-h-60 overflow-y-auto">
+                                                    {userGroups.map(group => (
+                                                        <button
+                                                            key={group.id}
+                                                            onClick={() => handleAddToGroup(group.id)}
+                                                            className="w-full text-left px-3 py-2.5 hover:bg-slate-50 rounded-xl transition-colors flex items-center gap-3 group"
+                                                        >
+                                                            <div className="w-8 h-8 bg-blue-50 rounded-lg flex items-center justify-center text-blue-600 font-bold group-hover:bg-blue-100">
+                                                                {group.name[0].toUpperCase()}
+                                                            </div>
+                                                            <div className="flex-1 min-w-0">
+                                                                <div className="text-sm font-bold text-slate-900 truncate">{group.name}</div>
+                                                                <div className="text-[10px] text-slate-400">{group.property_count || 0} properties</div>
+                                                            </div>
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            </motion.div>
+                                        )}
+                                    </AnimatePresence>
+                                </div>
+                            )}
+                            <button
+                                onClick={onClose}
+                                className="p-2 hover:bg-gray-200 rounded-full transition-colors text-gray-500"
+                            >
+                                <X size={20} />
+                            </button>
+                        </div>
                     </div>
 
                     {/* Content */}

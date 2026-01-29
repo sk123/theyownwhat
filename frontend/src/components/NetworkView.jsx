@@ -130,7 +130,7 @@ export default function NetworkView({ networkData, onSelectEntity, selectedEntit
                     <div className={`flex flex-col border-b border-gray-100 transition-all duration-300 min-h-0 border-l-4 border-blue-600/30 ${mobileSection === 'all' ? 'flex-shrink-0 lg:max-h-[45%] overflow-hidden flex-col flex' : (autoHeight ? '' : 'flex-1 overflow-hidden')
                         }`}>
                         <div className="bg-gradient-to-r from-blue-600 to-indigo-600 px-3 py-2 flex items-center justify-between shadow-sm">
-                            <h4 className="text-[10px] font-black text-white uppercase tracking-widest flex items-center gap-2">
+                            <h4 className="text-sm font-black text-white uppercase tracking-wider flex items-center gap-2">
                                 <User className="w-3.5 h-3.5" />
                                 Principals
                             </h4>
