@@ -119,21 +119,22 @@ export default function NetworkProfileCard({ networkData, stats }) {
         <>
             <section
                 aria-label="Network Profile Summary"
-                className="bg-slate-900 text-white rounded-2xl p-3 md:p-4 lg:p-6 shadow-xl shadow-slate-900/10 flex flex-col xl:flex-row gap-3 md:gap-4 lg:gap-6 items-start xl:items-stretch justify-between border border-slate-700/50 w-full"
+                className="bg-slate-900 text-white rounded-lg md:rounded-2xl p-2 md:p-3 lg:p-6 shadow-xl shadow-slate-900/10 flex flex-col md:flex-row gap-2 md:gap-3 lg:gap-6 items-start md:items-stretch justify-between border border-slate-700/50 w-full"
             >
                 {/* Left: Identity & Context */}
-                <div className="flex flex-col gap-2 md:gap-3 max-w-xl w-full">
-                    <div className="flex items-center gap-2 md:gap-3 mb-0">
-                        <div className="p-1.5 md:p-2 bg-blue-500/20 rounded-lg shrink-0">
-                            <Users className="w-4 h-4 md:w-5 md:h-5 text-blue-300" aria-hidden="true" />
+                <div className="flex flex-col gap-1 md:gap-2 lg:gap-3 max-w-xl w-full">
+                    <div className="flex items-center gap-1.5 md:gap-2 lg:gap-3 mb-0">
+                        <div className="p-1 md:p-1.5 lg:p-2 bg-blue-500/20 rounded-lg shrink-0">
+                            <Users className="w-3.5 h-3.5 md:w-4 md:h-4 lg:w-5 lg:h-5 text-blue-300" aria-hidden="true" />
                         </div>
-                        <h2 className="text-xl md:text-2xl lg:text-3xl font-black text-white tracking-tight break-words line-clamp-2" title={managerName}>
+                        <h2 className="text-base md:text-xl lg:text-2xl xl:text-3xl font-black text-white tracking-tight break-words line-clamp-1" title={managerName}>
                             {managerName}
                         </h2>
                     </div>
 
+                    {/* Hide entity list on small screens to save space */}
                     {activeBusinesses.length > 0 && (
-                        <div className="mt-2 md:mt-3 p-2 md:p-3 bg-white/5 rounded-lg border border-white/5 text-xs md:text-sm text-slate-300">
+                        <div className="hidden md:block mt-2 lg:mt-3 p-2 md:p-3 bg-white/5 rounded-lg border border-white/5 text-xs md:text-sm text-slate-300">
                             <span className="font-bold text-slate-400 text-xs uppercase tracking-wider block mb-1">
                                 Portfolio Controls {activeBusinesses.length + entityPrincipals.length} Entities
                             </span>
@@ -146,7 +147,7 @@ export default function NetworkProfileCard({ networkData, stats }) {
 
                     <button
                         onClick={handleGenerateReport}
-                        className="mt-2 md:mt-4 flex items-center gap-1.5 md:gap-2 text-[10px] md:text-xs font-bold text-amber-300 hover:text-amber-200 transition-colors uppercase tracking-widest bg-amber-500/10 hover:bg-amber-500/20 px-3 md:px-4 py-1.5 md:py-2 rounded-lg w-fit border border-amber-500/20"
+                        className="hidden md:flex mt-2 lg:mt-4 items-center gap-1.5 md:gap-2 text-[10px] md:text-xs font-bold text-amber-300 hover:text-amber-200 transition-colors uppercase tracking-widest bg-amber-500/10 hover:bg-amber-500/20 px-3 md:px-4 py-1.5 md:py-2 rounded-lg w-fit border border-amber-500/20"
                     >
                         <Sparkles size={14} />
                         Generate AI Report
@@ -155,7 +156,7 @@ export default function NetworkProfileCard({ networkData, stats }) {
 
                 {/* Right: Stats Grid */}
                 <div
-                    className="grid grid-cols-2 sm:grid-cols-3 gap-2 md:gap-3 w-full xl:w-auto"
+                    className="grid grid-cols-3 gap-1.5 md:gap-2 lg:gap-3 w-full md:w-auto"
                     role="list"
                     aria-label="Portfolio Statistics"
                 >
