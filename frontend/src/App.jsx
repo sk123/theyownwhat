@@ -351,6 +351,11 @@ function App() {
                   <div className="text-center mb-10">
 
 
+                    <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 border border-blue-100 text-blue-600 text-xs font-bold uppercase tracking-widest mb-6">
+                      <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
+                      CT Property Explorer
+                    </div>
+
                     <h1 className="text-5xl md:text-7xl font-black text-slate-900 mb-4 tracking-tighter leading-[0.9]">
                       they own <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-indigo-600">WHAT??</span>
                     </h1>
