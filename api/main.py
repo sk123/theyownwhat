@@ -2919,6 +2919,50 @@ class NetworkDigestRequest(BaseModel):
 
 @app.post("/api/network_digest")
 def create_network_digest(req: NetworkDigestRequest, conn=Depends(get_db_connection)):
+    """
+    Generate AI-powered analysis of a property network.
+    
+    Privacy Protection: Only analyzes networks meeting minimum thresholds
+    to protect privacy of small landlords and mom-and-pop operations.
+    """
+    # Privacy threshold: Only analyze substantial networks
+    total_props = sum(e.property_count for e in req.entities)
+    total_val = sum(e.total_value for e in req.entities)
+    entity_count = len(req.entities)
+    
+    MIN_PROPERTIES = 10
+    MIN_VALUE = 3_000_000  # $3M
+    MIN_ENTITIES = 5
+    
+    # Allow if ANY threshold is met (OR logic for flexibility)
+    meets_threshold = (
+        total_props >= MIN_PROPERTIES or 
+        total_val >= MIN_VALUE or 
+        entity_count >= MIN_ENTITIES
+    )
+    
+    if not meets_threshold:
+        return {
+            "entity": "PRIVACY_PROTECTED",
+            "entity_type": "network_digest",
+            "report_date": date.today(),
+            "title": "Analysis Not Available",
+            "content": (
+                f"**Privacy Protection Active**\n\n"
+                f"AI Digest is only available for substantial property networks to protect "
+                f"the privacy of small landlords and family-owned properties.\n\n"
+                f"**Current Network:**\n"
+                f"- {entity_count} entities\n"
+                f"- {total_props} properties\n"
+                f"- ${total_val:,.0f} total assessed value\n\n"
+                f"**Minimum Requirements (any one):**\n"
+                f"- {MIN_PROPERTIES}+ properties\n"
+                f"- ${MIN_VALUE:,.0f}+ total value\n"
+                f"- {MIN_ENTITIES}+ related entities"
+            ),
+            "sources": []
+        }
+    
     # 1. Generate Stable Hash (Cache Key)
     # Include stats in hash so if data changes (e.g. value updates), we regenerate
     sorted_ents = sorted(req.entities, key=lambda x: (x.type, x.name))
