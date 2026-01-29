@@ -21,3 +21,14 @@ build/
 # Ignore git metadata
 .git
 .gitignore
+
+# --- LOGS & DEBUG OUTPUTS ---
+*.log
+*.html
+nohup.out
+*.txt
+*.json
+!package.json
+!package-lock.json
+!tsconfig.json
+!database.json

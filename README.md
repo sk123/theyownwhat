@@ -31,9 +31,7 @@ The **AI Digest** performs automated web searches across multiple entities simul
 *   Legal violations and court case patterns.
 *   Corporate footprints and out-of-state investment trends.
 
-### 💰 Subsidy Tracking
-### 💰 Subsidy Tracking
-[NEW] Active housing subsidies are now tracked and displayed for properties, helping advocates identify at-risk affordable housing stock. Source: NHPD.
+
 
 ## Data Sources
 
