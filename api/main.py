@@ -16,10 +16,21 @@ import psycopg2
 from psycopg2 import pool
 from psycopg2.extras import RealDictCursor, execute_batch
 
-from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi import FastAPI, Depends, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+try:
+    from starlette.middleware.sessions import SessionMiddleware
+    from authlib.integrations.starlette_client import OAuth
+    from starlette.middleware.sessions import SessionMiddleware
+    from authlib.integrations.starlette_client import OAuth
+    # Default to True if deps exist, but allow env var override
+    TOOLBOX_ENABLED = os.environ.get("TOOLBOX_ENABLED", "true").lower() == "true"
+except ImportError:
+    TOOLBOX_ENABLED = False
+    SessionMiddleware = None
+    OAuth = None
 from pydantic import BaseModel
 
 # Optional OpenAI import (AI report). App still runs without it.
@@ -41,7 +52,31 @@ SERPAPI_API_KEY = os.environ.get("SERPAPI_API_KEY")  # reserved for future use
 if openai and OPENAI_API_KEY:
     openai.api_key = OPENAI_API_KEY
 
+# Auth Config
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
+# A random secret for sessions
+SESSION_SECRET_KEY = os.environ.get("SESSION_SECRET_KEY", "a-very-secret-key-change-this-in-prod")
+
 app = FastAPI(title="they own WHAT?? API")
+
+# OAuth setup
+if TOOLBOX_ENABLED:
+    oauth = OAuth()
+    oauth.register(
+        name='google',
+        client_id=GOOGLE_CLIENT_ID,
+        client_secret=GOOGLE_CLIENT_SECRET,
+        server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
+        client_kwargs={
+            'scope': 'openid email profile'
+        }
+    )
+else:
+    oauth = None
+
+if TOOLBOX_ENABLED:
+    app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET_KEY)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], allow_credentials=True,
@@ -58,7 +93,428 @@ def health_check():
     # Check if OpenAI key is present and NOT the placeholder
     ai_key = os.environ.get("OPENAI_API_KEY", "")
     ai_enabled = bool(ai_key and "REPLACE_WITH_API_KEY" not in ai_key)
-    return {"status": "ok", "timestamp": time.time(), "ai_enabled": ai_enabled}
+    return {
+        "status": "ok", 
+        "timestamp": time.time(), 
+        "ai_enabled": ai_enabled,
+        "toolbox_enabled": TOOLBOX_ENABLED
+    }
+
+# ------------------------------------------------------------
+# AUTH ROUTES
+# ------------------------------------------------------------
+@app.get("/api/auth/login")
+async def login(request: Request):
+    # Support mock login for development
+    if os.environ.get("USE_MOCK_AUTH", "true") == "true":
+         return RedirectResponse(url="/api/auth/mock-login")
+    
+    redirect_uri = request.url_for('auth_callback')
+    return await oauth.google.authorize_redirect(request, redirect_uri)
+
+@app.get("/api/auth/mock-login")
+async def mock_login(request: Request):
+    # Upsert a mock user
+    with db_pool.getconn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO users (google_id, email, full_name, picture_url)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (google_id) DO UPDATE SET
+                    full_name = EXCLUDED.full_name
+                RETURNING id;
+            """, ("mock_id_123", "organizer@example.com", "Mock Organizer", "https://api.dicebear.com/7.x/avataaars/svg?seed=mock"))
+            db_user_id = cur.fetchone()[0]
+            conn.commit()
+        db_pool.putconn(conn)
+
+    request.session['user'] = {
+        'id': db_user_id,
+        'email': "organizer@example.com",
+        'name': "Mock Organizer",
+        'picture': "https://api.dicebear.com/7.x/avataaars/svg?seed=mock"
+    }
+    return RedirectResponse(url="/")
+
+@app.get("/api/auth/callback")
+async def auth_callback(request: Request):
+    try:
+        token = await oauth.google.authorize_access_token(request)
+    except Exception as e:
+        logger.error(f"OAuth error: {e}")
+        raise HTTPException(status_code=400, detail="Authentication failed")
+        
+    user_info = token.get('userinfo')
+    if not user_info:
+        raise HTTPException(status_code=400, detail="No user info returned from Google")
+
+    # Upsert user in database
+    with db_pool.getconn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO users (google_id, email, full_name, picture_url)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (google_id) DO UPDATE SET
+                    full_name = EXCLUDED.full_name,
+                    picture_url = EXCLUDED.picture_url
+                RETURNING id;
+            """, (user_info['sub'], user_info['email'], user_info['name'], user_info.get('picture')))
+            db_user_id = cur.fetchone()[0]
+            conn.commit()
+        db_pool.putconn(conn)
+
+    # Store user info in session
+    request.session['user'] = {
+        'id': db_user_id,
+        'email': user_info['email'],
+        'name': user_info['name'],
+        'picture': user_info.get('picture')
+    }
+    
+    # Redirect back to frontend
+    return RedirectResponse(url="/")
+
+@app.get("/api/auth/logout")
+async def logout(request: Request):
+    request.session.pop('user', None)
+    return RedirectResponse(url="/")
+
+@app.get("/api/auth/me")
+async def get_me(request: Request):
+    if not TOOLBOX_ENABLED:
+        return {"authenticated": False}
+    user = request.session.get('user')
+    if not user:
+        return {"authenticated": False}
+    return {"authenticated": True, "user": user}
+
+# ------------------------------------------------------------
+# TOOLBOX / GROUP ROUTES
+# ------------------------------------------------------------
+class GroupCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+
+@app.post("/api/groups")
+async def create_group(group: GroupCreate, request: Request):
+    if not TOOLBOX_ENABLED:
+        raise HTTPException(status_code=503, detail="Toolbox features disabled")
+    user = request.session.get('user')
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+        
+    with db_pool.getconn() as conn:
+        with conn.cursor() as cur:
+            # 1. Create group
+            cur.execute("""
+                INSERT INTO groups (name, description, created_by)
+                VALUES (%s, %s, %s) RETURNING id;
+            """, (group.name, group.description, user['id']))
+            group_id = cur.fetchone()[0]
+            
+            # 2. Add creator as owner
+            cur.execute("""
+                INSERT INTO group_members (group_id, user_id, role)
+                VALUES (%s, %s, 'owner');
+            """, (group_id, user['id']))
+            
+            conn.commit()
+        db_pool.putconn(conn)
+        
+    return {"status": "success", "group_id": group_id}
+
+@app.get("/api/groups")
+async def list_groups(request: Request):
+    if not TOOLBOX_ENABLED:
+        raise HTTPException(status_code=503, detail="Toolbox features disabled")
+    user = request.session.get('user')
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+        
+    with db_pool.getconn() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT g.*, gm.role,
+                       (SELECT COUNT(*) FROM group_properties gp WHERE gp.group_id = g.id) as property_count,
+                       (SELECT COUNT(*) FROM group_members gmem WHERE gmem.group_id = g.id) as member_count
+                FROM groups g
+                JOIN group_members gm ON g.id = gm.group_id
+                WHERE gm.user_id = %s
+            """, (user['id'],))
+            groups = cur.fetchall()
+        db_pool.putconn(conn)
+        
+    return groups
+
+@app.post("/api/groups/{group_id}/properties")
+async def add_property_to_group(group_id: int, payload: Dict[str, Any], request: Request):
+    if not TOOLBOX_ENABLED: raise HTTPException(status_code=503, detail="Toolbox features disabled")
+    user = request.session.get('user')
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+        
+    property_id = payload.get('property_id')
+    if not property_id:
+        raise HTTPException(status_code=400, detail="property_id is required")
+
+    with db_pool.getconn() as conn:
+        with conn.cursor() as cur:
+            # Check membership/role
+            cur.execute("SELECT role FROM group_members WHERE group_id = %s AND user_id = %s", (group_id, user['id']))
+            role = cur.fetchone()
+            if not role:
+                db_pool.putconn(conn)
+                raise HTTPException(status_code=403, detail="Not a member of this group")
+            
+            # 1. Get address of the target property to find siblings
+            cur.execute("SELECT normalized_address, property_city, location FROM properties WHERE id = %s", (property_id,))
+            target = cur.fetchone()
+            if not target:
+                db_pool.putconn(conn)
+                raise HTTPException(status_code=404, detail="Property not found")
+            
+            norm_addr, city, loc = target
+            
+            # 2. Add all properties sharing the same address and city
+            cur.execute("""
+                INSERT INTO group_properties (group_id, property_id, added_by)
+                SELECT %s, id, %s
+                FROM properties
+                WHERE (
+                    (normalized_address IS NOT NULL AND normalized_address = %s)
+                    OR (normalized_address IS NULL AND location = %s)
+                )
+                AND property_city = %s
+                ON CONFLICT (group_id, property_id) DO NOTHING;
+            """, (group_id, user['id'], norm_addr, loc, city))
+            
+            conn.commit()
+        db_pool.putconn(conn)
+        
+    return {"status": "success"}
+
+@app.get("/api/groups/{group_id}/properties")
+async def list_group_properties(group_id: int, request: Request):
+    if not TOOLBOX_ENABLED:
+        raise HTTPException(status_code=503, detail="Toolbox features disabled")
+    user = request.session.get('user')
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+        
+    with db_pool.getconn() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # Check membership
+            cur.execute("SELECT role FROM group_members WHERE group_id = %s AND user_id = %s", (group_id, user['id']))
+            role = cur.fetchone()
+            if not role:
+                db_pool.putconn(conn)
+                raise HTTPException(status_code=403, detail="Not a member of this group")
+
+            cur.execute("""
+                SELECT p.* 
+                FROM properties p
+                JOIN group_properties gp ON p.id = gp.property_id
+                WHERE gp.group_id = %s
+                ORDER BY gp.added_at DESC
+            """, (group_id,))
+            properties = cur.fetchall()
+            
+            # Basic cleanup for JSON serialization
+            for p in properties:
+                if p.get('assessed_value'): p['assessed_value'] = str(p['assessed_value'])
+                if p.get('appraised_value'): p['appraised_value'] = str(p['appraised_value'])
+                if p.get('sale_amount'): p['sale_amount'] = str(p['sale_amount'])
+                if p.get('sale_date'): p['sale_date'] = str(p['sale_date'])
+                
+        db_pool.putconn(conn)
+        
+    return properties
+
+@app.get("/api/groups/{group_id}/members")
+async def list_group_members(group_id: int, request: Request):
+    if not TOOLBOX_ENABLED: raise HTTPException(status_code=503, detail="Toolbox features disabled")
+    user = request.session.get('user')
+    if not user: raise HTTPException(status_code=401, detail="Authentication required")
+    
+    with db_pool.getconn() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT role FROM group_members WHERE group_id = %s AND user_id = %s", (group_id, user['id']))
+            role = cur.fetchone()
+            if not role:
+                db_pool.putconn(conn)
+                raise HTTPException(status_code=403, detail="Not a member of this group")
+
+            cur.execute("""
+                SELECT u.id, u.full_name, u.email, u.picture_url, gm.role, gm.added_at
+                FROM group_members gm
+                JOIN users u ON gm.user_id = u.id
+                WHERE gm.group_id = %s
+                ORDER BY u.full_name ASC
+            """, (group_id,))
+            members = cur.fetchall()
+            for m in members:
+                if m.get('added_at'): m['added_at'] = str(m['added_at'])
+        db_pool.putconn(conn)
+    return members
+
+@app.post("/api/groups/{group_id}/members")
+async def add_group_member(group_id: int, payload: Dict[str, Any], request: Request):
+    if not TOOLBOX_ENABLED: raise HTTPException(status_code=503, detail="Toolbox features disabled")
+    user = request.session.get('user')
+    if not user: raise HTTPException(status_code=401, detail="Authentication required")
+    
+    email = payload.get('email')
+    role = payload.get('role', 'member')
+    if not email: raise HTTPException(status_code=400, detail="Email is required")
+
+    with db_pool.getconn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT role FROM group_members WHERE group_id = %s AND user_id = %s", (group_id, user['id']))
+            my_role = cur.fetchone()
+            if not my_role or my_role[0] != 'organizer':
+                db_pool.putconn(conn)
+                raise HTTPException(status_code=403, detail="Only organizers can add members")
+
+            cur.execute("SELECT id FROM users WHERE email = %s", (email,))
+            target_user = cur.fetchone()
+            if not target_user:
+                db_pool.putconn(conn)
+                raise HTTPException(status_code=404, detail=f"User with email {email} not found.")
+
+            cur.execute("""
+                INSERT INTO group_members (group_id, user_id, role)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (group_id, user_id) DO UPDATE SET role = EXCLUDED.role
+            """, (group_id, target_user[0], role))
+            conn.commit()
+        db_pool.putconn(conn)
+    return {"status": "success"}
+
+@app.patch("/api/groups/{group_id}/members/{user_id}")
+async def update_group_member(group_id: int, user_id: int, payload: Dict[str, Any], request: Request):
+    if not TOOLBOX_ENABLED: raise HTTPException(status_code=503, detail="Toolbox features disabled")
+    current_user = request.session.get('user')
+    if not current_user: raise HTTPException(status_code=401, detail="Authentication required")
+    
+    role = payload.get('role')
+    if not role: raise HTTPException(status_code=400, detail="Role is required")
+
+    with db_pool.getconn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT role FROM group_members WHERE group_id = %s AND user_id = %s", (group_id, current_user['id']))
+            my_role = cur.fetchone()
+            if not my_role or my_role[0] != 'organizer':
+                db_pool.putconn(conn)
+                raise HTTPException(status_code=403, detail="Only organizers can update roles")
+
+            cur.execute("UPDATE group_members SET role = %s WHERE group_id = %s AND user_id = %s", (role, group_id, user_id))
+            conn.commit()
+        db_pool.putconn(conn)
+    return {"status": "success"}
+
+@app.delete("/api/groups/{group_id}/members/{user_id}")
+async def remove_group_member(group_id: int, user_id: int, request: Request):
+    if not TOOLBOX_ENABLED: raise HTTPException(status_code=503, detail="Toolbox features disabled")
+    current_user = request.session.get('user')
+    if not current_user: raise HTTPException(status_code=401, detail="Authentication required")
+
+    with db_pool.getconn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT role FROM group_members WHERE group_id = %s AND user_id = %s", (group_id, current_user['id']))
+            my_role = cur.fetchone()
+            
+            if not my_role:
+                db_pool.putconn(conn)
+                raise HTTPException(status_code=403, detail="Not a member of this group")
+                
+            if current_user['id'] != user_id and my_role[0] != 'organizer':
+                db_pool.putconn(conn)
+                raise HTTPException(status_code=403, detail="Only organizers can remove other members")
+
+            cur.execute("DELETE FROM group_members WHERE group_id = %s AND user_id = %s", (group_id, user_id))
+            conn.commit()
+        db_pool.putconn(conn)
+    return {"status": "success"}
+
+@app.get("/api/users/search")
+async def search_users(email: str, request: Request):
+    if not TOOLBOX_ENABLED: raise HTTPException(status_code=503, detail="Toolbox features disabled")
+    if not request.session.get('user'): raise HTTPException(status_code=401, detail="Authentication required")
+    
+    with db_pool.getconn() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT id, full_name, email, picture_url FROM users WHERE email ILIKE %s LIMIT 10", (f"%{email}%",))
+            users = cur.fetchall()
+        db_pool.putconn(conn)
+    return users
+
+
+# ------------------------------------------------------------
+# AI REPORTING ROUTE
+# ------------------------------------------------------------
+class ReportRequest(BaseModel):
+    context: Dict[str, Any]
+    prompt_config: Optional[str] = "investigative"
+
+@app.post("/api/ai/report")
+async def generate_ai_report(req: ReportRequest, request: Request):
+    """
+    Generate an 'investigative journalist' summary of a portfolio.
+    Input: 'context' dict with stats, cities, top violations, etc.
+    Output: text summary.
+    """
+    if not openai:
+        raise HTTPException(status_code=400, detail="AI features not configured (missing openai lib)")
+    if not OPENAI_API_KEY or "REPLACE_WITH" in OPENAI_API_KEY:
+        # Return a mock report for demo purposes if key is missing? 
+        # Or just specific error. Let's return error but 400 to avoid Nginx HTML.
+        raise HTTPException(status_code=400, detail="AI features not configured (missing OPENAI_API_KEY)")
+
+    # Verify Auth (optional, but recommended for cost)
+    if TOOLBOX_ENABLED:
+        user = request.session.get('user')
+        if not user:
+            raise HTTPException(status_code=401, detail="Authentication required for AI features")
+
+    try:
+        # Construct a prompt from the context
+        owner_name = req.context.get('name', 'Unknown Entity')
+        prop_count = req.context.get('property_count', 0)
+        total_val = req.context.get('total_value', 0)
+        top_city = req.context.get('top_city', 'Unknown')
+        
+        system_prompt = (
+            "You are an investigative housing journalist. You write short, punchy, cynical summaries "
+            "about landlord portfolios. Focus on scale, consolidation, and potential monopolization. "
+            "Do not be polite. Be objective but sharp."
+        )
+        
+        user_prompt = (
+            f"Write a 1-paragraph summary (max 300 words) for a landlord named '{owner_name}'.\n"
+            f"They own {prop_count} properties in Connecticut, mostly in {top_city}.\n"
+            f"Total assessed portfolio value is roughly {total_val}.\n"
+            "Highlight the scale of their operation. If they have > 50 properties, mention they are a major player."
+        )
+
+        # OpenAI v1.0+ Client
+        client = openai.OpenAI(api_key=OPENAI_API_KEY)
+        
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.7,
+            max_tokens=250
+        )
+        
+        summary = response.choices[0].message.content.strip()
+        return {"report": summary}
+
+    except Exception as e:
+        logger.error(f"OpenAI Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 db_pool: Optional[pool.SimpleConnectionPool] = None
 
@@ -1924,17 +2380,33 @@ def _column_exists(cursor, table: str, col: str) -> bool:
     """, (table, col))
     return cursor.fetchone() is not None
 
-def _calculate_and_cache_insights(cursor, town_col: Optional[str], town_filter: Optional[str]):
+def _calculate_and_cache_insights(cursor, town_col: Optional[str], town_filter: Optional[str], sort_mode: str = 'total'):
     """
     Highly optimized logic for calculating top networks.
     Aggregates first by (network, entity) to avoid redundant scans,
     then picks the best display entity for each network.
+    
+    sort_mode: 'total' (default) or 'subsidized'
     """
     params = {}
     town_filter_clause = ""
     if town_col and town_filter:
         town_filter_clause = f"AND p.{town_col} = %(town_filter)s"
         params['town_filter'] = town_filter
+
+    # Sorting logic
+    order_clause = "ns.total_property_count DESC"
+    where_clause = "1=1"
+    final_order_clause = "re.total_property_count DESC"
+    
+    if sort_mode == 'subsidized':
+        order_clause = "ns.subsidized_property_count DESC"
+        where_clause = "ns.subsidized_property_count > 0"
+        final_order_clause = "re.total_property_count DESC" # Keep ordering by size, but filter applies? 
+        # Wait, if I sort by total size but filter > 0, I show biggest landlords who have subsidies.
+        # If I sort by subsidized count, I show landlords with MOST subsidies.
+        # User request: "subsidized properties" toggle. Usually expects rank by subsidy count?
+        final_order_clause = "re.subsidized_property_count DESC, re.total_property_count DESC"
 
     query = f"""
         WITH property_links AS (
@@ -1975,12 +2447,18 @@ def _calculate_and_cache_insights(cursor, town_col: Optional[str], town_filter: 
         network_stats AS (
             -- Total stats for each network
             SELECT 
-                network_id,
-                COUNT(DISTINCT property_id) as total_property_count,
-                SUM(assessed_value) as total_assessed_value,
-                SUM(appraised_value) as total_appraised_value
-            FROM property_links
-            GROUP BY network_id
+                pl.network_id,
+                COUNT(DISTINCT pl.property_id) as total_property_count,
+                SUM(pl.assessed_value) as total_assessed_value,
+                SUM(pl.appraised_value) as total_appraised_value,
+                COUNT(DISTINCT ps.property_id) as subsidized_property_count,
+                coalesce(
+                    jsonb_agg(DISTINCT ps.program_name) FILTER (WHERE ps.program_name IS NOT NULL), 
+                    '[]'::jsonb
+                ) as subsidy_programs
+            FROM property_links pl
+            LEFT JOIN property_subsidies ps ON pl.property_id = ps.property_id
+            GROUP BY pl.network_id
         ),
         entity_stats AS (
             -- Stats for each entity within its network
@@ -2000,6 +2478,8 @@ def _calculate_and_cache_insights(cursor, town_col: Optional[str], town_filter: 
                 ns.total_property_count,
                 ns.total_assessed_value,
                 ns.total_appraised_value,
+                ns.subsidized_property_count,
+                ns.subsidy_programs,
                 ROW_NUMBER() OVER (
                     PARTITION BY es.network_id 
                     ORDER BY 
@@ -2015,6 +2495,7 @@ def _calculate_and_cache_insights(cursor, town_col: Optional[str], town_filter: 
                 ) as rank
             FROM entity_stats es
             JOIN network_stats ns ON es.network_id = ns.network_id
+            WHERE {where_clause}
         ),
         controlling_business AS (
              -- Best business to use as a deduplication key
@@ -2033,6 +2514,8 @@ def _calculate_and_cache_insights(cursor, town_col: Optional[str], town_filter: 
             re.total_property_count as value,
             re.total_assessed_value,
             re.total_appraised_value,
+            re.subsidized_property_count,
+            re.subsidy_programs,
             re.network_id,
             (SELECT COUNT(*) FROM entity_networks en WHERE en.network_id = re.network_id AND en.entity_type = 'business') as business_count,
             cb.business_name as controlling_business_name,
@@ -2040,7 +2523,7 @@ def _calculate_and_cache_insights(cursor, town_col: Optional[str], town_filter: 
         FROM ranked_entities re
         LEFT JOIN controlling_business cb ON re.network_id = cb.network_id
         WHERE re.rank = 1
-        ORDER BY re.total_property_count DESC
+        ORDER BY {final_order_clause}
         LIMIT 50;
     """
     cursor.execute(query, params)
@@ -2151,7 +2634,8 @@ def _update_insights_cache_sync():
                 
                 # 1. Statewide
                 logger.info("Calculating STATEWIDE insights...")
-                insights_by_municipality['STATEWIDE'] = _calculate_and_cache_insights(cursor, None, None)
+                insights_by_municipality['STATEWIDE'] = _calculate_and_cache_insights(cursor, None, None, sort_mode='total')
+                insights_by_municipality['STATEWIDE_SUBSIDIZED'] = _calculate_and_cache_insights(cursor, None, None, sort_mode='subsidized')
                 
                 # Helper to save partial results
                 def save_partial(data):
@@ -2168,11 +2652,18 @@ def _update_insights_cache_sync():
                 for t in major_cities:
                     logger.info("Calculating insights for %s...", t)
                     try:
-                        town_networks = _calculate_and_cache_insights(cursor, 'property_city', t)
+                        # Standard
+                        town_networks = _calculate_and_cache_insights(cursor, 'property_city', t, sort_mode='total')
                         if town_networks:
                             insights_by_municipality[t.upper()] = town_networks
-                            save_partial(insights_by_municipality)
-                            logger.info("✅ Saved insights for %s", t)
+                        
+                        # Subsidized
+                        sub_networks = _calculate_and_cache_insights(cursor, 'property_city', t, sort_mode='subsidized')
+                        if sub_networks:
+                            insights_by_municipality[f"{t.upper()}_SUBSIDIZED"] = sub_networks
+
+                        save_partial(insights_by_municipality)
+                        logger.info("✅ Saved insights for %s", t)
                     except Exception:
                         logger.exception("Failed to calculate insights for %s", t)
                 

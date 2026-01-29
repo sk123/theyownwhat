@@ -1,7 +1,27 @@
 import React from 'react';
-import { Home, BookOpen, AlertCircle, RefreshCw } from 'lucide-react';
+import { Home, BookOpen, AlertCircle, RefreshCw, Toolbox, LogIn, LayoutDashboard } from 'lucide-react';
 
-export default function Header({ onHome, onReset, onAbout }) {
+export default function Header({ onHome, onReset, onAbout, OnOpenToolbox, toolboxEnabled }) {
+    const [user, setUser] = React.useState(null);
+
+    React.useEffect(() => {
+        if (toolboxEnabled) {
+            // Only check auth if toolbox is enabled
+            fetch('/api/auth/me')
+                .then(res => res.json())
+                .then(data => {
+                    if (data.authenticated) {
+                        setUser(data.user);
+                    }
+                })
+                .catch(err => console.error("Auth check failed", err));
+        }
+    }, [toolboxEnabled]);
+
+    const handleLogin = () => {
+        window.location.href = '/api/auth/login';
+    };
+
     return (
         <header className="bg-white border-b border-gray-200 sticky top-0 z-50">
             <div className="container mx-auto px-4 h-16 flex items-center justify-between">
@@ -14,11 +34,31 @@ export default function Header({ onHome, onReset, onAbout }) {
                     </div>
                     <div>
                         <h1 className="font-bold text-lg leading-tight text-gray-900">they own WHAT??</h1>
-                        <p className="text-xs text-gray-500 font-medium tracking-wide">CT PROPERTY EXPLORER</p>
+                        <p className="text-xs text-gray-500 font-medium tracking-wide">CONNECTICUT PROPERTY EXPLORER</p>
                     </div>
                 </div>
 
                 <div className="flex items-center gap-2">
+                    {user ? (
+                        <button
+                            onClick={OnOpenToolbox}
+                            className="flex items-center gap-2 px-3 py-1.5 text-sm font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors border border-blue-100"
+                        >
+                            <LayoutDashboard className="w-4 h-4" />
+                            <span className="hidden sm:inline">Toolbox</span>
+                        </button>
+                    ) : (
+                        toolboxEnabled && (
+                            <button
+                                onClick={handleLogin}
+                                className="flex items-center gap-2 px-3 py-1.5 text-sm font-semibold text-gray-700 bg-gray-50 hover:bg-gray-100 rounded-lg transition-colors border border-gray-200"
+                            >
+                                <LogIn className="w-4 h-4" />
+                                <span className="hidden sm:inline">Sign In</span>
+                            </button>
+                        )
+                    )}
+
                     {onReset && (
                         <button
                             onClick={onReset}

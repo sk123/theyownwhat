@@ -1,10 +1,12 @@
 import React from 'react';
 import { Building2, Users, MapPin, TrendingUp, ChevronRight } from 'lucide-react';
 
-export default function Insights({ data, onSelect }) {
+export default function Insights({ data, onSelect, toolboxEnabled }) {
     if (!data) return null;
 
     const [selectedCity, setSelectedCity] = React.useState('Statewide');
+    const [showSubsidized, setShowSubsidized] = React.useState(false);
+    const [selectedSubsidy, setSelectedSubsidy] = React.useState('All');
 
     // Normalize keys
     const majorCities = [
@@ -15,33 +17,56 @@ export default function Insights({ data, onSelect }) {
     // Always show these cities
     const filteredCities = ['Statewide', ...majorCities];
 
-    // Flatten logic (memoized)
-    const allNetworks = React.useMemo(() => {
-        const sourceData = data['STATEWIDE'] || data['Statewide'] || Object.values(data).flat();
-        return sourceData.map(n => ({ ...n })).sort((a, b) => b.value - a.value);
-    }, [data]);
-
     // Filter based on selection
     const displayedNetworks = React.useMemo(() => {
-        const lookupKey = selectedCity.toUpperCase();
+        let lookupKey = selectedCity.toUpperCase();
+        if (showSubsidized) {
+            lookupKey = lookupKey === 'STATEWIDE' ? 'STATEWIDE_SUBSIDIZED' : `${lookupKey}_SUBSIDIZED`;
+        }
+
         const uppercaseData = {};
         Object.keys(data).forEach(k => {
             uppercaseData[k.toUpperCase()] = data[k];
         });
 
-        if (lookupKey === 'STATEWIDE') {
-            const seen = new Map();
-            allNetworks.forEach(n => {
-                const ex = seen.get(n.entity_name);
-                if (!ex || n.value > ex.value) {
-                    seen.set(n.entity_name, n);
-                }
+        let results = uppercaseData[lookupKey] ? [...uppercaseData[lookupKey]] : [];
+
+        // Sort: Subsidized mode sorts by subsidized count, Total mode by total value
+        // The backend already returns them sorted, but we can enforce it or client-side filter
+        results.sort((a, b) => {
+            if (showSubsidized) {
+                return (b.subsidized_property_count || 0) - (a.subsidized_property_count || 0);
+            }
+            return b.value - a.value;
+        });
+
+        // Apply subsidy type filter
+        if (showSubsidized && selectedSubsidy !== 'All') {
+            results = results.filter(n => {
+                // subsidy_programs comes as JSON string or object from backend?
+                // Depending on json_converter, might be list.
+                // In main.py we used jsonb_agg, so pg returns list defined in json.
+                // But passing through json.dumps in python.
+                // Let's assume it's an array.
+                const programs = Array.isArray(n.subsidy_programs) ? n.subsidy_programs : [];
+                return programs.some(p => p.includes(selectedSubsidy) || p === selectedSubsidy);
             });
-            return Array.from(seen.values()).sort((a, b) => b.value - a.value).slice(0, 9);
         }
 
-        return uppercaseData[lookupKey] ? uppercaseData[lookupKey].sort((a, b) => b.value - a.value) : [];
-    }, [selectedCity, allNetworks, data]);
+        return results;
+    }, [selectedCity, data, showSubsidized, selectedSubsidy]);
+
+    // Extract available subsidy types from the CURRENT displayed set (or the full subsidized set for the city)
+    const availableSubsidies = React.useMemo(() => {
+        if (!showSubsidized) return [];
+        const types = new Set();
+        displayedNetworks.forEach(n => {
+            if (Array.isArray(n.subsidy_programs)) {
+                n.subsidy_programs.forEach(p => types.add(p));
+            }
+        });
+        return Array.from(types).sort();
+    }, [displayedNetworks, showSubsidized]);
 
     return (
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -54,6 +79,39 @@ export default function Insights({ data, onSelect }) {
                 </div>
 
                 <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+                    {toolboxEnabled && (
+                        <>
+                            {/* Subsidy Toggle */}
+                            <button
+                                onClick={() => {
+                                    setShowSubsidized(!showSubsidized);
+                                    if (!showSubsidized) setSelectedSubsidy('All');
+                                }}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all border flex items-center gap-1.5 ${showSubsidized
+                                    ? 'bg-emerald-600 text-white border-emerald-600 shadow-md transform scale-105'
+                                    : 'bg-white text-emerald-700 border-emerald-200 hover:bg-emerald-50'
+                                    }`}
+                            >
+                                {showSubsidized && <div className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />}
+                                {showSubsidized ? 'Subsidized Only' : 'Show Subsidized'}
+                            </button>
+
+                            {/* Filter Dropdown */}
+                            {showSubsidized && (
+                                <select
+                                    value={selectedSubsidy}
+                                    onChange={(e) => setSelectedSubsidy(e.target.value)}
+                                    className="px-2 py-1.5 rounded-lg text-xs font-bold bg-white border border-slate-200 text-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 max-w-[150px]"
+                                >
+                                    <option value="All">All Programs</option>
+                                    {availableSubsidies.map(s => (
+                                        <option key={s} value={s}>{s}</option>
+                                    ))}
+                                </select>
+                            )}
+                        </>
+                    )}
+
                     {/* Municipality Selector */}
                     <div className="bg-white/50 backdrop-blur-sm border border-slate-200 rounded-xl p-1 flex gap-1 overflow-x-auto max-w-full no-scrollbar">
                         {filteredCities.map(city => (
@@ -134,7 +192,16 @@ export default function Insights({ data, onSelect }) {
                             <div className="grid grid-cols-2 gap-4 mb-6">
                                 <div className="space-y-0.5">
                                     <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Properties</div>
-                                    <div className="text-xl font-black text-slate-900">{network.value}</div>
+                                    <div className="text-xl font-black text-slate-900">
+                                        {showSubsidized ? (
+                                            <span className="flex items-baseline gap-1">
+                                                <span className="text-emerald-600">{network.subsidized_property_count || 0}</span>
+                                                <span className="text-xs text-slate-400 font-medium">({network.value})</span>
+                                            </span>
+                                        ) : (
+                                            network.value
+                                        )}
+                                    </div>
                                 </div>
                                 <div className="space-y-0.5">
                                     <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Businesses</div>
@@ -154,6 +221,22 @@ export default function Insights({ data, onSelect }) {
 
 
                             <div className="pt-4 border-t border-slate-50 space-y-3">
+                                {showSubsidized && network.subsidy_programs && network.subsidy_programs.length > 0 && (
+                                    <div className="mb-2">
+                                        <div className="text-[9px] font-bold text-emerald-600 uppercase tracking-wider mb-1">Subsidy Programs</div>
+                                        <div className="flex flex-wrap gap-1">
+                                            {network.subsidy_programs.slice(0, 4).map((prog, idx) => (
+                                                <span key={idx} className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-100">
+                                                    {prog}
+                                                </span>
+                                            ))}
+                                            {network.subsidy_programs.length > 4 && (
+                                                <span className="text-[9px] text-slate-400 font-bold self-center">+{network.subsidy_programs.length - 4}</span>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
+
                                 {network.principals?.length > 0 && (
                                     <div>
                                         <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Key Principals</div>
