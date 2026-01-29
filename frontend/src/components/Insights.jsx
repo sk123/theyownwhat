@@ -7,24 +7,29 @@ export default function Insights({ data, onSelect }) {
     const [selectedCity, setSelectedCity] = React.useState('Statewide');
 
     // Normalize keys
-    const sortedCities = React.useMemo(() => {
-        return Object.keys(data)
-            .filter(k => k.toUpperCase() !== 'STATEWIDE')
-            .sort()
-            .map(k => k.charAt(0).toUpperCase() + k.slice(1).toLowerCase());
-    }, [data]);
+    const majorCities = [
+        'Bridgeport', 'New Haven', 'Hartford', 'Stamford',
+        'Waterbury', 'Norwalk', 'Danbury', 'New Britain'
+    ];
 
-    const cities = ['Statewide', ...sortedCities];
+    // Always show these cities
+    const filteredCities = ['Statewide', ...majorCities];
 
     // Flatten logic (memoized)
     const allNetworks = React.useMemo(() => {
-        const sourceData = data['STATEWIDE'] || Object.values(data).flat();
+        const sourceData = data['STATEWIDE'] || data['Statewide'] || Object.values(data).flat();
         return sourceData.map(n => ({ ...n })).sort((a, b) => b.value - a.value);
     }, [data]);
 
     // Filter based on selection
     const displayedNetworks = React.useMemo(() => {
-        if (selectedCity === 'Statewide') {
+        const lookupKey = selectedCity.toUpperCase();
+        const uppercaseData = {};
+        Object.keys(data).forEach(k => {
+            uppercaseData[k.toUpperCase()] = data[k];
+        });
+
+        if (lookupKey === 'STATEWIDE') {
             const seen = new Map();
             allNetworks.forEach(n => {
                 const ex = seen.get(n.entity_name);
@@ -34,8 +39,8 @@ export default function Insights({ data, onSelect }) {
             });
             return Array.from(seen.values()).sort((a, b) => b.value - a.value).slice(0, 9);
         }
-        const key = selectedCity.toUpperCase();
-        return data[key] ? data[key].sort((a, b) => b.value - a.value) : [];
+
+        return uppercaseData[lookupKey] ? uppercaseData[lookupKey].sort((a, b) => b.value - a.value) : [];
     }, [selectedCity, allNetworks, data]);
 
     return (
@@ -46,23 +51,24 @@ export default function Insights({ data, onSelect }) {
                         <TrendingUp className="w-6 h-6 text-blue-600" />
                         Top Networks
                     </h3>
-
-                    <p className="text-slate-500 font-medium">Top portfolios and ownership networks by volume</p>
                 </div>
 
-                <div className="bg-white/50 backdrop-blur-sm border border-slate-200 rounded-xl p-1.5 flex gap-1 overflow-x-auto max-w-full no-scrollbar">
-                    {cities.map(city => (
-                        <button
-                            key={city}
-                            onClick={() => setSelectedCity(city)}
-                            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${selectedCity === city
-                                ? 'bg-slate-900 text-white shadow-md'
-                                : 'text-slate-500 hover:bg-white hover:shadow-sm'
-                                }`}
-                        >
-                            {city}
-                        </button>
-                    ))}
+                <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+                    {/* Municipality Selector */}
+                    <div className="bg-white/50 backdrop-blur-sm border border-slate-200 rounded-xl p-1 flex gap-1 overflow-x-auto max-w-full no-scrollbar">
+                        {filteredCities.map(city => (
+                            <button
+                                key={city}
+                                onClick={() => setSelectedCity(city)}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${selectedCity === city
+                                    ? 'bg-slate-900 text-white shadow-md'
+                                    : 'text-slate-500 hover:bg-white hover:shadow-sm'
+                                    }`}
+                            >
+                                {city}
+                            </button>
+                        ))}
+                    </div>
                 </div>
             </div>
 
@@ -71,7 +77,7 @@ export default function Insights({ data, onSelect }) {
                     displayedNetworks.map((network, i) => (
                         <div
                             key={i}
-                            onClick={() => onSelect(network.entity_id, network.entity_type)}
+                            onClick={() => onSelect(network.entity_id, network.entity_type, network.entity_name)}
                             className="group relative bg-white rounded-2xl p-6 border border-slate-100 shadow-[0_2px_8px_-2px_rgba(0,0,0,0.05)] hover:shadow-xl hover:shadow-blue-500/10 hover:-translate-y-1 transition-all duration-300 cursor-pointer overflow-hidden"
                         >
                             <div className="absolute top-0 right-0 p-4 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -91,18 +97,35 @@ export default function Insights({ data, onSelect }) {
                                 </div>
                             </div>
 
-                            <div className="mb-3 min-h-[4.5rem]">
-                                <h4 className="font-bold text-lg text-slate-900 leading-snug line-clamp-2 group-hover:text-blue-700 transition-colors">
-                                    {network.principals && network.principals.length > 0
-                                        ? network.principals[0].name
-                                        : network.entity_name}
-                                </h4>
-                                {network.businesses && network.businesses.length > 0 && (
-                                    <div className="text-xs font-semibold text-slate-500 mt-1 uppercase tracking-wide truncate">
-                                        {network.businesses[0].name}
-                                        {network.business_count > 1 && (
-                                            <span className="text-slate-400 font-medium normal-case"> and {network.business_count - 1} more</span>
-                                        )}
+                            <div className="mb-4 min-h-[6rem]">
+                                <div className="space-y-1 mb-3">
+                                    <h4 className="font-black text-xl lg:text-2xl text-slate-900 leading-tight tracking-tight group-hover:text-blue-600 transition-colors">
+                                        {network.network_name || network.entity_name}
+                                    </h4>
+                                    {network.controlling_business_name && network.controlling_business_name !== network.entity_name && (
+                                        <div className="text-[11px] font-extrabold text-slate-400 uppercase tracking-[0.15em] flex items-center gap-1.5 mt-1.5">
+                                            <Building2 size={10} className="text-slate-300" />
+                                            {network.controlling_business_name}
+                                        </div>
+                                    )}
+                                </div>
+
+                                {network.representative_entities && network.representative_entities.length > 0 && (
+                                    <div className="space-y-1">
+                                        <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider mb-1">Includes</div>
+                                        <div className="flex flex-col gap-0.5">
+                                            {network.representative_entities.slice(0, 3).map((ent, idx) => (
+                                                <div key={idx} className="flex items-center gap-1.5 text-xs text-slate-600 truncate">
+                                                    <div className="w-1 h-1 rounded-full bg-slate-400 flex-shrink-0" />
+                                                    <span className="truncate">{ent.name || ent}</span>
+                                                </div>
+                                            ))}
+                                            {network.business_count > 3 && (
+                                                <div className="text-[10px] text-slate-400 font-medium pl-2.5">
+                                                    +{network.business_count - 3} more
+                                                </div>
+                                            )}
+                                        </div>
                                     </div>
                                 )}
                             </div>
@@ -156,6 +179,6 @@ export default function Insights({ data, onSelect }) {
                     </div>
                 )}
             </div>
-        </div>
+        </div >
     );
 }

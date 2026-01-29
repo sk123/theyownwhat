@@ -7,13 +7,18 @@ import sys
 import argparse
 from io import StringIO
 
+# Add parent directory to path to allow importing 'api'
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+
 # --- Configuration ---
 DATABASE_URL = os.environ.get("DATABASE_URL")
+import re
 # Define sources, mirroring import_data.py
 DATA_SOURCES = {
     "businesses": "businesses.csv",
     "principals": "principals.csv",
     "properties": "new_parcels.csv",
+    "subsidies": "Active and Inconclusive Properties.xlsx",
 }
 
 
@@ -30,6 +35,8 @@ def get_db_connection():
             retries -= 1
             time.sleep(5)
     raise Exception("❌ Could not connect to the database after multiple retries.")
+
+from api.shared_utils import normalize_person_name, normalize_business_name
 
 # --- Helper Function (from import_data.py) ---
 def construct_principal_name(row):
@@ -57,7 +64,8 @@ def add_property_columns(cursor):
         ("unit", "TEXT"), ("unit_cut", "TEXT"), ("property_zip", "TEXT"),
         ("property_county", "TEXT"), ("street_name", "TEXT"), ("address_number", "TEXT"),
         ("address_prefix", "TEXT"), ("address_suffix", "TEXT"), ("cama_site_link", "TEXT"),
-        ("building_photo", "TEXT"), ("number_of_units", "NUMERIC")
+        ("building_photo", "TEXT"), ("number_of_units", "NUMERIC"),
+        ("complex_name", "TEXT"), ("management_company", "TEXT")
     ]
     commands = [
         sql.SQL("ALTER TABLE properties ADD COLUMN IF NOT EXISTS {} {};")
@@ -121,6 +129,39 @@ def add_principal_columns(cursor):
         print(f"❌ Error altering 'principals' schema: {e}")
         raise
 
+def ensure_management_schema(cursor):
+    """Ensures the complex_management table exists."""
+    print("🚀 Ensuring 'complex_management' table exists...")
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS complex_management (
+            street_address TEXT,
+            city TEXT,
+            management_name TEXT,
+            official_url TEXT,
+            phone TEXT,
+            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (street_address, city)
+        )
+    """)
+    print("✅ Complex management schema ensured.")
+    
+def ensure_subsidies_schema(cursor):
+    """Ensures the property_subsidies table exists."""
+    print("🚀 Ensuring 'property_subsidies' table exists...")
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS property_subsidies (
+            id SERIAL PRIMARY KEY,
+            property_id INTEGER REFERENCES properties(id),
+            program_name TEXT,
+            subsidy_type TEXT,
+            units_subsidized INTEGER,
+            expiry_date DATE,
+            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_subsidies_property_id ON property_subsidies(property_id);
+    """)
+    print("✅ Property subsidies schema ensured.")
+
 # =============================================================================
 # DATA UPDATE FUNCTIONS
 # =============================================================================
@@ -175,9 +216,9 @@ def run_properties_update(conn, file_path, column_map):
 
             # Create normalized owner fields
             if 'owner' in chunk.columns:
-                chunk['owner_norm'] = chunk['owner'].astype(str).str.strip().str.upper().replace(r'[^a-zA-Z0-9 ]', '', regex=True).replace(r'\s+', ' ', regex=True)
+                chunk['owner_norm'] = chunk['owner'].apply(normalize_business_name)
             if 'co_owner' in chunk.columns:
-                chunk['co_owner_norm'] = chunk['co_owner'].astype(str).str.strip().str.upper().replace(r'[^a-zA-Z0-9 ]', '', regex=True).replace(r'\s+', ' ', regex=True)
+                chunk['co_owner_norm'] = chunk['co_owner'].apply(normalize_business_name)
 
             final_chunk = chunk.reindex(columns=staging_col_names)
 
@@ -371,24 +412,7 @@ def run_principals_update(conn, file_path, column_map):
             chunk.dropna(subset=['business_id', 'name_c'], inplace=True)
             chunk = chunk[chunk['name_c'] != '']
             
-            # Create normalized name field
-            # Define normalization helper
-            def clean_name(x):
-                if not isinstance(x, str): return ''
-                n = x.strip().upper()
-                n = re.sub(r'[^A-Z0-9 ]', '', n)
-                n = re.sub(r'\s+', ' ', n).strip()
-                # Typo fixes
-                n = n.replace('GUREVITOH', 'GUREVITCH').replace('MANACHEM', 'MENACHEM').replace('MENACHERM', 'MENACHEM').replace('MENAHEM', 'MENACHEM').replace('GURAVITCH', 'GUREVITCH')
-                # Middle initial strip
-                parts = n.split()
-                if len(parts) >= 3:
-                     if len(parts[0]) > 1 and len(parts[-1]) > 1:
-                         mid = [p for p in parts[1:-1] if len(p) > 1]
-                         n = " ".join([parts[0]] + mid + [parts[-1]])
-                return n
-
-            chunk['name_c_norm'] = chunk['name_c'].apply(clean_name)
+            chunk['name_c_norm'] = chunk['name_c'].apply(normalize_person_name)
 
             # Filter chunk to only columns we care about
             final_chunk = chunk.reindex(columns=staging_col_names)
@@ -431,6 +455,167 @@ def run_principals_update(conn, file_path, column_map):
         print(f"\n❌ An error occurred during the 'principals' update process: {e}")
         conn.rollback()
         raise e
+
+# =============================================================================
+# SUBSIDY UPDATE FUNCTIONS
+# =============================================================================
+
+def normalize_address(addr):
+    if not addr: return ""
+    addr = str(addr).upper().strip()
+    addr = re.sub(r'\s+', ' ', addr)
+    addr = re.sub(r'[^\w\s]', '', addr)
+    return addr
+
+def run_subsidies_update(conn, file_path, column_map=None):
+    """
+    Import subsidy data from NHPD Excel file.
+    Matches properties via Lat/Lon or Address text.
+    """
+    print(f"truck Starting data update for 'subsidies' from '{file_path}'...")
+    
+    # Check if file exists (pandas might need openpyxl)
+    if not os.path.exists(file_path):
+        print(f"❌ Error: Subsidy data file not found at {file_path}")
+        return
+
+    try:
+        df = pd.read_excel(file_path)
+    except Exception as e:
+        print(f"❌ Error reading Excel file: {e}")
+        return
+
+    # Filter for CT if not already done
+    if 'State' in df.columns:
+        df = df[df['State'] == 'CT'].copy()
+    
+    print(f"✅ Found {len(df)} properties in CT.")
+
+    cur = conn.cursor()
+
+    processed_count = 0
+    matched_count = 0
+    
+    # Define the subsidy prefixes to look for
+    subsidy_prefixes = [
+        'S8_1', 'S8_2', 'S202_1', 'S202_2', 'S236_1', 'S236_2',
+        'FHA_1', 'FHA_2', 'LIHTC_1', 'LIHTC_2', 'RHS515_1', 'RHS515_2',
+        'RHS538_1', 'RHS538_2', 'HOME_1', 'HOME_2', 'PH_1', 'PH_2',
+        'State_1', 'State_2', 'Pbv_1', 'Pbv_2', 'Mr_1', 'Mr_2', 'NHTF_1', 'NHTF_2'
+    ]
+
+    try:
+        for _, row in df.iterrows():
+            processed_count += 1
+            nhpd_id = row.get('NHPDPropertyID')
+            prop_name = row.get('PropertyName')
+            addr = row.get('PropertyAddress')
+            city = row.get('City')
+            lat = row.get('Latitude')
+            lon = row.get('Longitude')
+            total_units = row.get('TotalUnits')
+            owner = row.get('Owner')
+            manager = row.get('ManagerName')
+
+            # Try to find a matching property in our database
+            # Strategy 1: Lat/Long proximity
+            target_property_id = None
+            
+            if pd.notna(lat) and pd.notna(lon):
+                # Find closest property within ~50 meters (roughly 0.0005 degrees)
+                cur.execute("""
+                    SELECT id, location, property_city, 
+                           (point(longitude, latitude) <-> point(%s, %s)) as distance
+                    FROM properties
+                    WHERE latitude IS NOT NULL AND longitude IS NOT NULL
+                    AND latitude BETWEEN %s AND %s
+                    AND longitude BETWEEN %s AND %s
+                    ORDER BY distance ASC
+                    LIMIT 1
+                """, (lon, lat, lat-0.0005, lat+0.0005, lon-0.0005, lon+0.0005))
+                
+                match = cur.fetchone()
+                if match:
+                    target_property_id = match[0]
+                    matched_count += 1
+
+            # Strategy 2: Address Match (if lat/long failed)
+            if not target_property_id and addr:
+                # This is slow for a large DB, but we only do it for misses
+                cur.execute("""
+                    SELECT id FROM properties 
+                    WHERE (location ILIKE %s OR street_name ILIKE %s) 
+                    AND property_city ILIKE %s 
+                    LIMIT 1
+                """, (f"%{addr}%", f"%{addr}%", city))
+                match = cur.fetchone()
+                if match:
+                    target_property_id = match[0]
+                    matched_count += 1
+
+            if target_property_id:
+                # Sanitize None/NaN values for DB insertion
+                safe_prop_name = str(prop_name) if pd.notna(prop_name) and str(prop_name).strip() else None
+                safe_manager = str(manager) if pd.notna(manager) and str(manager).lower() != 'nan' else None
+                try:
+                    safe_units = int(total_units) if pd.notna(total_units) else None
+                except:
+                    safe_units = None
+
+                # Update property metadata
+                # We use COALESCE only for fields we don't want to overwrite if they exist?
+                # Actually import_nhpd logic used COALESCE(complex_name, %s) meaning:
+                # "Keep existing complex_name if present, otherwise use new one."
+                cur.execute("""
+                    UPDATE properties 
+                    SET nhpd_id = %s, 
+                        complex_name = COALESCE(complex_name, %s),
+                        management_company = COALESCE(management_company, %s),
+                        number_of_units = COALESCE(number_of_units, %s)
+                    WHERE id = %s
+                """, (nhpd_id, safe_prop_name, safe_manager, safe_units, target_property_id))
+
+                # Delete old subsidies for this property to avoid duplicates on re-import
+                cur.execute("DELETE FROM property_subsidies WHERE property_id = %s", (target_property_id,))
+
+                # Process subsidies
+                for prefix in subsidy_prefixes:
+                    prog_name_col = f"{prefix}_ProgramName"
+                    end_date_col = f"{prefix}_EndDate"
+                    units_col = f"{prefix}_AssistedUnits"
+                    
+                    if prog_name_col in row and pd.notna(row[prog_name_col]):
+                        prog_name = row[prog_name_col]
+                        expiry_date = row.get(end_date_col)
+                        units = row.get(units_col)
+                        
+                        if pd.isna(expiry_date): expiry_date = None
+                        if pd.isna(units): units = 0
+                        
+                        if isinstance(expiry_date, pd.Timestamp):
+                            expiry_date = expiry_date.date()
+
+                        cur.execute("""
+                            INSERT INTO property_subsidies 
+                            (property_id, program_name, subsidy_type, units_subsidized, expiry_date, source_url)
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                        """, (target_property_id, prog_name, prefix.split('_')[0], int(units), expiry_date, f"https://nhpd.preservationdatabase.org/Property/{nhpd_id}"))
+
+            if processed_count % 100 == 0:
+                sys.stdout.write(f"\\r⏳ Processed {processed_count}/{len(df)} properties... ({matched_count} matched)")
+                sys.stdout.flush()
+                conn.commit()
+
+        conn.commit()
+        print(f"\\n🎉 Import complete! Processed: {processed_count}, Matched: {matched_count}")
+
+    except Exception as e:
+        print(f"\\n❌ An error occurred during the 'subsidies' update process: {e}")
+        conn.rollback()
+        raise e
+    finally:
+        cur.close()
+
 
 
 # =============================================================================
@@ -481,7 +666,7 @@ def main():
     parser = argparse.ArgumentParser(description="Data update script for the property network database.")
     parser.add_argument(
         'table_name', 
-        choices=['properties', 'businesses', 'principals'], 
+        choices=['properties', 'businesses', 'principals', 'subsidies'], 
         help="The name of the table to update."
     )
     args = parser.parse_args()
@@ -561,10 +746,11 @@ def main():
             # 1. Add new columns
             if target_table == 'properties':
                 add_property_columns(cursor)
-            elif target_table == 'businesses':
-                add_business_columns(cursor)
             elif target_table == 'principals':
                 add_principal_columns(cursor)
+            
+            ensure_management_schema(cursor)
+            ensure_subsidies_schema(cursor)
             conn.commit()
 
             # 2. Run the update data process
@@ -574,6 +760,8 @@ def main():
                 run_businesses_update(conn, csv_path, business_update_cols)
             elif target_table == 'principals':
                 run_principals_update(conn, csv_path, principal_update_cols)
+            elif target_table == 'subsidies':
+                run_subsidies_update(conn, csv_path)
 
             # 3. Create new indexes for this table
             create_new_indices(cursor, target_table)

@@ -1,5 +1,5 @@
 import React from 'react';
-import { X, Building2, MapPin, DollarSign, User, ExternalLink, Link as LinkIcon } from 'lucide-react';
+import { X, Building2, MapPin, DollarSign, User, ExternalLink, Link as LinkIcon, Copy, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 // Helper to safely render a detail field
@@ -22,26 +22,31 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
     const isComplex = property.isComplex;
     const details = property.details || {};
 
-    // Find related business and principals
-    const ownerName = property.owner || '';
-    const relatedBusiness = networkData.businesses?.find(b =>
-        b.name && ownerName && b.name.toUpperCase().trim() === ownerName.toUpperCase().trim()
-    );
+    // Find related business and principals using IDs
+    const relatedBusiness = networkData.businesses?.find(b => {
+        const bid = property.details?.business_id;
+        if (bid && String(b.id) === String(bid)) return true;
+        // Fallback to name matching
+        const ownerName = property.owner || '';
+        return b.name && ownerName && b.name.toUpperCase().trim() === ownerName.toUpperCase().trim();
+    });
 
-    // Find related principals - try both business_id and name matching
+    // Find related principals - try principal_id, then business_id links
     const relatedPrincipals = networkData.principals?.filter(p => {
-        if (!relatedBusiness) return false;
+        // 1. Direct link to property
+        const pid = property.details?.principal_id;
+        if (pid && String(p.id) === String(pid)) return true;
 
-        // Try business_id match first
-        const businessId = String(relatedBusiness.id || '');
-        const principalBusinessId = String(p.business_id || p.details?.business_id || '');
-        if (businessId && principalBusinessId && businessId === principalBusinessId) {
-            return true;
+        // 2. Link via business
+        if (relatedBusiness) {
+            const businessId = String(relatedBusiness.id || '');
+            const principalBusinessId = String(p.business_id || p.details?.business_id || '');
+            if (businessId && principalBusinessId && businessId === principalBusinessId) {
+                return true;
+            }
         }
 
-        // Fallback: check if principal's business name matches the property owner
-        // This handles cases where business_id links aren't set up correctly
-        return false; // We'll rely on the business entity link to show principals in entity modal
+        return false;
     }) || [];
 
     // Mailing address from business or property details
@@ -57,9 +62,67 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
                 `${relatedBusiness.details.mail_city}, ${relatedBusiness.details.mail_state || 'CT'} ${relatedBusiness.details.mail_zip || ''}`.trim()
                 : null));
 
-    // CORRECTED: Use cama_site_link and building_photo from details
-    const imageUrl = details.building_photo || property.image_url || details.image_url;
-    const gisUrl = details.cama_site_link || details.link || property.gis_url || details.gis_url || property.vision_url;
+    // Helper to find first valid URL
+    const getValidUrl = (...args) => {
+        for (const arg of args) {
+            if (arg && typeof arg === 'string') {
+                if (arg.startsWith('http://') || arg.startsWith('https://') || arg.startsWith('/api/static/')) {
+                    return arg;
+                }
+            }
+        }
+        return null;
+    };
+
+    // CORRECTED: Use cama_site_link and building_photo from details.
+    // Construct URLs if we only have IDs (e.g. 52070-24675 for New Haven)
+    const getCamaUrl = (link) => {
+        if (!link) return null;
+        if (link.startsWith('http')) return link;
+
+        // New Haven VGSI ID format (e.g. 52070-24675 -> Pid=24675)
+        // Or generic Vision format
+        if (property.city?.toUpperCase() === 'NEW HAVEN' && link.includes('-')) {
+            const pid = link.split('-')[1];
+            if (pid) return `https://gis.vgsi.com/newhavenct/Parcel.aspx?Pid=${pid}`;
+        }
+
+        // Hartford Patriot Properties format
+        if (property.city?.toUpperCase() === 'HARTFORD') {
+            let pid = details.link;
+            if (pid) {
+                // Determine format
+                // In DB, link is often missing dashes (142588122)
+                pid = pid.toString();
+                if (!pid.includes('-') && pid.length === 9) {
+                    pid = `${pid.substring(0, 3)}-${pid.substring(3, 6)}-${pid.substring(6)}`;
+                }
+                // Use SearchResults to auto-set session
+                return `http://assessor1.hartford.gov/SearchResults.asp?SearchParcel=${pid}&SearchSubmitted=yes&cmdGo=Go`;
+            }
+            if (details.account_number) {
+                return `http://assessor1.hartford.gov/Summary.asp?AccountNumber=${details.account_number}`;
+            }
+        }
+
+        // Generic fallback for other Vision IDs if possible, or just return null
+        return null;
+    };
+
+    const imageUrl = getValidUrl(
+        details.building_photo,
+        property.image_url,
+        details.image_url,
+        details.link
+    );
+
+    // Prioritize constructed URL for CAMA, then fallbacks
+    const gisUrl = getCamaUrl(details.cama_site_link) || getValidUrl(
+        property.gis_url,
+        details.gis_url,
+        property.vision_url,
+        details.link
+    );
 
     // Handler to view entity details
     const handleViewEntity = (entity, type) => {
@@ -92,19 +155,58 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
                                 {isComplex ? <Building2 size={24} /> : <MapPin size={24} />}
                             </div>
                             <div>
-                                <h2 className="text-xl font-bold text-gray-900">{property.address}</h2>
-                                <div className="flex items-center gap-2 mt-1">
-                                    <span className="text-sm font-medium text-gray-500">{property.city}</span>
-                                    {isComplex && (
-                                        <span className="text-xs font-bold text-white bg-indigo-500 px-2 py-0.5 rounded-full">
+                                <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                                    {property.complex_name && (
+                                        <div className="text-sm font-medium text-gray-500 mb-1">{property.complex_name}</div>
+                                    )}
+                                    {property.address}
+                                    {!isComplex && property.derivedUnit && (
+                                        <span className="text-blue-500">#{property.derivedUnit}</span>
+                                    )}
+                                    <button
+                                        onClick={(e) => {
+                                            const addr = `${property.address}${!isComplex && property.derivedUnit ? ' #' + property.derivedUnit : ''}, ${property.city} CT`;
+                                            navigator.clipboard.writeText(addr);
+                                            const el = e.currentTarget;
+                                            const original = el.innerHTML;
+                                            el.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+                                            setTimeout(() => { if (el) el.innerHTML = original; }, 1000);
+                                        }}
+                                        className="p-1 hover:bg-gray-100 rounded text-gray-400 hover:text-blue-600 transition-colors"
+                                        title="Copy Full Address"
+                                    >
+                                        <Copy size={16} />
+                                    </button>
+                                    {isComplex && property.unit_count && (
+                                        <span className="text-indigo-500 ml-2 bg-indigo-50 px-2 py-0.5 rounded-lg text-sm uppercase tracking-wide">
                                             {property.unit_count} Units
                                         </span>
                                     )}
-                                    {!isComplex && property.unit && (
-                                        <span className="text-xs font-bold text-gray-500 bg-gray-200 px-2 py-0.5 rounded-full">
-                                            Unit #{property.unit}
-                                        </span>
-                                    )}
+                                </h2>
+                                <div className="flex flex-col md:flex-row md:items-center gap-2 mt-1">
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-sm font-medium text-gray-500">{property.city}</span>
+                                        {isComplex && (
+                                            <span className="text-xs font-bold text-white bg-indigo-500 px-2 py-0.5 rounded-full">
+                                                {property.unit_count} Units
+                                            </span>
+                                        )}
+                                        {property.subsidies && property.subsidies.length > 0 && (
+                                            <span className="text-xs font-bold text-white bg-amber-500 px-2 py-0.5 rounded-full">
+                                                Housing Preservation
+                                            </span>
+                                        )}
+                                    </div>
+                                    <a
+                                        href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${property.address}${!isComplex && property.derivedUnit ? ' #' + property.derivedUnit : ''}, ${property.city} CT`)}`}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="text-[10px] text-blue-600 hover:text-blue-800 font-bold uppercase tracking-widest flex items-center gap-1 group"
+                                    >
+                                        <MapPin size={10} />
+                                        View Map
+                                        <ExternalLink size={10} className="opacity-0 group-hover:opacity-100 transition-opacity" />
+                                    </a>
                                 </div>
                             </div>
                         </div>
@@ -204,6 +306,55 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
                                 )}
                             </div>
                         </div>
+
+                        {/* SUBSIDIES SECTION */}
+                        {property.subsidies && property.subsidies.length > 0 && (
+                            <div className="space-y-2">
+                                <h3 className="text-xs font-bold text-gray-900 uppercase tracking-wider flex items-center gap-2 mb-2 text-amber-600">
+                                    <span className="w-3.5 h-3.5 flex items-center justify-center rounded-full bg-amber-100 text-amber-600 font-bold text-[10px]">$</span>
+                                    Housing Programs & Preservation
+                                </h3>
+                                <div className="p-4 bg-amber-50 rounded-xl border border-amber-100 space-y-3">
+                                    {property.management_company && (
+                                        <div className="flex flex-col gap-1 pb-3 border-b border-amber-200/50">
+                                            <span className="text-[10px] font-bold text-amber-700/50 uppercase tracking-wider">Management Company</span>
+                                            <div className="font-medium text-amber-900">{property.management_company}</div>
+                                        </div>
+                                    )}
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                        {property.subsidies.map((sub, idx) => (
+                                            <div key={idx} className="bg-white p-3 rounded-lg border border-amber-100 shadow-sm">
+                                                <div className="flex justify-between items-start mb-1">
+                                                    <span className="font-bold text-amber-700 text-xs">{sub.subsidy_type}</span>
+                                                    {sub.units_subsidized > 0 && (
+                                                        <span className="text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded-full font-bold">
+                                                            {sub.units_subsidized} Units
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <div className="text-xs font-medium text-gray-800 mb-1">{sub.program_name}</div>
+                                                {sub.expiry_date && (
+                                                    <div className="text-[10px] text-gray-500 flex items-center gap-1">
+                                                        <span>Expires:</span>
+                                                        <span className={`font-mono font-bold ${new Date(sub.expiry_date) < new Date() ? 'text-red-500' : 'text-gray-700'}`}>
+                                                            {sub.expiry_date}
+                                                        </span>
+                                                    </div>
+                                                )}
+                                                {sub.source_url && (
+                                                    <a href={sub.source_url} target="_blank" rel="noreferrer" className="block mt-2 text-[10px] text-blue-500 hover:underline flex items-center gap-1">
+                                                        View NHPD Record (Account Required) <ExternalLink size={8} />
+                                                    </a>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div className="text-[10px] text-amber-700/60 pt-1 italic">
+                                        Source: National Housing Preservation Database (NHPD)
+                                    </div>
+                                </div>
+                            </div>
+                        )}
 
                         {/* Property Attributes Grid - Single Properties Only */}
                         {!isComplex && (

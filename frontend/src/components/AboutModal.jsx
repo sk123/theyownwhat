@@ -5,7 +5,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import readmeContent from '../../../README.md?raw';
 
-export default function AboutModal({ isOpen, onClose }) {
+export default function AboutModal({ isOpen, onClose, onShowFreshness }) {
     if (!isOpen) return null;
 
     return (
@@ -53,6 +53,20 @@ export default function AboutModal({ isOpen, onClose }) {
                         >
                             {readmeContent}
                         </ReactMarkdown>
+
+                        <div className="mt-10 pt-6 border-t border-gray-100 flex items-center justify-between">
+                            <div className="flex flex-col">
+                                <span className="text-xs font-bold text-gray-400 uppercase tracking-widest">Transparency</span>
+                                <span className="text-sm text-gray-500">View our data update logs and source freshness.</span>
+                            </div>
+                            <button
+                                onClick={onShowFreshness}
+                                className="px-6 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl transition-all shadow-lg flex items-center gap-2"
+                            >
+                                <Info size={16} />
+                                Data Freshness Report
+                            </button>
+                        </div>
                     </div>
                 </motion.div>
             </div>

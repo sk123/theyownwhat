@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { ArrowUpDown, Map, List, Grid3X3, X, Check, Building2, MapPin, ChevronRight, ChevronDown, LayoutGrid, Sparkles } from 'lucide-react';
+import { ArrowUpDown, Map, List, Grid3X3, X, Check, Building2, MapPin, ChevronRight, ChevronDown, LayoutGrid, Sparkles, Download, Share2, ExternalLink, Copy } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 // Helper Components
@@ -99,7 +99,8 @@ export default function PropertyTable({
 
             // Handle common "Unit X" or ", Unit X" at the end
             // Patterns: "123 MAIN ST, UNIT 1", "123 MAIN ST #1", "123 MAIN ST UNIT 1"
-            const unitPattern = /^(.*?)(?:,\s*|\s+)(?:#|UNIT|APT|STE|SUITE|#UD)\s*([A-Z0-9-]+)$/i;
+            // IMPROVED: Handle optional dots (Apt.), more markers (Floor, Rm), and looser spacing
+            const unitPattern = /^(.*?)(?:,\s*|\s+)(?:#|UNIT|APT|STE|SUITE|#UD|FL|FLOOR|RM|ROOM)\.?\s*([A-Z0-9-]+)$/i;
             const unitMatch = addr.match(unitPattern);
             if (unitMatch) {
                 base = unitMatch[1].replace(/,$/, '').trim();
@@ -114,9 +115,14 @@ export default function PropertyTable({
             if (trailingMatch) {
                 const candidateBase = trailingMatch[1].replace(/,$/, '').trim();
                 const candidateUnit = trailingMatch[2];
-                const directionals = new Set(['N', 'S', 'E', 'W', 'NE', 'NW', 'SE', 'SW', 'NORTH', 'SOUTH', 'EAST', 'WEST']);
+                // Blocklist common directions AND street suffixes so they aren't parsed as units
+                const reserved = new Set([
+                    'N', 'S', 'E', 'W', 'NE', 'NW', 'SE', 'SW', 'NORTH', 'SOUTH', 'EAST', 'WEST',
+                    'ST', 'AVE', 'RD', 'CT', 'BLVD', 'LN', 'DR', 'WAY', 'PL', 'TER', 'CIR', 'HWY', 'PKWY', 'TPKE', 'EXT',
+                    'STREET', 'AVENUE', 'ROAD', 'COURT', 'BOULEVARD', 'LANE', 'DRIVE', 'PLACE', 'TERRACE', 'CIRCLE'
+                ]);
 
-                if (!directionals.has(candidateUnit)) {
+                if (!reserved.has(candidateUnit.toUpperCase()) && candidateUnit.length < 6) {
                     base = candidateBase;
                     unit = candidateUnit;
                     return { base, unit };
@@ -127,7 +133,44 @@ export default function PropertyTable({
         };
 
         properties.forEach(p => {
-            const { base, unit } = normalizeAddress(p.address || p.location);
+            // Filter out Condo Association administrative rows (CNDASC)
+            if (p.unit?.includes('CNDASC') || p.location?.includes('CNDASC')) {
+                return;
+            }
+
+            let base, unit;
+
+            if (p.normalized_address) {
+                // normalized_address format in DB: "ADDRESS, CITY, CT, ZIP"
+                // 1. Extract just the address part (before first comma)
+                const rawNorm = p.normalized_address.split(',')[0].trim();
+
+                // 2. Parse it using our standard regex to split Base + Unit
+                // This ensures "123 MAIN ST UNIT A" becomes Base: "123 MAIN ST", Unit: "A"
+                const res = normalizeAddress(rawNorm);
+                base = res.base;
+                unit = p.unit || res.unit;
+            } else {
+                // Fallback: client-side regex grouping on raw location property
+                const res = normalizeAddress(p.address || p.location);
+                base = res.base;
+                unit = res.unit;
+            }
+
+            // CRITICAL FIX: Ignore grouping for placeholder addresses (e.g. "93", "0")
+            // Must start with a digit and have length > 2
+            if (!base || !/^\d+\s/.test(base) || base.length < 3) {
+                // If invalid address, force unique key so it doesn't group
+                const key = `unique_${p.id}`;
+                groups[key] = {
+                    key,
+                    rawAddress: p.address || p.location,
+                    rawCity: p.property_city || p.city,
+                    units: [p],
+                    owners: new Set([p.owner])
+                };
+                return;
+            }
 
             const baseKey = base.trim().toLowerCase();
             const cityKey = (p.property_city || p.city || '').trim().toLowerCase();
@@ -189,10 +232,12 @@ export default function PropertyTable({
                     representativeId: g.units[0].id
                 });
             } else {
+                const p = g.units[0];
+                const unitCount = parseInt(p.number_of_units || p.unit_count || 1);
                 result.push({
-                    ...g.units[0],
-                    unit_count: 1,
-                    isComplex: false
+                    ...p,
+                    unit_count: unitCount,
+                    isComplex: unitCount > 1 && !p.isComplex ? false : p.isComplex // Keep false if it's a single row, but we'll show the badge
                 });
             }
         });
@@ -329,6 +374,36 @@ export default function PropertyTable({
         onMapSelected(toMap);
     };
 
+    const handleExportCSV = () => {
+        const targetList = selectedIds.size > 0
+            ? properties.filter(p => selectedIds.has(p.id))
+            : properties;
+
+        if (targetList.length === 0) return;
+
+        const headers = ["Address", "City", "Owner", "Assessed Value", "Appraised Value", "Units", "Vision ID"];
+        const rows = targetList.map(p => [
+            `"${p.address || ''}"`,
+            `"${p.city || ''}"`,
+            `"${p.owner || ''}"`,
+            `"${p.assessed_value || ''}"`,
+            `"${p.appraised_value || ''}"`,
+            p.unit_count || 1,
+            p.id
+        ]);
+
+        const csvContent = [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.setAttribute("href", url);
+        link.setAttribute("download", `property_export_${new Date().toISOString().split('T')[0]}.csv`);
+        link.style.visibility = 'hidden';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    };
+
     const renderRows = (list) => (
         list.map((p, i) => {
             const selected = isItemSelected(p);
@@ -378,21 +453,125 @@ export default function PropertyTable({
                                     <div className="w-6" />
                                 )}
                                 <div className="flex items-center gap-2">
-                                    {p.isComplex && <Building2 className="w-4 h-4 text-indigo-500 shrink-0" />}
-                                    <div className="flex flex-col whitespace-nowrap min-w-0">
-                                        <div className="flex items-center gap-2 overflow-hidden">
-                                            <span className={`text-sm font-medium truncate ${p.isComplex ? 'text-indigo-900' : 'text-gray-900'}`}>
-                                                {p.address}
-                                            </span>
-                                            {p.isComplex && (
-                                                <span className="shrink-0 text-[10px] text-white bg-indigo-500 px-1.5 py-0.5 rounded-full font-bold">
-                                                    {p.unit_count} Units
+                                    <div className="flex flex-col">
+                                        {p.isComplex ? (
+                                            // Complex Header
+                                            <div className="flex flex-col">
+                                                {p.management_info?.name && (
+                                                    <span className="text-sm font-black text-indigo-900 uppercase tracking-tight flex items-center gap-1.5">
+                                                        <Building2 size={12} className="text-indigo-500" />
+                                                        {p.management_info.name}
+                                                    </span>
+                                                )}
+                                                <span className={`${p.management_info?.name ? 'text-[11px] text-gray-500 font-medium' : 'text-sm font-medium text-indigo-900'} truncate`}>
+                                                    {p.address}
                                                 </span>
-                                            )}
-                                        </div>
-                                        {!p.isComplex && p.unit && <span className="text-[10px] text-slate-500">Unit #{p.unit}</span>}
+
+                                                {/* Unit Count & Official Link Badge */}
+                                                <div className="flex items-center gap-2 mt-1">
+                                                    <span className="text-[10px] bg-blue-100 text-blue-700 font-bold px-1.5 py-0.5 rounded uppercase">
+                                                        {p.unit_count} Units
+                                                    </span>
+                                                    {p.management_info?.url && (
+                                                        <a
+                                                            href={p.management_info.url}
+                                                            target="_blank"
+                                                            rel="noopener noreferrer"
+                                                            onClick={(e) => e.stopPropagation()}
+                                                            className="text-[10px] bg-green-100 text-green-700 font-bold px-1.5 py-0.5 rounded uppercase hover:bg-green-200 flex items-center gap-1"
+                                                        >
+                                                            <ExternalLink size={10} />
+                                                            Official Site
+                                                        </a>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            // Standard Property
+                                            <div className="flex flex-col">
+                                                {/* If management name exists, show it prominently */}
+                                                {p.management_info?.name && (
+                                                    <span className="text-xs font-bold text-indigo-900 uppercase flex items-center gap-1 mb-0.5">
+                                                        <Building2 size={10} className="text-indigo-500" />
+                                                        {p.management_info.name}
+                                                    </span>
+                                                )}
+
+                                                <span className={`${p.management_info?.name ? 'text-xs text-gray-500' : 'text-sm font-medium text-gray-900'} truncate`}>
+                                                    {p.address}
+                                                </span>
+
+                                                <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                                                    {p.unit_count > 1 && (
+                                                        <span className="text-[9px] bg-blue-50 text-blue-600 font-bold px-1.5 py-0.5 rounded uppercase border border-blue-100">
+                                                            {p.unit_count} Units
+                                                        </span>
+                                                    )}
+
+                                                    {/* Official Site Link */}
+                                                    {p.management_info?.url && (
+                                                        <a
+                                                            href={p.management_info.url}
+                                                            target="_blank"
+                                                            rel="noopener noreferrer"
+                                                            onClick={(e) => e.stopPropagation()}
+                                                            className="text-[9px] bg-green-50 text-green-700 font-bold px-1.5 py-0.5 rounded uppercase hover:bg-green-100 border border-green-100 flex items-center gap-1"
+                                                        >
+                                                            <ExternalLink size={8} />
+                                                            Official Site
+                                                        </a>
+                                                    )}
+
+                                                    {p.property_type && (
+                                                        <span className="text-[9px] text-gray-400 font-medium">
+                                                            {p.property_type}
+                                                        </span>
+                                                    )}
+                                                    {p.subsidies && p.subsidies.length > 0 && (
+                                                        <span className="text-[9px] bg-amber-50 text-amber-600 font-bold px-1.5 py-0.5 rounded uppercase border border-amber-100 flex items-center gap-1">
+                                                            <span className="text-[8px]">$</span> Preservation
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        )}
                                     </div>
+                                    {!p.isMultiSelectActive && (
+                                        <div className="flex items-center gap-1">
+                                            <button
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    const addr = `${p.address}${!p.isComplex && p.derivedUnit ? ' #' + p.derivedUnit : ''}, ${p.city} CT`;
+                                                    navigator.clipboard.writeText(addr);
+                                                    const el = e.currentTarget;
+                                                    const original = el.innerHTML;
+                                                    el.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+                                                    setTimeout(() => { if (el) el.innerHTML = original; }, 1000);
+                                                }}
+                                                className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-blue-600 transition-all border border-transparent hover:border-slate-200 shadow-sm"
+                                                title="Copy Full Address"
+                                            >
+                                                <Copy size={12} />
+                                            </button>
+                                            <button
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    const addr = `${p.address}${!p.isComplex && p.derivedUnit ? ' #' + p.derivedUnit : ''}, ${p.city} CT`;
+                                                    navigator.clipboard.writeText(addr);
+                                                    const el = e.currentTarget;
+                                                    const original = el.innerHTML;
+                                                    el.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+                                                    setTimeout(() => { if (el) el.innerHTML = original; }, 1000);
+                                                }}
+                                                className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-blue-600 transition-all border border-transparent hover:border-slate-200 shadow-sm hidden"
+                                                title="Old Share Button"
+                                            >
+                                                <Share2 size={12} />
+                                            </button>
+                                        </div>
+                                    )}
                                 </div>
+                                {!p.isComplex && p.derivedUnit && <span className="text-[10px] text-slate-500">Unit #{p.derivedUnit}</span>}
                             </div>
                         </td>
                         {viewMode === 'list' && (
@@ -404,79 +583,125 @@ export default function PropertyTable({
                                     {p.city}
                                 </span>
                             </td>
-                        )}
+                        )
+                        }
                         <td className="p-2 text-xs text-gray-600 break-words max-w-[200px]">{p.owner}</td>
                         <td className="p-2 text-xs text-gray-700 font-mono">
                             <div className="font-semibold">{p.assessed_value}</div>
                             {p.appraised_value && <div className="text-[10px] text-gray-400">{p.appraised_value}</div>}
                         </td>
-                        {viewMode === 'list' && !isMultiSelectActive && (
-                            <td className="p-2">
-                                <a
-                                    href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${p.address}, ${p.city} CT`)}`}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="inline-flex items-center justify-center w-6 h-6 rounded bg-gray-50 text-gray-400 hover:bg-blue-100 hover:text-blue-600 transition-colors"
-                                    onClick={(e) => e.stopPropagation()}
-                                    aria-label="View on Google Maps"
-                                    title="Open in Google Maps"
-                                >
-                                    <Map className="w-3 h-3" />
-                                </a>
-                            </td>
-                        )}
-                    </tr>
-                    <AnimatePresence>
-                        {isExpanded && p.subProperties.map((sub, idx) => (
-                            <motion.tr
-                                key={sub.id}
-                                initial={{ opacity: 0, height: 0 }}
-                                animate={{ opacity: 1, height: 'auto' }}
-                                exit={{ opacity: 0, height: 0 }}
-                                className={`bg-indigo-50/30 hover:bg-indigo-50/60 border-b border-indigo-100/50 transition-colors
-                                    ${selectedIds.has(sub.id) && isMultiSelectActive ? 'bg-blue-100/50' : ''}
-                                `}
-                                onClick={(e) => {
-                                    if (e.target.tagName === "INPUT" || e.target.closest("a")) return;
-                                    if (isMultiSelectActive) toggleSelection(e, sub);
-                                    else onSelectProperty(sub);
-                                }}
-                            >
-                                {isMultiSelectActive && (
-                                    <td className="p-2 text-center">
-                                        <input
-                                            type="checkbox"
-                                            checked={selectedIds.has(sub.id)}
-                                            onChange={() => { }}
-                                            className="w-3 h-3 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
-                                        />
-                                    </td>
-                                )}
-                                <td className="p-2 pl-12 relative" colSpan={viewMode === 'list' ? 4 : 1}>
-                                    <div className="absolute left-[2.25rem] top-0 bottom-1/2 w-4 border-l-2 border-b-2 border-indigo-100 rounded-bl"></div>
-                                    <div className="flex items-center justify-between gap-3 ml-4 bg-white/50 border border-indigo-50/50 py-1.5 px-3 rounded-lg shadow-sm">
-                                        <div className="flex items-center gap-3">
-                                            <span className="inline-flex items-center justify-center min-w-[3.5rem] text-[10px] font-bold text-indigo-700 bg-indigo-100/80 px-2 py-0.5 rounded-md border border-indigo-200">
-                                                Unit {sub.derivedUnit || sub.unit}
-                                            </span>
-                                            <span className="text-[11px] text-gray-500 font-medium truncate max-w-[200px]">{sub.owner}</span>
-                                        </div>
-                                        <div className="flex items-center gap-4">
-                                            <span className="text-xs text-gray-700 font-mono font-bold whitespace-nowrap">
-                                                {sub.assessed_value}
-                                            </span>
-                                        </div>
-                                    </div>
+                        {
+                            viewMode === 'list' && !isMultiSelectActive && (
+                                <td className="p-2">
+                                    <a
+                                        href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${p.address}, ${p.city} CT`)}`}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="inline-flex items-center justify-center w-6 h-6 rounded bg-gray-50 text-gray-400 hover:bg-blue-100 hover:text-blue-600 transition-colors"
+                                        onClick={(e) => e.stopPropagation()}
+                                        aria-label="View on Google Maps"
+                                        title="Open in Google Maps"
+                                    >
+                                        <Map className="w-3 h-3" />
+                                    </a>
                                 </td>
-                                {viewMode === 'list' && !isMultiSelectActive && (
-                                    <td className="p-2">
-                                        {/* Individual map buttons removed as per user request */}
-                                    </td>
-                                )}
-                            </motion.tr>
-                        ))}
+                            )
+                        }
+                    </tr >
+                    <AnimatePresence>
+                        {isExpanded && (() => {
+                            const networkProps = p.subProperties.filter(s => s.is_in_network !== false);
+                            const otherProps = p.subProperties.filter(s => s.is_in_network === false);
+
+                            const renderSubRow = (sub) => {
+                                const isThirdParty = sub.is_in_network === false;
+                                return (
+                                    <motion.tr
+                                        key={sub.id}
+                                        initial={{ opacity: 0, height: 0 }}
+                                        animate={{ opacity: 1, height: 'auto' }}
+                                        exit={{ opacity: 0, height: 0 }}
+                                        className={`
+                                        ${isThirdParty
+                                                ? 'bg-gray-50/50 hover:bg-gray-50 text-gray-400'
+                                                : 'bg-indigo-50/30 hover:bg-indigo-50/60'
+                                            } 
+                                        border-b border-indigo-100/50 transition-colors
+                                        ${selectedIds.has(sub.id) && isMultiSelectActive ? 'bg-blue-100/50' : ''}
+                                    `}
+                                        onClick={(e) => {
+                                            if (e.target.tagName === "INPUT" || e.target.closest("a")) return;
+                                            if (isMultiSelectActive) toggleSelection(e, sub);
+                                            else onSelectProperty(sub);
+                                        }}
+                                    >
+                                        {isMultiSelectActive && (
+                                            <td className="p-2 text-center">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={selectedIds.has(sub.id)}
+                                                    onChange={() => { }}
+                                                    className="w-3 h-3 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                                                />
+                                            </td>
+                                        )}
+                                        <td className="p-2 pl-12 relative" colSpan={viewMode === 'list' ? 4 : 1}>
+                                            <div className="absolute left-[2.25rem] top-0 bottom-1/2 w-4 border-l-2 border-b-2 border-indigo-100 rounded-bl"></div>
+                                            <div className={`flex items-center justify-between gap-3 ml-4 py-1.5 px-3 rounded-lg shadow-sm border ${isThirdParty ? 'bg-gray-100/50 border-gray-200' : 'bg-white/50 border-indigo-50/50'}`}>
+                                                <div className="flex items-center gap-3">
+                                                    <span className={`inline-flex items-center justify-center min-w-[3.5rem] text-[10px] font-bold px-2 py-0.5 rounded-md border
+                                                    ${isThirdParty ? 'bg-gray-200 text-gray-500 border-gray-300' : 'text-indigo-700 bg-indigo-100/80 border-indigo-200'}
+                                                `}>
+                                                        Unit {sub.derivedUnit || sub.unit}
+                                                    </span>
+                                                    <span className={`text-[10px] lg:text-[11px] font-medium truncate max-w-[150px] lg:max-w-[300px] ${isThirdParty ? 'text-gray-400 italic' : 'text-gray-500'}`}>
+                                                        {sub.owner}
+                                                    </span>
+                                                </div>
+                                                <div className="flex items-center gap-4">
+                                                    <span className={`text-xs font-mono font-bold whitespace-nowrap ${isThirdParty ? 'text-gray-400' : 'text-gray-700'}`}>
+                                                        {sub.assessed_value}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        </td>
+                                        {viewMode === 'list' && !isMultiSelectActive && (
+                                            <td className="p-2">
+                                                {/* Individual map buttons removed as per user request */}
+                                            </td>
+                                        )}
+                                    </motion.tr>
+                                );
+                            };
+
+                            return (
+                                <React.Fragment>
+                                    {networkProps.map(renderSubRow)}
+
+                                    {otherProps.length > 0 && (
+                                        <motion.tr
+                                            initial={{ opacity: 0 }}
+                                            animate={{ opacity: 1 }}
+                                            exit={{ opacity: 0 }}
+                                        >
+                                            <td colSpan={100} className="px-12 py-2">
+                                                <div className="flex items-center gap-2">
+                                                    <div className="h-px bg-gray-200 flex-1"></div>
+                                                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                                                        Other Units in Complex
+                                                    </span>
+                                                    <div className="h-px bg-gray-200 flex-1"></div>
+                                                </div>
+                                            </td>
+                                        </motion.tr>
+                                    )}
+
+                                    {otherProps.map(renderSubRow)}
+                                </React.Fragment>
+                            );
+                        })()}
                     </AnimatePresence>
-                </React.Fragment>
+                </React.Fragment >
             );
         })
     );
@@ -485,17 +710,17 @@ export default function PropertyTable({
         <div className={`bg-white rounded-xl border border-gray-200 shadow-sm flex flex-col ${autoHeight ? '' : 'h-full overflow-auto'}`}>
             {/* Header / Toolbar */}
             <div
-                className="p-4 border-b border-gray-100 flex flex-col gap-4 bg-gray-50/50 shrink-0"
+                className="bg-gradient-to-r from-blue-600 to-indigo-600 p-4 border-b border-white/10 flex flex-col gap-4 shadow-sm shrink-0"
             >
                 <div className="flex items-center justify-between cursor-pointer lg:cursor-default" onClick={toggleExpand}>
                     <div className="flex items-center gap-3">
-                        <h3 className="font-bold text-gray-800">Properties</h3>
+                        <h3 className="font-bold text-white">Properties</h3>
                         <div className="flex items-center gap-1">
-                            <span className="text-xs font-bold text-gray-500 bg-gray-200/50 px-2 py-1 rounded-md">
-                                {properties.length} Parcels
+                            <span className="text-xs font-bold text-white/90 bg-white/20 px-2 py-1 rounded-md">
+                                {properties.filter(p => p.is_in_network !== false).length} Parcels
                             </span>
-                            {groupedProperties.length < properties.length && (
-                                <span className="text-xs font-bold text-indigo-500 bg-indigo-50 px-2 py-1 rounded-md">
+                            {groupedProperties.filter(g => g.units?.some(u => u.is_in_network !== false)).length < properties.filter(p => p.is_in_network !== false).length && (
+                                <span className="text-xs font-bold text-white bg-indigo-500/30 px-2 py-1 rounded-md">
                                     {groupedProperties.filter(g => g.isComplex).length} Complexes
                                 </span>
                             )}
@@ -518,6 +743,14 @@ export default function PropertyTable({
                                 >
                                     <CheckSquare size={14} className="text-gray-500" />
                                     <span className="hidden sm:inline">Map Multiple</span>
+                                </button>
+                                <button
+                                    onClick={(e) => { e.stopPropagation(); handleExportCSV(); }}
+                                    className="ml-2 px-2 py-1 bg-white border border-gray-300 text-gray-700 text-xs font-bold rounded shadow-sm hover:bg-gray-50 transition-colors flex items-center gap-1"
+                                    title="Download CSV"
+                                >
+                                    <Download size={14} className="text-gray-500" />
+                                    <span className="hidden sm:inline">Export CSV</span>
                                 </button>
                             </>
                         )}
@@ -702,7 +935,19 @@ export default function PropertyTable({
                                                                     </td>
                                                                 )}
                                                                 <td className="p-2">
-                                                                    <div className="flex flex-col gap-0.5">
+                                                                    <div className="flex flex-col gap-1">
+                                                                        {/* Building Photo */}
+                                                                        {p.details?.building_photo && (
+                                                                            <div className="mb-1 w-full h-24 overflow-hidden rounded-md border border-gray-100 relative">
+                                                                                <img
+                                                                                    src={p.details.building_photo}
+                                                                                    alt={p.address}
+                                                                                    className="w-full h-full object-cover transform hover:scale-105 transition-transform duration-500"
+                                                                                    onError={(e) => e.target.style.display = 'none'}
+                                                                                />
+                                                                            </div>
+                                                                        )}
+
                                                                         <div className="text-xs font-medium text-gray-900 truncate" title={p.address}>{p.address}</div>
                                                                         <div className="flex items-center gap-1 md:hidden">
                                                                             <div className="text-[10px] text-gray-500 truncate">{p.owner}</div>
@@ -711,12 +956,12 @@ export default function PropertyTable({
                                                                     </div>
                                                                 </td>
                                                                 {/* Hide Owner column on mobile to save space, show under address */}
-                                                                <td className="p-2 text-right hidden md:table-cell">
+                                                                <td className="p-2 text-right hidden md:table-cell align-top pt-3">
                                                                     <div className="text-[10px] text-gray-500 truncate max-w-[100px]">{p.owner}</div>
                                                                     <div className="text-[10px] font-mono">{p.assessed_value}</div>
                                                                 </td>
                                                                 {/* Mobile Only Value */}
-                                                                <td className="p-2 text-right md:hidden align-top">
+                                                                <td className="p-2 text-right md:hidden align-top pt-3">
                                                                     <div className="text-[10px] font-mono font-bold text-slate-700">{p.assessed_value}</div>
                                                                 </td>
                                                             </tr>

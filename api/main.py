@@ -10,6 +10,7 @@ import hashlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
+from collections import defaultdict
 
 import psycopg2
 from psycopg2 import pool
@@ -18,6 +19,7 @@ from psycopg2.extras import RealDictCursor, execute_batch
 from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 # Optional OpenAI import (AI report). App still runs without it.
@@ -46,6 +48,11 @@ app.add_middleware(
     allow_methods=["*"], allow_headers=["*"],
 )
 
+# Mount static files for scraped images
+# Use absolute path valid inside container
+os.makedirs("/app/api/static", exist_ok=True)
+app.mount("/api/static", StaticFiles(directory="/app/api/static"), name="static")
+
 @app.get("/api/health")
 def health_check():
     # Check if OpenAI key is present and NOT the placeholder
@@ -62,8 +69,60 @@ db_pool: Optional[pool.SimpleConnectionPool] = None
 _PERSON_SUFFIXES = {'JR', 'SR', 'III', 'IV', 'II', 'ESQ', 'MD', 'PHD', 'DDS'}
 import decimal
 
-def shape_property_row(p: dict) -> dict:
+
+def _extract_street_address(address: str) -> str:
+    """
+    Experimental: Remove unit/apartment numbers to get the 'base' street address.
+    e.g. '123 MAIN ST UNIT 4' -> '123 MAIN ST'
+    """
+    if not address:
+        return ""
+    
+    # Check for unit keywords. 
+    # Use \b (word bound) or (?=\d) (followed by digit) to avoid partial matches 
+    # on street names (e.g. 'FL' matching 'FLORENCE').
+    # regex matches: space + (keyword) + (boundary/digit) + space? + (alphanumeric/dash) until end
+    
+    pattern = r'(?:,|\s+)\s*(?:(?:UNIT|APT|APARTMENT|SUITE|STE|FL|FLOOR|RM|ROOM)(?:\b|(?=\d))|#)\s*[\w\d-]+$'
+    
+    clean = re.sub(pattern, '', address, flags=re.IGNORECASE).strip()
+    return clean
+
+def is_likely_street_address(addr: str) -> bool:
+    """
+    Heuristic: Valid street addresses usually start with a digit (house number)
+    AND have at least one text part (street name).
+    Avoids grouping outliers like '93' or '0'.
+    """
+    if not addr: return False
+    addr = addr.strip()
+    if not addr[0].isdigit():
+        return False
+    
+    parts = addr.split()
+    if len(parts) < 2:
+        return False
+        
+    return True
+
+
+def get_property_subsidies(cursor, property_id: int) -> List[Dict[str, Any]]:
+    """Fetch subsidies for a specific property."""
+    cursor.execute("""
+        SELECT program_name, subsidy_type, units_subsidized, expiry_date, source_url 
+        FROM property_subsidies 
+        WHERE property_id = %s
+    """, (property_id,))
+    return [dict(row) for row in cursor.fetchall()]
+
+def shape_property_row(p: dict, subsidies: List[dict] = None) -> dict:
     """Normalize a property DB row into the shape the frontend expects."""
+    # Only use normalized_address if it looks like an address (starts with digit).
+    # Otherwise it might be a POI name from geocoding (e.g. 'Clifford Beers') which breaks grouping.
+    norm_addr = p.get("normalized_address")
+    if norm_addr and not is_likely_street_address(norm_addr):
+        norm_addr = None
+
     return {
         "id": p.get("id"),
         "address": p.get("location") or "",
@@ -76,10 +135,159 @@ def shape_property_row(p: dict) -> dict:
             f"${int(p['appraised_value']):,}" if p.get("appraised_value") is not None else None
         ),
         "unit": p.get("unit"),
+        "number_of_units": p.get("number_of_units"),
         "latitude": float(p['latitude']) if p.get("latitude") is not None else None,
         "longitude": float(p['longitude']) if p.get("longitude") is not None else None,
+        "normalized_address": norm_addr,
+        "complex_name": p.get("complex_name"),
+        "management_company": p.get("management_company"),
+        "subsidies": subsidies or [],
         "details": p,  # keep full row for drill-down
     }
+
+
+def group_properties_into_complexes(properties: List[dict]) -> List[dict]:
+    """
+    Group properties by street address into complexes.
+    - Main row shows street address with count of units
+    - Sub-rows show individual units with their owners
+    
+    Uses the 'location' and 'property_city' fields to group properties.
+    """
+    from collections import defaultdict
+    
+    # Group by (location, city) tuple
+    complexes_map = defaultdict(list)
+    
+    for prop in properties:
+        # Use normalized_address if available AND valid, otherwise location + city
+        raw_norm = (prop.get("normalized_address") or "").strip()
+        if raw_norm and not is_likely_street_address(raw_norm):
+            raw_norm = ""
+            
+        location = (prop.get("location") or "").strip()
+        city = (prop.get("property_city") or "").strip()
+        
+        # Priority to normalized address, but fall back to raw location
+        # CRITICAL CHANGE: Always strip unit numbers for grouping purposes
+        raw_grouping_str = raw_norm
+        if not raw_grouping_str:
+             if is_likely_street_address(location):
+                 raw_grouping_str = location
+        
+        if not raw_grouping_str:
+            continue
+            
+        base_address = _extract_street_address(raw_grouping_str)
+        grouping_key = (base_address, city)
+        
+        complexes_map[grouping_key].append(prop)
+    
+    # Fetch management info for all grouping keys in one go if possible
+    # For now, we'll do individual lookups or a batch lookup if we have the keys
+    group_keys = list(complexes_map.keys())
+    mgt_info = {}
+    if group_keys:
+        try:
+            with cursor_context() as cur:
+                # Use a tuple for the where clause: ((addr1, city1), (addr2, city2), ...)
+                # PostgreSQL supports this syntax: WHERE (street_address, city) IN (('addr1', 'city1'), ...)
+                placeholders = []
+                params = []
+                for addr, city in group_keys:
+                    placeholders.append("(%s, %s)")
+                    params.extend([addr, city])
+                
+                if placeholders:
+                    query = f"SELECT street_address, city, management_name, official_url, phone FROM complex_management WHERE (street_address, city) IN ({', '.join(placeholders)})"
+                    cur.execute(query, params)
+                    for r in cur.fetchall():
+                        mgt_info[(r['street_address'], r['city'])] = r
+        except Exception as e:
+            logger.warning(f"Failed to fetch management info: {e}")
+
+    # Build result with complexes
+    result = []
+    
+    # Pre-fetch subsidies for all properties in this batch
+    all_property_ids = [p['id'] for units in complexes_map.values() for p in units]
+    subsidies_map = defaultdict(list)
+    if all_property_ids:
+        try:
+            with cursor_context() as cur:
+                cur.execute("""
+                    SELECT property_id, program_name, subsidy_type, units_subsidized, expiry_date, source_url
+                    FROM property_subsidies
+                    WHERE property_id = ANY(%s)
+                """, (all_property_ids,))
+                for row in cur.fetchall():
+                    subsidies_map[row['property_id']].append(dict(row))
+        except Exception as e:
+            logger.warning(f"Failed to fetch subsidies: {e}")
+
+    for (street_address, city), units in sorted(complexes_map.items()):
+        mgt = mgt_info.get((street_address, city))
+        
+        # Aggregate complex level info from first unit (NHPD data usually consistent for complex)
+        complex_name = next((u.get('complex_name') for u in units if u.get('complex_name')), None)
+        management_co = next((u.get('management_company') for u in units if u.get('management_company')), None)
+        
+        if len(units) > 1:
+            # This is a complex - create parent row with children
+            total_assessed = sum(
+                (p.get("assessed_value") or 0) for p in units
+            )
+            
+            display_addr = street_address
+            
+            # Aggregate subsidies for the complex
+            complex_subsidies = []
+            seen_subsidy_keys = set()
+            for u in units:
+                for s in subsidies_map.get(u['id'], []):
+                    key = (s['program_name'], s['subsidy_type'], s['expiry_date'])
+                    if key not in seen_subsidy_keys:
+                        complex_subsidies.append(s)
+                        seen_subsidy_keys.add(key)
+            
+            complex_row = {
+                "id": f"complex_{hash((street_address, city))}",
+                "address": display_addr,
+                "city": city,
+                "owner": f"{units[0].get('owner', 'Multiple')} (+{len(units)-1} others)",
+                "assessed_value": f"${int(total_assessed):,}" if total_assessed else None,
+                "unit_count": sum(u.get("number_of_units") or 1 for u in units),
+                "is_complex": True,
+                "units": [u for u in units], 
+                "latitude": float(units[0]['latitude']) if units[0].get("latitude") is not None else None,
+                "longitude": float(units[0]['longitude']) if units[0].get("longitude") is not None else None,
+                "normalized_address": display_addr,
+                "complex_name": complex_name,
+                "management_company": management_co,
+                "subsidies": complex_subsidies,
+                "management_info": {
+                    "name": mgt['management_name'] if mgt else management_co, # prefer scraped mgt if available, else NHPD
+                    "url": mgt['official_url'] if mgt else None,
+                    "phone": mgt['phone'] if mgt else None
+                }
+            }
+            # Deep shape the units
+            complex_row["units"] = [shape_property_row(u, subsidies_map.get(u['id'], [])) for u in units]
+            result.append(complex_row)
+        else:
+            # Single property, no grouping needed
+            # Pass subsidies for this property
+            res = shape_property_row(units[0], subsidies_map.get(units[0]['id'], []))
+            if mgt:
+                res["management_info"] = {
+                    "name": mgt['management_name'],
+                    "url": mgt['official_url'],
+                    "phone": mgt['phone']
+                }
+            result.append(res)
+    
+    return result
+
 
 
 def json_converter(o):
@@ -316,14 +524,14 @@ def backfill_owner_norm_columns(conn) -> None:
 @app.on_event("startup")
 def startup_event():
     global db_pool
-    retries = 10
+    retries = 60
     while retries > 0:
         try:
-            db_pool = pool.SimpleConnectionPool(1, 10, dsn=DATABASE_URL)
+            db_pool = pool.SimpleConnectionPool(1, 40, dsn=DATABASE_URL)
             break
-        except psycopg2.OperationalError:
+        except psycopg2.OperationalError as e:
             retries -= 1
-            logger.warning("DB not ready; retrying... (%s left)", retries)
+            logger.warning(f"DB not ready; retrying... ({retries} left). Error: {e}")
             time.sleep(5)
 
     if db_pool is None:
@@ -334,7 +542,7 @@ def startup_event():
     try:
         with conn.cursor() as c:
             # c.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm;")
-            # c.execute("DROP FUNCTION IF EXISTS normalize_person_name(TEXT)")
+            # # c.execute("DROP FUNCTION IF EXISTS normalize_person_name(TEXT)")
             # c.execute(DDL_NORMALIZE_FUNCTION)
             # c.execute(DDL_ADD_OWNER_NORM)
             # c.execute(DDL_ADD_GEO_COLUMNS)
@@ -388,6 +596,9 @@ class PropertyItem(BaseModel):
     owner: Optional[str]
     assessed_value: Optional[float]
     details: Dict[str, Any]
+    subsidies: Optional[List[Dict[str, Any]]] = []
+    complex_name: Optional[str] = None
+    management_company: Optional[str] = None
 
 class NetworkStep(BaseModel):
     entity_id: str
@@ -651,6 +862,10 @@ def autocomplete(q: str, type: str, conn=Depends(get_db_connection)):
         with conn.cursor(cursor_factory=RealDictCursor) as cursor:
             t_prefix = q.lower() + "%"
             t_infix = "%" + q + "%"
+            
+            # Construct a flexible pattern for address matching:
+            # "304 Barbour" -> "304%Barbour%" matches "304-306 Barbour St"
+            t_flexible = q.replace(" ", "%") + "%"
 
             if type == "business":
                 cursor.execute(
@@ -670,7 +885,33 @@ def autocomplete(q: str, type: str, conn=Depends(get_db_connection)):
                             results.append({"label": r["name"], "value": r["name"], "id": str(r["id"]), "type": "Business", "context": "Business Entity"})
 
             elif type == "owner":
+                # UNIFIED SEARCH: "Owner" now means "All" (Principals, Businesses, Properties)
+                # Optimized for "Infix" search with gin_trgm_ops indices
+                t_infix = f"%{q.strip()}%"
+
+                # Helpers
+                def fmt_princ(biz):
+                    if not biz: return "Business Principal"
+                    bs = [x for x in biz.split('||') if x]
+                    if not bs: return "Business Principal"
+                    return f"Principal of {bs[0]}" + (f" + {len(bs)-1} more" if len(bs)>1 else "")
+
+                def fmt_owner(loc, city, zip_code):
+                    parts = []
+                    if loc: parts.append(loc)
+                    if city: parts.append(city)
+                    parts.append("CT")
+                    return "Owner of " + ", ".join(parts) if loc else "Property Owner"
+
+                def fmt_co_owner(loc, city, zip_code):
+                    parts = []
+                    if loc: parts.append(loc)
+                    if city: parts.append(city)
+                    parts.append("CT")
+                    return "Co-Owner of " + ", ".join(parts) if loc else "Property Co-Owner"
+
                 # 1. Search Principals
+                # Uses idx_principals_norm_name_trgm on normalize_person_name(name_c)
                 cursor.execute(
                     """
                     SELECT 
@@ -678,225 +919,102 @@ def autocomplete(q: str, type: str, conn=Depends(get_db_connection)):
                         string_agg(DISTINCT b.name, '||') as businesses 
                     FROM principals p 
                     LEFT JOIN businesses b ON p.business_id = b.id
-                    WHERE p.name_c_norm IS NOT NULL AND lower(p.name_c_norm) LIKE %s 
-                    GROUP BY p.name_c_norm 
-                    ORDER BY lower(p.name_c_norm) ASC 
+                    WHERE p.name_c IS NOT NULL AND normalize_person_name(p.name_c) ILIKE %s 
+                    GROUP BY normalize_person_name(p.name_c)
                     LIMIT %s
                     """,
-                    (t_prefix, limit)
+                    (t_infix, limit)
                 )
-
-                def fmt_princ(biz):
-                    if not biz: return "Business Principal"
-                    bs = [x for x in biz.split('||') if x]
-                    if not bs: return "Business Principal"
-                    return bs[0] + (f" + {len(bs)-1} more" if len(bs)>1 else "")
-
-                results.extend([{
+                principal_results = [{
                     "label": r["name"], "value": r["name"], 
                     "type": "Business Principal", "context": fmt_princ(r["businesses"])
-                } for r in cursor.fetchall()])
-                
-                # Infix Principals
-                if len(results) < limit:
-                    cursor.execute(
-                        """
-                        SELECT 
-                            mode() WITHIN GROUP (ORDER BY p.name_c) as name, 
-                            string_agg(DISTINCT b.name, '||') as businesses 
-                        FROM principals p 
-                        LEFT JOIN businesses b ON p.business_id = b.id
-                        WHERE p.name_c_norm IS NOT NULL AND p.name_c_norm ILIKE %s 
-                        GROUP BY p.name_c_norm
-                        LIMIT %s
-                        """,
-                        (t_infix, limit - len(results))
-                    )
-                    existing = {x["value"].upper() for x in results} 
-                    for r in cursor.fetchall():
-                        if r["name"] and r["name"].upper() not in existing:
-                            results.append({
-                                "label": r["name"], "value": r["name"], 
-                                "type": "Business Principal", "context": fmt_princ(r["businesses"])
-                            })
-                            existing.add(r["name"].upper())
+                } for r in cursor.fetchall()]
 
                 # 2. Search Property Owners
-                if len(results) < limit:
-                    remaining = limit - len(results)
-                    
-                    def fmt_owner(loc, city, zip_code):
-                        parts = []
-                        if loc: parts.append(loc)
-                        if city: parts.append(city)
-                        parts.append("CT")
-                        if zip_code:
-                            z = str(zip_code).strip()
-                            if len(z) < 5 and z.isdigit(): z = z.zfill(5)
-                            parts.append(z)
-                        return ", ".join(parts) if loc else "Property Owner"
-
-                    # Prefix Property Owners
-                    cursor.execute(
-                        """
-                        SELECT 
-                            mode() WITHIN GROUP (ORDER BY owner) as name, 
-                            location as loc, property_city as city, property_zip as zip
-                        FROM properties 
-                        WHERE owner_norm IS NOT NULL AND lower(owner_norm) LIKE %s 
-                        GROUP BY owner_norm, location, property_city, property_zip
-                        ORDER BY lower(owner_norm) ASC 
-                        LIMIT %s
-                        """,
-                        (t_prefix, remaining)
-                    )
-                    
-                    existing_keys = {x["value"].upper() + x.get("context","") for x in results}
-                    for r in cursor.fetchall():
-                        ctx = fmt_owner(r["loc"], r["city"], r["zip"])
-                        key = r["name"].upper() + ctx
-                        if key not in existing_keys:
-                            results.append({
-                                "label": r["name"], "value": r["name"], 
-                                "type": "Property Owner", "context": ctx
-                            })
-                            existing_keys.add(key)
-                    
-                    # Infix Property Owners (Multi-Word Support)
-                    if len(results) < limit:
-                        remaining = limit - len(results)
-                        parts = q.split()
-                        
-                        if len(parts) > 1:
-                            where_clauses = ["owner_norm IS NOT NULL"]
-                            params = [] 
-                            for part in parts:
-                                where_clauses.append("owner_norm ILIKE %s")
-                                params.append(f"%{part}%")
-                            
-                            sql = f"""
-                                SELECT 
-                                    mode() WITHIN GROUP (ORDER BY owner) as name, 
-                                    location as loc, property_city as city, property_zip as zip
-                                FROM properties 
-                                WHERE {' AND '.join(where_clauses)}
-                                GROUP BY owner_norm, location, property_city, property_zip
-                                LIMIT %s
-                            """
-                            params.append(remaining)
-                            cursor.execute(sql, tuple(params))
-                        else:
-                            cursor.execute(
-                                """
-                                SELECT 
-                                    mode() WITHIN GROUP (ORDER BY owner) as name, 
-                                    location as loc, property_city as city, property_zip as zip
-                                FROM properties 
-                                WHERE owner_norm IS NOT NULL AND owner_norm ILIKE %s 
-                                GROUP BY owner_norm, location, property_city, property_zip
-                                LIMIT %s
-                                """,
-                                (t_infix, remaining)
-                            )
-                        
-                        for r in cursor.fetchall():
-                            if not r["name"]: continue
-                            ctx = fmt_owner(r["loc"], r["city"], r["zip"])
-                            key = r["name"].upper() + ctx
-                            if key not in existing_keys:
-                                results.append({
-                                    "label": r["name"], "value": r["name"], 
-                                    "type": "Property Owner", "context": ctx
-                                })
-                                existing_keys.add(key)
-
-                # 3. Search Co-Owners
-                if len(results) < limit:
-                    remaining = limit - len(results)
-                    # Prefix Co-Owners
-                    cursor.execute(
-                        """
-                        SELECT 
-                            mode() WITHIN GROUP (ORDER BY co_owner) as name, 
-                            location as loc, property_city as city, property_zip as zip
-                        FROM properties 
-                        WHERE co_owner_norm IS NOT NULL AND lower(co_owner_norm) LIKE %s 
-                        GROUP BY co_owner_norm, location, property_city, property_zip
-                        ORDER BY lower(co_owner_norm) ASC 
-                        LIMIT %s
-                        """,
-                        (t_prefix, remaining)
-                    )
-                    existing_keys = {x["value"].upper() + x.get("context","") for x in results}
-                    for r in cursor.fetchall():
-                        if not r["name"]: continue
-                        ctx = fmt_owner(r["loc"], r["city"], r["zip"])
-                        key = r["name"].upper() + ctx
-                        if key not in existing_keys:
-                            results.append({
-                                "label": r["name"], "value": r["name"], 
-                                "type": "Property Co-Owner", "context": ctx
-                            })
-                            existing_keys.add(key)
-
-                    # Infix Co-Owners (Multi-Word)
-                    if len(results) < limit:
-                        remaining = limit - len(results)
-                        parts = q.split()
-                        if len(parts) > 1:
-                            where_clauses = ["co_owner_norm IS NOT NULL"]
-                            params = [] 
-                            for part in parts:
-                                where_clauses.append("co_owner_norm ILIKE %s")
-                                params.append(f"%{part}%")
-                            
-                            sql = f"""
-                                SELECT 
-                                    mode() WITHIN GROUP (ORDER BY co_owner) as name, 
-                                    location as loc, property_city as city, property_zip as zip
-                                FROM properties 
-                                WHERE {' AND '.join(where_clauses)}
-                                GROUP BY co_owner_norm, location, property_city, property_zip
-                                LIMIT %s
-                            """
-                            params.append(remaining)
-                            cursor.execute(sql, tuple(params))
-                        else:
-                            cursor.execute(
-                                """
-                                SELECT 
-                                    mode() WITHIN GROUP (ORDER BY co_owner) as name, 
-                                    location as loc, property_city as city, property_zip as zip
-                                FROM properties 
-                                WHERE co_owner_norm IS NOT NULL AND co_owner_norm ILIKE %s 
-                                GROUP BY co_owner_norm, location, property_city, property_zip
-                                LIMIT %s
-                                """,
-                                (t_infix, remaining)
-                            )
-                        
-                        for r in cursor.fetchall():
-                            if not r["name"]: continue
-                            ctx = fmt_owner(r["loc"], r["city"], r["zip"])
-                            key = r["name"].upper() + ctx
-                            if key not in existing_keys:
-                                results.append({
-                                    "label": r["name"], "value": r["name"], 
-                                    "type": "Property Co-Owner", "context": ctx
-                                })
-                                existing_keys.add(key)
-
-            elif type == "address":
-                # Search properties by location (address) and include City/Zip
+                # Uses idx_properties_owner_norm_trgm
                 cursor.execute(
                     """
-                    SELECT DISTINCT location, property_city, property_zip 
+                    SELECT 
+                        mode() WITHIN GROUP (ORDER BY owner) as name, 
+                        location as loc, property_city as city, property_zip as zip
                     FROM properties 
-                    WHERE location IS NOT NULL AND location LIKE %s 
-                    ORDER BY location ASC 
+                    WHERE owner_norm IS NOT NULL AND owner_norm ILIKE %s 
+                    GROUP BY owner_norm, location, property_city, property_zip
+                    limit %s
+                    """,
+                    (t_infix, limit)
+                )
+                owner_results = []
+                # Use a set to avoid duplicates within owners
+                seen_owners = set()
+                for r in cursor.fetchall():
+                    # Dedupe within same type by name
+                    if r["name"] not in seen_owners:
+                        ctx = fmt_owner(r["loc"], r["city"], r["zip"])
+                        owner_results.append({
+                            "label": r["name"], "value": r["name"], 
+                            "type": "Property Owner", "context": ctx
+                        })
+                        seen_owners.add(r["name"])
+
+                # 3. Search Co-Owners
+                # Uses idx_properties_co_owner_norm_trgm
+                cursor.execute(
+                    """
+                    SELECT 
+                        mode() WITHIN GROUP (ORDER BY co_owner) as name, 
+                        location as loc, property_city as city, property_zip as zip
+                    FROM properties 
+                    WHERE co_owner_norm IS NOT NULL AND co_owner_norm ILIKE %s 
+                    GROUP BY co_owner_norm, location, property_city, property_zip
                     LIMIT %s
                     """,
-                    (t_prefix, limit)
+                    (t_infix, limit)
+                )
+                co_owner_results = []
+                seen_co = set()
+                for r in cursor.fetchall():
+                    if r["name"] not in seen_co:
+                        ctx = fmt_co_owner(r["loc"], r["city"], r["zip"])
+                        co_owner_results.append({
+                            "label": r["name"], "value": r["name"], 
+                            "type": "Property Co-Owner", "context": ctx
+                        })
+                        seen_co.add(r["name"])
+
+                # Merge Strategy: Interleave Principals and Owners, then append Co-Owners
+                import itertools
+                results = []
+                # composite key to dedupe: LABEL + TYPE. 
+                # This allows "John Doe (Principal)" and "John Doe (Owner)" to both appear.
+                existing_items = set()
+
+                def add_res(item):
+                    k = (item["label"].upper(), item["type"])
+                    if k not in existing_items:
+                        results.append(item)
+                        existing_items.add(k)
+
+                for p, o in itertools.zip_longest(principal_results, owner_results):
+                    if p: add_res(p)
+                    if o: add_res(o)
+                
+                # Append Co-Owners if we have space
+                for co in co_owner_results:
+                    if len(results) >= limit: break
+                    add_res(co)
+
+            elif type == "address":
+                cursor.execute(
+                    """
+                    SELECT location, property_city, property_zip, MAX(similarity(location, %s)) as rank
+                    FROM properties 
+                    WHERE location IS NOT NULL AND location %% %s 
+                    GROUP BY location, property_city, property_zip
+                    ORDER BY rank DESC, location ASC 
+                    LIMIT %s
+                    """,
+                    (q, q, limit)
                 )
                 
                 results = []
@@ -905,10 +1023,21 @@ def autocomplete(q: str, type: str, conn=Depends(get_db_connection)):
                     if r.get("property_city"): parts.append(r["property_city"])
                     parts.append("CT")
                     if r.get("property_zip"):
-                        z = str(r["property_zip"]).strip()
-                        if len(z) < 5 and z.isdigit(): z = z.zfill(5)
+                        # Handle float-like zips from DB (e.g. 6107.0)
+                        raw_zip = r["property_zip"]
+                        try:
+                            z_int = int(float(raw_zip))
+                            z = f"{z_int:05d}"
+                        except Exception:
+                            z = str(raw_zip).strip()
+                            if len(z) < 5 and z.isdigit(): z = z.zfill(5)
                         parts.append(z)
-                    results.append(", ".join(parts))
+                    results.append({
+                        "label": ", ".join(parts),
+                        "value": r["location"],
+                        "type": "Address",
+                        "context": r.get("property_city", "")
+                    })
 
     except Exception as e:
         logger.error(f"Autocomplete Error: {e}")
@@ -1012,13 +1141,11 @@ def search_entities(type: str, term: str, conn=Depends(get_db_connection)):
 
                 # 3. Search Properties (Addresses)
                 # ------------------------------------------------------------------
-                # Use pg_trgm for fuzzy matching only if search term is long enough, otherwise simple LIKE
-                # Using the exact same logic as 'address' type but limiting count
                 cursor.execute(
                     """
-                    SELECT location, owner, co_owner, property_city, business_id
+                    SELECT id, location, owner, co_owner, property_city, business_id
                     FROM properties
-                    WHERE location %% %s
+                    WHERE location % %s
                     ORDER BY similarity(location, %s) DESC
                     LIMIT 20
                     """,
@@ -1029,13 +1156,7 @@ def search_entities(type: str, term: str, conn=Depends(get_db_connection)):
 
                 # Resolve context for properties (Business vs Owner)
                 if prop_rows:
-                    # Batch collect business IDs
                     business_ids = {str(r['business_id']) for r in prop_rows if r.get('business_id')}
-                    # If we really want full context we could fetch business names here, 
-                    # but for speed let's just stick to basic info or reuse the logic from type='address' block if strictly needed.
-                    # Simplified context generation:
-                    
-                    # Fetch business names if needed
                     biz_map = {}
                     if business_ids:
                          cursor.execute("SELECT id, name FROM businesses WHERE id::text = ANY(%s)", (list(business_ids),))
@@ -1047,36 +1168,19 @@ def search_entities(type: str, term: str, conn=Depends(get_db_connection)):
                         loc = r['location']
                         if loc in seen_locs: continue
                         
-                        # Determine what ID to pass. 
-                        # Ideally, clicking an address should open the analysis for that PROPERTY's network.
-                        # The 'type' needs to be handled by frontend. 
-                        # If frontend receives type='property', does it work? 
-                        # Frontend `loadNetwork` usually expects `principal` or `business`.
-                        # However, the 'address' search block returns type='owner' or 'business' based on who owns the property.
-                        # We should mimic that so the graph loads the OWNER of the property.
-                        
                         target_id = None
                         target_type = None
-                        ctx = ""
-
+                        # Resolve context for the dropdown
                         if r.get('business_id') and str(r['business_id']) in biz_map:
-                             target_id = str(r['business_id'])
-                             target_type = "business"
-                             ctx = f"Owned by {biz_map[target_id]}"
+                             ctx = f"Owned by {biz_map[str(r['business_id'])]}"
                         elif r.get('owner'):
-                             target_id = r['owner']
-                             target_type = "owner"
-                             ctx = f"Owned by {target_id}"
-                        elif r.get('co_owner'):
-                             target_id = r['co_owner']
-                             target_type = "owner"
-                             ctx = f"Co-owned by {target_id}"
+                             ctx = f"Owner: {r['owner']}"
                         
-                        if target_id:
+                        if loc:
                             results.append(SearchResult(
-                                id=target_id,
-                                name=loc,          # Display the ADDRESS
-                                type=target_type,  # But link to the OWNER entity
+                                id=loc,
+                                name=loc,
+                                type="address",
                                 context=ctx
                             ))
                             seen_locs.add(loc)
@@ -1140,26 +1244,21 @@ def search_entities(type: str, term: str, conn=Depends(get_db_connection)):
 
                     entity_id, entity_type, context_owner_name = None, None, None
 
-                    # Determine the primary entity for this property result, prioritizing businesses.
-                    # Priority 1: Direct business_id link on the property record.
                     if r.get('business_id') and str(r['business_id']) in business_info_by_id:
                         biz = business_info_by_id[str(r['business_id'])]
                         entity_id = biz['id']
                         entity_type = 'business'
                         context_owner_name = biz['name']
-                    # Priority 2: Owner name is a known business.
                     elif r.get('owner') and r['owner'].upper() in business_info_by_name:
                         biz = business_info_by_name[r['owner'].upper()]
                         entity_id = biz['id']
                         entity_type = 'business'
                         context_owner_name = biz['name']
-                    # Priority 3: Co-owner name is a known business.
                     elif r.get('co_owner') and r['co_owner'].upper() in business_info_by_name:
                         biz = business_info_by_name[r['co_owner'].upper()]
                         entity_id = biz['id']
                         entity_type = 'business'
                         context_owner_name = biz['name']
-                    # Priority 4: Fallback to owner or co-owner as a principal (person).
                     else:
                         primary_owner = r.get('owner') or r.get('co_owner')
                         if primary_owner:
@@ -1168,11 +1267,16 @@ def search_entities(type: str, term: str, conn=Depends(get_db_connection)):
                             context_owner_name = primary_owner
 
                     if entity_id:
+                        # For address search results we want the UI to receive the
+                        # actual entity to load in the `name` field (business or owner)
+                        # and the address as the `context` so the frontend can display
+                        # the address and pivot to the owner's/business's network.
+                        display_name = context_owner_name if context_owner_name else r.get("location")
                         results.append(SearchResult(
                             id=str(entity_id),
-                            name=r["location"],
+                            name=display_name,
                             type=entity_type,
-                            context=f"Owner: {context_owner_name}"
+                            context=r.get("location")
                         ))
                         seen_locations.add(r['location'])
 
@@ -1240,6 +1344,18 @@ def get_network_step(step: NetworkStep, conn=Depends(get_db_connection)):
                 for p in cursor.fetchall():
                     new_properties[p["id"]] = p
 
+            # Fetch subsidies for isolated properties
+            isolated_ids = list(new_properties.keys())
+            isolated_subsidies_map = defaultdict(list)
+            if isolated_ids:
+                cursor.execute("""
+                    SELECT property_id, program_name, subsidy_type, units_subsidized, expiry_date, source_url
+                    FROM property_subsidies
+                    WHERE property_id = ANY(%s)
+                """, (isolated_ids,))
+                for s_row in cursor.fetchall():
+                    isolated_subsidies_map[s_row['property_id']].append(dict(s_row))
+
             return IncrementalNetworkResponse(
                 new_entities=list(new_entities.values()),
                 new_properties=[
@@ -1248,6 +1364,7 @@ def get_network_step(step: NetworkStep, conn=Depends(get_db_connection)):
                         city=v.get("property_city"),
                         owner=v.get("owner"),
                         assessed_value=v.get("assessed_value"),
+                        subsidies=isolated_subsidies_map.get(v['id'], []),
                         details=v,
                     ) for v in new_properties.values()
                 ],
@@ -1300,6 +1417,18 @@ def get_network_step(step: NetworkStep, conn=Depends(get_db_connection)):
         for p in cursor.fetchall():
             new_properties[p["id"]] = p
 
+        # Fetch subsidies for network properties
+        network_prop_ids = list(new_properties.keys())
+        network_subsidies_map = defaultdict(list)
+        if network_prop_ids:
+            cursor.execute("""
+                SELECT property_id, program_name, subsidy_type, units_subsidized, expiry_date, source_url
+                FROM property_subsidies
+                WHERE property_id = ANY(%s)
+            """, (network_prop_ids,))
+            for s_row in cursor.fetchall():
+                network_subsidies_map[s_row['property_id']].append(dict(s_row))
+
     return IncrementalNetworkResponse(
         new_entities=list(new_entities.values()),
         new_properties=[
@@ -1308,6 +1437,7 @@ def get_network_step(step: NetworkStep, conn=Depends(get_db_connection)):
                 city=v.get("property_city"),
                 owner=v.get("owner"),
                 assessed_value=v.get("assessed_value"),
+                subsidies=network_subsidies_map.get(v['id'], []),
                 details=v,
             ) for v in new_properties.values()
         ],
@@ -1356,9 +1486,10 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
         return f"principal_{normalize_person_name_py(name)}"
 
     def generate_network_data():
+        nonlocal entity_type, entity_id, entity_name
         try:
             with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-                network_id = None
+                network_ids = []
 
                 if entity_type == "business":
                     cursor.execute(
@@ -1368,21 +1499,97 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                     )
                     row = cursor.fetchone()
                     if row:
-                        network_id = row["network_id"]
+                        network_ids = [row["network_id"]]
+
+                elif entity_type == "address":
+                    # Lookup property by exact location (assuming entity_id passed is the address string)
+                    # Fetch owner details too so we can fall back to isolated view if no network
+                    cursor.execute(
+                        "SELECT p.business_id, p.principal_id, p.owner_norm, p.owner, p.co_owner, b.name as business_name "
+                        "FROM properties p "
+                        "LEFT JOIN businesses b ON p.business_id = b.id "
+                        "WHERE p.location = %s LIMIT 1",
+                        (entity_id,) 
+                    )
+                    prop = cursor.fetchone()
+                    if prop:
+                         # Try to pivot to the owner's network
+                         if prop["business_id"]:
+                             cursor.execute("SELECT network_id FROM entity_networks WHERE entity_type='business' AND entity_id=%s", (str(prop["business_id"]),))
+                             row = cursor.fetchone()
+                             if row: network_ids = [row["network_id"]]
+                         
+                         if not network_ids and prop["principal_id"]:
+                             # Resolve principal ID to name first (since we link by name_c mostly)
+                             cursor.execute("SELECT name_c FROM principals WHERE id=%s", (prop["principal_id"],))
+                             p_row = cursor.fetchone()
+                             if p_row:
+                                 cursor.execute("SELECT network_id FROM entity_networks WHERE entity_type='principal' AND entity_id=%s", (p_row["name_c"],))
+                                 row = cursor.fetchone()
+                                 if row: network_ids = [row["network_id"]]
+                                 
+                         if not network_ids and prop["owner_norm"]:
+                             cursor.execute("SELECT network_id FROM entity_networks WHERE entity_type='principal' AND entity_id=%s", (prop["owner_norm"],))
+                             row = cursor.fetchone()
+                             if row: network_ids = [row["network_id"]]
+                        
+                         # --- FALLBACK: If no network found, redirect to Isolated Owner View ---
+                         if not network_ids:
+                             if prop["business_id"]:
+                                 entity_type = "business"
+                                 entity_id = str(prop["business_id"])
+                                 entity_name = prop.get("business_name")
+                             else:
+                                 entity_type = "principal"
+                                 # Use explicit owner name for the isolated view title
+                                 entity_name = prop.get("owner") or prop.get("co_owner") or "Unknown Owner"
+                                 entity_id = entity_name
 
                 else:
                     pname_norm = normalize_person_name_py(entity_name or entity_id)
+                    # Fetch ALL networks this principal is part of
                     cursor.execute(
                         "SELECT network_id FROM entity_networks "
-                        "WHERE entity_type = 'principal' AND entity_id = %s LIMIT 1",
-                        (pname_norm,)
+                        "WHERE entity_type = 'principal' AND (entity_id = %s OR normalized_name = %s)",
+                        (entity_id, pname_norm)
                     )
-                    row = cursor.fetchone()
-                    if row:
-                        network_id = row["network_id"]
+                    rows = cursor.fetchall()
+                    if rows:
+                        network_ids = [r["network_id"] for r in rows]
+                    
+                    # Fallback: If ID didn't match, check if ID exists in principals table and try matching by that name
+                    if not network_ids and entity_id.isdigit():
+                         cursor.execute("SELECT name_c FROM principals WHERE id = %s", (entity_id,))
+                         pr_row = cursor.fetchone()
+                         if pr_row and pr_row['name_c']:
+                             fallback_name = pr_row['name_c']
+                             fallback_norm = normalize_person_name_py(fallback_name)
+                             cursor.execute(
+                                 "SELECT network_id FROM entity_networks "
+                                 "WHERE entity_type = 'principal' AND (normalized_name = %s OR entity_name = %s)",
+                                 (fallback_norm, fallback_name)
+                             )
+                             rows = cursor.fetchall()
+                             if rows:
+                                 network_ids = [r["network_id"] for r in rows]
+                             
+                    # Fallback 2: Check by entity_name from payload (e.g. "Menachem Gurevitch")
+                    if not network_ids and entity_name and entity_name != entity_id:
+                         fallback_norm = normalize_person_name_py(entity_name)
+                         cursor.execute(
+                             "SELECT network_id FROM entity_networks "
+                             "WHERE entity_type = 'principal' AND (normalized_name = %s OR entity_name = %s)",
+                             (fallback_norm, entity_name)
+                         )
+                         rows = cursor.fetchall()
+                         if rows:
+                             network_ids = [r["network_id"] for r in rows]
+
+
+
 
                 # --- If no network found → isolated view
-                if not network_id:
+                if not network_ids:
                     if entity_type == "business":
                         cursor.execute("SELECT * FROM businesses WHERE id = %s", (entity_id,))
                         business = cursor.fetchone()
@@ -1403,9 +1610,11 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                         ))
 
                         cursor.execute("SELECT * FROM properties WHERE business_id = %s", (entity_id,))
-                        for p in cursor.fetchall():
+                        all_properties = cursor.fetchall()
+                        grouped_properties = group_properties_into_complexes(all_properties)
+                        for prop_or_complex in grouped_properties:
                             yield _yield(json.dumps(
-                                {"type": "properties", "data": [shape_property_row(p)]},
+                                {"type": "properties", "data": [prop_or_complex]},
                                 default=json_converter
                             ))
 
@@ -1425,12 +1634,14 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
 
                         cursor.execute(
                             "SELECT * FROM properties "
-                            "WHERE principal_id = %s OR owner_norm = %s OR co_owner_norm = %s",
-                            (pname_norm, pname_norm, pname_norm)
+                            "WHERE principal_id = %s OR owner_norm = %s OR co_owner_norm = %s OR owner = %s",
+                            (pname_norm, pname_norm, pname_norm, entity_name)
                         )
-                        for p in cursor.fetchall():
+                        all_properties = cursor.fetchall()
+                        grouped_properties = group_properties_into_complexes(all_properties)
+                        for prop_or_complex in grouped_properties:
                             yield _yield(json.dumps(
-                                {"type": "properties", "data": [shape_property_row(p)]},
+                                {"type": "properties", "data": [prop_or_complex]},
                                 default=json_converter
                             ))
 
@@ -1438,12 +1649,40 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                     return
 
                 # --- If network found → load entire network (businesses, principals, properties)
+                # Lookup "Human" Name from Cached Insights if available
+                cursor.execute(
+                    "SELECT network_name, primary_entity_name FROM cached_insights "
+                    "WHERE title = 'Statewide' AND (primary_entity_id = %s OR network_name = %s OR primary_entity_name = %s) LIMIT 1",
+                    (entity_id, entity_name, entity_name)
+                )
+                insight_row = cursor.fetchone()
+                
+                # We need the Network ID name from the networks table first to be safe
+                # Summing up business count if multiple networks
+                cursor.execute("SELECT SUM(business_count) as bc, MIN(primary_name) as bn FROM networks WHERE id = ANY(%s)", (network_ids,))
+                net_row = cursor.fetchone()
+                
+                header_name = net_row.get("bn") if net_row else "Unknown Network"
+                
+                # Override if Insight has a better name (Human Principal)
+                if insight_row and insight_row.get('primary_entity_name') and insight_row['primary_entity_name'] not in ('NULL', 'None', ''):
+                     header_name = insight_row['primary_entity_name']
+
+                yield _yield(json.dumps({
+                    "type": "network_info", 
+                    "data": {
+                        "id": network_ids[0], # Just use first ID as canonical ID for now
+                        "name": header_name,
+                        "business_count": net_row.get("bc") if net_row else 0
+                    }
+                }))
+                
                 # Businesses
                 cursor.execute(
                     "SELECT b.* FROM entity_networks en "
                     "JOIN businesses b ON b.id::text = en.entity_id "
-                    "WHERE en.network_id = %s AND en.entity_type = 'business'",
-                    (network_id,)
+                    "WHERE en.network_id = ANY(%s) AND en.entity_type = 'business'",
+                    (network_ids,)
                 )
                 businesses = cursor.fetchall()
 
@@ -1451,8 +1690,8 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                 cursor.execute(
                     "SELECT entity_id AS principal_id, COALESCE(entity_name, entity_id) AS principal_name "
                     "FROM entity_networks "
-                    "WHERE network_id = %s AND entity_type = 'principal'",
-                    (network_id,)
+                    "WHERE network_id = ANY(%s) AND entity_type = 'principal'",
+                    (network_ids,)
                 )
                 principals_in_network = cursor.fetchall()
 
@@ -1525,24 +1764,108 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                             links["business_to_principal"].append({"source": b_key, "target": p_key})
                             links["principal_to_business"].append({"source": p_key, "target": b_key})
 
+                # --- NEW: Shared Address Links for Visualization ---
+                # We want to show the user that these businesses are linked because they share an address.
+                # We can reuse the same normalization logic or just check exact string match 
+                # (since discover_networks.py already grouped them by norm address).
+                from .shared_utils import normalize_mailing_address
+                
+                # Group businesses by normalized address locally for this network
+                addr_groups = defaultdict(list)
+                for b in businesses:
+                    raw_addr = b.get('mail_address') or b.get('business_address')
+                    if raw_addr:
+                        norm = normalize_mailing_address(raw_addr)
+                        if norm and len(norm) > 4:
+                            addr_groups[norm].append(f"business_{b['id']}")
+
+                links["shared_address"] = []
+                for addr, b_keys in addr_groups.items():
+                    if len(b_keys) > 1:
+                        # Link them in a chain or all-to-all? Chain is cleaner for graph.
+                        for i in range(len(b_keys) - 1):
+                            links["shared_address"].append({
+                                "source": b_keys[i], 
+                                "target": b_keys[i+1],
+                                "label": "Shared Address"
+                            })
+                # ---------------------------------------------------
+
                 yield _yield(json.dumps(
                     {"type": "entities", "data": {"entities": list(entities_dict.values()), "links": links}},
                     default=json_converter,
                 ))
 
                 # Stream properties for all businesses/principals in the network
+                # Stream properties for all businesses/principals in the network
                 biz_ids = [b["id"] for b in businesses]
+                biz_names = [b["name"] for b in businesses]
                 principal_ids = [pr["principal_id"] for pr in principals_in_network]
 
+                # Match by:
+                # 1. business_id (direct link)
+                # 2. owner_norm/co_owner_norm = principal_id (person owns it)
+                # 3. owner = business_name (business owns it, simple string match)
+                # We normalize the business names for better matching if possible, but exact match is a safe start.
+                
+                # Match by explicit link in entity_networks (Source of Truth)
+                # This ensures we get exactly the properties counted in the insights card.
+                # Stream flat properties (Frontend handles grouping)
+                # DEDUPLICATION FIX: Use DISTINCT ON to return only one row per physical address
+                # NEIGHBOR FETCH: Find "Base Addresses" and fetch ALL units, flagging ownership.
                 cursor.execute(
-                    "SELECT * FROM properties WHERE (business_id = ANY(%s)) OR (principal_id = ANY(%s))",
-                    (biz_ids or [None], principal_ids or [None])
+                    r"""
+                    WITH network_bases AS (
+                        SELECT DISTINCT 
+                            property_city,
+                            -- Heuristic: Remove trailing unit (Space + 1 Letter OR Space + 1-4 Digits)
+                            REGEXP_REPLACE(location, '\s+([A-Z]|\d{1,4})$', '') as base_loc
+                        FROM properties p
+                        JOIN entity_networks en ON p.business_id::text = en.entity_id
+                        WHERE en.network_id = ANY(%s)
+                    )
+                    SELECT DISTINCT ON (p.location, p.property_city, p.unit) 
+                        p.*,
+                        CASE WHEN en.entity_id IS NOT NULL THEN true ELSE false END as is_in_network
+                    FROM properties p
+                    JOIN network_bases nb ON p.property_city = nb.property_city
+                    LEFT JOIN entity_networks en ON p.business_id::text = en.entity_id AND en.network_id = ANY(%s)
+                    -- Match: Exact Base, OR Base + Space + Unit
+                    -- OPTIMIZATION: Use LIKE as primary filter (with %% for wildcard escaping in psycopg2)
+                    WHERE (
+                        p.location = nb.base_loc 
+                        OR (
+                            p.location LIKE (nb.base_loc || ' %%') 
+                            AND p.location ~ ('^' || REGEXP_REPLACE(nb.base_loc, '([!$()*+.:<=>?[\\\]^{|}-])', '\\\\1', 'g') || '\s+([A-Z]|\d{1,4})$')
+                        )
+                    )
+                    ORDER BY p.location, p.property_city, p.unit, p.id DESC
+                    """,
+                    (network_ids, network_ids)
                 )
-                for p in cursor.fetchall():
-                    yield _yield(json.dumps(
-                        {"type": "properties", "data": [shape_property_row(p)]},
-                        default=json_converter
-                    ))
+                  
+                # Stream flat properties (Frontend handles grouping)
+                # First, fetch ALL properties to get their subsidies in one go
+                all_raw_rows = cursor.fetchall()
+                if all_raw_rows:
+                    all_ids = [r['id'] for r in all_raw_rows]
+                    subsidies_map = defaultdict(list)
+                    cursor.execute("""
+                        SELECT property_id, program_name, subsidy_type, units_subsidized, expiry_date, source_url
+                        FROM property_subsidies
+                        WHERE property_id = ANY(%s)
+                    """, (all_ids,))
+                    for s_row in cursor.fetchall():
+                        subsidies_map[s_row['property_id']].append(dict(s_row))
+
+                    # Now yield in batches of 100
+                    for i in range(0, len(all_raw_rows), 100):
+                        batch = all_raw_rows[i:i+100]
+                        shaped_rows = [shape_property_row(r, subsidies_map.get(r['id'])) for r in batch]
+                        yield _yield(json.dumps(
+                            {"type": "properties", "data": shaped_rows},
+                            default=json_converter
+                        ))
 
                 yield _yield(json.dumps({"type": "done"}))
         except Exception as e:
@@ -1603,97 +1926,187 @@ def _column_exists(cursor, table: str, col: str) -> bool:
 
 def _calculate_and_cache_insights(cursor, town_col: Optional[str], town_filter: Optional[str]):
     """
-    This is the definitive, correct logic for calculating top networks.
-    It counts properties and sums values at the network level by joining through
-    all possible links (business_id, principal_id, and owner_norm).
+    Highly optimized logic for calculating top networks.
+    Aggregates first by (network, entity) to avoid redundant scans,
+    then picks the best display entity for each network.
     """
-    town_where_clause = ""
-    params = []
+    params = {}
+    town_filter_clause = ""
     if town_col and town_filter:
-        town_where_clause = f"WHERE p.{town_col} = %s"
-        params.append(town_filter)
+        town_filter_clause = f"AND p.{town_col} = %(town_filter)s"
+        params['town_filter'] = town_filter
 
     query = f"""
-        WITH property_to_network AS (
-            -- Link properties via business_id
-            SELECT p.id as property_id, en.network_id
+        WITH property_links AS (
+            -- All properties linked to a network, tagged with the linking entity
+            SELECT p.id as property_id, en.network_id, en.entity_id, en.entity_type, en.entity_name, p.assessed_value, p.appraised_value
             FROM properties p
             JOIN entity_networks en ON p.business_id::text = en.entity_id AND en.entity_type = 'business'
-            WHERE p.business_id IS NOT NULL
+            WHERE p.business_id IS NOT NULL {town_filter_clause}
             
-            UNION
+            UNION ALL
             
-            -- Link properties via principal_id (linking principal ID to principal NAME in entity_networks)
-            SELECT p.id, en.network_id
+            -- Direct link to principal via property.principal_id
+            SELECT p.id, en.network_id, en.entity_id, en.entity_type, en.entity_name, p.assessed_value, p.appraised_value
             FROM properties p
             JOIN principals pr ON p.principal_id = pr.id::text
             JOIN entity_networks en ON pr.name_c = en.entity_id AND en.entity_type = 'principal'
-            WHERE p.principal_id IS NOT NULL
+            WHERE p.principal_id IS NOT NULL {town_filter_clause}
 
-            UNION
+            UNION ALL
 
-            -- Link properties via owner_norm (for principals owning property directly)
-            SELECT p.id, en.network_id
+            -- Direct link to principal via property.owner_norm
+            SELECT p.id, en.network_id, en.entity_id, en.entity_type, en.entity_name, p.assessed_value, p.appraised_value
             FROM properties p
             JOIN entity_networks en ON p.owner_norm = en.entity_id AND en.entity_type = 'principal'
-            WHERE p.owner_norm IS NOT NULL
+            WHERE p.owner_norm IS NOT NULL {town_filter_clause}
+
+            UNION ALL
+
+            -- CRITICAL: Link properties to principals VIA their businesses
+            -- This ensures human principals get "credit" for all properties owned by their LLCs
+            SELECT p.id, en_p.network_id, en_p.entity_id, en_p.entity_type, en_p.entity_name, p.assessed_value, p.appraised_value
+            FROM properties p
+            JOIN entity_networks en_b ON p.business_id::text = en_b.entity_id AND en_b.entity_type = 'business'
+            JOIN principals pr ON en_b.entity_id = pr.business_id
+            JOIN entity_networks en_p ON pr.name_c = en_p.entity_id AND en_p.entity_type = 'principal'
+            WHERE p.business_id IS NOT NULL {town_filter_clause}
         ),
-        top_networks AS (
-            SELECT
-                ptn.network_id,
-                COUNT(DISTINCT ptn.property_id) as property_count,
-                COALESCE(SUM(p.assessed_value), 0) as total_assessed_value,
-                COALESCE(SUM(p.appraised_value), 0) as total_appraised_value,
-                (SELECT COUNT(*) FROM entity_networks en WHERE en.network_id = ptn.network_id AND en.entity_type = 'business') as business_count
-            FROM property_to_network ptn
-            JOIN properties p ON ptn.property_id = p.id
-            {town_where_clause}
-            GROUP BY ptn.network_id
-            HAVING COUNT(DISTINCT ptn.property_id) > 0
-            ORDER BY property_count DESC
-            LIMIT 10
+        network_stats AS (
+            -- Total stats for each network
+            SELECT 
+                network_id,
+                COUNT(DISTINCT property_id) as total_property_count,
+                SUM(assessed_value) as total_assessed_value,
+                SUM(appraised_value) as total_appraised_value
+            FROM property_links
+            GROUP BY network_id
         ),
-        network_display_entity AS (
-            SELECT DISTINCT ON (tn.network_id)
-                tn.network_id,
-                tn.property_count,
-                tn.total_assessed_value,
-                tn.total_appraised_value,
-                tn.business_count,
-                en.entity_id,
-                en.entity_type,
-                en.entity_name,
-                (
-                    SELECT COUNT(p_inner.id)
-                    FROM properties p_inner
-                    WHERE (p_inner.business_id::text = en.entity_id AND en.entity_type = 'business')
-                       OR (p_inner.principal_id = en.entity_id AND en.entity_type = 'principal')
-                       OR (p_inner.owner_norm = en.entity_id AND en.entity_type = 'principal')
-                ) as entity_property_count
-            FROM top_networks tn
-            JOIN entity_networks en ON tn.network_id = en.network_id
-            ORDER BY tn.network_id, entity_property_count DESC, en.entity_name
+        entity_stats AS (
+            -- Stats for each entity within its network
+            SELECT 
+                network_id,
+                entity_id,
+                entity_type,
+                entity_name,
+                COUNT(DISTINCT property_id) as entity_property_count
+            FROM property_links
+            GROUP BY network_id, entity_id, entity_type, entity_name
+        ),
+        ranked_entities AS (
+            -- Pick the best entity to represent each network
+            SELECT 
+                es.*,
+                ns.total_property_count,
+                ns.total_assessed_value,
+                ns.total_appraised_value,
+                ROW_NUMBER() OVER (
+                    PARTITION BY es.network_id 
+                    ORDER BY 
+                        CASE WHEN es.entity_type = 'principal' THEN 0 ELSE 1 END,
+                        CASE 
+                            WHEN es.entity_name ILIKE '%% LLC' THEN 2 
+                            WHEN es.entity_name ILIKE '%% INC%%' THEN 2 
+                            WHEN es.entity_name ILIKE '%% CORP%%' THEN 2 
+                            WHEN es.entity_name ILIKE '%% LTD%%' THEN 2 
+                            ELSE 0 
+                        END,
+                        es.entity_property_count DESC
+                ) as rank
+            FROM entity_stats es
+            JOIN network_stats ns ON es.network_id = ns.network_id
+        ),
+        controlling_business AS (
+             -- Best business to use as a deduplication key
+             SELECT DISTINCT ON (network_id)
+                network_id,
+                entity_name as business_name,
+                entity_id as business_id
+             FROM entity_stats
+             WHERE entity_type = 'business'
+             ORDER BY network_id, entity_property_count DESC
         )
-        SELECT
-            nde.entity_id,
-            nde.entity_name,
-            nde.entity_type,
-            nde.property_count as value,
-            nde.total_assessed_value,
-            nde.total_appraised_value,
-            nde.business_count,
-            nde.network_id
-        FROM network_display_entity nde
-        ORDER BY nde.property_count DESC
+        SELECT 
+            re.entity_id,
+            re.entity_name,
+            re.entity_type,
+            re.total_property_count as value,
+            re.total_assessed_value,
+            re.total_appraised_value,
+            re.network_id,
+            (SELECT COUNT(*) FROM entity_networks en WHERE en.network_id = re.network_id AND en.entity_type = 'business') as business_count,
+            cb.business_name as controlling_business_name,
+            cb.business_id as controlling_business_id
+        FROM ranked_entities re
+        LEFT JOIN controlling_business cb ON re.network_id = cb.network_id
+        WHERE re.rank = 1
+        ORDER BY re.total_property_count DESC
+        LIMIT 50;
     """
     cursor.execute(query, params)
-    top_networks = cursor.fetchall()
+    # Using RealDictCursor, so we get dicts
+    raw_networks = cursor.fetchall()
+    
+    # Graceful Merge / Deduplication
+    merged_networks = []
+    seen_keys = {} # Map unique_key -> index in merged_networks
+    
+    for net in raw_networks:
+        # Create a unique key based on controlling business or entity ID
+        c_id = net.get('controlling_business_id')
+        unique_key = c_id if c_id else f"ent_{net['entity_id']}"
+        
+        # Make a mutable copy
+        network = dict(net)
+        
+        if unique_key in seen_keys:
+            # Merge into existing
+            existing_idx = seen_keys[unique_key]
+            existing_net = merged_networks[existing_idx]
+            
+            # Merge logic:
+            
+            # 1. Prioritize Human Principal for the Main Title
+            # If existing is a business but incoming is a principal (human), swap to human.
+            if existing_net['entity_type'] == 'business' and network['entity_type'] == 'principal':
+                existing_net['entity_name'] = network['entity_name']
+                existing_net['entity_type'] = 'principal'
+                existing_net['entity_id'] = network['entity_id']
+            
+            # If both are principals, append names if distinct (joint title)
+            elif existing_net['entity_type'] == 'principal' and network['entity_type'] == 'principal':
+                 if network['entity_name'] not in existing_net['entity_name']:
+                     if len(existing_net['entity_name']) < 60: # Avoid overly long titles
+                        existing_net['entity_name'] += f" & {network['entity_name']}"
+            
+            # If incoming has a controlling business name and existing doesn't, take it
+            if not existing_net.get('controlling_business_name') and network.get('controlling_business_name'):
+                existing_net['controlling_business_name'] = network['controlling_business_name']
+                existing_net['controlling_business_id'] = network['controlling_business_id']
 
-    for network in top_networks:
+            # 2. Update Stats: Take the MAX of duplicate fragments (don't sum updates/overlaps)
+            if network['value'] > existing_net['value']:
+                existing_net['value'] = network['value']
+                existing_net['total_assessed_value'] = network['total_assessed_value']
+                existing_net['total_appraised_value'] = network['total_appraised_value']
+            
+            # Always max out business count
+            existing_net['business_count'] = max(existing_net.get('business_count', 0), network.get('business_count', 0))
+            
+            continue
+        
+        seen_keys[unique_key] = len(merged_networks)
+        merged_networks.append(network)
+    
+    # 2. Enrich the Final Top 10
+    final_networks = merged_networks[:10]
+    result = []
+    
+    for network in final_networks:
         # Top Principals
         cursor.execute("""
             SELECT name, state FROM (
-                SELECT DISTINCT ON(pr.name_c)
+                SELECT DISTINCT ON(UPPER(pr.name_c))
                     pr.name_c as name,
                     pr.state,
                     COUNT(*) as link_count
@@ -1701,92 +2114,76 @@ def _calculate_and_cache_insights(cursor, town_col: Optional[str], town_filter: 
                 JOIN principals pr ON en.entity_id = pr.business_id
                 WHERE en.network_id = %s AND en.entity_type = 'business' AND pr.name_c IS NOT NULL
                 GROUP BY pr.name_c, pr.state
-                ORDER BY pr.name_c, link_count DESC
+                ORDER BY UPPER(pr.name_c), link_count DESC
             ) as distinct_principals
             ORDER BY link_count DESC
             LIMIT 3;
         """, (network['network_id'],))
-        principals = cursor.fetchall()
-        
-        if network['entity_type'] == 'principal':
-            cursor.execute("SELECT name_c as name, state FROM principals WHERE name_c = %s LIMIT 1", (network['entity_name'],))
-            principal_info = cursor.fetchone()
-            if principal_info and principal_info not in principals:
-                principals.insert(0, principal_info)
-        
-        network['principals'] = principals[:3]
+        network['principals'] = cursor.fetchall()
 
-        # Top Businesses
+        # Top Businesses (Representative Entities)
         cursor.execute("""
-            SELECT name, status, business_address, state FROM (
-                SELECT DISTINCT ON(b.name)
-                    b.name,
-                    b.status,
-                    b.business_address,
-                    b.business_state as state,
-                    COUNT(*) as link_count
-                FROM entity_networks en
-                JOIN businesses b ON en.entity_id = b.id::text
-                WHERE en.network_id = %s AND en.entity_type = 'business'
-                GROUP BY b.name, b.status, b.business_address, b.business_state
-            ) as distinct_businesses
-            ORDER BY link_count DESC
-            LIMIT 3;
+            SELECT entity_name as name
+            FROM entity_networks
+            WHERE network_id = %s AND entity_type = 'business'
+            ORDER BY entity_name
+            LIMIT 5;
         """, (network['network_id'],))
-        businesses = cursor.fetchall()
-        network['businesses'] = businesses[:3]
+        network['representative_entities'] = cursor.fetchall()
 
-    return top_networks
+        result.append(network)
+    return result
 
 def _update_insights_cache_sync():
-    """Synchronous version of the cache update logic to be run in a thread."""
-    if not db_pool:
-        logger.error("DB pool not available for cache refresh.")
-        return
-
-    conn = None
-    try:
+    """
+    Background worker to refresh the heavy insights query.
+    """
+    if db_pool:
         conn = db_pool.getconn()
-        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        try:
             logger.info("Starting background refresh of insights cache...")
             
-            insights_by_municipality = {}
-            
-            town_col = None
-            for c in ["property_city", "town", "city", "municipality"]:
-                if _column_exists(cursor, "properties", c):
-                    town_col = c
-                    break
-            
-            insights_by_municipality['STATEWIDE'] = _calculate_and_cache_insights(cursor, None, None)
-
-            if town_col:
-                cursor.execute(f"SELECT {town_col} AS town FROM properties WHERE {town_col} IS NOT NULL AND {town_col} <> '' GROUP BY {town_col} ORDER BY COUNT(*) DESC LIMIT 10")
-                top_towns = [r["town"] for r in cursor.fetchall() if r["town"]]
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                # Load existing cache to preserve other cities if we crash
+                cursor.execute("SELECT value FROM kv_cache WHERE key = 'insights'")
+                row = cursor.fetchone()
+                insights_by_municipality = row['value'] if row and row['value'] else {}
                 
-                for t in top_towns:
-                    town_networks = _calculate_and_cache_insights(cursor, town_col, t)
-                    if town_networks:
-                        insights_by_municipality[t.upper()] = town_networks
-            
-            insights_json = json.dumps(insights_by_municipality, default=json_converter)
-            cursor.execute("""
-                INSERT INTO kv_cache (key, value)
-                VALUES (%s, %s::jsonb)
-                ON CONFLICT (key) DO UPDATE SET
-                    value = EXCLUDED.value,
-                    created_at = now();
-            """, ('insights', insights_json))
-            conn.commit()
-            logger.info("✅ Background refresh of insights cache complete.")
+                # 1. Statewide
+                logger.info("Calculating STATEWIDE insights...")
+                insights_by_municipality['STATEWIDE'] = _calculate_and_cache_insights(cursor, None, None)
+                
+                # Helper to save partial results
+                def save_partial(data):
+                     cursor.execute("""
+                        INSERT INTO kv_cache (key, value) VALUES (%s, %s::jsonb)
+                        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, created_at = now()
+                    """, ('insights', json.dumps(data, default=json_converter)))
+                     conn.commit()
 
-    except Exception as e:
-        logger.exception("Error during background cache refresh")
-        if conn:
-            conn.rollback()
-    finally:
-        if conn and db_pool:
+                save_partial(insights_by_municipality)
+                
+                # 2. Major Cities
+                major_cities = ['Bridgeport', 'New Haven', 'Hartford', 'Stamford', 'Waterbury', 'Norwalk', 'Danbury', 'New Britain']
+                for t in major_cities:
+                    logger.info("Calculating insights for %s...", t)
+                    try:
+                        town_networks = _calculate_and_cache_insights(cursor, 'property_city', t)
+                        if town_networks:
+                            insights_by_municipality[t.upper()] = town_networks
+                            save_partial(insights_by_municipality)
+                            logger.info("✅ Saved insights for %s", t)
+                    except Exception:
+                        logger.exception("Failed to calculate insights for %s", t)
+                
+            logger.info("✅ Background refresh of insights cache complete.")
+        except Exception:
+            logger.exception("Background cache refresh failed")
+            if conn: conn.rollback()
+        finally:
             db_pool.putconn(conn)
+    else:
+        logger.error("DB pool not available for cache refresh.")
 
 @app.get("/api/insights", response_model=Dict[str, List[InsightItem]])
 def get_insights(conn=Depends(get_db_connection)):
@@ -1858,6 +2255,14 @@ def get_reports(conn=Depends(get_db_connection)):
             title="Top Owners by Assessed Value",
             data=[ReportItem(key=r["key"], value=f"${int(r['value'] or 0):,}") for r in rows]
         ))
+    
+    # 3. Top Networks (Custom Logic) - Prioritize Human Names
+    # Note: Logic moved upstream or we query here?
+    # For now, let's just ensure we return consistent structure.
+    # The user wants "Menachem Gurevitch" (Principal) as header if linked.
+    # But this function `_get_top_networks` currently returns OWNERS.
+    # We need a separate `top_networks` endpoint or check `get_network_graph`.
+    
     return reports
 
 # ------------------------------------------------------------
@@ -1931,7 +2336,7 @@ def _draft_ai_report_text(context: Dict[str, Any]) -> Tuple[str, str]:
         "Output sections:\n"
         "1) Snapshot (counts, value)\n"
         "2) Geography focus (top cities)\n"
-        "3) Next steps for tenants/organizers (generic, non-legal)\n"
+        "3) Investigative Observations (ownership patterns, corporate history, or notable controversies)\n"
     )
     try:
         resp = openai.ChatCompletion.create(  # type: ignore[attr-defined]
@@ -2128,8 +2533,8 @@ def create_network_digest(req: NetworkDigestRequest, conn=Depends(get_db_connect
                 "2. KEY RISKS & FINDINGS: Bullet points of major issues, complaints, eviction history, or legal patterns found in the news.\n"
                 "3. ENTITY BREAKDOWN: Brief notes on individual principals or businesses where specific info was found.\n\n"
                 "CITATIONS: When referencing specific details, include the source link inline formatted as (Source: <url>). Do NOT use markdown links.\n\n"
-                "Focus on identifying problems, complaints, violations, poor conditions, or anything of interest to tenants/organizers.\n"
-                "Be specific. If no negative info is found, focus on characterizing the portfolio based on the property count and value provided above.\n\n"
+                "Focus on identifying acquisition patterns, property management reputation, significant legal filings, and any public controversies involving these entities.\n"
+                "Be specific. If no negative/notable info is found, focus on characterizing the portfolio based on the property count and value provided above.\n\n"
                 f"Web Search Data:\n{full_text_context}\n"
             )
             try:
@@ -2196,4 +2601,21 @@ def update_property_geocode(property_id: int, lat: float, lon: float, conn=Depen
             return {"status": "success", "id": property_id, "lat": lat, "lon": lon}
     except Exception as e:
         logger.error(f"Failed to update geocode for property {property_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+@app.get("/api/freshness")
+def get_data_freshness(conn=Depends(get_db_connection)):
+    """
+    Returns the last refresh status and external 'Last Updated' dates 
+    for all configured data sources.
+    """
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute("""
+                SELECT source_name, source_type, external_last_updated, last_refreshed_at, refresh_status, details
+                FROM data_source_status
+                ORDER BY source_type, source_name
+            """)
+            return cursor.fetchall()
+    except Exception as e:
+        logger.error(f"Failed to fetch data freshness: {e}")
         raise HTTPException(status_code=500, detail=str(e))

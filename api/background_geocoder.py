@@ -44,16 +44,30 @@ def process_property(prop):
     if stop_signal: return None
     
     prop_id, location, city, zip_code = prop
-    full_address = f"{location}, {city or ''}, CT {zip_code or ''}".strip()
+    
+    # Clean zip code (remove .0 if it's a float-string)
+    clean_zip = ""
+    if zip_code:
+        try:
+            clean_zip = str(int(float(str(zip_code).strip())))
+        except:
+            clean_zip = str(zip_code).strip()
+            
+    full_address = f"{location}, {city or ''}, CT {clean_zip}".strip()
     
     # Try Census First
-    lat, lon = geocode_census(full_address)
+    lat, lon, norm = geocode_census(full_address)
     
     # Fallback to Nominatim
     if not lat:
-        lat, lon = geocode_nominatim(full_address)
+        lat, lon, norm = geocode_nominatim(full_address)
+    
+    # Second Fallback: Nominatim without zip (sometimes zip is wrong/imprecise)
+    if not lat and clean_zip:
+        addr_no_zip = f"{location}, {city or ''}, CT".strip()
+        lat, lon, norm = geocode_nominatim(addr_no_zip)
         
-    return (prop_id, lat, lon)
+    return (prop_id, lat, lon, norm)
 
 
 def main():
@@ -104,13 +118,13 @@ def main():
 
                 # Batch Update
                 success_count = 0
-                for pid, lat, lon in results:
+                for pid, lat, lon, norm_addr in results:
                     if lat and lon:
                         cur.execute("""
                             UPDATE properties 
-                            SET latitude = %s, longitude = %s 
+                            SET latitude = %s, longitude = %s, normalized_address = %s
                             WHERE id = %s
-                        """, (lat, lon, pid))
+                        """, (lat, lon, norm_addr, pid))
                         success_count += 1
                     else:
                         # Fail marker

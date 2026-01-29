@@ -12,7 +12,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 DATA_SOURCES = {
     "businesses": "businesses.csv",
     "principals": "principals.csv",
-    "properties": "parcels.csv",
+    "properties": "new_parcels.csv", 
 }
 
 # --- Database Connection ---
@@ -71,8 +71,29 @@ def create_schema(cursor):
         building_photo TEXT,
         number_of_units NUMERIC,
         latitude NUMERIC,
-        longitude NUMERIC
+        longitude NUMERIC,
+        mailing_address TEXT,
+        mailing_city TEXT,
+        mailing_state TEXT,
+        mailing_zip TEXT,
+        complex_name TEXT,
+        management_company TEXT,
+        nhpd_id INTEGER
     );
+    CREATE TABLE IF NOT EXISTS property_subsidies (
+        id SERIAL PRIMARY KEY,
+        property_id INTEGER REFERENCES properties(id),
+        program_name TEXT,
+        subsidy_type TEXT,
+        units_subsidized INTEGER,
+        expiry_date DATE,
+        source_url TEXT,
+        last_updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_properties_complex_name_gin ON properties USING gin (complex_name gin_trgm_ops);
+    CREATE INDEX IF NOT EXISTS idx_properties_management_company_gin ON properties USING gin (management_company gin_trgm_ops);
+    CREATE INDEX IF NOT EXISTS idx_property_subsidies_property_id ON property_subsidies(property_id);
+    ALTER TABLE property_subsidies ADD COLUMN IF NOT EXISTS source_url TEXT;
     """)
     print("✅ Schema created successfully.")
 
@@ -81,18 +102,27 @@ def import_csv_data(conn, table_name, file_name, column_map):
     """Imports data from a local CSV file with flexible column mapping."""
     print(f"🚚 Starting local import for '{table_name}' from '{file_name}'...")
     file_path = f'/app/data/{file_name}'
+    if not os.path.exists(file_path):
+        file_path = f'../data/{file_name}' # Fallback for local run
     
     try:
         total_size = os.path.getsize(file_path)
         print(f"Processing file ({total_size / (1024*1024):.2f} MB)...")
 
-        df_chunk_iter = pd.read_csv(file_path, chunksize=50000, low_memory=False, encoding='utf-8', on_bad_lines='warn')
+        chunk_iter = pd.read_csv(file_path, chunksize=50000, low_memory=False, encoding='utf-8', on_bad_lines='warn', quotechar='"', doublequote=True)
         
         total_rows = 0
         processed_size = 0
 
-        for chunk in df_chunk_iter:
+        for chunk in chunk_iter:
             chunk.columns = [c.strip().lower().replace(' ', '_').replace('-', '_') for c in chunk.columns]
+            
+            # --- FIX: Drop columns that will be overwritten by rename if they already exist ---
+            for src, dst in column_map.items():
+                if src != dst and dst in chunk.columns and src in chunk.columns:
+                    chunk.drop(columns=[dst], inplace=True)
+            
+            # --- Apply column mapping ---
             chunk.rename(columns=column_map, inplace=True)
 
             # --- Data Type Coercion & Cleaning ---
@@ -123,6 +153,31 @@ def import_csv_data(conn, table_name, file_name, column_map):
                 # --- NEWLY ADDED ---
                 if 'number_of_units' in chunk.columns:
                     chunk['number_of_units'] = pd.to_numeric(chunk['number_of_units'], errors='coerce')
+                
+                # --- ROBUSTNESS: Infer "Unit" from Location if missing ---
+                # This mirrors the logic in update_vision_data.py and fix_units_context_aware.py
+                if 'location' in chunk.columns and (( 'unit' not in chunk.columns ) or (chunk['unit'].isnull().any())):
+                     if 'unit' not in chunk.columns:
+                         chunk['unit'] = None
+                     
+                     # Define inference function
+                     import re
+                     def infer_unit(row):
+                         if pd.notna(row['unit']) and str(row['unit']).strip():
+                             return row['unit'] # Keep existing
+                         
+                         loc = str(row['location']).strip().upper()
+                         # Regex: Space followed by optional "Unit", then (Single Uppercase Letter OR 1-4 Alphanumeric chars) at end of string
+                         # We try to catch "Unit 11B" or "Unit 7" or just " 7"
+                         m = re.search(r'(?:\sUNIT\s+|\s)([A-Z\d]{1,4})$', loc)
+                         if m:
+                             return m.group(1)
+                         return None
+
+                     # Apply to missing rows only to save time? Or apply to column. 
+                     # Vectorized application is hard with regex group extraction in pandas without .str accessor which might be slow on huge chunks.
+                     # Using apply is fine for 50k chunks.
+                     chunk['unit'] = chunk.apply(infer_unit, axis=1)
                 # -------------------
 
             cursor = conn.cursor()
@@ -156,7 +211,7 @@ def import_csv_data(conn, table_name, file_name, column_map):
         print(f"\n✅ Successfully imported {total_rows:,} rows into '{table_name}'.")
 
     except FileNotFoundError:
-        print(f"\n❌ Error: The file '{file_path}' was not found. Please place it in the 'data' folder.")
+        print(f"\n❌ Error: The file '{file_path}' was not found.")
     except Exception as e:
         print(f"\n❌ An error occurred during the import for {table_name}: {e}")
         conn.rollback()
@@ -198,6 +253,7 @@ def main():
 
     conn = None
     try:
+        print("DEBUG: DATA_SOURCES:", DATA_SOURCES)
         conn = get_db_connection()
         with conn.cursor() as cursor:
             create_schema(cursor)
@@ -246,7 +302,7 @@ def main():
                 'property_city': 'property_city',
                 'owner': 'owner', 
                 'co_owner': 'co_owner', 
-                'location': 'location',
+                'location_cama': 'location', # FIX: Use CAMA location, it's more accurate
                 'style_desc': 'property_type', 
                 'living_area': 'living_area', 
                 'ayb': 'year_built', 
@@ -277,14 +333,20 @@ def main():
                 'building_photo': 'building_photo',
                 'number_of_units': 'number_of_units',
                 'latitude': 'latitude',
-                'longitude': 'longitude'
+                'longitude': 'longitude',
+                'mailing_address': 'mailing_address',
+                'mailing_city': 'mailing_city',
+                'mailing_state': 'mailing_state',
+                'mailing_zip': 'mailing_zip'
             }
             
-            all_mappings = {
-                "businesses": (DATA_SOURCES["businesses"], business_cols),
-                "principals": (DATA_SOURCES["principals"], principal_cols),
-                "properties": (DATA_SOURCES["properties"], property_cols)
-            }
+            all_mappings = {}
+            if "businesses" in DATA_SOURCES:
+                all_mappings["businesses"] = (DATA_SOURCES["businesses"], business_cols)
+            if "principals" in DATA_SOURCES:
+                all_mappings["principals"] = (DATA_SOURCES["principals"], principal_cols)
+            if "properties" in DATA_SOURCES:
+                all_mappings["properties"] = (DATA_SOURCES["properties"], property_cols)
 
             for table_name, (file_name, col_map) in all_mappings.items():
                 if table_name in force_tables:
@@ -302,6 +364,8 @@ def main():
         create_indices(conn)
 
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         print(f"\n❌ A critical error occurred in the main process: {e}")
     finally:
         if conn:

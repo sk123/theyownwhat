@@ -30,6 +30,9 @@ CREATE TABLE IF NOT EXISTS {SCHEMA}.cached_insights (
     primary_entity_id text NOT NULL,   -- principal or business id as text
     primary_entity_name text NOT NULL, -- display name of the primary entity
     primary_entity_type text NOT NULL CHECK (primary_entity_type IN ('principal','business')),
+    business_count int DEFAULT 0,
+    controlling_business text,
+    representative_entities jsonb,
     created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS cached_insights_title_rank_idx
@@ -61,6 +64,16 @@ def column_exists(cur, table: str, col: str) -> bool:
         LIMIT 1
     """, (schema, name, col))
     return cur.fetchone() is not None
+
+def get_column_names(cur, table: str) -> List[str]:
+    """Return all columns for a given table in lower case."""
+    schema, name = (SCHEMA, table) if "." not in table else tuple(table.split(".", 1))
+    cur.execute("""
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema=%s AND table_name=%s
+    """, (schema, name))
+    return [r['column_name'].lower() for r in cur.fetchall()]
 
 def pick_first_existing_column(cur, table: str, candidates: List[str]) -> Optional[str]:
     for c in candidates:
@@ -98,8 +111,25 @@ def detect_principal_columns(cur) -> Dict[str, Optional[str]]:
         "name": "name" if column_exists(cur, table, "name") else None,
         "full_name": "full_name" if column_exists(cur, table, "full_name") else None,
         "state": "state" if column_exists(cur, table, "state") else ("state_code" if column_exists(cur, table, "state_code") else ("home_state" if column_exists(cur, table, "home_state") else None)),
+        "name_c_norm": "name_c_norm" if column_exists(cur, table, "name_c_norm") else None,
+        "name_c": "name_c" if column_exists(cur, table, "name_c") else None,
     }
     return detected
+
+def get_norm_sql(col_name):
+    """Returns a string of SQL operations to normalize a name column (matching deduplicate_principals.py)."""
+    norm_ops = f"UPPER({col_name})"
+    norm_ops = f"REPLACE({norm_ops}, '&', 'AND')"
+    norm_ops = f"REGEXP_REPLACE({norm_ops}, '[.,''`\"]', '', 'g')" # Remove punctuation
+    # Handle common typos/variations (Gurevitch, etc.)
+    norm_ops = f"REPLACE({norm_ops}, 'GUREVITOH', 'GUREVITCH')"
+    norm_ops = f"REPLACE({norm_ops}, 'MANACHEM', 'MENACHEM')"
+    norm_ops = f"REPLACE({norm_ops}, 'MENACHERM', 'MENACHEM')"
+    norm_ops = f"REPLACE({norm_ops}, 'MENAHEM', 'MENACHEM')"
+    norm_ops = f"REPLACE({norm_ops}, 'GURAVITCH', 'GUREVITCH')"
+    norm_ops = f"REGEXP_REPLACE({norm_ops}, '[^A-Z0-9\\s-]', '', 'g')" # Remove special chars (keep hyphen)
+    norm_ops = f"TRIM(REGEXP_REPLACE({norm_ops}, '\\s+', ' ', 'g'))" # Collapse whitespace
+    return norm_ops
 
 def sql_nonempty(s: str) -> str:
     # Returns an expression that yields NULL if s is '' or NULL
@@ -129,6 +159,8 @@ def build_principal_display_expr(alias: str, cols: Dict[str, Optional[str]]) -> 
 
     if cols["full_name"]:
         parts.append(sql_nonempty(f"{alias}.{cols['full_name']}"))
+    if cols["name_c"]:
+        parts.append(sql_nonempty(f"{alias}.{cols['name_c']}"))
     if cols["name"]:
         parts.append(sql_nonempty(f"{alias}.{cols['name']}"))
     if cols["designation"]:
@@ -149,41 +181,103 @@ def build_principal_state_expr(alias: str, cols: Dict[str, Optional[str]]) -> st
 
 def compute_top_principals(cur, town_col: Optional[str], town_filter: Optional[str]) -> List[Dict]:
     """
-    Count properties by principal (joining text principal_id -> principals.id safely).
-    Optionally filter by a given town (if town_col is present).
+    Count properties by principal using a 2-step in-memory aggregation.
+    Much faster than the massive 4-way JOIN.
     """
+    if not (table_exists(cur, "entity_networks") and table_exists(cur, "businesses")):
+        return []
+
+    needed_en = column_exists(cur, "entity_networks", "entity_type")
+    if not needed_en: return []
+
     cols = detect_principal_columns(cur)
     pr_id = cols["id_col"]
     pr_disp = build_principal_display_expr("pr", cols)
     pr_state = build_principal_state_expr("pr", cols)
 
-    where = ""
-    params: List = []
-    if town_col and town_filter:
-        where = f"WHERE UPPER(p.{town_col}) = UPPER(%s)"
-        params.append(town_filter)
+    cols = detect_principal_columns(cur)
+    pr_id = cols["id_col"]
+    pr_disp = build_principal_display_expr("pr", cols)
+    pr_state = build_principal_state_expr("pr", cols)
+    
+    # 2. Join Principals to Networks and Rank
+    log.info(f"Joining Principals to Network Stats (SQL) for town={town_filter}...")
+    
+    # Choose correct stats source
+    if town_filter:
+        # Use town-specific stats
+        source_table = "temp_network_town_stats"
+        safe_town = town_filter.replace("'", "''").upper()
+        stats_join = f"JOIN temp_network_town_stats ns ON ns.id = pl.network_id AND ns.town = '{safe_town}'"
+    else:
+        # Use global stats
+        source_table = "temp_network_stats"
+        stats_join = "JOIN temp_network_stats ns ON ns.id = pl.network_id"
 
-    # Use LEFT JOIN so we include principals with zero properties in the base, then HAVING > 0 filters to those with properties
-    sql = f"""
-        SELECT
-            pr.{pr_id} AS principal_id,
-            {pr_disp}  AS principal_name,
-            {pr_state} AS principal_state,
-            COUNT(p.id) AS property_count,
-            COALESCE(SUM(p.assessed_value), 0) AS total_assessed_value,
-            COALESCE(SUM(p.appraised_value), 0) AS total_appraised_value
-        FROM {SCHEMA}.principals pr
-        LEFT JOIN {SCHEMA}.properties p
-          ON p.principal_id ~ '^[0-9]+$'
-         AND pr.{pr_id} = p.principal_id::integer
-        {where}
-        GROUP BY pr.{pr_id}, principal_name, principal_state
-        HAVING COUNT(p.id) > 0
-        ORDER BY COUNT(p.id) DESC, principal_name ASC
-        LIMIT 1000
+    # Use the pre-calculated principal_network_map
+    sql_ranking = f"""
+    WITH network_aggregates AS (
+        SELECT 
+            pl.raw_pid,
+            pl.network_id,
+            ns.total_properties,
+            ns.total_assessed_value
+        FROM temp_principal_network_map pl
+        {stats_join}
+    ),
+    deduplicated AS (
+        SELECT 
+            na.*,
+            pr.{pr_id} as principal_id,
+            -- Prioritize human name from unique_principals if available
+            COALESCE(up.representative_name_c, {pr_disp}) as principal_name,
+            {pr_state} as principal_state,
+            -- Determine if this is a human or entity principal
+            CASE 
+                WHEN up.representative_name_c ~* '(LLC|INC|CORP|LTD|GROUP|HOLDINGS|REALTY|MANAGEMENT|TRUST|LP|PARTNERSH)' THEN 'entity'
+                WHEN {pr_disp} ~* '(LLC|INC|CORP|LTD|GROUP|HOLDINGS|REALTY|MANAGEMENT|TRUST|LP|PARTNERSH)' THEN 'entity'
+                ELSE 'human'
+            END as p_kind,
+            n.business_count,
+            -- Partition by network_id to avoid duplicate entries for the same portfolio
+            ROW_NUMBER() OVER (
+                PARTITION BY na.network_id 
+                ORDER BY 
+                    -- Priority: 1. Human names, 2. Most properties
+                    CASE 
+                        WHEN up.representative_name_c ~* '(LLC|INC|CORP|LTD|GROUP|HOLDINGS|REALTY|MANAGEMENT|TRUST|LP|PARTNERSH)' THEN 2
+                        WHEN {pr_disp} ~* '(LLC|INC|CORP|LTD|GROUP|HOLDINGS|REALTY|MANAGEMENT|TRUST|LP|PARTNERSH)' THEN 2
+                        ELSE 1 
+                    END ASC,
+                    na.total_properties DESC
+            ) as mirror_rank
+        FROM network_aggregates na
+        JOIN {SCHEMA}.principals pr ON pr.{pr_id}::text = na.raw_pid
+        LEFT JOIN {SCHEMA}.unique_principals up ON up.principal_id::text = na.raw_pid
+        LEFT JOIN {SCHEMA}.networks n ON n.id = na.network_id
+    )
+    SELECT 
+        principal_id,
+        principal_name,
+        principal_state,
+        network_id,
+        total_properties as property_count,
+        total_assessed_value,
+        0 as total_appraised_value,
+        business_count,
+        p_kind
+    FROM deduplicated
+    WHERE mirror_rank = 1
+    ORDER BY total_properties DESC
+    LIMIT 1000
     """
-    cur.execute(sql, params)
-    return [dict(r) for r in cur.fetchall()]
+    
+    cur.execute(sql_ranking)
+    results = [dict(row) for row in cur.fetchall()]
+    
+    log.info(f"Top Principals query returned {len(results)} rows.")
+    
+    return results
 
 def compute_top_business_networks(cur, town_col: Optional[str], town_filter: Optional[str]) -> List[Dict]:
     """
@@ -214,11 +308,13 @@ def compute_top_business_networks(cur, town_col: Optional[str], town_filter: Opt
 
     sql = f"""
         SELECT
+            en.network_id,
             b.id AS business_id,
             b.{bname} AS business_name,
             COUNT(DISTINCT p.id) AS property_count,
             COALESCE(SUM(p.assessed_value), 0) AS total_assessed_value,
-            COALESCE(SUM(p.appraised_value), 0) AS total_appraised_value
+            COALESCE(SUM(p.appraised_value), 0) AS total_appraised_value,
+            (SELECT business_count FROM {SCHEMA}.networks WHERE id = en.network_id) as business_count
         FROM {SCHEMA}.entity_networks en
         JOIN {SCHEMA}.businesses b
           ON en.entity_type = 'business'
@@ -226,7 +322,7 @@ def compute_top_business_networks(cur, town_col: Optional[str], town_filter: Opt
         JOIN {SCHEMA}.properties p
           ON p.business_id = b.id
         WHERE 1=1 {where}
-        GROUP BY b.id, b.{bname}
+        GROUP BY en.network_id, b.id, b.{bname}
         HAVING COUNT(DISTINCT p.id) > 0
         ORDER BY COUNT(DISTINCT p.id) DESC, b.{bname} ASC
         LIMIT 1000
@@ -236,38 +332,197 @@ def compute_top_business_networks(cur, town_col: Optional[str], town_filter: Opt
 
 # ------------------------------- ranking --------------------------------
 
+def merge_and_rank(principals: List[Dict], businesses: List[Dict], limit: int = 10) -> List[Tuple[int, Dict]]:
+    """
+    Merges principal and business lists, prioritizing principals for the same network_id.
+    Force renames networks containing TRIDEC or STATE OF CT.
+    """
+    # 1. First Pass: Map each network_id to its best name
+    # Special priority: STATE OF CONNECTICUT / TRIDEC
+    # Second priority: Principals
+    # Third priority: Businesses
+    
+    network_best_info = {} # nid -> item
+    
+    def is_state_ct(name: str) -> bool:
+        if not name: return False
+        name = name.upper()
+        return any(x in name for x in ["STATE OF CONNECTICUT", "CONNECTICUT STATE OF", "CONN STATE OF", "STATE OF CONN", "TRIDEC TECHNOLOGIES"])
+
+    # Combine all for scanning
+    all_items = []
+    for p in principals:
+        all_items.append(('principal', p))
+    for b in businesses:
+        all_items.append(('business', b))
+        
+    for itype, item in all_items:
+        nid = item.get('network_id')
+        if not nid: continue
+        
+        name = item.get("principal_name") or item.get("business_name") or ""
+        p_kind = item.get("p_kind", "entity")
+        
+        # If this is the first time seeing this network, or if this item is "better"
+        current = network_best_info.get(nid)
+        if not current:
+            network_best_info[nid] = (itype, item)
+            continue
+            
+        cur_type, cur_item = current
+        cur_name = cur_item.get("principal_name") or cur_item.get("business_name") or ""
+        cur_kind = cur_item.get("p_kind", "entity")
+        
+        # Priority Logic:
+        # A. State of CT name > anything else
+        # B. Human > Entity (Business or Entity-Principal)
+        # C. Higher property count
+        
+        better = False
+        import re
+        # Stronger check for "Human" - if it doesn't look like an entity, and it's a principal, prefer it.
+        is_entity_pattern = r'(LLC|INC\.|CORP|LTD|GROUP|HOLDINGS|REALTY|MANAGEMENT|TRUST|LP|PARTNERSHIP|DEPARTMENT|Housing|Authority)'
+        
+        # Simplified Robust Priority
+        # 1. State of CT
+        # 2. Human Principal (Principal type AND no LLC keywords)
+        # 3. Business / Entity
+        
+        # Calculate categories
+        def classify(name, type_str):
+            if not name: return 0 # Unknown
+            if is_state_ct(name): return 3 # Top Priority
+            
+            # Check for Entity Keywords
+            # using the broad pattern
+            is_entity = bool(re.search(is_entity_pattern, name, re.IGNORECASE))
+            
+            if type_str == 'principal' and not is_entity:
+                return 2 # Human
+            return 1 # Business or Entity-Principal
+
+        new_score = classify(name, itype)
+        cur_score = classify(cur_name, cur_type)
+        
+        if new_score > cur_score:
+            better = True
+        elif new_score == cur_score:
+            # Tie-break: Prefer 'principal' type over 'business' even if both are entities
+            if new_score == 1 and itype == 'principal' and cur_type == 'business':
+                better = True
+            # Tie-break: Property count (implicitly handled by sort order of input list?)
+            # Input list is NOT sorted by property count globally, but `compute_top` returns sorted lists.
+            # We iterate principals then businesses.
+            # If scores equal, keep current (first one seen is usually better if sorted).
+        
+        # if "GUREVITCH" in name.upper() or "DANNY" in name.upper():
+        #    print(f"DEBUG: {name} ({new_score}) vs {cur_name} ({cur_score}) -> Better={better}", file=sys.stderr)
+        
+        if better:
+            network_best_info[nid] = (itype, item)
+
+    # 2. Final List: Use the best items found
+    combined = []
+    for nid, (itype, item) in network_best_info.items():
+        # Final rename for display
+        name = item.get("principal_name") or item.get("business_name") or ""
+        if is_state_ct(name):
+             if "principal_name" in item: item["principal_name"] = "STATE OF CONNECTICUT"
+             if "business_name" in item: item["business_name"] = "STATE OF CONNECTICUT"
+        
+        # Find the best business name to use as a sub-header if the primary is a human
+        best_biz = ""
+        for b in businesses:
+            if b.get('network_id') == nid:
+                bname = b.get('business_name')
+                if bname and (not best_biz or b.get('property_count', 0) > best_biz_count):
+                    best_biz = bname
+                    best_biz_count = b.get('property_count', 0)
+        item['controlling_business'] = best_biz
+        combined.append(item)
+
+    # Sort by property count descending
+    combined.sort(key=lambda x: x['property_count'], reverse=True)
+    
+    # 5. Rank and find representative businesses for the top ones (Deduplicate Names)
+    ranked = []
+    seen_names = set()
+    
+    current_rank = 1
+    for item in combined:
+        if len(ranked) >= limit: break
+        
+        nid = item.get('network_id')
+        name = item.get("principal_name") or item.get("business_name") or "Unknown"
+        norm_name = name.strip().upper()
+        
+        if norm_name in seen_names:
+            continue
+        seen_names.add(norm_name)
+        
+        reps = []
+        for b in businesses:
+            if b.get('network_id') == nid:
+                bname = b.get('business_name')
+                if bname and bname not in [r['name'] for r in reps]:
+                    reps.append({'name': bname, 'id': b.get('business_id'), 'type': 'business'})
+            if len(reps) >= 5: break 
+        
+        item['representative_entities'] = reps
+        ranked.append((current_rank, item))
+        current_rank += 1
+        
+    return ranked
+
+
 def rank_first_n(rows: List[Dict], n: int = 10) -> List[Tuple[int, Dict]]:
     return [(i, r) for i, r in enumerate(rows[:n], start=1)]
 
-def insert_ranked_principals(cur, title: str, rows: List[Tuple[int, Dict]]):
+def insert_ranked_combined(cur, title: str, rows: List[Tuple[int, Dict]]):
+    import json
     for rank, r in rows:
+        # Determine type and name
+        if "principal_name" in r:
+            name = r["principal_name"]
+            ent_id = str(r["principal_id"])
+            ent_type = "principal"
+        else:
+            name = r["business_name"]
+            ent_id = str(r["business_id"])
+            ent_type = "business"
+
         cur.execute(
             f"""
             INSERT INTO {SCHEMA}.cached_insights
             (title, rank, network_name, property_count, total_assessed_value, total_appraised_value,
-             primary_entity_id, primary_entity_name, primary_entity_type)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'principal')
+             primary_entity_id, primary_entity_name, primary_entity_type, business_count, representative_entities, controlling_business)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 title,
                 rank,
-                r.get("principal_name") or "[unknown]",
+                name or "[unknown]",
                 int(r.get("property_count") or 0),
                 float(r.get("total_assessed_value") or 0),
                 float(r.get("total_appraised_value") or 0),
-                str(r.get("principal_id")),
-                r.get("principal_name") or "[unknown]",
+                ent_id,
+                name or "[unknown]",
+                ent_type,
+                int(r.get("business_count") or 0),
+                json.dumps(r.get('representative_entities', [])),
+                r.get('controlling_business')
             ),
         )
 
 def insert_ranked_businesses(cur, title: str, rows: List[Tuple[int, Dict]]):
+    import json
     for rank, r in rows:
         cur.execute(
             f"""
             INSERT INTO {SCHEMA}.cached_insights
             (title, rank, network_name, property_count, total_assessed_value, total_appraised_value,
-             primary_entity_id, primary_entity_name, primary_entity_type)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'business')
+             primary_entity_id, primary_entity_name, primary_entity_type, business_count, representative_entities)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'business', %s, %s)
             """,
             (
                 title,
@@ -278,9 +533,10 @@ def insert_ranked_businesses(cur, title: str, rows: List[Tuple[int, Dict]]):
                 float(r.get("total_appraised_value") or 0),
                 str(r.get("business_id")),
                 r.get("business_name") or "[unknown]",
+                int(r.get("business_count") or 0),
+                json.dumps(r.get('representative_entities', []))
             ),
         )
-
 
 # ------------------------------- driver ---------------------------------
 
@@ -295,22 +551,133 @@ def main():
                     if not table_exists(cur, t):
                         raise RuntimeError(f"Required table {SCHEMA}.{t} not found")
 
+                # Force recreation to pick up new columns
+                cur.execute(f"DROP TABLE IF EXISTS {SCHEMA}.cached_insights")
                 ensure_cached_table(cur)
                 wipe_cached_insights(cur)
 
-                # Detect a town-like column
-                town_col = pick_first_existing_column(cur, "properties", ["town","city","municipality","locality"])
+                # --- GLOBAL OPTIMIZATION: Create Network Stats Temp Table ONCE ---
+                log.info("Creating global temp table for Network Stats...")
+                cur.execute(f"""
+                    CREATE TEMP TABLE temp_network_stats AS
+                    WITH property_networks AS (
+                        SELECT p.id as property_id, p.assessed_value, en.network_id
+                        FROM {SCHEMA}.properties p
+                        JOIN {SCHEMA}.entity_networks en ON en.entity_type = 'business' AND p.business_id::text = en.entity_id
+                        
+                        UNION
+                        
+                        SELECT p.id as property_id, p.assessed_value, en.network_id
+                        FROM {SCHEMA}.properties p
+                        JOIN {SCHEMA}.entity_networks en ON en.entity_type = 'principal' AND p.principal_id::text = en.entity_id
+                    )
+                    SELECT 
+                        network_id AS id,
+                        COUNT(DISTINCT property_id) AS total_properties,
+                        SUM(assessed_value) AS total_assessed_value
+                    FROM property_networks
+                    GROUP BY network_id
+                    HAVING COUNT(DISTINCT property_id) > 0
+                """)
+                cur.execute("CREATE INDEX idx_tmp_net_stats ON temp_network_stats(id)")
+                log.info("Global stats table created.")
+                
+                # --- GLOBAL OPTIMIZATION 2: Temp Table for Town Stats ---
+                # We need a column for 'town' (property_city)
+                # But we don't know the town column name yet!
+                # We only detect it below at line 440+
+                # Move detection up!
+                
+                town_col = pick_first_existing_column(cur, "properties", ["town","city","municipality","locality", "property_city"])
                 if town_col:
                     log.info("Detected town column on properties: %s", town_col)
+                    log.info("Creating temp table for Town Stats...")
+                    cur.execute(f"""
+                        CREATE TEMP TABLE temp_network_town_stats AS
+                        WITH property_networks AS (
+                            SELECT p.id as property_id, p.assessed_value, UPPER(p.{town_col}) as town, en.network_id
+                            FROM {SCHEMA}.properties p
+                            JOIN {SCHEMA}.entity_networks en ON en.entity_type = 'business' AND p.business_id::text = en.entity_id
+                            WHERE p.{town_col} IS NOT NULL AND p.{town_col} <> ''
+                            
+                            UNION
+                            
+                            SELECT p.id as property_id, p.assessed_value, UPPER(p.{town_col}) as town, en.network_id
+                            FROM {SCHEMA}.properties p
+                            JOIN {SCHEMA}.entity_networks en ON en.entity_type = 'principal' AND p.principal_id::text = en.entity_id
+                            WHERE p.{town_col} IS NOT NULL AND p.{town_col} <> ''
+                        )
+                        SELECT 
+                            network_id AS id,
+                            town,
+                            COUNT(DISTINCT property_id) AS total_properties,
+                            SUM(assessed_value) AS total_assessed_value
+                        FROM property_networks
+                        GROUP BY network_id, town
+                        HAVING COUNT(DISTINCT property_id) > 0
+                    """)
+                    cur.execute("CREATE INDEX idx_tmp_net_town_stats ON temp_network_town_stats(id, town)")
+                    log.info("Town stats table created.")
                 else:
                     log.warning("No town-like column found on properties; computing Statewide only.")
+                # -----------------------------------------------------------------
+
+                # --- GLOBAL OPTIMIZATION 3: Temp Table for Principal-Network Map ---
+                log.info("Creating temp table for Principal-Network Map...")
+                
+                # We need to look up column names dynamically again just in case
+                pr_cols = get_column_names(cur, "principals")
+                pr_id = "id" if "id" in pr_cols else "principal_id" # specific overrides?
+                # Actually, compute_top_principals handles column detection too. 
+                # Let's do a safe detection here similar to compute_top_principals
+                
+                # Check for specific columns to decide on name expression (reuse logic)
+                has_name_c = "name_c" in pr_cols
+                has_first = "firstname" in pr_cols
+                has_name_norm = "name_normalized" in pr_cols # If it exists on principals? No, usually on unique_principals or calculated
+                
+                # Construct name expression for normalization
+                # Note: entity_networks has normalized_name. We need to match principal's normalized name to it.
+                # In deduplicate_principals, we see normalization logic.
+                # Ideally, we should just join on entity_networks where entity_type='principal' and entity_id=principal.id
+                # BUT, there's also the name-based matching logic in the original query:
+                # JOIN ... ON ... normalized_name = ...
+                
+                name_expr_sql = "TRIM(UPPER(pr.name_c))" if has_name_c else "TRIM(UPPER(CONCAT_WS(' ', pr.firstname, pr.middlename, pr.lastname)))"
+                # Improved normalization SQL from get_norm_sql
+                name_expr_sql = get_norm_sql(f"pr.name_c" if has_name_c else "TRIM(CONCAT_WS(' ', pr.firstname, pr.middlename, pr.lastname))")
+
+                cur.execute(f"""
+                    CREATE TEMP TABLE temp_principal_network_map AS
+                    SELECT pr.{pr_id}::text AS raw_pid, en.network_id
+                    FROM {SCHEMA}.principals pr
+                    JOIN {SCHEMA}.entity_networks en ON en.entity_type = 'principal' AND en.entity_id = pr.{pr_id}::text
+                    
+                    UNION
+                    
+                    SELECT pr.{pr_id}::text AS raw_pid, en.network_id
+                    FROM {SCHEMA}.principals pr
+                    JOIN {SCHEMA}.entity_networks en ON en.entity_type = 'principal' AND en.normalized_name = {name_expr_sql}
+                """)
+                cur.execute("CREATE INDEX idx_tmp_pr_net_map ON temp_principal_network_map(raw_pid, network_id)")
+                log.info("Principal-Network Map created.")
+
+                # -----------------------------------------------------------------
 
                 # ---------- Statewide ----------
                 top_principals_state = compute_top_principals(cur, town_col, None)
-                insert_ranked_principals(cur, "Statewide", rank_first_n(top_principals_state, 10))
-
                 top_businesses_state = compute_top_business_networks(cur, town_col, None)
+                
+                merged_state = merge_and_rank(top_principals_state, top_businesses_state, 10)
+                insert_ranked_combined(cur, "Statewide", merged_state)
+
+                # Keep separated 'Business' list if needed, or maybe drop it? 
+                # User didn't ask to remove it, so let's keep it but purely businesses.
                 if top_businesses_state:
+                     # Rename TRIDEC in business list too
+                    for b in top_businesses_state:
+                         if "TRIDEC TECHNOLOGIES" in (b.get("business_name") or "").upper():
+                             b["business_name"] = "STATE OF CONNECTICUT"
                     insert_ranked_businesses(cur, "Statewide – Businesses", rank_first_n(top_businesses_state, 10))
 
                 # ---------- Per-town ----------
@@ -323,11 +690,69 @@ def main():
                     towns = [r["town"] for r in cur.fetchall() if r["town"]]
                     for t in towns:
                         top_p = compute_top_principals(cur, town_col, t)
-                        if top_p:
-                            insert_ranked_principals(cur, t, rank_first_n(top_p, 10))
                         top_b = compute_top_business_networks(cur, town_col, t)
+                        
+                        merged_town = merge_and_rank(top_p, top_b, 10)
+                        insert_ranked_combined(cur, t, merged_town)
+                        
                         if top_b:
+                            for b in top_b:
+                                 if "TRIDEC TECHNOLOGIES" in (b.get("business_name") or "").upper():
+                                     b["business_name"] = "STATE OF CONNECTICUT"
                             insert_ranked_businesses(cur, f"{t} – Businesses", rank_first_n(top_b, 10))
+
+                # ---------- Cleanup ----------
+                cur.execute("DROP TABLE IF EXISTS temp_network_stats")
+                cur.execute("DROP TABLE IF EXISTS temp_principal_network_map")
+                cur.execute("DROP TABLE IF EXISTS temp_network_town_stats")
+
+                # ---------- Hydrate KV Cache for API ----------
+                log.info("Hydrating API KV Cache from 'cached_insights' table...")
+                
+                # Fetch all rows from cached_insights
+                cur.execute(f"""
+                    SELECT title, rank, network_name, property_count, total_assessed_value, total_appraised_value,
+                           primary_entity_id, primary_entity_name, primary_entity_type, business_count, representative_entities, controlling_business
+                    FROM {SCHEMA}.cached_insights
+                    ORDER BY title, rank
+                """)
+                all_rows = cur.fetchall()
+                
+                # Group by title (Statewide or Town)
+                insights_map = {}
+                for r in all_rows:
+                    group = r['title']
+                    if group not in insights_map:
+                        insights_map[group] = []
+                    
+                    # Convert to API format (InsightItem)
+                    # format: { rank, name, property_count, value, entity_id, entity_type }
+                    item = {
+                        "rank": r['rank'],
+                        "entity_name": r['network_name'],
+                        "entity_id": r['primary_entity_id'],
+                        "entity_type": r['primary_entity_type'],
+                        "value": int(r['property_count'] or 0),
+                        "property_count": r['property_count'],
+                        "business_count": r['business_count'],
+                        "total_assessed_value": float(r['total_assessed_value'] or 0),
+                        "total_appraised_value": float(r['total_appraised_value'] or 0),
+                        "representative_entities": r['representative_entities'],
+                        "controlling_business": r['controlling_business']
+                    }
+                    insights_map[group].append(item)
+                
+                # Write to KV Cache
+                import json
+                cur.execute(f"""
+                    INSERT INTO {SCHEMA}.kv_cache (key, value)
+                    VALUES (%s, %s::jsonb)
+                    ON CONFLICT (key) DO UPDATE SET
+                        value = EXCLUDED.value,
+                        created_at = now();
+                """, ('insights', json.dumps(insights_map)))
+                
+                log.info(f"✅ KV Cache updated with {len(insights_map)} groups.")
 
         log.info("✅ cached_insights rebuilt in %.2fs", time.time() - t0)
     finally:

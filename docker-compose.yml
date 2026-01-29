@@ -19,6 +19,7 @@ services:
       timeout: 5s
       retries: 5
     command: postgres -c max_wal_size=4GB
+    restart: unless-stopped
 
   api:
     build:
@@ -74,10 +75,11 @@ services:
     volumes:
       - ./importer:/app/importer
       - ./data:/app/data
+      - ./scripts:/app/scripts
     environment:
       - DATABASE_URL=postgresql://user:password@db:5432/ctdata
       - PYTHONUNBUFFERED=1
-    command: python importer/update_data.py businesses
+    command: python importer/update_data.py
 
   updater:
     build:
@@ -92,7 +94,7 @@ services:
       - ./updater:/app/updater
     environment:
       - DATABASE_URL=postgresql://user:password@db:5432/ctdata
-    command: python updater/update_vision_data.py -m "NEW HAVEN"
+    command: python updater/update_vision_data.py -m "HARTFORD"
 
   updater2:
     build:
@@ -123,7 +125,22 @@ services:
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
 
+  nominatim:
+    image: mediagis/nominatim:4.2
+    container_name: ctdata_nominatim
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - PBF_URL=https://download.geofabrik.de/north-america/us/connecticut-latest.osm.pbf
+      - REPLICATION_URL=https://download.geofabrik.de/north-america/us/connecticut-updates/
+      - NOMINATIM_PASSWORD=password
+    volumes:
+      - nominatim_data:/var/lib/postgresql/data
+    shm_size: '1gb'
+
 volumes:
   postgres_data:
+  nominatim_data:
 
 

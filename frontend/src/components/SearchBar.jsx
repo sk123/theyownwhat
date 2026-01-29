@@ -111,70 +111,69 @@ export default function SearchBar({ onSearch, onSelect, isLoading }) {
             {/* Input Area */}
             <div className="p-3 bg-white flex items-center gap-2 relative">
                 <div className="flex-1 relative">
-                    <input
-                        type="text"
-                        value={term}
-                        onChange={(e) => { setTerm(e.target.value); setShowSuggestions(true); }}
-                        onFocus={() => setShowSuggestions(true)}
-                        onKeyDown={handleKeyDown}
-                        placeholder={`Search by ${activeTab}...`}
-                        className="w-full pl-4 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-medium text-slate-900 placeholder:text-slate-500"
-                        autoFocus
-                        aria-label={`Search by ${activeTab}`}
-                    />
+                    <div className="relative">
+                        <input
+                            type="text"
+                            value={term}
+                            onChange={(e) => { setTerm(e.target.value); setShowSuggestions(true); }}
+                            onFocus={() => setShowSuggestions(true)}
+                            onKeyDown={handleKeyDown}
+                            placeholder={`Search by ${activeTab}...`}
+                            className="w-full pl-12 pr-4 py-4 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-medium text-slate-900 placeholder:text-slate-400 text-lg shadow-inner"
+                            autoFocus
+                            aria-label={`Search by ${activeTab}`}
+                        />
+                        <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 w-5 h-5" />
+                    </div>
 
                     {/* Autocomplete Dropdown */}
                     <AnimatePresence>
-                        {showSuggestions && suggestions.length > 0 && (
+                        {showSuggestions && term.length >= 2 && (
                             <motion.div
                                 initial={{ opacity: 0, y: 10 }}
                                 animate={{ opacity: 1, y: 0 }}
                                 exit={{ opacity: 0, y: 10 }}
-                                className="absolute top-full left-0 right-0 mt-2 bg-white rounded-xl shadow-xl border border-slate-100 overflow-hidden z-50 max-h-60 overflow-y-auto"
+                                className="absolute top-full left-0 right-0 mt-2 bg-white rounded-xl shadow-xl border border-slate-100 overflow-hidden z-50 max-h-[300px] overflow-y-auto"
                             >
-                                {suggestions.map((item, index) => (
-                                    <button
-                                        key={index}
-                                        onClick={() => handleSelectSuggestion(item)}
-                                        className="w-full text-left px-4 py-3 hover:bg-slate-50 text-sm border-b border-slate-50 last:border-0 flex items-center gap-3 transition-colors"
-                                    >
-                                        <Search className="w-4 h-4 text-slate-400 shrink-0" />
-                                        <div className="flex-1 min-w-0">
-                                            <div className="font-medium text-slate-800 truncate">
-                                                {item.label || item.value || item}
+                                {suggestions.length > 0 ? (
+                                    suggestions.map((item, index) => (
+                                        <button
+                                            key={index}
+                                            onClick={() => handleSelectSuggestion(item)}
+                                            className="w-full text-left px-4 py-3 hover:bg-slate-50 text-sm border-b border-slate-50 last:border-0 flex items-center gap-3 transition-colors group"
+                                        >
+                                            <div className="p-2 bg-slate-100 rounded-lg text-slate-400 group-hover:bg-white group-hover:text-blue-500 transition-colors">
+                                                <Search className="w-4 h-4" />
                                             </div>
-                                            {(item.context || item.type) && (
-                                                <div className="text-xs text-slate-500 truncate">
-                                                    {item.context}
+                                            <div className="flex-1 min-w-0">
+                                                <div className="font-bold text-slate-800 truncate text-base">
+                                                    {item.label || item.value || item}
                                                 </div>
-                                            )}
+                                                {(item.context || item.type) && (
+                                                    <div className="text-xs text-slate-500 truncate flex items-center gap-1">
+                                                        {item.type && <span className="font-semibold text-slate-600">{item.type}</span>}
+                                                        {item.context && <span>• {item.context}</span>}
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <div className="opacity-0 group-hover:opacity-100 text-blue-600">
+                                                <Search className="w-4 h-4 -rotate-90" />
+                                            </div>
+                                        </button>
+                                    ))
+                                ) : (
+                                    <div className="p-8 text-center text-slate-500 flex flex-col items-center justify-center gap-2">
+                                        <div className="w-10 h-10 rounded-full bg-slate-50 flex items-center justify-center mb-1">
+                                            <Search className="w-5 h-5 text-slate-300" />
                                         </div>
-                                        {item.type && (
-                                            <span className="shrink-0 text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full uppercase tracking-wider">
-                                                {item.type}
-                                            </span>
-                                        )}
-                                    </button>
-                                ))}
+                                        <p className="font-medium">No results found for "{term}"</p>
+                                        <p className="text-xs text-slate-400">Try checking for typos or using a broader term.</p>
+                                    </div>
+                                )}
                             </motion.div>
                         )}
                     </AnimatePresence>
                 </div>
-                <button
-                    onClick={handleSearch}
-                    disabled={isLoading || term.length < 3}
-                    className={`px-6 py-3 rounded-xl font-bold text-white shadow-lg shadow-blue-500/30 transition-all flex items-center gap-2 ${isLoading || term.length < 3
-                        ? 'bg-slate-300 cursor-not-allowed shadow-none'
-                        : 'bg-blue-600 hover:bg-blue-700 hover:scale-[1.02] active:scale-[0.98]'
-                        }`}
-                >
-                    {isLoading ? (
-                        <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    ) : (
-                        <Search className="w-5 h-5" />
-                    )}
-                    <span className="hidden sm:inline">Search</span>
-                </button>
             </div>
         </div>
     );
