@@ -24,78 +24,88 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Priority configurations
-NIGHTLY_MUNI_COUNT = 15  # Process top 15 municipalities by data debt nightly
-WEEKLY_MUNI_COUNT = 30   # Process top 30 municipalities more aggressively on weekends
+# Priority municipalities ordered by impact
+PRIORITY_TOWNS = [
+    'EAST HAMPTON',
+    'CROMWELL',
+    'RIDGEFIELD',
+    'CHESHIRE',
+    'HAMDEN',
+    'CLINTON',
+    'OLD LYME',
+    'MIDDLETOWN',
+    'ENFIELD',
+    'MILFORD'
+]
 
-def run_priority_update():
-    """Run update for municipalities with the most 'data debt' (missing photos, units, links)"""
+def run_nightly_update():
+    """Run nightly update for Current Owner properties in priority towns"""
     logger.info("=" * 80)
-    logger.info("Starting Priority Property Enrichment (Data Debt Mode)")
+    logger.info("Starting nightly Vision data update")
     logger.info("=" * 80)
     
-    try:
-        from updater.update_vision_data import main as vision_main
-        # --priority flag triggers the data debt ranking
-        # We don't specify towns; the script will fetch and rank them itself.
-        # We can limit parallel municipalities to avoid rate limits.
-        sys.argv = ['update_vision_data.py', '--priority', '--parallel-munis', '4']
-        vision_main()
-        logger.info("✓ Priority enrichment complete")
-    except Exception as e:
-        logger.error(f"✗ Priority enrichment failed: {e}")
+    for town in PRIORITY_TOWNS:
+        try:
+            logger.info(f"Updating {town}...")
+            # Import here to avoid import errors if module not ready
+            from updater.update_data import main as vision_main
+            
+            # Run with current-owner-only flag (don't force full refresh nightly)
+            sys.argv = ['update_data.py', town, '--current-owner-only']
+            vision_main()
+            
+            logger.info(f"✓ {town} completed")
+            
+            # Brief pause between towns to avoid overwhelming servers
+            time.sleep(30)
+            
+        except Exception as e:
+            logger.error(f"✗ {town} failed: {e}")
+            continue
     
     logger.info("=" * 80)
-
-def run_placeholder_cleanup():
-    """Focus specifically on 'Current Owner' placeholders across all towns"""
-    logger.info("Starting 'Current Owner' placeholder cleanup")
-    try:
-        from updater.update_vision_data import main as vision_main
-        sys.argv = ['update_vision_data.py', '--current-owner-only', '--parallel-munis', '6']
-        vision_main()
-        logger.info("✓ Placeholder cleanup complete")
-    except Exception as e:
-        logger.error(f"✗ Placeholder cleanup failed: {e}")
+    logger.info("Nightly update completed")
+    logger.info("=" * 80)
 
 def run_weekly_full_scan():
-    """Weekly full force-scan for a rotating set of priority towns"""
-    logger.info("Starting weekly full property scan (Force Refresh)")
+    """Run weekly full scan for a rotating subset of towns"""
+    logger.info("Starting weekly full property scan")
+    
+    # Rotate through towns weekly (10 towns = 10 weeks to cover all)
+    week_number = datetime.now().isocalendar()[1]
+    town_index = week_number % len(PRIORITY_TOWNS)
+    town = PRIORITY_TOWNS[town_index]
+    
     try:
-        from updater.update_vision_data import main as vision_main
-        # Run with --force and --priority to refresh high-value/low-quality towns
-        sys.argv = ['update_vision_data.py', '--priority', '--force', '--parallel-munis', '2']
+        logger.info(f"Running full scan for {town} (week {week_number} rotation)")
+        from updater.update_data import main as vision_main
+        sys.argv = ['update_data.py', town, '--force']
         vision_main()
-        logger.info("✓ Weekly full scan completed")
+        logger.info(f"✓ Full scan of {town} completed")
     except Exception as e:
-        logger.error(f"✗ Weekly full scan failed: {e}")
+        logger.error(f"✗ Full scan of {town} failed: {e}")
 
 def main():
     """Main scheduler loop"""
-    logger.info("Comprehensive Property Updater & Enrichment Service Starting")
+    logger.info("Vision Data Updater Service Starting")
+    logger.info(f"Monitoring {len(PRIORITY_TOWNS)} priority municipalities")
     
     # Schedule jobs
-    # 1. Daily Data Debt Enrichment (Photos, Units, Links)
-    schedule.every().day.at("01:00").do(run_priority_update)
-    
-    # 2. Daily Placeholder Cleanup (Current Owner)
-    schedule.every().day.at("04:00").do(run_placeholder_cleanup)
-    
-    # 3. Weekly Force Refresh (Sundays)
-    schedule.every().sunday.at("00:00").do(run_weekly_full_scan)
+    schedule.every().day.at("02:00").do(run_nightly_update)
+    schedule.every().sunday.at("03:00").do(run_weekly_full_scan)
     
     logger.info("Scheduled jobs:")
-    logger.info("  - Priority Data Enrichment: 1:00 AM daily")
-    logger.info("  - 'Current Owner' Cleanup: 4:00 AM daily")
-    logger.info("  - Weekly Full Refresh: Sunday 12:00 AM")
+    logger.info("  - Nightly update (Current Owner): 2:00 AM daily")
+    logger.info("  - Weekly full scan: 3:00 AM Sunday")
     
-    # Run a quick priority check on startup for verification
-    logger.info("Running initial priority scan...")
-    run_priority_update()
+    # Run immediately on startup for testing
+    logger.info("Running initial update...")
+    run_nightly_update()
     
+    # Keep running
     while True:
         schedule.run_pending()
-        time.sleep(60)
+        time.sleep(60)  # Check every minute
 
 if __name__ == '__main__':
     main()

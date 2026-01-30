@@ -1,8 +1,31 @@
 /* src/components/LoadingScreen.jsx */
-import React from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import React, { useEffect, useRef } from 'react';
+import { motion, AnimatePresence, useSpring } from 'framer-motion';
 
-export default function LoadingScreen({ visible, entities, properties, lastItem }) {
+function AnimatedCounter({ value, className }) {
+    const ref = useRef(null);
+    const motionValue = useSpring(0, { stiffness: 60, damping: 20 });
+
+    useEffect(() => {
+        motionValue.set(value || 0);
+    }, [value, motionValue]);
+
+    useEffect(() => {
+        return motionValue.on("change", (latest) => {
+            if (ref.current) {
+                ref.current.textContent = Math.round(latest).toLocaleString();
+            }
+        });
+    }, [motionValue]);
+
+    return <span ref={ref} className={className}>0</span>;
+}
+
+export default function LoadingScreen({ visible, entities, properties }) {
+    let statusText = "Tracing ownership links and aggregating property data...";
+    if (properties > 0) statusText = "Linking properties to network...";
+    else if (entities > 0) statusText = "Found entities, retrieving properties...";
+
     return (
         <AnimatePresence>
             {visible && (
@@ -29,25 +52,21 @@ export default function LoadingScreen({ visible, entities, properties, lastItem 
                             transition={{ delay: 0.2 }}
                         >
                             <h3 className="text-2xl font-black text-white mb-2 tracking-tight">Building Network</h3>
-                            <p className="text-sm text-slate-400 font-medium mb-1">
-                                Tracing ownership links and aggregating property data...
+                            <p className="text-sm text-slate-400 font-medium mb-8">
+                                {statusText}
                             </p>
-                            {/* Real-time feedback */}
-                            <div className="h-6 mb-6 flex items-center justify-center">
-                                {lastItem && (
-                                    <span className="text-xs font-mono text-blue-400 animate-pulse bg-blue-900/30 px-2 py-0.5 rounded border border-blue-500/30 truncate max-w-[280px]">
-                                        scanning: {lastItem.toLowerCase()}
-                                    </span>
-                                )}
-                            </div>
 
                             <div className="grid grid-cols-2 gap-4">
                                 <div className="bg-white/5 p-4 rounded-2xl border border-white/10 backdrop-blur-md">
-                                    <div className="text-3xl font-black text-blue-400">{entities}</div>
+                                    <div className="text-3xl font-black text-blue-400">
+                                        <AnimatedCounter value={entities} />
+                                    </div>
                                     <div className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Entities Found</div>
                                 </div>
                                 <div className="bg-white/5 p-4 rounded-2xl border border-white/10 backdrop-blur-md">
-                                    <div className="text-3xl font-black text-indigo-400">{properties}</div>
+                                    <div className="text-3xl font-black text-indigo-400">
+                                        <AnimatedCounter value={properties} />
+                                    </div>
                                     <div className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Properties Linked</div>
                                 </div>
                             </div>
