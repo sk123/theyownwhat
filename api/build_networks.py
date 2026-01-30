@@ -86,8 +86,17 @@ def load_data_and_build_graph(conn):
     
     email_rules = {
         'gmail.com': 'public', 'yahoo.com': 'public', 'hotmail.com': 'public', 'outlook.com': 'public', 'aol.com': 'public',
-        'comcast.net': 'public', 'verizon.net': 'public', 'icloud.com': 'public', 'me.com': 'public', 'msn.com': 'public',
+        'comcast.net': 'public', 'verizon.net': 'public', 'icloud.com': 'public', 'me.com': 'public', 'msn.com': 'public', 'mac.com': 'public',
         'live.com': 'public', 'sbcglobal.net': 'public', 'att.net': 'public', 'cox.net': 'public',
+        'protonmail.com': 'public', 'proton.me': 'public', 'zoho.com': 'public', 'yandex.com': 'public',
+        'gmx.com': 'public', 'mail.com': 'public', 'inbox.com': 'public', 'rocketmail.com': 'public',
+        'fastmail.com': 'public', 'fastmail.fm': 'public', 'hushmail.com': 'public',
+        'yale.edu': 'public', 'aya.yale.edu': 'public', 'uchc.edu': 'public', 'uconn.edu': 'public',
+        'snet.net': 'public', 'optonline.net': 'public', 'optonline.com': 'public', 'charter.net': 'public',
+        'frontier.com': 'public', 'earthlink.net': 'public', 'juno.com': 'public', 'netzero.net': 'public',
+        'mindspring.com': 'public', 'roadrunner.com': 'public', 'rr.com': 'public', 'centurylink.net': 'public',
+        'windstream.net': 'public', 'cablevision.com': 'public', 'bell.net': 'public', 'shaw.ca': 'public',
+        'sympatico.ca': 'public', 'rogers.com': 'public', 'telus.net': 'public',
         'cscinfo.com': 'registrar', 
         'incfile.com': 'registrar', 
         'cscglobal.com': 'registrar', 
@@ -95,6 +104,7 @@ def load_data_and_build_graph(conn):
         'wolterskluwer.com': 'registrar',
         'cogencyglobal.com': 'registrar',
         'legalzoom.com': 'registrar',
+        'registeredagentsinc.com': 'registrar',
         'zenbusiness.com': 'registrar'
     }
     
@@ -311,16 +321,41 @@ def save_networks(conn, uf):
     conn.commit()
     logger.info("✅ Network Discovery Complete.")
 
+
+LOCK_FILE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'maintenance.lock')
+
+def create_lock_file():
+    try:
+        with open(LOCK_FILE_PATH, 'w') as f:
+            f.write(str(time.time()))
+        logger.info(f"🔒 Created lock file at {LOCK_FILE_PATH}")
+    except Exception as e:
+        logger.error(f"Failed to create lock file: {e}")
+
+def remove_lock_file():
+    try:
+        if os.path.exists(LOCK_FILE_PATH):
+            os.remove(LOCK_FILE_PATH)
+            logger.info(f"🔓 Removed lock file at {LOCK_FILE_PATH}")
+    except Exception as e:
+        logger.error(f"Failed to remove lock file: {e}")
+
 def main():
     logger.info("🚀 Starting Network Discovery (Recursive/Connected Components)...")
+    create_lock_file()
     conn = get_db_connection()
     try:
         setup_schema(conn)
         uf = load_data_and_build_graph(conn)
         save_networks(conn, uf)
         logger.info("✅ Network Discovery Complete.")
+    except Exception as e:
+        logger.exception("❌ Network Discovery Failed")
+        raise e
     finally:
         conn.close()
+        remove_lock_file()
 
 if __name__ == "__main__":
     main()
+

@@ -48,6 +48,10 @@ logger = logging.getLogger("they-own-what")
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+
+# Lock file path (same as in build_networks.py)
+LOCK_FILE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'maintenance.lock')
+
 SERPAPI_API_KEY = os.environ.get("SERPAPI_API_KEY")  # reserved for future use
 
 if openai and OPENAI_API_KEY:
@@ -60,6 +64,13 @@ GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
 SESSION_SECRET_KEY = os.environ.get("SESSION_SECRET_KEY", "a-very-secret-key-change-this-in-prod")
 
 app = FastAPI(title="they own WHAT?? API")
+
+@app.get("/api/system/status")
+def get_system_status():
+    """Checks if the system is in maintenance mode (rebuilding networks)."""
+    is_maintenance = os.path.exists(LOCK_FILE_PATH)
+    return {"maintenance": is_maintenance}
+
 
 # OAuth setup
 if TOOLBOX_ENABLED:
@@ -2439,95 +2450,208 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                 
                 # Match by explicit link in entity_networks (Source of Truth)
                 # This ensures we get exactly the properties counted in the insights card.
-                # Stream flat properties (Frontend handles grouping)
-                # DEDUPLICATION FIX: Use DISTINCT ON to return only one row per physical address
-                # NEIGHBOR FETCH: Find "Base Addresses" and fetch ALL units, flagging ownership.
-                cursor.execute(
-                    r"""
-                    WITH network_bases AS (
-                        SELECT DISTINCT 
-                            property_city,
-                            REGEXP_REPLACE(location, '\s+([A-Z]|\d{1,4})$', '') as base_loc
-                        FROM (
-                            -- Link via business
-                            SELECT p.location, p.property_city
-                            FROM properties p
-                            JOIN entity_networks en ON p.business_id::text = en.entity_id AND en.entity_type = 'business'
-                            WHERE en.network_id = ANY(%s)
-                            
-                            UNION
-                            
-                            -- Link via principal (direct)
-                            SELECT p.location, p.property_city
-                            FROM properties p
-                            JOIN principals pr ON p.principal_id = pr.id::text
-                            JOIN entity_networks en ON pr.name_c = en.entity_id AND en.entity_type = 'principal'
-                            WHERE en.network_id = ANY(%s)
+                # Stream flat properties with incremental updates (Frontend handles grouping)
+                # DEDUPLICATION: Track seen IDs to handle overlaps between chunks
+                seen_props = set()
+                
+                # Prepare global lists of targets
+                all_biz_ids = [b["id"] for b in businesses]
+                all_raw_p_ids = [pr["principal_id"] for pr in principals_in_network]
+                
+                # Chunking configuration
+                CHUNK_SIZE = 50
+                
+                # We can iterate through businesses and principals in parallel chunks or just one after another.
+                # Simplest strategy: Interleave them or just process lists.
+                # To maximize "parallel" feel, we process chunks of both.
+                
+                import math
+                n_biz = len(all_biz_ids)
+                n_princ = len(all_raw_p_ids)
+                max_steps = max(math.ceil(n_biz / CHUNK_SIZE), math.ceil(n_princ / CHUNK_SIZE))
+                
+                for i in range(max_steps):
+                    # 1. Slice IDs for this chunk
+                    b_chunk = all_biz_ids[i*CHUNK_SIZE : (i+1)*CHUNK_SIZE]
+                    p_chunk = all_raw_p_ids[i*CHUNK_SIZE : (i+1)*CHUNK_SIZE]
+                    
+                    if not b_chunk and not p_chunk:
+                        break
+                        
+                    # 2. Query properties for this chunk
+                    # We replicate the UNION logic but filtered to this batch
+                    # Note: We must still handle the "Business Principal" link indirectly? 
+                    # No, we have ALL businesses in `all_biz_ids` so `business_id IN b_chunk` covers LLCs.
+                    # We have ALL principals in `all_raw_p_ids` so `principal_id IN p_chunk OR owner_norm IN p_chunk` covers Humans.
+                    
+                    # Optimization: Simple OR query is faster than UNIONs for batch ID lookups
+                    try:
+                         # Build safe IN clauses
+                         # We rely on Postgres arrays for ANY(%s)
+                         
+                         query_parts = []
+                         params = []
+                         
+                         if b_chunk:
+                             query_parts.append("business_id = ANY(%s)")
+                             params.append(b_chunk)
+                         
+                         if p_chunk:
+                             # principal_id column is TEXT (name_c usually?) - Wait check Schema.
+                             # principals.id is SERIAL/INT. properties.principal_id is TEXT?
+                             # Let's check Schema or previous query. 
+                             # Previous query: JOIN principals pr ON p.principal_id = pr.id::text
+                             # So p.principal_id is the string representation of the numeric ID.
+                             # But `principals_in_network` (from entity_networks) has `principal_id` as the ENTITY ID (string name?).
+                             # Wait, entity_networks for principals: entity_id = name_c.
+                             # BUT `p.principal_id` stores the string numeric ID of the principal record?
+                             # Let's check `api/build_networks.py` or Schema.
+                             
+                             # Re-reading previous big query carefully:
+                             # JOIN principals pr ON p.principal_id = pr.id::text
+                             # JOIN entity_networks en ON pr.name_c = en.entity_id
+                             
+                             # So `en.entity_id` is the NAME_C.
+                             # We have `p_chunk` which is a list of `en.entity_id` (NAME_C).
+                             # We cannot directly match `p.principal_id` (numeric string) against `p_chunk` (Name).
+                             # We need the numeric IDs associated with these Names.
+                             
+                             # Resolve Names to IDs for this chunk? 
+                             # Or just match on owner_norm / co_owner_norm which match Name?
+                             # properties.owner_norm usually matches normalized Name.
+                             # entity_networks.entity_id (for principal) is Name.
+                             
+                             # Query A: owner_norm = ANY(p_chunk) OR co_owner_norm = ANY(p_chunk)
+                             # Query B: properties linked via principal_id? 
+                             # We need to look up principal raw IDs for these names first?
+                             # Faster: We can just match owner_norm.
+                             pass
+                         
+                         # Let's do a sub-lookup for Principal IDs to be safe
+                         # OR just rely on owner_norm.
+                         # The Big Query used `p.principal_id = pr.id` then `pr.name_c = en.entity_id`.
+                         # So properties where the LINKED principal has the target Name.
+                         
+                         # To replicate this efficiently in batches:
+                         # 1. Find Principal INT IDs for the names in p_chunk
+                         # 2. Query properties WHERE principal_id IN (ints) OR owner_norm IN (names)
+                         
+                         current_p_int_ids = []
+                         if p_chunk:
+                             cursor.execute("SELECT id FROM principals WHERE name_c = ANY(%s)", (p_chunk,))
+                             current_p_int_ids = [str(r['id']) for r in cursor.fetchall()]
+                         
+                         clauses = []
+                         args = []
+                         
+                         if b_chunk:
+                             clauses.append("business_id = ANY(%s)")
+                             args.append(b_chunk)
+                             
+                         if p_chunk:
+                             clauses.append("owner_norm = ANY(%s)")
+                             args.append(p_chunk)
+                             clauses.append("co_owner_norm = ANY(%s)")
+                             args.append(p_chunk) # Assuming p_chunk names are compatible with owner_norm (normalization?)
+                             # en.entity_id is name_c. properties.owner_norm is normalized.
+                             # If they differ, direct match fails.
+                             # The Big Query joined `p.owner_norm = en.entity_id`. So they MUST match for that link to work.
+                             
+                         if current_p_int_ids:
+                             clauses.append("principal_id = ANY(%s)")
+                             args.append(current_p_int_ids)
+                         
+                         if not clauses:
+                             continue
 
-                            UNION
+                         # NEIGHBOR FETCH (Crucial for Completeness)
+                         # We want All units in the building if one unit matches.
+                         # Logic:
+                         # 1. Find matched properties (anchors) -> Get their `location` + `property_city`
+                         # 2. Query ALL properties with that `location` (base address)
+                         
+                         # Step 1: Get Anchors
+                         sql_anchors = f"SELECT location, property_city FROM properties WHERE {' OR '.join(clauses)}"
+                         cursor.execute(sql_anchors, args)
+                         anchors = cursor.fetchall()
+                         
+                         if not anchors:
+                             continue
+                             
+                         # Extract unique addresses to fetch buildings
+                         # Simple normalization: trim unit numbers? 
+                         # We'll use the regex from the main query but in Python for batching?
+                         # Or just simple "Startswith" in SQL?
+                         
+                         # Group by city for index efficiency
+                         city_locs = defaultdict(set)
+                         for a in anchors:
+                             if a['location']:
+                                 # Heuristic: Trim unit suffix like " UNIT 4" or " APT 5"
+                                 # simplified "base_loc"
+                                 base = re.sub(r'\s+(UNIT|APT|#|FL|STE).*$', '', a['location'], flags=re.IGNORECASE).strip()
+                                 if base:
+                                     city_locs[a['property_city']].add(base)
+                         
+                         # Step 2: Fetch Buildings
+                         # We do this per city to use the index effectively
+                         batch_results = []
+                         for city, locs in city_locs.items():
+                             if not locs: continue
+                             
+                             # Optimization: If too many locations, maybe just exact match?
+                             # Or LIKE ANY?
+                             # "location LIKE '123 MAIN ST%'"
+                             
+                             # Prepare LIKE patterns
+                             patterns = [f"{l}%" for l in locs]
+                             
+                             # Fetch properties
+                             # Note: This might re-fetch properties already seen in other chunks. 
+                             cursor.execute("""
+                                 SELECT * FROM properties 
+                                 WHERE property_city = %s AND location LIKE ANY(%s)
+                             """, (city, patterns))
+                             
+                             batch_results.extend(cursor.fetchall())
 
-                            -- Link via owner_norm
-                            SELECT p.location, p.property_city
-                            FROM properties p
-                            JOIN entity_networks en ON p.owner_norm = en.entity_id AND en.entity_type = 'principal'
-                            WHERE en.network_id = ANY(%s)
-
-                            UNION
-
-                            -- Link via business-principal connection
-                            SELECT p.location, p.property_city
-                            FROM properties p
-                            JOIN entity_networks en_b ON p.business_id::text = en_b.entity_id AND en_b.entity_type = 'business'
-                            JOIN principals pr ON en_b.entity_id = pr.business_id
-                            JOIN entity_networks en_p ON pr.name_c = en_p.entity_id AND en_p.entity_type = 'principal'
-                            WHERE en_p.network_id = ANY(%s)
-                        ) sub
-                    )
-                    SELECT DISTINCT ON (p.location, p.property_city, p.unit) 
-                        p.*,
-                        EXISTS (
-                            SELECT 1 FROM entity_networks en2 
-                            WHERE (p.business_id::text = en2.entity_id OR p.owner_norm = en2.entity_id)
-                            AND en2.network_id = ANY(%s)
-                        ) as is_in_network
-                    FROM properties p
-                    JOIN network_bases nb ON p.property_city = nb.property_city
-                    WHERE (
-                        p.location = nb.base_loc 
-                        OR (
-                            p.location LIKE (nb.base_loc || ' %%') 
-                            AND p.location ~ ('^' || REGEXP_REPLACE(nb.base_loc, '([!$()*+.:<=>?[\\\]^{|}-])', '\\\\1', 'g') || '\s+([A-Z]|\d{1,4})$')
-                        )
-                    )
-                    ORDER BY p.location, p.property_city, p.unit, p.id DESC
-                    """,
-                    (network_ids, network_ids, network_ids, network_ids, network_ids)
-                )
-                  
-                # Stream flat properties (Frontend handles grouping)
-                # First, fetch ALL properties to get their subsidies in one go
-                all_raw_rows = cursor.fetchall()
-                if all_raw_rows:
-                    all_ids = [r['id'] for r in all_raw_rows]
-                    subsidies_map = defaultdict(list)
-                    cursor.execute("""
-                        SELECT property_id, program_name, subsidy_type, units_subsidized, expiry_date, source_url
-                        FROM property_subsidies
-                        WHERE property_id = ANY(%s)
-                    """, (all_ids,))
-                    for s_row in cursor.fetchall():
-                        subsidies_map[s_row['property_id']].append(dict(s_row))
-
-                    # Now yield in batches of 25 for smoother updates
-                    for i in range(0, len(all_raw_rows), 25):
-                        batch = all_raw_rows[i:i+25]
-                        shaped_rows = [shape_property_row(r, subsidies_map.get(r['id'])) for r in batch]
-                        yield _yield(json.dumps(
-                            {"type": "properties", "data": shaped_rows},
-                            default=json_converter
-                        ))
+                         # Dedupe global
+                         new_props = []
+                         new_ids = []
+                         for p in batch_results:
+                             if p['id'] not in seen_props:
+                                 seen_props.add(p['id'])
+                                 new_props.append(p)
+                                 new_ids.append(p['id'])
+                                 
+                         if not new_props:
+                             continue
+                             
+                         # Fetch subsidies for this batch
+                         s_map = defaultdict(list)
+                         cursor.execute("""
+                            SELECT property_id, program_name, subsidy_type, units_subsidized, expiry_date, source_url
+                            FROM property_subsidies
+                            WHERE property_id = ANY(%s)
+                         """, (new_ids,))
+                         for s in cursor.fetchall():
+                             s_map[s['property_id']].append(dict(s))
+                             
+                         # Shape and Yield
+                         shaped = [shape_property_row(p, s_map.get(p['id'])) for p in new_props]
+                         yield _yield(json.dumps(
+                             {"type": "properties", "data": shaped},
+                             default=json_converter
+                         ))
+                         
+                    except Exception as e:
+                         # Log but don't crash stream
+                         logger.error(f"Chunk error: {e}")
+                         # Continue to next chunk
+                         pass
 
                 yield _yield(json.dumps({"type": "done"}))
+
         except Exception as e:
             logging.exception("stream_load_network error")
             yield _yield(json.dumps({"type": "done", "error": str(e)}))
