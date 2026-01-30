@@ -86,6 +86,10 @@ export default function PropertyPublicDetails({ property, networkData = {}, onVi
                         src={imageUrl}
                         alt={property.address}
                         className="w-full h-full object-cover"
+                        onError={(e) => {
+                            e.target.style.display = 'none';
+                            e.target.parentElement.style.display = 'none';
+                        }}
                     />
                 </div>
             )}

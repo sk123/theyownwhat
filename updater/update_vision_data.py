@@ -1707,21 +1707,17 @@ def update_property_in_db(conn, property_db_id, vision_data, restricted_mode=Fal
 
 def find_match_for_property(prop_address, scraped_properties_dict):
     """Helper function to find a scraped property matching a DB address."""
-    if not prop_address:
+    if not prop_address or len(str(prop_address).strip()) < 3:
         return None
     
     normalized_db_address = normalize_address(prop_address)
+    if not normalized_db_address or len(normalized_db_address) < 3:
+        return None
     
     # Strategy 1: Direct match on normalized address
     if normalized_db_address in scraped_properties_dict:
         return scraped_properties_dict[normalized_db_address]
-    else:
-        # Strategy 2: Fuzzy matching for edge cases
-        for scraped_addr, vision_data in scraped_properties_dict.items():
-            # Check if DB address is in scraped address or vice-versa
-            if normalized_db_address in scraped_addr or scraped_addr in normalized_db_address:
-                return vision_data
-                
+    
     return None
 
 def process_municipality_with_realtime_updates(conn, municipality_name, municipality_url, last_updated_date=None, current_owner_only=False, force_process=False, max_workers=None):
@@ -1791,6 +1787,9 @@ def process_municipality_with_realtime_updates(conn, municipality_name, municipa
                         if update_property_in_db(conn, prop_id, vision_data, restricted_mode=restricted_mode, municipality_name=municipality_name):
                             group1_updated_count += 1
                     
+                    # Mark as processed even if vision_data was None (to avoid retry on broken links)
+                    mark_property_processed_today(conn, prop_id)
+                    
                     group1_processed_count += 1 # <--- INCREMENT COUNTER
                     # --- NEW LOGGING LINE ---
                     if group1_processed_count % 100 == 0:
@@ -1829,6 +1828,9 @@ def process_municipality_with_realtime_updates(conn, municipality_name, municipa
                                 matched_addresses.add(addr)
                                 break
                 
+                # Mark as processed regardless of match to move the needle
+                mark_property_processed_today(conn, prop_db_id)
+                
                 processed_in_group += 1
                 if processed_in_group % 100 == 0:
                     log(f"    -> Matched {processed_in_group}/{len(props_without_urls)}, updated {group2_updated_count} so far...")
@@ -1858,16 +1860,16 @@ def process_municipality_with_realtime_updates(conn, municipality_name, municipa
                         # because update_property_in_db allows updates if current val is empty.
                         if update_property_in_db(conn, prop_db_id, vision_data, restricted_mode=restricted_mode):
                             group2_updated_count += 1
+                        
+                        # Already marked as processed in the previous loop above, 
+                        # but we can re-mark or leave it as is since it was in unmatched_db_props
+                        # which was derived from props_without_urls.
 
             log(f"  -> SLOW PATH complete. Updated {group2_updated_count} properties (and populated their URLs).")
             total_updated_count += group2_updated_count
 
-    # --- FINALIZE: Mark all items from the original queue as processed ---
-    # We do this even if 'force' is on, to ensure the 'last_processed_date' is always today's date.
-    log(f"  -> Finalizing: Marking all {len(all_processed_ids)} properties as processed for today.")
-    for prop_id in all_processed_ids:
-        mark_property_processed_today(conn, prop_id)
-
+    # --- FINALIZE ---
+    # We no longer need the bulk mark_property_processed_today loop here as it's done incrementally.
     log(f"Finished {municipality_name}. Total Updated: {total_updated_count} of {len(all_processed_ids)} properties.")
     return total_updated_count
 

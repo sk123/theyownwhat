@@ -271,6 +271,8 @@ export default function PropertyTable({
                     ownerDisplay = `${ownerList[0]} (+${ownerList.length - 1} others)`;
                 }
 
+                const representativePhoto = g.units.find(u => u.details?.building_photo || u.image_url)?.details?.building_photo || g.units.find(u => u.details?.building_photo || u.image_url)?.image_url;
+
                 result.push({
                     id: `complex-${g.key}`,
                     isComplex: true,
@@ -281,7 +283,8 @@ export default function PropertyTable({
                     assessed_value: currencyFmt.format(totalAssessed),
                     appraised_value: currencyFmt.format(totalAppraised),
                     subProperties: g.units,
-                    representativeId: g.units[0].id
+                    representativeId: g.units[0].id,
+                    representativePhoto // Added for complex thumbnail
                 });
             } else {
                 const p = g.units[0];
@@ -531,15 +534,18 @@ export default function PropertyTable({
                                 )}
 
                                 <div className="flex items-center gap-2 max-w-full overflow-hidden">
-                                    {/* Small Thumbnail in List view */}
-                                    {(p.details?.building_photo || p.image_url) && (
+                                    {/* Small Thumbnail in List view (or complex thumbnail) */}
+                                    {(p.details?.building_photo || p.image_url || p.representativePhoto) && (
                                         <div className="shrink-0 w-10 h-10 rounded-lg overflow-hidden border border-gray-100 bg-gray-50 hidden sm:block">
                                             <img
-                                                src={p.details?.building_photo || p.image_url}
+                                                src={p.representativePhoto || p.details?.building_photo || p.image_url}
                                                 alt={`Photo of ${p.address}`}
                                                 className="w-full h-full object-cover"
                                                 loading="lazy"
-                                                onError={(e) => e.target.closest('div').style.display = 'none'}
+                                                onError={(e) => {
+                                                    e.target.style.display = 'none';
+                                                    e.target.closest('div').style.display = 'none';
+                                                }}
                                             />
                                         </div>
                                     )}
@@ -746,8 +752,11 @@ export default function PropertyTable({
                                                 `}>
                                                         Unit {sub.derivedUnit || sub.unit}
                                                     </span>
-                                                    <span className={`text-[10px] lg:text-[11px] font-medium truncate max-w-[150px] lg:max-w-[300px] ${isThirdParty ? 'text-gray-400 italic' : 'text-gray-500'}`}>
+                                                    <span className={`text-[10px] lg:text-[11px] font-medium truncate max-w-[150px] lg:max-w-[300px] ${isThirdParty ? 'text-gray-400 italic flex items-center gap-2' : 'text-gray-500'}`}>
                                                         {sub.owner}
+                                                        {isThirdParty && (
+                                                            <span className="text-[8px] bg-gray-200 text-gray-500 px-1 py-0.5 rounded font-bold uppercase tracking-tighter shrink-0">Not in Network</span>
+                                                        )}
                                                     </span>
                                                 </div>
                                                 <div className="flex items-center gap-4">
