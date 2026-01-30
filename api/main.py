@@ -100,6 +100,10 @@ app.add_middleware(
 os.makedirs("api/static", exist_ok=True)
 app.mount("/api/static", StaticFiles(directory="api/static"), name="static")
 
+
+
+
+
 @app.get("/api/health")
 def health_check():
     # Check if OpenAI key is present and NOT the placeholder
@@ -746,7 +750,16 @@ def shape_property_row(p: dict, subsidies: List[dict] = None) -> dict:
         "complex_name": p.get("complex_name"),
         "management_company": p.get("management_company"),
         "subsidies": subsidies or [],
-        "details": p,  # keep full row for drill-down
+        "image_url": p.get("building_photo") or p.get("image_url"),
+        "details": {
+            **p,
+            "is_network_member": p.get("is_network_member"),
+            "land_use": p.get("property_type"),
+            "style": p.get("property_type"), # Hartford often combines these or uses type as style
+            "total_rooms": p.get("total_rooms"),
+            "total_bedrooms": p.get("total_bedrooms"),
+            "total_baths": p.get("total_baths")
+        },
     }
 
 
@@ -1312,7 +1325,8 @@ class InsightItem(BaseModel):
     entity_id: str
     entity_name: str
     entity_type: str
-    value: int
+    value: Optional[int] = 0  # Default for backward compatibility with old cache
+    property_count: Optional[int] = None  # Frontend expects this field
     total_assessed_value: Optional[float] = None
     total_appraised_value: Optional[float] = None
     subsidized_property_count: Optional[int] = 0
@@ -2455,8 +2469,26 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                 seen_props = set()
                 
                 # Prepare global lists of targets
-                all_biz_ids = [b["id"] for b in businesses]
-                all_raw_p_ids = [pr["principal_id"] for pr in principals_in_network]
+                all_biz_ids = [str(b["id"]) for b in businesses] # Ensure str
+                all_raw_p_ids = [str(pr["principal_id"]) for pr in principals_in_network]
+                
+                # SETS for fast lookup inside loop
+                global_biz_ids = set(all_biz_ids)
+                
+                # global_princ_ids contains NAMES (from entity_networks.entity_id)
+                global_princ_names = set(all_raw_p_ids) 
+                
+                # Fetch Principal INT IDs for these names to allow linking via principal_id FK
+                global_princ_int_ids = set()
+                if all_raw_p_ids:
+                    try:
+                        cursor.execute("SELECT id FROM principals WHERE name_c = ANY(%s)", (all_raw_p_ids,))
+                        global_princ_int_ids = {str(r['id']) for r in cursor.fetchall()}
+                    except Exception:
+                        pass # proceed with just names
+                
+                # Also include raw business names?
+                global_owner_names = set([b['name'] for b in businesses])
                 
                 # Chunking configuration
                 CHUNK_SIZE = 50
@@ -2564,31 +2596,28 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                          if not clauses:
                              continue
 
-                         # NEIGHBOR FETCH (Crucial for Completeness)
-                         # We want All units in the building if one unit matches.
+                         # NEIGHBOR FETCH (Re-enabled with Explicit Flag)
                          # Logic:
-                         # 1. Find matched properties (anchors) -> Get their `location` + `property_city`
-                         # 2. Query ALL properties with that `location` (base address)
+                         # 1. Fetch Explicit properties (matching clauses) to identify OWNED
+                         # 2. Fetch Neighbors (matching location/city) to identify RELATED
+                         # 3. Mark is_network_member = true/false
                          
-                         # Step 1: Get Anchors
-                         sql_anchors = f"SELECT location, property_city FROM properties WHERE {' OR '.join(clauses)}"
+                         # Step 1: Get Anchors (And Explicit IDs)
+                         sql_anchors = f"SELECT * FROM properties WHERE {' OR '.join(clauses)}"
                          cursor.execute(sql_anchors, args)
                          anchors = cursor.fetchall()
                          
                          if not anchors:
                              continue
-                             
-                         # Extract unique addresses to fetch buildings
-                         # Simple normalization: trim unit numbers? 
-                         # We'll use the regex from the main query but in Python for batching?
-                         # Or just simple "Startswith" in SQL?
                          
-                         # Group by city for index efficiency
+                         # Capture Explicit IDs for this batch
+                         explicit_ids_in_batch = {a['id'] for a in anchors}
+
+                         # Extract unique addresses to fetch buildings
                          city_locs = defaultdict(set)
                          for a in anchors:
                              if a['location']:
                                  # Heuristic: Trim unit suffix like " UNIT 4" or " APT 5"
-                                 # simplified "base_loc"
                                  base = re.sub(r'\s+(UNIT|APT|#|FL|STE).*$', '', a['location'], flags=re.IGNORECASE).strip()
                                  if base:
                                      city_locs[a['property_city']].add(base)
@@ -2596,18 +2625,18 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                          # Step 2: Fetch Buildings
                          # We do this per city to use the index effectively
                          batch_results = []
+                         
+                         # Add anchors first (guarantees we get explicit ones even if regex fails)
+                         # We'll dedup later
+                         batch_results.extend(anchors)
+
                          for city, locs in city_locs.items():
                              if not locs: continue
-                             
-                             # Optimization: If too many locations, maybe just exact match?
-                             # Or LIKE ANY?
-                             # "location LIKE '123 MAIN ST%'"
                              
                              # Prepare LIKE patterns
                              patterns = [f"{l}%" for l in locs]
                              
                              # Fetch properties
-                             # Note: This might re-fetch properties already seen in other chunks. 
                              cursor.execute("""
                                  SELECT * FROM properties 
                                  WHERE property_city = %s AND location LIKE ANY(%s)
@@ -2615,12 +2644,57 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                              
                              batch_results.extend(cursor.fetchall())
 
-                         # Dedupe global
+                         # Dedupe & Mark
                          new_props = []
                          new_ids = []
+                         # We need to know global explicit status?
+                         # Actually, checking `explicit_ids_in_batch` is insufficient because a neighbor might be explicit in another batch?
+                         # BUT: If it's explicit in another batch, it will be yielded as explicit then.
+                         # Here, we mark it based on THIS batch's relationship.
+                         # Wait: If we mark it 'False' here, and later 'True' comes in, Frontend might not update?
+                         # Frontend typically appends or overwrites.
+                         # BETTER: Check against GLOBAL lists as planned.
+                         
+                         # Prepare Global Sets for membership check (Lazy init?)
+                         # Since we are inside loop, let's pass them or use the ones defined outside loop:
+                         # all_biz_ids, all_raw_p_ids
+                         # Also need names? 
+                         # all_biz_names = set(biz_names) -- need to create this outside
+                         # all_princ_names = set([pr['principal_name'] for pr in principals_in_network])
+                         
+                         # Let's assume we create these sets before the loop (I will add them in previous block)
+                         
                          for p in batch_results:
                              if p['id'] not in seen_props:
                                  seen_props.add(p['id'])
+                                 
+                                 # Determine Membership using GLOBAL context
+                                 # This ensures even neighbors that are owned by the network (but not in this batch?) are marked correctly.
+                                 # Actually, if they are owned by network, they SHOULD be in all_biz_ids / all_raw_p_ids.
+                                 is_member = False
+                                 
+                                 if p.get('business_id'):
+                                     if str(p['business_id']) in global_biz_ids:
+                                         is_member = True
+                                         
+                                 if not is_member and p.get('principal_id'):
+                                     if str(p['principal_id']) in global_princ_int_ids:
+                                         is_member = True
+                                         
+                                 if not is_member:
+                                     # Check Owner Names
+                                     own = (p.get('owner') or "").strip()
+                                     own_norm = (p.get('owner_norm') or "").strip()
+                                     co_own_norm = (p.get('co_owner_norm') or "").strip()
+                                     
+                                     if own_norm and own_norm in global_princ_names:
+                                         is_member = True
+                                     elif co_own_norm and co_own_norm in global_princ_names:
+                                         is_member = True
+                                     elif own and own in global_owner_names:
+                                         is_member = True
+                                 
+                                 p['is_network_member'] = is_member
                                  new_props.append(p)
                                  new_ids.append(p['id'])
                                  

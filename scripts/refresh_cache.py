@@ -101,7 +101,7 @@ def _calculate_and_cache_insights(cursor, town_col, town_filter):
             nde.entity_id,
             nde.entity_name,
             nde.entity_type,
-            nde.property_count as value,
+            nde.property_count,
             nde.total_assessed_value,
             nde.total_appraised_value,
             nde.business_count,
@@ -137,8 +137,8 @@ def _calculate_and_cache_insights(cursor, town_col, town_filter):
                      if len(existing_net['entity_name']) < 60: 
                         existing_net['entity_name'] += f" & {network['entity_name']}"
             
-            if network['value'] > existing_net['value']:
-                existing_net['value'] = network['value']
+            if network['property_count'] > existing_net['property_count']:
+                existing_net['property_count'] = network['property_count']
                 existing_net['total_assessed_value'] = network['total_assessed_value']
                 existing_net['total_appraised_value'] = network['total_appraised_value']
             
@@ -178,6 +178,9 @@ def _calculate_and_cache_insights(cursor, town_col, town_filter):
             LIMIT 5;
         """, (network['network_id'],))
         network['representative_entities'] = cursor.fetchall()
+        # Ensure both value and property_count are set for frontend
+        # Ensure both value and property_count are set for frontend (value is required by API model)
+        network['value'] = network.get('property_count', 0)
         result.append(network)
         
     return result
@@ -196,6 +199,9 @@ def run():
                 def default(self, obj):
                     if hasattr(obj, 'isoformat'):
                         return obj.isoformat()
+                    from decimal import Decimal
+                    if isinstance(obj, Decimal):
+                        return float(obj)
                     return super().default(obj)
 
             insights_json = json.dumps(insights_by_municipality, cls=DateTimeEncoder)
@@ -213,7 +219,7 @@ def run():
                 top = insights_by_municipality['STATEWIDE'][0]
                 print(f"Name: {top['entity_name']}")
                 print(f"Type: {top['entity_type']}")
-                print(f"Count: {top['value']}")
+                print(f"Count: {top['property_count']}")
             else:
                 print("No statewide networks found!")
 
