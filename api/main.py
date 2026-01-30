@@ -2314,9 +2314,9 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                     for s_row in cursor.fetchall():
                         subsidies_map[s_row['property_id']].append(dict(s_row))
 
-                    # Now yield in batches of 100
-                    for i in range(0, len(all_raw_rows), 100):
-                        batch = all_raw_rows[i:i+100]
+                    # Now yield in batches of 25 for smoother updates
+                    for i in range(0, len(all_raw_rows), 25):
+                        batch = all_raw_rows[i:i+25]
                         shaped_rows = [shape_property_row(r, subsidies_map.get(r['id'])) for r in batch]
                         yield _yield(json.dumps(
                             {"type": "properties", "data": shaped_rows},
@@ -2919,6 +2919,50 @@ class NetworkDigestRequest(BaseModel):
 
 @app.post("/api/network_digest")
 def create_network_digest(req: NetworkDigestRequest, conn=Depends(get_db_connection)):
+    """
+    Generate AI-powered analysis of a property network.
+    
+    Privacy Protection: Only analyzes networks meeting minimum thresholds
+    to protect privacy of small landlords and mom-and-pop operations.
+    """
+    # Privacy threshold: Only analyze substantial networks
+    total_props = sum(e.property_count for e in req.entities)
+    total_val = sum(e.total_value for e in req.entities)
+    entity_count = len(req.entities)
+    
+    MIN_PROPERTIES = 10
+    MIN_VALUE = 3_000_000  # $3M
+    MIN_ENTITIES = 5
+    
+    # Allow if ANY threshold is met (OR logic for flexibility)
+    meets_threshold = (
+        total_props >= MIN_PROPERTIES or 
+        total_val >= MIN_VALUE or 
+        entity_count >= MIN_ENTITIES
+    )
+    
+    if not meets_threshold:
+        return {
+            "entity": "PRIVACY_PROTECTED",
+            "entity_type": "network_digest",
+            "report_date": date.today(),
+            "title": "Analysis Not Available",
+            "content": (
+                f"**Privacy Protection Active**\n\n"
+                f"AI Digest is only available for substantial property networks to protect "
+                f"the privacy of small landlords and family-owned properties.\n\n"
+                f"**Current Network:**\n"
+                f"- {entity_count} entities\n"
+                f"- {total_props} properties\n"
+                f"- ${total_val:,.0f} total assessed value\n\n"
+                f"**Minimum Requirements (any one):**\n"
+                f"- {MIN_PROPERTIES}+ properties\n"
+                f"- ${MIN_VALUE:,.0f}+ total value\n"
+                f"- {MIN_ENTITIES}+ related entities"
+            ),
+            "sources": []
+        }
+    
     # 1. Generate Stable Hash (Cache Key)
     # Include stats in hash so if data changes (e.g. value updates), we regenerate
     sorted_ents = sorted(req.entities, key=lambda x: (x.type, x.name))
@@ -2950,11 +2994,13 @@ def create_network_digest(req: NetworkDigestRequest, conn=Depends(get_db_connect
             if not SERPAPI_API_KEY:
                 return {"context": f"Entity: {ent.name} ({ent.type}) - SerpAPI not configured.", "sources": []}
             
-            query = f"{ent.name} Connecticut real estate"
+            # Enhanced query for more comprehensive results
+            base_query = f'"{ent.name}"'
+            
             if ent.type == 'business':
-                query += " business LLC"
+                query = f'{base_query} Connecticut (complaints OR lawsuit OR eviction OR violation OR "code enforcement" OR tenants)'
             else:
-                query += " landlord property owner"
+                query = f'{base_query} Connecticut (landlord OR "property owner" OR lawsuit OR eviction OR LLC OR business)'
             
             try:
                 url = "https://serpapi.com/search"
@@ -2963,7 +3009,7 @@ def create_network_digest(req: NetworkDigestRequest, conn=Depends(get_db_connect
                    "api_key": SERPAPI_API_KEY,
                    "hl": "en",
                    "gl": "us",
-                   "num": 3 
+                   "num": 5  # Increased from 3 to get more context
                 }
                 resp = requests.get(url, params=params, timeout=10)
                 data = resp.json()
@@ -3015,18 +3061,51 @@ def create_network_digest(req: NetworkDigestRequest, conn=Depends(get_db_connect
         title = f"AI Digest - Network of {len(req.entities)} Entities"
         
         if openai and OPENAI_API_KEY:
+            # Build entity list for context
+            entity_list = "\n".join([f"- {e.name} ({e.type}) - {e.property_count} properties, ${e.total_value:,.0f}" for e in req.entities])
+            
             prompt = (
-                f"You are an investigative analyst. You are analyzing a property network consisting of {len(req.entities)} related entities (principals and businesses). "
-                f"Together, they own {total_props} properties with a total assessed value of ${total_val:,.0f}.\n\n"
-                "Analyze the following web search excerpts for this group.\n\n"
-                "STRUCTURE YOUR RESPONSE AS FOLLOWS:\n"
-                "1. OVERALL SUMMARY: A concise 3-4 sentence high-level overview of the entire network's footprint, reputation, and scale.\n"
-                "2. KEY RISKS & FINDINGS: Bullet points of major issues, complaints, eviction history, or legal patterns found in the news.\n"
-                "3. ENTITY BREAKDOWN: Brief notes on individual principals or businesses where specific info was found.\n\n"
-                "CITATIONS: When referencing specific details, include the source link inline formatted as (Source: <url>). Do NOT use markdown links.\n\n"
-                "Focus on identifying acquisition patterns, property management reputation, significant legal filings, and any public controversies involving these entities.\n"
-                "Be specific. If no negative/notable info is found, focus on characterizing the portfolio based on the property count and value provided above.\n\n"
-                f"Web Search Data:\n{full_text_context}\n"
+                f"You are an investigative journalist analyzing a Connecticut property ownership network. "
+                f"This network consists of {len(req.entities)} interconnected entities controlling {total_props} properties "
+                f"worth ${total_val:,.0f} in assessed value.\n\n"
+                
+                "ENTITIES IN NETWORK:\n"
+                f"{entity_list}\n\n"
+                
+                "YOUR TASK:\n"
+                "Analyze the web search results below to uncover:\n"
+                "1. WHO: Identify all principals, aliases, and related business entities\n"
+                "2. WHAT: Document complaints, legal issues, evictions, code violations, and controversies\n"
+                "3. PATTERNS: Spot acquisition strategies, management practices, or systemic issues\n"
+                "4. CONTEXT: Note any regulatory actions, media coverage, or tenant activism\n\n"
+                
+                "OUTPUT FORMAT (use this exact structure):\n\n"
+                
+                "## NETWORK OVERVIEW\n"
+                "[2-3 sentences describing the scale, geographic focus, and primary business model of this ownership group]\n\n"
+                
+                "## KEY PRINCIPALS & ALIASES\n"
+                "[List main individuals and their associated business entities. Include known aliases or DBAs. Format: Name (Role) - Related Entities]\n\n"
+                
+                "## FINDINGS & RED FLAGS\n"
+                "[Bullet points of specific issues found: complaints, legal cases, evictions, code violations, controversies. "
+                "Each bullet should cite source URL in parentheses. NO SPECULATION - only cite what's documented.]\n\n"
+                
+                "## BUSINESS ENTITIES & RELATIONSHIPS\n"
+                "[List key LLCs, partnerships, or corporations and their relationships to principals. Note any shell company patterns.]\n\n"
+                
+                "## RISK ASSESSMENT\n"
+                "[One paragraph: Based on findings, assess tenant risk, regulatory scrutiny, and reputation. Be specific and evidence-based.]\n\n"
+                
+                "CRITICAL RULES:\n"
+                "- NO marketing language, NO promotional content, NO fluff\n"
+                "- ONLY factual information from search results\n"
+                "- CITE sources inline as (Source: URL) for all specific claims\n"
+                "- If no negative info found, state that clearly - don't invent concerns\n"
+                "- Focus on actionable intelligence for tenants, advocates, and researchers\n"
+                "- Identify patterns across entities (e.g., 'Multiple LLCs share same registered agent')\n\n"
+                
+                f"WEB SEARCH DATA:\n{full_text_context}\n"
             )
             try:
                  # Check for v1.0+ vs older SDK
@@ -3037,11 +3116,11 @@ def create_network_digest(req: NetworkDigestRequest, conn=Depends(get_db_connect
                     resp = client.chat.completions.create(
                         model="gpt-4o-mini",
                         messages=[
-                            {"role": "system", "content": "You are a meticulous investigative analyst."},
+                            {"role": "system", "content": "You are an investigative journalist specializing in property ownership accountability. Your reports are factual, well-sourced, and focused on protecting tenant rights and community interests."},
                             {"role": "user", "content": prompt}
                         ],
-                        temperature=0.3,
-                        max_tokens=1500,
+                        temperature=0.2,  # Lower temperature for more factual, less creative output
+                        max_tokens=2000,  # Increased for detailed analysis
                     )
                     final_summary = resp.choices[0].message.content.strip()
                 except ImportError:

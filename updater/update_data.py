@@ -30,7 +30,7 @@ DEFAULT_MUNI_WORKERS = 8 # Process more municipalities in parallel
 
 # --- Municipality-specific data sources ---
 MUNICIPAL_DATA_SOURCES = {
-# update_vision_data.py
+# update_data.py
 
 # ... inside MUNICIPAL_DATA_SOURCES dictionary ...
     "HARTFORD": {
@@ -59,7 +59,7 @@ MUNICIPAL_DATA_SOURCES = {
     'LITCHFIELD': {'type': 'MAPXPRESS', 'domain': 'litchfield.mapxpress.net'},
     'MIDDLEBURY': {'type': 'MAPXPRESS', 'domain': 'middlebury.mapxpress.net'},
     'NAUGATUCK': {'type': 'MAPXPRESS', 'domain': 'naugatuck.mapxpress.net'},
-    'NEW BRITAIN': {'type': 'MAPXPRESS', 'domain': 'newbritain.mapxpress.net'},
+    'NEW BRITAIN': {'type': 'MAPXPRESS', 'domain': 'newbritain.mapxpress.net', 'id_param': 'parid'},
     'NEWTOWN': {'type': 'MAPXPRESS', 'domain': 'newtown.mapxpress.net'},
     'OXFORD': {'type': 'MAPXPRESS', 'domain': 'oxford.mapxpress.net'},
     'PLAINVILLE': {'type': 'MAPXPRESS', 'domain': 'plainville.mapxpress.net'},
@@ -136,7 +136,7 @@ MUNICIPAL_DATA_SOURCES = {
     'STAMFORD': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/stamfordct/'},
     'NORWALK': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Norwalk'},
     'DANBURY': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Danbury'},
-    'NEW BRITAIN': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'New Britain'},
+    # 'NEW BRITAIN': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'New Britain'},
     # 'WEST HARTFORD': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'West Hartford'},
     'GREENWICH': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Greenwich'},
     'HAMDEN': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/hamdenct/'},
@@ -606,6 +606,11 @@ def process_municipality_with_ct_geodata(conn, municipality_name, config, curren
     processed_data = {}
     for _, row in df.iterrows():
         try:
+            # Skip CNDASC placeholder units (Condo Association administrative records)
+            unit_type = str(row.get('Unit_Type', '')).upper()
+            if 'CNDASC' in unit_type or 'CONDO ASC' in unit_type:
+                continue
+            
             loc1 = str(row.get('Location', '')).strip()
             loc2 = str(row.get('Location_CAMA', '')).strip()
             
@@ -821,11 +826,105 @@ def scrape_mapxpress_property(session, base_url_template, row):
         return prop_id, None, str(e)
 
 
+def discover_mapxpress_properties(conn, municipality_name, domain, id_param='UNIQUE_ID'):
+    """Crawls MapXpress search to find ALL properties and insert missing ones."""
+    log(f"Starting discovery for {municipality_name}...", municipality=municipality_name)
+    base_url = f"https://{domain}"
+    search_url = f"{base_url}/PAGES/search.asp"
+    
+    session = requests.Session()
+    session.verify = False
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+        'Referer': search_url,
+        'Origin': base_url
+    })
+    
+    # Initialize session
+    try:
+        session.get(search_url, timeout=10)
+    except Exception as e:
+        log(f"Discovery Init Failed: {e}", municipality=municipality_name)
+        return
+
+    # Iteration keys: A-Z and 0-9
+    search_keys = [chr(i) for i in range(65, 91)] + [str(i) for i in range(10)]
+    
+    discovered_count = 0
+    new_count = 0
+    
+    for key in search_keys:
+        try:
+            # log(f"  Searching '{key}'...", municipality=municipality_name)
+            resp = session.post(search_url, data={
+                'searchname': key,
+                'houseno': '',
+                'mbl': '',
+                'go.x': 1, 'go.y': 1
+            }, timeout=20)
+            
+            if resp.status_code != 200:
+                continue
+                
+            soup = BeautifulSoup(resp.content, 'html.parser')
+            links = soup.find_all('a', href=lambda h: h and 'detail.asp' in h)
+            
+            for link in links:
+                href = link.get('href', '')
+                # Extract ID
+                match = re.search(rf'{id_param}=([^&]+)', href, re.I)
+                if match:
+                    unique_id = match.group(1)
+                    raw_address = link.text.strip()
+                    # Clean address mostly (MapXpress usually puts address in text)
+                    if not raw_address or "Parcel Details" in raw_address:
+                        continue
+                        
+                    # Insert if missing
+                    with conn.cursor() as cursor:
+                        # Check existence by account_number (if we treat unique_id as account_number)
+                        # OR cama_site_link
+                        
+                        # We use ON CONFLICT DO NOTHING to be safe and fast
+                        # But we need to ensure we insert minimal valid data
+                        
+                        # Map unique_id to account_number for now? Or just store in cama_site_link?
+                        # update_data.py usually links account_number to the unique ID.
+                        
+                        full_link = f"{base_url}/PAGES/detail.asp?{id_param}={unique_id}"
+                        
+                        cursor.execute("""
+                            INSERT INTO properties (property_city, location, account_number, cama_site_link, source)
+                            VALUES (%s, %s, %s, %s, 'MAPXPRESS_DISCOVERY')
+                            ON CONFLICT (property_city, location) DO NOTHING
+                            RETURNING id
+                        """, (municipality_name.title(), raw_address, unique_id, full_link))
+                        
+                        if cursor.fetchone():
+                            new_count += 1
+                    
+                    discovered_count += 1
+                    
+        except Exception as e:
+            log(f"  Discovery Error on key {key}: {e}", municipality=municipality_name)
+            
+    log(f"Discovery Complete: Found {discovered_count} total, Inserted {new_count} new properties.", municipality=municipality_name)
+    conn.commit()
+
+
 def process_municipality_with_mapxpress(conn, municipality_name, data_source_config, current_owner_only=False, force_process=False):
     """Process a municipality scraping MapXpress (Parallel)."""
     
     log(f"--- Processing municipality: {municipality_name} via MapXpress (Force={force_process}) ---", municipality=municipality_name)
     
+    # 0. Run Discovery Phase
+    domain = data_source_config['domain']
+    if domain.endswith('/'): domain = domain[:-1]
+    id_param = data_source_config.get('id_param', 'UNIQUE_ID')
+    
+    if not current_owner_only:
+        discover_mapxpress_properties(conn, municipality_name, domain, id_param)
+
     query = """
         SELECT p.id, p.location, p.account_number, p.serial_number, p.cama_site_link 
         FROM properties p
@@ -855,9 +954,7 @@ def process_municipality_with_mapxpress(conn, municipality_name, data_source_con
         
     log(f"Found {len(properties)} properties to scrape for {municipality_name}. Starting parallel scrape (10 threads)...", municipality=municipality_name)
     
-    domain = data_source_config['domain']
-    if domain.endswith('/'): domain = domain[:-1]
-    base_url_template = f"https://{domain}/PAGES/detail.asp?UNIQUE_ID={{}}"
+    base_url_template = f"https://{domain}/PAGES/detail.asp?{id_param}={{}}"
 
     updated_count = 0
     processed_count = 0

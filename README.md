@@ -1,6 +1,7 @@
 # they own WHAT??
 
 [![Open Source | Love](https://img.shields.io/badge/Open%20Source-Love-red)](https://github.com/sk123/theyownwhat)
+**Source Code:** [https://github.com/sk123/theyownwhat](https://github.com/sk123/theyownwhat)
 
 **Published at:** [https://theyownwhat.net](https://theyownwhat.net)
 
