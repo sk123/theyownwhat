@@ -5,15 +5,14 @@ import NetworkView from './components/NetworkView';
 import PropertyTable from './components/PropertyTable';
 import { api } from './api';
 import Insights from './components/Insights';
-import NetworkProfileCard from './components/NetworkProfileCard';
 import SearchResults from './components/SearchResults';
 const PropertyDetailsModal = React.lazy(() => import('./components/PropertyDetailsModal'));
 const EntityDetailsModal = React.lazy(() => import('./components/EntityDetailsModal'));
+const NetworkAnalysisModal = React.lazy(() => import('./components/NetworkAnalysisModal'));
 const AboutModal = React.lazy(() => import('./components/AboutModal'));
 const MultiPropertyMapModal = React.lazy(() => import('./components/MultiPropertyMapModal'));
-const FreshnessModal = React.lazy(() => import('./components/FreshnessModal'));
 import LoadingScreen from './components/LoadingScreen';
-import ToolboxDashboard from './components/ToolboxDashboard';
+// import DashboardControls from './components/DashboardControls'; // Removed
 import StatCard from './components/StatCard';
 import BackgroundGrid from './components/BackgroundGrid';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -21,7 +20,7 @@ import { Sparkles, Loader2, Search, ArrowRight, Building2, TrendingUp, Users } f
 
 // NOTE: This is a simplified App.jsx. In a real scenario we'd use React Router.
 function App() {
-  const [view, setView] = useState('home'); // home | dashboard | toolbox
+  const [view, setView] = useState('home'); // home | dashboard
   const [loading, setLoading] = useState(false);
   const [insights, setInsights] = useState(null);
   const [searchResults, setSearchResults] = useState(null);
@@ -45,8 +44,8 @@ function App() {
   // Dashboard State
   const [selectedCity, setSelectedCity] = useState('All');
   const [selectedEntityId, setSelectedEntityId] = useState(null);
+  const [showAnalysis, setShowAnalysis] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
-  const [showFreshness, setShowFreshness] = useState(false);
 
   // Mobile Tabs
   const [activeMobileTab, setActiveMobileTab] = useState('properties');
@@ -58,7 +57,6 @@ function App() {
     });
   };
   const [aiEnabled, setAiEnabled] = useState(false);
-  const [toolboxEnabled, setToolboxEnabled] = useState(false);
 
   const [loadingInsights, setLoadingInsights] = useState(true);
   const [streamingStatus, setStreamingStatus] = useState({
@@ -73,9 +71,6 @@ function App() {
       .then(data => {
         if (data && data.ai_enabled) {
           setAiEnabled(true);
-        }
-        if (data && data.toolbox_enabled !== undefined) {
-          setToolboxEnabled(data.toolbox_enabled);
         }
       })
       .catch(err => console.warn("Health check failed", err));
@@ -113,14 +108,14 @@ function App() {
   };
 
   // Load Network Stream
-  const loadNetwork = async (id, type, name) => {
+  const loadNetwork = async (id, type) => {
     setLoading(true);
     setStreamingStatus({ entities: 0, properties: 0, active: true });
 
     const newData = { principals: [], businesses: [], properties: [], links: [] };
     const seenEntities = new Set();
 
-    api.streamNetwork(id, type, name,
+    api.streamNetwork(id, type,
       (chunk) => {
         if (chunk.type === 'entities') {
           if (chunk.data.entities) {
@@ -137,7 +132,7 @@ function App() {
 
                 // Simple heurustic
                 if (e.type === 'principal') {
-                  e.isEntity = e.name && e.name.match(/(LLC|INC|CORP|LTD|GROUP|HOLDINGS|REALTY|MANAGEMENT|TRUST|LP|PARTNERSHIP|FUND|INVESTMENT)/i);
+                  e.isEntity = e.name && e.name.match(/(LLC|INC|CORP|LTD|GROUP|HOLDINGS)/i);
                 }
                 // Extract connections if present
                 if (e.details && e.details.connections && Array.isArray(e.details.connections)) {
@@ -177,15 +172,7 @@ function App() {
               properties: prev.properties + chunk.data.length
             }));
             for (const prop of chunk.data) {
-              if (prop.is_complex && Array.isArray(prop.units)) {
-                // Flatten backend complexes back into units for the PropertyTable
-                // which handles its own grouping logic
-                for (const unit of prop.units) {
-                  newData.properties.push(unit);
-                }
-              } else {
-                newData.properties.push(prop);
-              }
+              newData.properties.push(prop);
             }
           }
         }
@@ -329,8 +316,6 @@ function App() {
         onHome={handleReset}
         onReset={view === 'dashboard' ? handleReset : null}
         onAbout={() => setShowAbout(true)}
-        OnOpenToolbox={() => setView('toolbox')}
-        toolboxEnabled={toolboxEnabled}
       />
 
       <LoadingScreen
@@ -357,17 +342,12 @@ function App() {
                   <div className="text-center mb-10">
 
 
-                    <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 border border-blue-100 text-blue-600 text-xs font-bold uppercase tracking-widest mb-6">
-                      <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
-                      Connecticut Property Explorer
-                    </div>
-
                     <h1 className="text-5xl md:text-7xl font-black text-slate-900 mb-4 tracking-tighter leading-[0.9]">
                       they own <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-indigo-600">WHAT??</span>
                     </h1>
 
                     <p className="text-lg text-slate-500 max-w-xl mx-auto font-medium leading-relaxed mb-8">
-                      Uncover hidden property networks.
+                      Uncover hidden property networks, connect LLCs to real owners, and analyze portfolio value with AI-powered insights.
                     </p>
 
                     <div className="max-w-2xl mx-auto relative group">
@@ -385,13 +365,11 @@ function App() {
                               id = item.id;
                             } else if (item.type === 'Business Principal') {
                               type = 'principal';
-                            } else if (item.type === 'Address') {
-                              type = 'address';
                             }
                             // Property Owner/Co-Owner fallback to 'owner' and use name (item.value)
 
-                            console.log("Direct load:", id, type, item.value);
-                            loadNetwork(id, type, item.value);
+                            console.log("Direct load:", id, type);
+                            loadNetwork(id, type);
                           }}
                         />
                       </div>
@@ -412,7 +390,7 @@ function App() {
                     {searchResults ? (
                       <SearchResults
                         results={searchResults}
-                        onSelect={(id, type, name) => loadNetwork(id, type, name)}
+                        onSelect={(id, type) => loadNetwork(id, type)}
                       />
                     ) : (
                       <div className="mt-8">
@@ -423,11 +401,7 @@ function App() {
                             ))}
                           </div>
                         ) : (
-                          <Insights
-                            data={insights}
-                            onSelect={(id, type, name) => loadNetwork(id, type, name)}
-                            toolboxEnabled={toolboxEnabled}
-                          />
+                          <Insights data={insights} onSelect={(id, type) => loadNetwork(id, type)} />
                         )}
                       </div>
                     )}
@@ -435,200 +409,172 @@ function App() {
                 </motion.div>
               </div>
             </div>
-          )
-          }
-
-          {/* DASHBOARD VIEW */}
-          {
-            view === 'dashboard' && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="flex flex-col h-full w-full max-w-[1920px] mx-auto px-4 py-3 gap-3 overflow-y-auto bg-slate-50/50 backdrop-blur-sm"
-              >
-
-
-                {/* Compact Dashboard Header Strip */}
-                <div className="flex flex-col xl:flex-row justify-between items-center gap-3 shrink-0">
-                  <NetworkProfileCard networkData={networkData} stats={stats} />
-
-                  <div className="flex items-center gap-2 w-full xl:w-auto justify-end shrink-0">
-                    <button
-                      onClick={() => {
-                        const csvContent = "data:text/csv;charset=utf-8,"
-                          + "Address,City,Owner,Assessed Value,Appraised Value\n"
-                          + networkData.properties.map(p => `"${p.location}","${p.city}","${p.owner}","${p.assessed_value}","${p.appraised_value}"`).join("\n");
-                        const encodedUri = encodeURI(csvContent);
-                        const link = document.createElement("a");
-                        link.setAttribute("href", encodedUri);
-                        link.setAttribute("download", "portfolio_export.csv");
-                        document.body.appendChild(link);
-                        link.click();
-                      }}
-                      className="px-4 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold rounded-lg transition-all flex items-center gap-2 shadow-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                      aria-label="Export portfolio as CSV"
-                    >
-                      <TrendingUp size={14} aria-hidden="true" />
-                      Export
-                    </button>
-                    <button
-                      onClick={handleReset}
-                      className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg shadow-md transition-all flex items-center gap-2 focus:ring-2 focus:ring-blue-500 focus:outline-none focus:ring-offset-2"
-                      aria-label="Start a new search"
-                    >
-                      <Search size={14} aria-hidden="true" />
-                      New Search
-                    </button>
-                  </div>
-                </div>
-
-
-
-                {/* Cross-Filtering & City Selection Controls - MOVED TO PROPERTY TABLE */}
-
-
-
-                {/* --- MOBILE TAB LAYOUT (lg:hidden) --- */}
-                <div className="flex flex-col lg:hidden relative border border-slate-200 rounded-xl bg-white shadow-sm mt-2">
-
-                  {/* Sticky Tab Header */}
-                  <div className="flex items-center border-b border-gray-100 bg-white/95 backdrop-blur-md sticky top-0 z-30 shadow-sm">
-                    <button
-                      onClick={() => handleTabChange('properties')}
-                      className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider transition-colors border-b-2 ${activeMobileTab === 'properties' ? 'border-blue-500 text-blue-700 bg-blue-50/50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
-                    >
-                      Properties
-                    </button>
-                    <button
-                      onClick={() => handleTabChange('businesses')}
-                      className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider transition-colors border-b-2 ${activeMobileTab === 'businesses' ? 'border-emerald-500 text-emerald-700 bg-emerald-50/50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
-                    >
-                      Businesses
-                    </button>
-                    <button
-                      onClick={() => handleTabChange('principals')}
-                      className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider transition-colors border-b-2 ${activeMobileTab === 'principals' ? 'border-indigo-500 text-indigo-700 bg-indigo-50/50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
-                    >
-                      Principals
-                    </button>
-
-                    {/* Start Over Button */}
-                    <button
-                      onClick={handleReset}
-                      className="px-3 py-3 text-gray-400 hover:text-red-500 hover:bg-red-50 border-b-2 border-transparent transition-colors"
-                      title="Start Over"
-                      aria-label="Start Over"
-                    >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-                        <path d="M3 3v5h5" />
-                      </svg>
-                    </button>
-                  </div>
-
-                  {/* Content Area - Auto Height for Page Scroll */}
-                  <div className={`bg-white min-h-[500px] transition-opacity duration-200 ${isPending ? 'opacity-50' : 'opacity-100'}`}>
-                    {activeMobileTab === 'properties' && (
-                      <div className="flex flex-col">
-                        <PropertyTable
-                          properties={filteredProperties}
-                          highlightedEntityId={selectedEntityId}
-                          onSelectProperty={setSelectedProperty}
-                          onMapSelected={setSelectedMapProperties}
-                          onAiDigest={aiEnabled ? () => setShowAnalysis(true) : null}
-                          forceExpanded={true}
-                          autoHeight={true}
-
-                          // Filter Props
-                          cities={allCities}
-                          selectedCity={selectedCity}
-                          onSelectCity={setSelectedCity}
-                          onClearEntity={() => setSelectedEntityId(null)}
-                        />
-                      </div>
-                    )}
-
-                    {activeMobileTab === 'businesses' && (
-                      <div className="flex flex-col">
-                        <NetworkView
-                          networkData={networkData}
-                          selectedEntityId={selectedEntityId}
-                          onSelectEntity={(id, type) => setSelectedEntityId(id === selectedEntityId ? null : id)}
-                          onViewDetails={(entity, type) => setSelectedDetailEntity({ entity, type })}
-                          mobileSection="businesses"
-                          autoHeight={true}
-                        />
-                      </div>
-                    )}
-
-                    {activeMobileTab === 'principals' && (
-                      <div className="flex flex-col">
-                        <NetworkView
-                          networkData={networkData}
-                          selectedEntityId={selectedEntityId}
-                          onSelectEntity={(id, type) => setSelectedEntityId(id === selectedEntityId ? null : id)}
-                          onViewDetails={(entity, type) => setSelectedDetailEntity({ entity, type })}
-                          mobileSection="principals"
-                          autoHeight={true}
-                        />
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* --- DESKTOP GRID LAYOUT (hidden lg:grid) --- */}
-                <div className="hidden lg:grid grid-cols-12 gap-4 flex-1 min-h-0 overflow-auto">
-                  {/* Left: Network List */}
-                  <div className="col-span-4 h-full bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
-                    <div className="p-4 border-b border-slate-100 bg-slate-50/50">
-
-                    </div>
-                    <div className="flex-1 overflow-hidden">
-                      <NetworkView
-                        networkData={networkData}
-                        selectedEntityId={selectedEntityId}
-                        onSelectEntity={(id, type) => setSelectedEntityId(id === selectedEntityId ? null : id)}
-                        onViewDetails={(entity, type) => setSelectedDetailEntity({ entity, type })}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Right: Property Table */}
-                  <div className="col-span-8 flex-1 overflow-auto flex flex-col min-h-0">
-                    <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center shrink-0">
-
-                      <div className="text-xs font-bold text-slate-400">{filteredProperties.length} Assets</div>
-                    </div>
-                    <div className="flex-1 flex flex-col min-h-0 overflow-auto">
-                      <PropertyTable
-                        properties={filteredProperties}
-                        highlightedEntityId={selectedEntityId}
-                        onSelectProperty={setSelectedProperty}
-                        onMapSelected={setSelectedMapProperties}
-
-                        // Filter Props
-                        cities={allCities}
-                        selectedCity={selectedCity}
-                        onSelectCity={setSelectedCity}
-                        onClearEntity={() => setSelectedEntityId(null)}
-                      />
-                    </div>
-                  </div>
-                </div>
-              </motion.div>
-            )
-          }
-
-          {view === 'toolbox' && (
-            <motion.div
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              className="h-full w-full"
-            >
-              <ToolboxDashboard onBack={() => setView('home')} />
-            </motion.div>
           )}
         </AnimatePresence>
+
+        {/* DASHBOARD VIEW */}
+        {view === 'dashboard' && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="flex flex-col h-full w-full max-w-[1920px] mx-auto px-4 py-3 gap-3 overflow-y-auto bg-slate-50/50 backdrop-blur-sm"
+          >
+            {/* Stats Row */}
+            <div className="flex flex-col md:flex-row gap-3 items-stretch">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 flex-1">
+                <StatCard label="Properties" value={stats.totalProperties} icon={<Building2 className="w-4 h-4 text-slate-400" />} />
+                <StatCard
+                  label="Portfolio Value"
+                  value={`$${(stats.totalValue / 1000000).toFixed(1)}M`}
+                  sub={`Appraised: $${(stats.totalAppraised / 1000000).toFixed(1)}M`}
+                  highlight
+                  icon={<TrendingUp className="w-4 h-4 text-blue-200" />}
+                />
+                <StatCard label="Businesses" value={networkData.businesses.length} icon={<Building2 className="w-4 h-4 text-slate-400" />} />
+                <StatCard
+                  label="Principals"
+                  value={stats.humanCount + stats.entityCount}
+                  sub={`${stats.humanCount} Human / ${stats.entityCount} Entity`}
+                  icon={<Users className="w-4 h-4 text-slate-400" />}
+                />
+              </div>
+              {/* Stats Row End */}
+            </div>
+
+            {/* Cross-Filtering & City Selection Controls - MOVED TO PROPERTY TABLE */}
+
+
+
+            {/* --- MOBILE TAB LAYOUT (lg:hidden) --- */}
+            <div className="flex flex-col lg:hidden relative border border-slate-200 rounded-xl bg-white shadow-sm mt-2">
+
+              {/* Sticky Tab Header */}
+              <div className="flex items-center border-b border-gray-100 bg-white/95 backdrop-blur-md sticky top-0 z-30 shadow-sm">
+                <button
+                  onClick={() => handleTabChange('properties')}
+                  className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider transition-colors border-b-2 ${activeMobileTab === 'properties' ? 'border-blue-500 text-blue-700 bg-blue-50/50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                >
+                  Properties
+                </button>
+                <button
+                  onClick={() => handleTabChange('businesses')}
+                  className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider transition-colors border-b-2 ${activeMobileTab === 'businesses' ? 'border-emerald-500 text-emerald-700 bg-emerald-50/50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                >
+                  Businesses
+                </button>
+                <button
+                  onClick={() => handleTabChange('principals')}
+                  className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider transition-colors border-b-2 ${activeMobileTab === 'principals' ? 'border-indigo-500 text-indigo-700 bg-indigo-50/50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                >
+                  Principals
+                </button>
+
+                {/* Start Over Button */}
+                <button
+                  onClick={handleReset}
+                  className="px-3 py-3 text-gray-400 hover:text-red-500 hover:bg-red-50 border-b-2 border-transparent transition-colors"
+                  title="Start Over"
+                  aria-label="Start Over"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                    <path d="M3 3v5h5" />
+                  </svg>
+                </button>
+              </div>
+
+              {/* Content Area - Auto Height for Page Scroll */}
+              <div className={`bg-white min-h-[500px] transition-opacity duration-200 ${isPending ? 'opacity-50' : 'opacity-100'}`}>
+                {activeMobileTab === 'properties' && (
+                  <div className="flex flex-col">
+                    <PropertyTable
+                      properties={filteredProperties}
+                      highlightedEntityId={selectedEntityId}
+                      onSelectProperty={setSelectedProperty}
+                      onMapSelected={setSelectedMapProperties}
+                      onAiDigest={aiEnabled ? () => setShowAnalysis(true) : null}
+                      forceExpanded={true}
+                      autoHeight={true}
+
+                      // Filter Props
+                      cities={allCities}
+                      selectedCity={selectedCity}
+                      onSelectCity={setSelectedCity}
+                      onClearEntity={() => setSelectedEntityId(null)}
+                    />
+                  </div>
+                )}
+
+                {activeMobileTab === 'businesses' && (
+                  <div className="flex flex-col">
+                    <NetworkView
+                      networkData={networkData}
+                      selectedEntityId={selectedEntityId}
+                      onSelectEntity={(id, type) => setSelectedEntityId(id === selectedEntityId ? null : id)}
+                      onViewDetails={(entity, type) => setSelectedDetailEntity({ entity, type })}
+                      mobileSection="businesses"
+                      autoHeight={true}
+                    />
+                  </div>
+                )}
+
+                {activeMobileTab === 'principals' && (
+                  <div className="flex flex-col">
+                    <NetworkView
+                      networkData={networkData}
+                      selectedEntityId={selectedEntityId}
+                      onSelectEntity={(id, type) => setSelectedEntityId(id === selectedEntityId ? null : id)}
+                      onViewDetails={(entity, type) => setSelectedDetailEntity({ entity, type })}
+                      mobileSection="principals"
+                      autoHeight={true}
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* --- DESKTOP GRID LAYOUT (hidden lg:grid) --- */}
+            <div className="hidden lg:grid grid-cols-12 gap-4 flex-1 min-h-0 overflow-auto">
+              {/* Left: Network List */}
+              <div className="col-span-4 h-full bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
+                <div className="p-4 border-b border-slate-100 bg-slate-50/50">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">Ownership Network</h3>
+                </div>
+                <div className="flex-1 overflow-hidden">
+                  <NetworkView
+                    networkData={networkData}
+                    selectedEntityId={selectedEntityId}
+                    onSelectEntity={(id, type) => setSelectedEntityId(id === selectedEntityId ? null : id)}
+                    onViewDetails={(entity, type) => setSelectedDetailEntity({ entity, type })}
+                  />
+                </div>
+              </div>
+
+              {/* Right: Property Table */}
+              <div className="col-span-8 flex-1 overflow-auto flex flex-col min-h-0">
+                <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center shrink-0">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">Property Portfolio</h3>
+                  <div className="text-xs font-bold text-slate-400">{filteredProperties.length} Assets</div>
+                </div>
+                <div className="flex-1 flex flex-col min-h-0 overflow-auto">
+                  <PropertyTable
+                    properties={filteredProperties}
+                    highlightedEntityId={selectedEntityId}
+                    onSelectProperty={setSelectedProperty}
+                    onMapSelected={setSelectedMapProperties}
+                    onAiDigest={aiEnabled ? () => setShowAnalysis(true) : null}
+
+                    // Filter Props
+                    cities={allCities}
+                    selectedCity={selectedCity}
+                    onSelectCity={setSelectedCity}
+                    onClearEntity={() => setSelectedEntityId(null)}
+                  />
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
 
         <Suspense fallback={null}>
           <PropertyDetailsModal
@@ -642,32 +588,27 @@ function App() {
             type={selectedDetailEntity?.type}
             networkData={networkData}
             onNavigate={(entity, type) => setSelectedDetailEntity({ entity, type })}
-            onViewProperty={setSelectedProperty}
             onClose={() => setSelectedDetailEntity(null)}
           />
 
+          <NetworkAnalysisModal
+            isOpen={showAnalysis}
+            onClose={() => setShowAnalysis(false)}
+            networkData={networkData}
+            stats={stats}
+          />
           <AboutModal
             isOpen={showAbout}
             onClose={() => setShowAbout(false)}
-            onShowFreshness={() => {
-              setShowAbout(false);
-              setShowFreshness(true);
-            }}
-            networkData={networkData}
-          />
-          <FreshnessModal
-            isOpen={showFreshness}
-            onClose={() => setShowFreshness(false)}
           />
           <MultiPropertyMapModal
             properties={selectedMapProperties}
             onClose={() => setSelectedMapProperties(null)}
           />
         </Suspense>
-      </main >
+      </main>
     </div >
   );
 }
-
 
 export default App;

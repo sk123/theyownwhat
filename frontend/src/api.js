@@ -18,6 +18,31 @@ export const api = {
         if (!res.ok) throw new Error(`API Error: ${res.statusText}`);
         return res.json();
     },
+    put: async (endpoint, body) => {
+        const res = await fetch(`${API_BASE}${endpoint}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        if (!res.ok) throw new Error(`API Error: ${res.statusText}`);
+        return res.json();
+    },
+    patch: async (endpoint, body) => {
+        const res = await fetch(`${API_BASE}${endpoint}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        if (!res.ok) throw new Error(`API Error: ${res.statusText}`);
+        return res.json();
+    },
+    delete: async (endpoint) => {
+        const res = await fetch(`${API_BASE}${endpoint}`, {
+            method: 'DELETE',
+        });
+        if (!res.ok) throw new Error(`API Error: ${res.statusText}`);
+        return res.json();
+    },
 
     // Streaming helper for network loading
     streamNetwork: async (entityId, entityType, entityName, onChunk, onComplete, onError) => {

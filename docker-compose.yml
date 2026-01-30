@@ -44,6 +44,21 @@ services:
     networks:
       - default
 
+  updater:
+    build:
+      context: .
+      dockerfile: Dockerfile.updater
+    container_name: ctdata_updater
+    restart: unless-stopped
+    volumes:
+      - .:/app
+    environment:
+      - DATABASE_URL=postgresql://user:password@ctdata_db:5432/ctdata
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - SERPAPI_API_KEY=${SERPAPI_API_KEY}
+    networks:
+      - default
+
 networks:
   default:
     name: theyownwhat_default

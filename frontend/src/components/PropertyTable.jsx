@@ -9,6 +9,15 @@ function SortHeader({ label, sortKey, currentSort, onSort }) {
         <th
             className={`p-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider cursor-pointer select-none hover:bg-gray-100 hover:text-gray-700 transition-colors ${isActive ? 'bg-blue-50 text-blue-700' : ''}`}
             onClick={() => onSort(sortKey)}
+            tabIndex={0}
+            role="button"
+            aria-sort={isActive ? (currentSort.direction === 'asc' ? 'ascending' : 'descending') : 'none'}
+            onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onSort(sortKey);
+                }
+            }}
         >
             <div className="flex items-center gap-1">
                 {label}
@@ -56,8 +65,31 @@ export default function PropertyTable({
     const [filter, setFilter] = useState('');
     const [selectedIds, setSelectedIds] = useState(new Set());
 
-    // Default to 'grid' (City View) on large screens
+    // Subsidy Filtering State
+    const [showSubsidized, setShowSubsidized] = useState(false);
+    const [selectedSubsidyType, setSelectedSubsidyType] = useState('All');
+
+    // Extract available subsidy types from CURRENT properties
+    // This allows the filter list to be dynamic based on the city/search context
+    const availableSubsidyTypes = useMemo(() => {
+        // if (!showSubsidized) return []; // Allow pre-calc if needed, or just calc
+        const types = new Set();
+        properties.forEach(p => {
+            if (p.subsidies && p.subsidies.length > 0) {
+                p.subsidies.forEach(s => {
+                    if (s.program_name) types.add(s.program_name);
+                });
+            }
+        });
+        return Array.from(types).sort();
+    }, [properties]);
+
+    // Default to 'grid' (City View) on large screens, unless only one municipality
+    const actualCities = cities.filter(c => c !== 'All');
+    const hasMultipleCities = actualCities.length > 1;
+
     const getInitialViewMode = () => {
+        if (!hasMultipleCities) return 'list';
         if (typeof window !== 'undefined') {
             return window.innerWidth >= 1024 ? 'grid' : 'list';
         }
@@ -269,33 +301,57 @@ export default function PropertyTable({
     const filteredProperties = useMemo(() => {
         return groupedProperties.filter(p => {
             const search = filter.toLowerCase();
-            return (
+            const matchesSearch = (
                 (p.address || '').toLowerCase().includes(search) ||
                 (p.city || '').toLowerCase().includes(search) ||
                 (p.owner || '').toLowerCase().includes(search)
             );
+
+            if (!matchesSearch) return false;
+
+            if (showSubsidized) {
+                const checkSubsidy = (u) => {
+                    if (!u.subsidies || u.subsidies.length === 0) return false;
+                    if (selectedSubsidyType === 'All') return true;
+                    return u.subsidies.some(s => s.program_name === selectedSubsidyType);
+                };
+
+                if (p.isComplex) {
+                    return p.subProperties.some(checkSubsidy);
+                } else {
+                    return checkSubsidy(p);
+                }
+            }
+
+            return true;
         });
-    }, [groupedProperties, filter]);
+    }, [groupedProperties, filter, showSubsidized, selectedSubsidyType]);
 
     // 3. Sort Filtered List
     const sortedProperties = useMemo(() => {
         const sorted = [...filteredProperties];
+
+        // If in Grid/City view, override to Unit Count Descending by default
+        const effectiveSort = viewMode === 'grid'
+            ? { key: 'unit_count', direction: 'desc' }
+            : sortConfig;
+
         sorted.sort((a, b) => {
-            let aVal = a[sortConfig.key];
-            let bVal = b[sortConfig.key];
+            let aVal = a[effectiveSort.key];
+            let bVal = b[effectiveSort.key];
 
             if (aVal === undefined || aVal === null) aVal = '';
             if (bVal === undefined || bVal === null) bVal = '';
 
-            if (['assessed_value', 'appraised_value', 'unit_count'].includes(sortConfig.key)) {
+            if (['assessed_value', 'appraised_value', 'unit_count'].includes(effectiveSort.key)) {
                 aVal = parseFloat(String(aVal).replace(/[^0-9.-]+/g, "")) || 0;
                 bVal = parseFloat(String(bVal).replace(/[^0-9.-]+/g, "")) || 0;
             }
 
-            if (aVal < bVal) return sortConfig.direction === 'asc' ? -1 : 1;
-            if (aVal > bVal) return sortConfig.direction === 'asc' ? 1 : -1;
+            if (aVal < bVal) return effectiveSort.direction === 'asc' ? -1 : 1;
+            if (aVal > bVal) return effectiveSort.direction === 'asc' ? 1 : -1;
 
-            if (sortConfig.key !== 'city') {
+            if (effectiveSort.key !== 'city') {
                 const cityA = (a.city || '').toLowerCase();
                 const cityB = (b.city || '').toLowerCase();
                 return cityA.localeCompare(cityB);
@@ -304,7 +360,7 @@ export default function PropertyTable({
             return 0;
         });
         return sorted;
-    }, [filteredProperties, sortConfig]);
+    }, [filteredProperties, sortConfig, viewMode]);
 
     // Group properties by city for Grid View
     const groupedByCity = useMemo(() => {
@@ -466,26 +522,42 @@ export default function PropertyTable({
                                     <button
                                         onClick={(e) => toggleComplexExpansion(e, p.id)}
                                         className="p-1 rounded-full hover:bg-black/5 text-gray-500 transition-colors"
+                                        aria-label={isExpanded ? "Collapse" : "Expand"}
                                     >
                                         {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                                     </button>
                                 ) : (
                                     <div className="w-6" />
                                 )}
-                                <div className="flex items-center gap-2">
-                                    <div className="flex flex-col">
+
+                                <div className="flex items-center gap-2 max-w-full overflow-hidden">
+                                    {/* Small Thumbnail in List view */}
+                                    {(p.details?.building_photo || p.image_url) && (
+                                        <div className="shrink-0 w-10 h-10 rounded-lg overflow-hidden border border-gray-100 bg-gray-50 hidden sm:block">
+                                            <img
+                                                src={p.details?.building_photo || p.image_url}
+                                                alt={`Photo of ${p.address}`}
+                                                className="w-full h-full object-cover"
+                                                loading="lazy"
+                                                onError={(e) => e.target.closest('div').style.display = 'none'}
+                                            />
+                                        </div>
+                                    )}
+
+                                    <div className="flex flex-col min-w-0">
                                         {p.isComplex ? (
                                             // Complex Header
-                                            <div className="flex flex-col">
+                                            <div className="flex flex-col min-w-0">
                                                 {p.management_info?.name && (
-                                                    <span className="text-sm font-black text-indigo-900 uppercase tracking-tight flex items-center gap-1.5">
-                                                        <Building2 size={12} className="text-indigo-500" />
+                                                    <span className="text-xs font-black text-indigo-900 uppercase tracking-tight flex items-center gap-1.5 truncate">
+                                                        <Building2 size={12} className="text-indigo-500 shrink-0" />
                                                         {p.management_info.name}
                                                     </span>
                                                 )}
                                                 <span className={`${p.management_info?.name ? 'text-[11px] text-gray-500 font-medium' : 'text-sm font-medium text-indigo-900'} truncate`}>
                                                     {p.address}
                                                 </span>
+                                                ...
 
                                                 {/* Unit Count & Official Link Badge */}
                                                 <div className="flex items-center gap-2 mt-1">
@@ -800,203 +872,330 @@ export default function PropertyTable({
                         )}
                     </div>
 
-                    {/* View Toggles */}
-                    <div className="flex items-center gap-2 bg-gray-100 rounded-lg p-1 ml-auto">
-                        <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider pl-2 hidden sm:inline">View:</span>
-                        <div className="flex">
-                            <button
-                                onClick={(e) => { e.stopPropagation(); setViewMode('list'); }}
-                                className={`flex items-center gap-1.5 px-2 py-1.5 rounded-md transition-all ${viewMode === 'list' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-                                title="List View"
-                            >
-                                <List size={14} />
-                                <span className="text-xs font-bold hidden sm:inline">List</span>
-                            </button>
-                            <button
-                                onClick={(e) => { e.stopPropagation(); setViewMode('grid'); }}
-                                className={`flex items-center gap-1.5 px-2 py-1.5 rounded-md transition-all ${viewMode === 'grid' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-                                title="City Grid View"
-                            >
-                                <LayoutGrid size={14} />
-                                <span className="text-xs font-bold whitespace-nowrap">City View</span>
-                            </button>
+                    {/* View Toggles - Only show if multiple cities */}
+                    {hasMultipleCities && (
+                        <div className="flex items-center gap-2 bg-black/10 rounded-lg p-1 ml-auto">
+                            <span className="text-[10px] font-bold text-white/60 uppercase tracking-wider pl-2 hidden sm:inline">View:</span>
+                            <div className="flex">
+                                <button
+                                    onClick={(e) => { e.stopPropagation(); setViewMode('list'); }}
+                                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md transition-all ${viewMode === 'list' ? 'bg-white text-blue-600 shadow-sm' : 'text-white/70 hover:text-white hover:bg-white/10'}`}
+                                    aria-pressed={viewMode === 'list'}
+                                    title="List View"
+                                >
+                                    <List size={14} />
+                                    <span className="text-xs font-bold hidden sm:inline">List</span>
+                                </button>
+                                <button
+                                    onClick={(e) => { e.stopPropagation(); setViewMode('grid'); }}
+                                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md transition-all ${viewMode === 'grid' ? 'bg-white text-blue-600 shadow-sm' : 'text-white/70 hover:text-white hover:bg-white/10'}`}
+                                    aria-pressed={viewMode === 'grid'}
+                                    title="City Grid View"
+                                >
+                                    <LayoutGrid size={14} />
+                                    <span className="text-xs font-bold whitespace-nowrap">City View</span>
+                                </button>
+                            </div>
                         </div>
-                    </div>
+                    )}
                 </div>
 
-                {/* Multi-Select Toolbar */}
-                <AnimatePresence>
-                    {isMultiSelectActive && (
-                        <motion.div
-                            initial={{ height: 0, opacity: 0 }}
-                            animate={{ height: 'auto', opacity: 1 }}
-                            exit={{ height: 0, opacity: 0 }}
-                            className="bg-blue-50 border-b border-blue-100 px-4 py-2 flex flex-wrap items-center gap-2 overflow-hidden shadow-inner"
-                        >
-                            {/* Simplified Toolbar Content */}
+                <button
+                    onClick={() => setShowSubsidized(!showSubsidized)}
+                    className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold transition-all border ${showSubsidized
+                        ? 'bg-emerald-100 text-emerald-700 border-emerald-200 shadow-inner'
+                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                        }`}
+                >
+                    <div className={`w-2 h-2 rounded-full ${showSubsidized ? 'bg-emerald-500' : 'bg-slate-300'}`} />
+                    Subsidized
+                </button>
+            </div>
+
+            {/* Subsidy Type Filters (Appears when toggled) */}
+            <AnimatePresence>
+                {showSubsidized && availableSubsidyTypes.length > 0 && (
+                    <motion.div
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: 'auto' }}
+                        exit={{ opacity: 0, height: 0 }}
+                        className="w-full overflow-hidden"
+                    >
+                        <div className="flex flex-wrap gap-2 pt-2 pb-1">
                             <button
-                                onClick={() => handleSelectAll()}
-                                className="bg-white border border-blue-200 hover:bg-blue-100 text-blue-700 text-xs font-semibold px-3 py-1.5 rounded-full shadow-sm active:scale-95"
+                                onClick={() => setSelectedSubsidyType('All')}
+                                className={`px-2 py-1 rounded text-[10px] font-bold border transition-colors ${selectedSubsidyType === 'All'
+                                    ? 'bg-emerald-600 text-white border-emerald-600'
+                                    : 'bg-white text-slate-600 border-slate-200 hover:border-emerald-300'
+                                    }`}
                             >
-                                All
+                                All Types
                             </button>
-                            <div className="w-px h-4 bg-blue-200 mx-1"></div>
-                            {Array.from(new Set(sortedProperties.map(p => p.city || p.rawCity || 'Unknown'))).sort().map(city => {
-                                const propsInCity = sortedProperties.filter(p => (p.city || p.rawCity) === city);
-                                const allCitySelected = propsInCity.length > 0 && propsInCity.every(p => {
-                                    if (p.isComplex) return p.subProperties.every(s => selectedIds.has(s.id));
-                                    return selectedIds.has(p.id);
-                                });
-                                return (
-                                    <button
-                                        key={city}
-                                        onClick={() => handleSelectByCity(city)}
-                                        className={`text-[10px] font-bold px-2 py-1 rounded-full border ${allCitySelected
-                                            ? 'bg-blue-600 text-white border-blue-600'
-                                            : 'bg-white text-blue-700 border-blue-200'
-                                            }`}
-                                    >
-                                        {city}
-                                    </button>
-                                );
-                            })}
-                        </motion.div>
-                    )}
-                </AnimatePresence>
-
-                {/* Content Area */}
-                <div className={`flex-1 flex flex-col min-h-0 bg-white relative ${autoHeight ? '' : 'h-full overflow-auto'}`}>
-                    {viewMode === 'list' && (
-                        <div className={`w-full ${autoHeight ? 'overflow-visible' : 'flex-1 overflow-auto bg-white min-h-0'}`}>
-                            <table className="w-full text-left border-collapse">
-                                <thead className="bg-gray-50 sticky top-0 z-20 shadow-sm border-b border-gray-100">
-                                    <tr>
-                                        {isMultiSelectActive && (
-                                            <th className="p-2 w-10 text-center cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => handleSelectAll()}>
-                                                <input
-                                                    type="checkbox"
-                                                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
-                                                    checked={selectedIds.size > 0 && selectedIds.size === properties.length}
-                                                    onChange={(e) => { e.stopPropagation(); handleSelectAll(); }}
-                                                />
-                                            </th>
-                                        )}
-                                        <SortHeader label="Address" sortKey="address" currentSort={sortConfig} onSort={handleSort} />
-                                        <SortHeader label="City" sortKey="city" currentSort={sortConfig} onSort={handleSort} />
-                                        <SortHeader label="Owner" sortKey="owner" currentSort={sortConfig} onSort={handleSort} />
-                                        <SortHeader label="Assessed" sortKey="assessed_value" currentSort={sortConfig} onSort={handleSort} />
-                                        {!isMultiSelectActive && <th className="p-2 w-10"></th>}
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-gray-100">
-                                    {renderRows(sortedProperties)}
-                                </tbody>
-                            </table>
+                            {availableSubsidyTypes.map(type => (
+                                <button
+                                    key={type}
+                                    onClick={() => setSelectedSubsidyType(type)}
+                                    className={`px-2 py-1 rounded text-[10px] font-bold border transition-colors ${selectedSubsidyType === type
+                                        ? 'bg-emerald-600 text-white border-emerald-600'
+                                        : 'bg-white text-slate-600 border-slate-200 hover:border-emerald-300'
+                                        }`}
+                                >
+                                    {type}
+                                </button>
+                            ))}
                         </div>
-                    )}
+                    </motion.div>
+                )}
+            </AnimatePresence>
+            <AnimatePresence>
+                {isMultiSelectActive && (
+                    <motion.div
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: 'auto', opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        className="bg-blue-50 border-b border-blue-100 px-4 py-2 flex flex-wrap items-center gap-2 overflow-hidden shadow-inner"
+                    >
+                        {/* Simplified Toolbar Content */}
+                        <button
+                            onClick={() => handleSelectAll()}
+                            className="bg-white border border-blue-200 hover:bg-blue-100 text-blue-700 text-xs font-semibold px-3 py-1.5 rounded-full shadow-sm active:scale-95"
+                        >
+                            All
+                        </button>
+                        <div className="w-px h-4 bg-blue-200 mx-1"></div>
+                        {Array.from(new Set(sortedProperties.map(p => p.city || p.rawCity || 'Unknown'))).sort().map(city => {
+                            const propsInCity = sortedProperties.filter(p => (p.city || p.rawCity) === city);
+                            const allCitySelected = propsInCity.length > 0 && propsInCity.every(p => {
+                                if (p.isComplex) return p.subProperties.every(s => selectedIds.has(s.id));
+                                return selectedIds.has(p.id);
+                            });
+                            return (
+                                <button
+                                    key={city}
+                                    onClick={() => handleSelectByCity(city)}
+                                    className={`text-[10px] font-bold px-2 py-1 rounded-full border ${allCitySelected
+                                        ? 'bg-blue-600 text-white border-blue-600'
+                                        : 'bg-white text-blue-700 border-blue-200'
+                                        }`}
+                                >
+                                    {city}
+                                </button>
+                            );
+                        })}
+                    </motion.div>
+                )}
+            </AnimatePresence>
 
-                    {viewMode === 'grid' && (
-                        <div className={`w-full flex flex-col bg-slate-50 ${autoHeight ? '' : 'h-full overflow-auto'}`}>
-                            {/* Mobile Jump Navigation */}
-                            <div className="md:hidden overflow-x-auto py-1.5 px-3 flex gap-1.5 bg-white border-b border-gray-200 shrink-0 no-scrollbar">
-                                <span className="text-[10px] uppercase font-bold text-gray-400 self-center mr-1">JUMP TO:</span>
-                                {groupedByCity && Object.keys(groupedByCity).sort().map(city => (
-                                    <button
+            {/* Content Area */}
+            <div className={`flex-1 flex flex-col min-h-0 bg-white relative ${autoHeight ? '' : 'h-full overflow-auto'}`}>
+                {viewMode === 'list' && (
+                    <div className={`w-full ${autoHeight ? 'overflow-visible' : 'flex-1 overflow-auto bg-white min-h-0'}`}>
+                        <table className="w-full text-left border-collapse">
+                            <thead className="bg-gray-50 sticky top-0 z-20 shadow-sm border-b border-gray-100">
+                                <tr>
+                                    {isMultiSelectActive && (
+                                        <th className="p-2 w-10 text-center cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => handleSelectAll()}>
+                                            <input
+                                                type="checkbox"
+                                                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                                                checked={selectedIds.size > 0 && selectedIds.size === properties.length}
+                                                onChange={(e) => { e.stopPropagation(); handleSelectAll(); }}
+                                            />
+                                        </th>
+                                    )}
+                                    <SortHeader label="Address" sortKey="address" currentSort={sortConfig} onSort={handleSort} />
+                                    <SortHeader label="City" sortKey="city" currentSort={sortConfig} onSort={handleSort} />
+                                    <SortHeader label="Owner" sortKey="owner" currentSort={sortConfig} onSort={handleSort} />
+                                    <SortHeader label="Assessed" sortKey="assessed_value" currentSort={sortConfig} onSort={handleSort} />
+                                    {!isMultiSelectActive && <th className="p-2 w-10"></th>}
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100">
+                                {renderRows(sortedProperties)}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+
+                {viewMode === 'grid' && (
+                    <div className={`w-full flex flex-col bg-slate-50 ${autoHeight ? '' : 'h-full overflow-auto'}`}>
+                        {/* Mobile Jump Navigation */}
+                        <div className="md:hidden overflow-x-auto py-1.5 px-3 flex gap-1.5 bg-white border-b border-gray-200 shrink-0 no-scrollbar">
+                            <span className="text-[10px] uppercase font-bold text-gray-400 self-center mr-1">JUMP TO:</span>
+                            {groupedByCity && Object.keys(groupedByCity).sort().map(city => (
+                                <button
+                                    key={city}
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        document.getElementById(`city-card-${city}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                                    }}
+                                    className="whitespace-nowrap px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-full transition-colors flex items-center gap-1.5"
+                                >
+                                    {city}
+                                    <span className="bg-slate-300 text-[9px] px-1 rounded-sm text-slate-600">{groupedByCity[city].length}</span>
+                                </button>
+                            ))}
+                        </div>
+
+                        <div className="p-2 md:p-3 ${autoHeight ? '' : 'flex-1 overflow-y-auto'}">
+                            <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3 md:gap-4 pb-16 md:pb-0">
+                                {groupedByCity && Object.entries(groupedByCity).map(([city, props]) => (
+                                    <div
                                         key={city}
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            document.getElementById(`city-card-${city}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                                        }}
-                                        className="whitespace-nowrap px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-full transition-colors flex items-center gap-1.5"
+                                        id={`city-card-${city}`}
+                                        className="bg-white border border-gray-200 rounded-lg md:rounded-xl shadow-sm flex flex-col lg:h-[450px] h-auto scroll-mt-4"
                                     >
-                                        {city}
-                                        <span className="bg-slate-300 text-[9px] px-1 rounded-sm text-slate-600">{groupedByCity[city].length}</span>
-                                    </button>
+                                        <div className="p-2 md:p-3 bg-gray-50 border-b border-gray-100 flex justify-between items-center sticky top-0 z-10 rounded-t-lg md:rounded-t-xl">
+                                            <h4 className="font-bold text-gray-800 text-sm">{city}</h4>
+                                            <span className="text-xs bg-gray-200 text-gray-600 px-2 py-0.5 rounded-full">{props.length}</span>
+                                        </div>
+                                        {/* On mobile (default), allow auto height. On md+, fix height to 400px for grid alignment */}
+                                        <div className="overflow-visible md:flex-1 md:overflow-y-auto">
+                                            <table className="w-full text-left border-collapse">
+                                                <thead className="bg-white md:sticky md:top-0 z-10 shadow-sm border-b border-gray-100 hidden md:table-header-group">
+                                                    <tr>
+                                                        {isMultiSelectActive && <th className="p-2 w-8">
+                                                            <input type="checkbox" readOnly checked={props.every(p => isItemSelected(p))} />
+                                                        </th>}
+                                                        <th className="p-2 text-[10px] font-bold text-gray-500 uppercase">Address</th>
+                                                        <th className="p-2 text-[10px] font-bold text-gray-500 uppercase text-right">Owner</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody className="divide-y divide-gray-100">
+                                                    {props.map((p, i) => {
+                                                        const isExpanded = p.isComplex && expandedComplexIds.has(p.id);
+                                                        const selected = isItemSelected(p);
+
+                                                        return (
+                                                            <React.Fragment key={p.id || i}>
+                                                                <tr
+                                                                    className={`hover:bg-blue-50/50 cursor-pointer ${selected && isMultiSelectActive ? 'bg-blue-50' : ''} ${isExpanded ? 'bg-indigo-50/20' : ''}`}
+                                                                    onClick={(e) => {
+                                                                        if (e.target.tagName === "INPUT" || e.target.closest("button")) return;
+                                                                        if (isMultiSelectActive) {
+                                                                            toggleSelection(e, p);
+                                                                        } else {
+                                                                            if (p.isComplex) {
+                                                                                toggleComplexExpansion(e, p.id);
+                                                                            } else {
+                                                                                onSelectProperty(p);
+                                                                            }
+                                                                        }
+                                                                    }}
+                                                                >
+                                                                    {isMultiSelectActive && (
+                                                                        <td className="p-2 text-center w-8 align-top pt-3" onClick={(e) => toggleSelection(e, p)}>
+                                                                            <input type="checkbox" checked={selected} readOnly className="pointer-events-none rounded text-blue-600" />
+                                                                        </td>
+                                                                    )}
+                                                                    <td className="p-2">
+                                                                        <div className="flex gap-2">
+                                                                            {/* Expand Toggle for Complex */}
+                                                                            <div className="shrink-0 pt-0.5">
+                                                                                {p.isComplex ? (
+                                                                                    <button
+                                                                                        onClick={(e) => toggleComplexExpansion(e, p.id)}
+                                                                                        className={`w-5 h-5 flex items-center justify-center rounded-full hover:bg-gray-200 text-gray-400 transition-colors ${isExpanded ? 'bg-gray-100 text-gray-600' : ''}`}
+                                                                                    >
+                                                                                        {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                                                                                    </button>
+                                                                                ) : (
+                                                                                    /* Spacer same size as button */
+                                                                                    <div className="w-5" />
+                                                                                )}
+                                                                            </div>
+
+                                                                            <div className="flex flex-col gap-1 min-w-0">
+                                                                                {/* Building Photo in Grid View */}
+                                                                                {(p.details?.building_photo || p.image_url) && (
+                                                                                    <div className="mb-1 w-full h-24 overflow-hidden rounded-md border border-gray-100 relative bg-gray-50">
+                                                                                        <img
+                                                                                            src={p.details?.building_photo || p.image_url}
+                                                                                            alt={`Property at ${p.address}`}
+                                                                                            className="w-full h-full object-cover transform hover:scale-105 transition-transform duration-500"
+                                                                                            loading="lazy"
+                                                                                            onError={(e) => e.target.closest('div').style.display = 'none'}
+                                                                                        />
+                                                                                    </div>
+                                                                                )}
+
+                                                                                <div className="text-xs font-medium text-gray-900 truncate" title={p.address}>{p.address}</div>
+                                                                                <div className="flex items-center gap-1 md:hidden">
+                                                                                    <div className="text-[10px] text-gray-500 truncate">{p.owner}</div>
+                                                                                </div>
+                                                                                {p.isComplex ? (
+                                                                                    <span className="text-[10px] bg-indigo-50 text-indigo-700 font-bold px-1.5 py-0.5 rounded uppercase self-start border border-indigo-100">
+                                                                                        {p.unit_count} Units
+                                                                                    </span>
+                                                                                ) : (
+                                                                                    ((p.unit_count > 1) || (p.number_of_units > 1 && !p.unit)) ? (
+                                                                                        <span className="text-[10px] bg-indigo-50 text-indigo-700 font-bold px-1.5 py-0.5 rounded uppercase self-start border border-indigo-100">
+                                                                                            {p.unit_count || p.number_of_units} Units
+                                                                                        </span>
+                                                                                    ) : (
+                                                                                        p.unit ? <span className="text-[9px] text-gray-400 inline-block">Unit #{p.unit}</span> : null
+                                                                                    )
+                                                                                )}
+                                                                            </div>
+                                                                        </div>
+                                                                    </td>
+                                                                    {/* Hide Owner column on mobile to save space, show under address */}
+                                                                    <td className="p-2 text-right hidden md:table-cell align-top pt-3">
+                                                                        <div className="text-[10px] text-gray-500 truncate max-w-[100px]">{p.owner}</div>
+                                                                        <div className="text-[10px] font-mono">{p.assessed_value}</div>
+                                                                    </td>
+                                                                    {/* Mobile Only Value */}
+                                                                    <td className="p-2 text-right md:hidden align-top pt-3">
+                                                                        <div className="text-[10px] font-mono font-bold text-slate-700">{p.assessed_value}</div>
+                                                                    </td>
+                                                                </tr>
+
+                                                                {/* Expanded Sub-Rows */}
+                                                                <AnimatePresence>
+                                                                    {isExpanded && p.subProperties.map(sub => (
+                                                                        <motion.tr
+                                                                            key={sub.id}
+                                                                            initial={{ opacity: 0, height: 0 }}
+                                                                            animate={{ opacity: 1, height: 'auto' }}
+                                                                            exit={{ opacity: 0, height: 0 }}
+                                                                            className="bg-indigo-50/30 border-b border-indigo-50"
+                                                                            onClick={(e) => {
+                                                                                if (e.target.tagName === "INPUT") return;
+                                                                                if (isMultiSelectActive) toggleSelection(e, sub);
+                                                                                else onSelectProperty(sub);
+                                                                            }}
+                                                                        >
+                                                                            {isMultiSelectActive && <td className="p-2"></td>}
+                                                                            <td className="p-2 pl-9" colSpan={isMultiSelectActive ? 1 : 1}>
+                                                                                <div className="flex flex-col gap-0.5 relative pl-3 border-l-2 border-indigo-100">
+                                                                                    <div className="flex items-center justify-between">
+                                                                                        <span className="text-[10px] font-bold text-indigo-700 bg-indigo-100/50 px-1.5 rounded">
+                                                                                            Unit {sub.derivedUnit || sub.unit}
+                                                                                        </span>
+                                                                                        <span className="text-[10px] font-mono text-gray-500 md:hidden">{sub.assessed_value}</span>
+                                                                                    </div>
+                                                                                    <span className="text-[10px] text-gray-400 truncate">{sub.owner}</span>
+                                                                                </div>
+                                                                            </td>
+                                                                            <td className="p-2 text-right hidden md:table-cell align-top">
+                                                                                <div className="text-[10px] font-mono text-gray-600">{sub.assessed_value}</div>
+                                                                            </td>
+                                                                            <td className="md:hidden"></td>
+                                                                        </motion.tr>
+                                                                    ))}
+                                                                </AnimatePresence>
+                                                            </React.Fragment>
+                                                        );
+                                                    })}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
                                 ))}
                             </div>
-
-                            <div className="p-2 md:p-3 ${autoHeight ? '' : 'flex-1 overflow-y-auto'}">
-                                <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3 md:gap-4 pb-16 md:pb-0">
-                                    {groupedByCity && Object.entries(groupedByCity).map(([city, props]) => (
-                                        <div
-                                            key={city}
-                                            id={`city-card-${city}`}
-                                            className="bg-white border border-gray-200 rounded-lg md:rounded-xl shadow-sm flex flex-col lg:h-[450px] h-auto scroll-mt-4"
-                                        >
-                                            <div className="p-2 md:p-3 bg-gray-50 border-b border-gray-100 flex justify-between items-center sticky top-0 z-10 rounded-t-lg md:rounded-t-xl">
-                                                <h4 className="font-bold text-gray-800 text-sm">{city}</h4>
-                                                <span className="text-xs bg-gray-200 text-gray-600 px-2 py-0.5 rounded-full">{props.length}</span>
-                                            </div>
-                                            {/* On mobile (default), allow auto height. On md+, fix height to 400px for grid alignment */}
-                                            <div className="overflow-visible md:flex-1 md:overflow-y-auto">
-                                                <table className="w-full text-left border-collapse">
-                                                    <thead className="bg-white md:sticky md:top-0 z-10 shadow-sm border-b border-gray-100 hidden md:table-header-group">
-                                                        <tr>
-                                                            {isMultiSelectActive && <th className="p-2 w-8">
-                                                                <input type="checkbox" readOnly checked={props.every(p => isItemSelected(p))} />
-                                                            </th>}
-                                                            <th className="p-2 text-[10px] font-bold text-gray-500 uppercase">Address</th>
-                                                            <th className="p-2 text-[10px] font-bold text-gray-500 uppercase text-right">Owner</th>
-                                                        </tr>
-                                                    </thead>
-                                                    <tbody className="divide-y divide-gray-100">
-                                                        {props.map((p, i) => (
-                                                            <tr
-                                                                key={p.id || i}
-                                                                className={`hover:bg-blue-50/50 cursor-pointer ${isItemSelected(p) && isMultiSelectActive ? 'bg-blue-50' : ''}`}
-                                                                onClick={(e) => {
-                                                                    if (e.target.tagName === "INPUT") return;
-                                                                    if (isMultiSelectActive) toggleSelection(e, p);
-                                                                    else onSelectProperty(p.isComplex ? p.subProperties[0] : p);
-                                                                }}
-                                                            >
-                                                                {isMultiSelectActive && (
-                                                                    <td className="p-2 text-center w-8" onClick={(e) => toggleSelection(e, p)}>
-                                                                        <input type="checkbox" checked={isItemSelected(p)} readOnly className="pointer-events-none rounded text-blue-600" />
-                                                                    </td>
-                                                                )}
-                                                                <td className="p-2">
-                                                                    <div className="flex flex-col gap-1">
-                                                                        {/* Building Photo */}
-                                                                        {p.details?.building_photo && (
-                                                                            <div className="mb-1 w-full h-24 overflow-hidden rounded-md border border-gray-100 relative">
-                                                                                <img
-                                                                                    src={p.details.building_photo}
-                                                                                    alt={p.address}
-                                                                                    className="w-full h-full object-cover transform hover:scale-105 transition-transform duration-500"
-                                                                                    onError={(e) => e.target.style.display = 'none'}
-                                                                                />
-                                                                            </div>
-                                                                        )}
-
-                                                                        <div className="text-xs font-medium text-gray-900 truncate" title={p.address}>{p.address}</div>
-                                                                        <div className="flex items-center gap-1 md:hidden">
-                                                                            <div className="text-[10px] text-gray-500 truncate">{p.owner}</div>
-                                                                        </div>
-                                                                        {p.isComplex ? <span className="text-[9px] text-indigo-600 font-bold inline-block">{p.unit_count} Units</span> : <span className="text-[9px] text-gray-400 inline-block">Unit #{p.unit}</span>}
-                                                                    </div>
-                                                                </td>
-                                                                {/* Hide Owner column on mobile to save space, show under address */}
-                                                                <td className="p-2 text-right hidden md:table-cell align-top pt-3">
-                                                                    <div className="text-[10px] text-gray-500 truncate max-w-[100px]">{p.owner}</div>
-                                                                    <div className="text-[10px] font-mono">{p.assessed_value}</div>
-                                                                </td>
-                                                                {/* Mobile Only Value */}
-                                                                <td className="p-2 text-right md:hidden align-top pt-3">
-                                                                    <div className="text-[10px] font-mono font-bold text-slate-700">{p.assessed_value}</div>
-                                                                </td>
-                                                            </tr>
-                                                        ))}
-                                                    </tbody>
-                                                </table>
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
                         </div>
-                    )}
-                </div>
+                    </div>
+                )}
             </div>
         </div>
     );

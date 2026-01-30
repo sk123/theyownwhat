@@ -15,8 +15,31 @@ import random
 import traceback
 from io import StringIO
 import argparse
-# Add scripts directory to path for sibling imports
+import pandas as pd
+# --- Shared Cache for Large CSVs ---
+GEODATA_CACHE = {}
+GEODATA_LOCK = threading.Lock()
+
+# --- Network Refresh Control ---
+REFRESH_LOCK = threading.Lock()
+LAST_REFRESH_TIME = 0
+REFRESH_COOLDOWN_SECONDS = 300 # 5 minutes between refreshes to avoid thrashing
+# Add root directory to path for sibling imports
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+# Also add api directory explicitly just in case
+sys.path.append(os.path.join(os.path.dirname(__file__), '../api'))
+
+try:
+    from api.safe_network_refresh import run_refresh
+except ImportError:
+    from safe_network_refresh import run_refresh
+
+try:
+    from scripts.sync_data_dates import update_status
+except ImportError:
+    # If scripts folder is not in path yet, update_status will be None 
+    # and we'll handle it gracefully in the worker
+    update_status = None
 
 # Suppress only the single InsecureRequestWarning from urllib3 needed for this script
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -25,8 +48,8 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 DATABASE_URL = os.environ.get("DATABASE_URL")
 VISION_BASE_URL = "https://www.vgsi.com"
 CONNECTICUT_DATABASE_URL = f"{VISION_BASE_URL}/connecticut-online-database/"
-MAX_WORKERS = 20  # Increased workers for faster scraping
-DEFAULT_MUNI_WORKERS = 8 # Process more municipalities in parallel
+MAX_WORKERS = 12  # Approved reduction to avoid timeouts
+DEFAULT_MUNI_WORKERS = 4 # Process fewer municipalities in parallel to reduce server pressure
 
 # --- Municipality-specific data sources ---
 MUNICIPAL_DATA_SOURCES = {
@@ -98,6 +121,9 @@ MUNICIPAL_DATA_SOURCES = {
     'MONTVILLE': {'type': 'PROPERTYRECORDCARDS', 'towncode': '086'},
     'NAUGATUCK': {'type': 'PROPERTYRECORDCARDS', 'towncode': '088'},
     'NEW CANAAN': {'type': 'PROPERTYRECORDCARDS', 'towncode': '090'},
+    'WEST HARTFORD': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/westhartfordct/'},
+    'WOODBRIDGE': {'type': 'MAPXPRESS', 'domain': 'woodbridge.mapxpress.net'},
+
     'NEWINGTON': {'type': 'PROPERTYRECORDCARDS', 'towncode': '094'},
     'NORFOLK': {'type': 'PROPERTYRECORDCARDS', 'towncode': '098'},
     'NORTH CANAAN': {'type': 'PROPERTYRECORDCARDS', 'towncode': '100'},
@@ -168,6 +194,39 @@ MUNICIPAL_DATA_SOURCES = {
 GEODATA_CACHE = {}
 GEODATA_LOCK = threading.Lock()
 
+# --- Utility: Robust Requests with Retries ---
+def requests_get_with_retries(url, session=None, headers=None, max_retries=5, timeout=30):
+    """
+    Performs a GET request with exponential backoff and jitter.
+    If session is provided, use it; otherwise, use requests.get.
+    """
+    last_exception = None
+    for attempt in range(max_retries):
+        try:
+            # Add small random jitter (0-2s) to avoid thundering herd
+            if attempt > 0:
+                wait_time = (2 ** attempt) + random.uniform(0, 2)
+                time.sleep(wait_time)
+            
+            call_func = session.get if session else requests.get
+            resp = call_func(url, verify=False, timeout=timeout, headers=headers)
+            
+            # If we get a 429 (Too Many Requests) or 5xx, retry
+            if resp.status_code == 429 or 500 <= resp.status_code < 600:
+                # log(f"  [RETRY] HTTP {resp.status_code} for {url} (Attempt {attempt+1}/{max_retries})")
+                continue
+                
+            resp.raise_for_status()
+            return resp
+            
+        except (requests.exceptions.RequestException, urllib3.exceptions.HTTPError) as e:
+            last_exception = e
+            # log(f"  [RETRY] Error fetching {url}: {e} (Attempt {attempt+1}/{max_retries})")
+            continue
+            
+    # If we reached here, all retries failed
+    raise last_exception if last_exception else Exception(f"Failed to fetch {url} after {max_retries} attempts")
+
 # --- Logging ---
 def log(message, municipality=None):
     """Prints a message with a timestamp and optional municipality prefix."""
@@ -193,6 +252,43 @@ def get_db_connection():
             retries -= 1
             time.sleep(3)
     raise Exception("Could not connect to the database after multiple retries.")
+
+def trigger_network_refresh(municipality_name):
+    """
+    Triggers a safe network refresh if cooldown has passed.
+    Thread-safe.
+    """
+    global LAST_REFRESH_TIME
+    
+    # Quick check without lock first
+    if time.time() - LAST_REFRESH_TIME < REFRESH_COOLDOWN_SECONDS:
+        log(f"  [Info] Skipping network refresh after {municipality_name} (Cooldown active).")
+        return
+
+    # Acquire lock to ensure only one thread refreshes
+    if REFRESH_LOCK.acquire(blocking=False):
+        try:
+            # Double check time after acquiring lock
+            if time.time() - LAST_REFRESH_TIME < REFRESH_COOLDOWN_SECONDS:
+                log(f"  [Info] Skipping network refresh after {municipality_name} (Cooldown active).")
+                return
+            
+            log(f"🌐 Triggering Network Refresh after {municipality_name}...")
+            success = run_refresh(depth=4, dry_run=False) # Use default depth
+            
+            if success:
+                LAST_REFRESH_TIME = time.time()
+                log(f"✅ Network Refresh updated successfully.")
+            else:
+                log(f"⚠️ Network Refresh failed or was aborted.")
+                
+        except Exception as e:
+            log(f"❌ Error during triggered network refresh: {e}")
+            traceback.print_exc()
+        finally:
+            REFRESH_LOCK.release()
+    else:
+        log(f"  [Info] Skipping network refresh after {municipality_name} (Refresh already in progress).")
 
 # --- Resumability Functions ---
 def mark_property_processed_today(conn, property_id):
@@ -243,6 +339,42 @@ def get_current_owner_properties_by_municipality(conn):
         cursor.execute(query)
         results = cursor.fetchall()
         log(f"Found {len(results)} municipalities with 'Current Owner' properties.")
+        return results
+
+def get_priority_municipalities(conn):
+    """
+    Ranks municipalities by "data debt":
+    1. Count of 'Current Owner' placeholders.
+    2. Count of properties with missing cama_site_link.
+    3. Count of properties with missing building_photo/image_url.
+    4. Count of multi-unit properties with missing unit details.
+    """
+    query = """
+        SELECT 
+            property_city,
+            (
+                COUNT(*) FILTER (WHERE owner = 'Current Owner') * 10 +
+                COUNT(*) FILTER (WHERE cama_site_link IS NULL OR cama_site_link = '') * 5 +
+                COUNT(*) FILTER (WHERE (building_photo IS NULL OR building_photo = '') AND (image_url IS NULL OR image_url = '')) * 2 +
+                COUNT(*) FILTER (WHERE number_of_units > 1 AND (unit IS NULL OR unit = '')) * 15
+            ) as priority_score,
+            COUNT(*) FILTER (WHERE owner = 'Current Owner') as current_owner_count,
+            COUNT(*) FILTER (WHERE (building_photo IS NULL OR building_photo = '') AND (image_url IS NULL OR image_url = '')) as missing_photos
+        FROM properties
+        WHERE property_city IS NOT NULL
+        GROUP BY property_city
+        HAVING (
+            COUNT(*) FILTER (WHERE owner = 'Current Owner') > 0 OR
+            COUNT(*) FILTER (WHERE cama_site_link IS NULL OR cama_site_link = '') > 0 OR
+            COUNT(*) FILTER (WHERE (building_photo IS NULL OR building_photo = '') AND (image_url IS NULL OR image_url = '')) > 0 OR
+            COUNT(*) FILTER (WHERE number_of_units > 1 AND (unit IS NULL OR unit = '')) > 0
+        )
+        ORDER BY priority_score DESC
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(query)
+        results = cursor.fetchall()
+        log(f"Ranked {len(results)} municipalities by data debt (priority score).")
         return results
 
 def get_unprocessed_current_owner_properties(conn, municipality_name, force_process=False):
@@ -809,7 +941,7 @@ def scrape_mapxpress_property(session, base_url_template, row):
         # Reduced sleep time for parallel execution (random jitter 0.1s - 0.5s)
         time.sleep(random.uniform(0.1, 0.5))
         
-        resp = session.get(target_url, timeout=15)
+        resp = requests_get_with_retries(target_url, session=session, timeout=30)
         if resp.status_code == 200:
             scraped_data = parse_mapxpress_html(resp.text)
             
@@ -826,7 +958,7 @@ def scrape_mapxpress_property(session, base_url_template, row):
         return prop_id, None, str(e)
 
 
-def process_municipality_with_mapxpress(conn, municipality_name, data_source_config, current_owner_only=False, force_process=False):
+def process_municipality_with_mapxpress(conn, municipality_name, data_source_config, current_owner_only=False, force_process=False, max_workers=5):
     """Process a municipality scraping MapXpress (Parallel)."""
     
     log(f"--- Processing municipality: {municipality_name} via MapXpress (Force={force_process}) ---", municipality=municipality_name)
@@ -874,7 +1006,7 @@ def process_municipality_with_mapxpress(conn, municipality_name, data_source_con
     
     # Parallel Processing using ThreadPoolExecutor
     # We use threads for I/O (scraping), but update DB in the main thread to ensure safety.
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         # Submit all tasks
         future_to_prop = {
             executor.submit(scrape_mapxpress_property, session, base_url_template, row): row 
@@ -987,7 +1119,7 @@ def scrape_propertyrecordcards_property(session, base_url_template, row):
         # Respectful jitter
         time.sleep(random.uniform(0.1, 0.5))
         
-        resp = session.get(target_url, timeout=20)
+        resp = requests_get_with_retries(target_url, session=session, timeout=30)
         
         # Check for soft errors or redirect to search page (invalid ID)
         if "SearchMaster.aspx" in resp.url and "propertyresults.aspx" not in resp.url:
@@ -1016,7 +1148,7 @@ def scrape_propertyrecordcards_property(session, base_url_template, row):
     except Exception as e:
         return prop_id, None, str(e)
 
-def process_municipality_with_propertyrecordcards(conn, municipality_name, data_source_config, current_owner_only=False, force_process=False):
+def process_municipality_with_propertyrecordcards(conn, municipality_name, data_source_config, current_owner_only=False, force_process=False, max_workers=5):
     """Process a municipality using PropertyRecordCards (Parallel)."""
     
     log(f"--- Processing municipality: {municipality_name} via PropertyRecordCards (Force={force_process}) ---", municipality=municipality_name)
@@ -1063,7 +1195,7 @@ def process_municipality_with_propertyrecordcards(conn, municipality_name, data_
     })
     
     # 3. Parallel Execution
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_prop = {
             executor.submit(scrape_propertyrecordcards_property, session, base_url_template, row): row 
             for row in properties
@@ -1180,8 +1312,7 @@ def scrape_individual_property_page(prop_page_url, session, referer):
             'Referer': referer,
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
-        response = session.get(prop_page_url, verify=False, timeout=20, headers=headers)
-        response.raise_for_status()
+        response = requests_get_with_retries(prop_page_url, session=session, headers=headers, timeout=30)
         soup = BeautifulSoup(response.content, 'html.parser')
         # print(f"DEBUG: Scraped URL {prop_page_url} - Payload Size: {len(response.content)} - Title: {soup.title.text.strip() if soup.title else 'No Title'}", flush=True)
 
@@ -1326,13 +1457,11 @@ def scrape_street_properties(street_link, municipality_url, referer, session=Non
     try:
         if session:
             # When sharing a session, we stay in the same "ASP.NET Session"
-            response = session.get(street_link, headers={'Referer': referer} if referer else {}, verify=False, timeout=30)
+            response = requests_get_with_retries(street_link, session=session, headers={'Referer': referer} if referer else {}, timeout=30)
         else:
             with requests.Session() as s:
                 s.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
-                response = s.get(street_link, verify=False, timeout=30)
-
-        response.raise_for_status()
+                response = requests_get_with_retries(street_link, session=s, timeout=30)
         soup = BeautifulSoup(response.content, 'html.parser')
         
         # FIX: Use regex for case-insensitive and robust link finding
@@ -1371,7 +1500,7 @@ def scrape_street_properties(street_link, municipality_url, referer, session=Non
         
     return street_props
 
-def scrape_all_properties_by_address(municipality_url, municipality_name):
+def scrape_all_properties_by_address(municipality_url, municipality_name, max_workers=MAX_WORKERS):
     """Orchestrates the scraping of all properties for a municipality."""
     all_props_data = {}
     street_list_base_url = f"{municipality_url}Streets.aspx"
@@ -1380,8 +1509,7 @@ def scrape_all_properties_by_address(municipality_url, municipality_name):
         main_session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
         try:
             log(f"  -> Fetching street index for {municipality_name}...")
-            response = main_session.get(street_list_base_url, verify=False, timeout=20)
-            response.raise_for_status()
+            response = requests_get_with_retries(street_list_base_url, session=main_session, timeout=30)
             soup = BeautifulSoup(response.content, 'html.parser')
             
             # More robust selector: any link containing Streets.aspx?Letter=
@@ -1412,7 +1540,7 @@ def scrape_all_properties_by_address(municipality_url, municipality_name):
                 # Let's use a new request to be thread-safe/simple.
                 with requests.Session() as s:
                     s.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
-                    resp = s.get(letter_link, verify=False, timeout=20, headers={'Referer': street_list_base_url})
+                    resp = requests_get_with_retries(letter_link, session=s, timeout=30, headers={'Referer': street_list_base_url})
                     l_soup = BeautifulSoup(resp.content, 'html.parser')
                     
                     # More robust selector: any link containing Streets.aspx?Name=
@@ -1427,7 +1555,7 @@ def scrape_all_properties_by_address(municipality_url, municipality_name):
                 return (letter_link, [])
 
         log(f"  -> discovering streets across {len(letter_links)} letters in parallel...")
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_letter = {executor.submit(get_streets_for_letter, link): link for link in letter_links}
             for future in concurrent.futures.as_completed(future_to_letter):
                 ll, s_links = future.result()
@@ -1446,7 +1574,7 @@ def scrape_all_properties_by_address(municipality_url, municipality_name):
         # We can submit ALL, but for huge lists, maybe chunking helps avoid memory spikes?
         # 1000 streets is fine.
         
-        with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             # We pass the specific letter link as referer for each street AND use the main_session
             future_to_street = {executor.submit(scrape_street_properties, s_link, municipality_url, referer, main_session, municipality_name): s_link for s_link, referer in all_street_links}
             
@@ -1539,6 +1667,14 @@ def update_property_in_db(conn, property_db_id, vision_data, restricted_mode=Fal
                         should_update = False
         
         if should_update:
+            # Check for value change specifically for protected fields if not restricted
+            if key in PROTECTED_FIELDS and not is_placeholder and not restricted_mode:
+                if str(current_val).strip() == str(new_value).strip():
+                    should_update = False
+                else:
+                    log(f"Updating {key} from '{current_val}' to '{new_value}' (owner change detected)", municipality=municipality_name)
+        
+        if should_update:
             log(f"Planning to update field {key} to {new_value} (current: {current_val})", municipality=municipality_name)
             update_fields.append(sql.SQL("{} = %s").format(sql.Identifier(key)))
             values.append(new_value)
@@ -1547,13 +1683,15 @@ def update_property_in_db(conn, property_db_id, vision_data, restricted_mode=Fal
             pass
     
     if not update_fields:
-        print(f"DEBUG DB: No fields to update for property {property_db_id}", flush=True)
+        # print(f"DEBUG DB: No fields to update for property {property_db_id}", flush=True)
         return False
 
     # Use psycopg2.sql to safely format identifiers and structure
     query_sql = sql.SQL("UPDATE properties SET {} WHERE id = %s").format(
         sql.SQL(", ").join(update_fields)
     )
+
+
     
     values.append(property_db_id)
     
@@ -1586,10 +1724,12 @@ def find_match_for_property(prop_address, scraped_properties_dict):
                 
     return None
 
-def process_municipality_with_realtime_updates(conn, municipality_name, municipality_url, last_updated_date=None, current_owner_only=False, force_process=False):
+def process_municipality_with_realtime_updates(conn, municipality_name, municipality_url, last_updated_date=None, current_owner_only=False, force_process=False, max_workers=None):
     """
-    Process a municipality with real-time database updates, resumability, and direct URL optimization.
+    Main orchestration logic for vision appraisal municipalities.
     """
+    if max_workers is None:
+        max_workers = MAX_WORKERS
     log(f"--- Processing municipality: {municipality_name} (Force={force_process}) ---")
     
     # Determine Restricted Mode based on last_updated_date
@@ -1636,7 +1776,7 @@ def process_municipality_with_realtime_updates(conn, municipality_name, municipa
 
         with requests.Session() as session:
             session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
-            with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
                 future_to_id = {
                     executor.submit(scrape_individual_property_page, prop_url, session, referer_url): prop_id
                     for prop_id, prop_url in props_with_urls
@@ -1646,6 +1786,8 @@ def process_municipality_with_realtime_updates(conn, municipality_name, municipa
                     prop_id = future_to_id[future]
                     vision_data = future.result()
                     if vision_data:
+                        # Ensure the URL is stored in the data dict
+                        vision_data['cama_site_link'] = prop_url
                         if update_property_in_db(conn, prop_id, vision_data, restricted_mode=restricted_mode, municipality_name=municipality_name):
                             group1_updated_count += 1
                     
@@ -1663,7 +1805,7 @@ def process_municipality_with_realtime_updates(conn, municipality_name, municipa
         log(f"  -> Starting SLOW PATH: Full street scrape required for {len(props_without_urls)} properties...")
         
         # This scrape function now returns data dicts that include 'cama_site_link'
-        scraped_properties = scrape_all_properties_by_address(municipality_url, municipality_name)
+        scraped_properties = scrape_all_properties_by_address(municipality_url, municipality_name, max_workers=max_workers)
         
         if not scraped_properties:
             log(f"  -> Full scrape returned no data. Skipping {len(props_without_urls)} properties for {municipality_name}.")
@@ -1729,15 +1871,18 @@ def process_municipality_with_realtime_updates(conn, municipality_name, municipa
     log(f"Finished {municipality_name}. Total Updated: {total_updated_count} of {len(all_processed_ids)} properties.")
     return total_updated_count
 
+    log(f"Finished {municipality_name}. Total Updated: {total_updated_count} of {len(all_processed_ids)} properties.")
+    return total_updated_count
 
-# --- NEW PARALLEL WORKER FUNCTION ---
 
-def process_municipality_task(city_name, city_data, current_owner_only, force_process):
+# --- NEW PARALLEL WORKER FUNCTIONS ---
+
+def process_municipality_task(city_name, city_data, current_owner_only, force_process, max_workers=5):
     """
     Worker task for processing a single municipality. 
     This function creates its OWN database connection to ensure thread safety.
     """
-    log(f"WORKER_START: Starting job for {city_name}")
+    log(f"WORKER_START: Starting job for {city_name} (max_workers={max_workers})")
     conn = None
     try:
         # Each thread MUST create its own connection
@@ -1753,11 +1898,11 @@ def process_municipality_task(city_name, city_data, current_owner_only, force_pr
                 )
             elif MUNICIPAL_DATA_SOURCES[city_name]['type'] == 'MAPXPRESS':
                 updated_count = process_municipality_with_mapxpress(
-                    conn, city_name, MUNICIPAL_DATA_SOURCES[city_name], current_owner_only, force_process
+                    conn, city_name, MUNICIPAL_DATA_SOURCES[city_name], current_owner_only, force_process, max_workers=max_workers
                 )
             elif MUNICIPAL_DATA_SOURCES[city_name]['type'] == 'PROPERTYRECORDCARDS':
                 updated_count = process_municipality_with_propertyrecordcards(
-                    conn, city_name, MUNICIPAL_DATA_SOURCES[city_name], current_owner_only, force_process
+                    conn, city_name, MUNICIPAL_DATA_SOURCES[city_name], current_owner_only, force_process, max_workers=max_workers
                 )
             elif MUNICIPAL_DATA_SOURCES[city_name]['type'] == 'ct_geodata_csv':
                 updated_count = process_municipality_with_ct_geodata(
@@ -1765,7 +1910,7 @@ def process_municipality_task(city_name, city_data, current_owner_only, force_pr
                 )
             elif MUNICIPAL_DATA_SOURCES[city_name]['type'] == 'vision_appraisal':
                 updated_count = process_municipality_with_realtime_updates(
-                    conn, city_name, MUNICIPAL_DATA_SOURCES[city_name]['url'], last_updated_date=None, current_owner_only=current_owner_only, force_process=force_process
+                    conn, city_name, MUNICIPAL_DATA_SOURCES[city_name]['url'], last_updated_date=None, current_owner_only=current_owner_only, force_process=force_process, max_workers=max_workers
                 )
             else:
                 log(f"Unknown data source type for {city_name}: {MUNICIPAL_DATA_SOURCES[city_name]['type']}")
@@ -1773,10 +1918,49 @@ def process_municipality_task(city_name, city_data, current_owner_only, force_pr
         else:
             # Use traditional Vision Appraisal scraping
             updated_count = process_municipality_with_realtime_updates(
-                conn, city_name, city_data['url'], last_updated_date=city_data.get('last_updated'), current_owner_only=current_owner_only, force_process=force_process
+                conn, city_name, city_data['url'], last_updated_date=city_data.get('last_updated'), current_owner_only=current_owner_only, force_process=force_process, max_workers=max_workers
             )
         
         log(f"WORKER_DONE: Finished job for {city_name}. Updated {updated_count} properties.")
+        
+        # --- Update Data Freshness Report ---
+        if update_status:
+            try:
+                # Determine source type for the report
+                if city_name in MUNICIPAL_DATA_SOURCES:
+                    stype = MUNICIPAL_DATA_SOURCES[city_name]['type']
+                else:
+                    stype = 'VISION' # Default for Vision Appraisal
+                
+                # Normalizing type labels to match report expectations
+                type_map = {
+                    'vision_appraisal': 'VISION',
+                    'arcgis_csv': 'ARCGIS',
+                    'MAPXPRESS': 'MAPXPRESS',
+                    'PROPERTYRECORDCARDS': 'PROPERTYRECORDCARDS',
+                    'ct_geodata_csv': 'ARCGIS'
+                }
+                report_type = type_map.get(stype, stype)
+                
+                # In this context, external_date is 'today' since we just finished a refresh
+                # details includes property count
+                update_status(
+                    conn, 
+                    city_name, 
+                    report_type, 
+                    date.today(), 
+                    {"updated_properties": updated_count, "trigger": "background_updater"}
+                )
+                log(f"Synced freshness status for {city_name} ({report_type}).")
+            except Exception as e:
+                log(f"Failed to sync freshness status for {city_name}: {e}")
+
+        # --- Trigger Safe Network Refresh ---
+        try:
+             trigger_network_refresh(city_name)
+        except Exception as e:
+             log(f"Failed to trigger network refresh for {city_name}: {e}")
+
         return updated_count
     
     except Exception as e:
@@ -1788,6 +1972,33 @@ def process_municipality_task(city_name, city_data, current_owner_only, force_pr
         if conn:
             conn.close()
             log(f"WORKER_CLEANUP: Closed DB connection for {city_name}.")
+
+def process_service_group(service_name, municipalities, current_owner_only, force_process, muni_concurrency, inner_concurrency):
+    """
+    Manages a pool of workers for a specific service type (e.g., Vision, MapXpress).
+    Running in its own thread to allow independent parallel execution.
+    """
+    log(f"SERVICE_SCHEDULER: Starting group '{service_name}' with {len(municipalities)} munis (Muni Limit: {muni_concurrency}, Inner Threads: {inner_concurrency})")
+    
+    updated_counts = []
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=muni_concurrency) as executor:
+        future_to_city = {
+            executor.submit(process_municipality_task, city_name, city_data, current_owner_only, force_process, inner_concurrency): city_name
+            for city_name, city_data in municipalities
+        }
+        
+        for future in concurrent.futures.as_completed(future_to_city):
+             city_name = future_to_city[future]
+             try:
+                 count = future.result()
+                 updated_counts.append(count)
+             except Exception as e:
+                 log(f"SERVICE_ERROR: {service_name} group failed on {city_name}: {e}")
+
+    total_updated = sum(updated_counts)
+    log(f"SERVICE_COMPLETE: Finished group '{service_name}'. Total updated: {total_updated}")
+    return total_updated
 
 
 # --- Main Execution (Rewritten for Parallelism) ---
@@ -1804,6 +2015,8 @@ def main():
                        help=f'Number of municipalities to process in parallel (Default: {DEFAULT_MUNI_WORKERS})')
     parser.add_argument('--force', '-f', action='store_true',
                        help='Force reprocessing of all properties, ignoring the last processed date')
+    parser.add_argument('--priority', '-P', action='store_true',
+                       help='Prioritize municipalities by data debt (missing units, photos, etc.)')
     args = parser.parse_args()
     
     log(f"Starting data update process...")
@@ -1863,6 +2076,24 @@ def main():
                 else:
                     log(f"Warning: '{city}' (from DB) not found in available municipality list.")
             
+        elif args.priority:
+            # Priority mode: Rank by data debt
+            log("MODE: Prioritizing by Data Debt (Missing photos, units, links)")
+            priority_list = get_priority_municipalities(conn)
+            
+            for city, score, co_count, photo_count in priority_list:
+                city_upper = city.upper() if city else ""
+                if city_upper in all_municipalities_from_vision:
+                    municipalities_to_check[city_upper] = all_municipalities_from_vision[city_upper]
+                    municipalities_to_check[city_upper]['priority_score'] = score
+                    municipalities_to_check[city_upper]['current_owner_count'] = co_count
+                else:
+                    # Check if it's a known vision town even if not in our custom data sources
+                    # Actually all_municipalities_from_vision already includes them.
+                    pass
+            
+            log(f"Found {len(municipalities_to_check)} municipalities to enrich based on priority.")
+
         else:
             # Normal mode: Filter by year and/or specific municipalities
             if args.municipalities:
@@ -1896,6 +2127,12 @@ def main():
             for name, data in municipality_list:
                  data_type = data.get('type', 'vision_appraisal')
                  log(f"  - (Priority) {name} ({data.get('current_owner_count', 0)} properties) [{data_type}]")
+        elif args.priority:
+            # Sort by priority score (descending)
+            municipality_list.sort(key=lambda x: x[1].get('priority_score', 0), reverse=True)
+            for name, data in municipality_list:
+                data_type = data.get('type', 'vision_appraisal')
+                log(f"  - (Data Debt) {name} (Score: {data.get('priority_score', 0)}) [{data_type}]")
         else:
             # Sort alphabetically
             municipality_list.sort()
@@ -1910,13 +2147,59 @@ def main():
         conn = None 
         log("Setup complete. Closed main DB connection. Starting worker pool.")
 
-        # --- 3. EXECUTION PHASE: Process the queue in parallel ---
-        with concurrent.futures.ThreadPoolExecutor(max_workers=args.parallel_munis) as executor:
-            # Submit all jobs to the pool
-            future_to_city = {
-                executor.submit(process_municipality_task, city_name, city_data, args.current_owner_only, args.force): city_name
-                for city_name, city_data in municipality_list
-            }
+        # --- 3. EXECUTION PHASE: Process the queue in parallel service groups ---
+        
+        # Group municipalities by service type
+        service_groups = {}
+        for name, data in municipality_list:
+            # Determine type
+            if name in MUNICIPAL_DATA_SOURCES:
+                svc_type = MUNICIPAL_DATA_SOURCES[name]['type']
+            else:
+                svc_type = 'vision_appraisal'
+                
+            if svc_type not in service_groups:
+                service_groups[svc_type] = []
+            service_groups[svc_type].append((name, data))
+            
+        # Define limits per service
+        # Total concurrent DB connections =~ Sum(muni_limit)
+        service_config = {
+            'vision_appraisal': {'muni_limit': 4, 'inner_limit': 8},
+            'MAPXPRESS': {'muni_limit': 3, 'inner_limit': 5},
+            'PROPERTYRECORDCARDS': {'muni_limit': 3, 'inner_limit': 5},
+            'default': {'muni_limit': 2, 'inner_limit': 4}
+        }
+        
+        # Use ThreadPoolExecutor to run SERVICE MANAGERS in parallel
+        # We want all services to run simultaneously
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(service_groups)) as service_executor:
+            future_to_service = {}
+            for svc_type, munis in service_groups.items():
+                config = service_config.get(svc_type, service_config['default'])
+                
+                # If command line arg specified a lower limit, respect it? 
+                # Actually user asked for independent limits. We stick to config but clamp if arg is extremely low (debugging).
+                # Let's just use the config for now as it's tuned for independent limits.
+                
+                future = service_executor.submit(
+                    process_service_group, 
+                    svc_type, 
+                    munis, 
+                    args.current_owner_only, 
+                    args.force, 
+                    config['muni_limit'], 
+                    config['inner_limit']
+                )
+                future_to_service[future] = svc_type
+                
+            for future in concurrent.futures.as_completed(future_to_service):
+                svc = future_to_service[future]
+                try:
+                    res = future.result()
+                    total_updated += res
+                except Exception as e:
+                    log(f"FATAL ERROR managing service group {svc}: {e}")
 
             log(f"Submitted {len(future_to_city)} municipality jobs to the thread pool with {args.parallel_munis} workers...")
 

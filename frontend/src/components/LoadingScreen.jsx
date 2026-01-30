@@ -2,7 +2,7 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-export default function LoadingScreen({ visible, entities, properties }) {
+export default function LoadingScreen({ visible, entities, properties, lastItem }) {
     return (
         <AnimatePresence>
             {visible && (
@@ -29,9 +29,17 @@ export default function LoadingScreen({ visible, entities, properties }) {
                             transition={{ delay: 0.2 }}
                         >
                             <h3 className="text-2xl font-black text-white mb-2 tracking-tight">Building Network</h3>
-                            <p className="text-sm text-slate-400 font-medium mb-8">
+                            <p className="text-sm text-slate-400 font-medium mb-1">
                                 Tracing ownership links and aggregating property data...
                             </p>
+                            {/* Real-time feedback */}
+                            <div className="h-6 mb-6 flex items-center justify-center">
+                                {lastItem && (
+                                    <span className="text-xs font-mono text-blue-400 animate-pulse bg-blue-900/30 px-2 py-0.5 rounded border border-blue-500/30 truncate max-w-[280px]">
+                                        scanning: {lastItem.toLowerCase()}
+                                    </span>
+                                )}
+                            </div>
 
                             <div className="grid grid-cols-2 gap-4">
                                 <div className="bg-white/5 p-4 rounded-2xl border border-white/10 backdrop-blur-md">
