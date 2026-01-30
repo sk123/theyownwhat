@@ -155,7 +155,7 @@ def import_csv_data(conn, table_name, file_name, column_map):
                     chunk['number_of_units'] = pd.to_numeric(chunk['number_of_units'], errors='coerce')
                 
                 # --- ROBUSTNESS: Infer "Unit" from Location if missing ---
-                # This mirrors the logic in update_vision_data.py and fix_units_context_aware.py
+                # This mirrors the logic in update_data.py and fix_units_context_aware.py
                 if 'location' in chunk.columns and (( 'unit' not in chunk.columns ) or (chunk['unit'].isnull().any())):
                      if 'unit' not in chunk.columns:
                          chunk['unit'] = None

@@ -17,19 +17,19 @@ python3 scripts/vision_enrichment_status.py
 
 ### Run for Specific Town (Current Owner only)
 ```bash
-docker exec ctdata_api python updater/update_vision_data.py "EAST HAMPTON" --current-owner-only
+docker exec ctdata_api python updater/update_data.py "EAST HAMPTON" --current-owner-only
 ```
 
 ### Force Full Town Refresh
 ```bash
-docker exec ctdata_api python updater/update_vision_data.py "CROMWELL" --force
+docker exec ctdata_api python updater/update_data.py "CROMWELL" --force
 ```
 
 ### Run Multiple Towns
 ```bash
 # Priority list
 for town in "EAST HAMPTON" "CROMWELL" "RIDGEFIELD" "CHESHIRE"; do
-    docker exec ctdata_api python updater/update_vision_data.py "$town" --current-owner-only
+    docker exec ctdata_api python updater/update_data.py "$town" --current-owner-only
     sleep 60  # Pause between towns
 done
 ```
