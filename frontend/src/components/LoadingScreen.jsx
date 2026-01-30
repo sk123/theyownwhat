@@ -56,18 +56,30 @@ export default function LoadingScreen({ visible, entities, properties }) {
                                 {statusText}
                             </p>
 
-                            <div className="grid grid-cols-2 gap-4">
+                            {/* Progress Bar */}
+                            <div className="space-y-3">
                                 <div className="bg-white/5 p-4 rounded-2xl border border-white/10 backdrop-blur-md">
-                                    <div className="text-3xl font-black text-blue-400">
-                                        <AnimatedCounter value={entities} />
+                                    <div className="mb-3">
+                                        <div className="flex justify-between items-baseline mb-2">
+                                            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Progress</span>
+                                            <span className="text-2xl font-black text-blue-400">
+                                                {Math.round((properties / Math.max(entities * 10, 100)) * 100)}%
+                                            </span>
+                                        </div>
+                                        <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
+                                            <motion.div
+                                                className="h-full bg-gradient-to-r from-blue-500 to-indigo-500"
+                                                initial={{ width: "0%" }}
+                                                animate={{ width: `${Math.min((properties / Math.max(entities * 10, 100)) * 100, 100)}%` }}
+                                                transition={{ duration: 0.5, ease: "easeOut" }}
+                                            />
+                                        </div>
                                     </div>
-                                    <div className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Entities Found</div>
-                                </div>
-                                <div className="bg-white/5 p-4 rounded-2xl border border-white/10 backdrop-blur-md">
-                                    <div className="text-3xl font-black text-indigo-400">
-                                        <AnimatedCounter value={properties} />
+                                    <div className="text-xs text-slate-500 font-medium">
+                                        {entities > 0 && `${entities} entities found`}
+                                        {properties > 0 && entities > 0 && " • "}
+                                        {properties > 0 && `${properties} parcel records loaded`}
                                     </div>
-                                    <div className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Properties Linked</div>
                                 </div>
                             </div>
                         </motion.div>

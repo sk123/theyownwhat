@@ -32,7 +32,6 @@ export default function Insights({ data, onSelect, toolboxEnabled }) {
         let results = uppercaseData[lookupKey] ? [...uppercaseData[lookupKey]] : [];
 
         // Sort: Subsidized mode sorts by subsidized count, Total mode by total value
-        // The backend already returns them sorted, but we can enforce it or client-side filter
         results.sort((a, b) => {
             if (showSubsidized) {
                 return (b.subsidized_property_count || 0) - (a.subsidized_property_count || 0);
@@ -43,11 +42,6 @@ export default function Insights({ data, onSelect, toolboxEnabled }) {
         // Apply subsidy type filter
         if (showSubsidized && selectedSubsidy !== 'All') {
             results = results.filter(n => {
-                // subsidy_programs comes as JSON string or object from backend?
-                // Depending on json_converter, might be list.
-                // In main.py we used jsonb_agg, so pg returns list defined in json.
-                // But passing through json.dumps in python.
-                // Let's assume it's an array.
                 const programs = Array.isArray(n.subsidy_programs) ? n.subsidy_programs : [];
                 return programs.some(p => p.includes(selectedSubsidy) || p === selectedSubsidy);
             });
@@ -56,7 +50,7 @@ export default function Insights({ data, onSelect, toolboxEnabled }) {
         return results;
     }, [selectedCity, data, showSubsidized, selectedSubsidy]);
 
-    // Extract available subsidy types from the CURRENT displayed set (or the full subsidized set for the city)
+    // Extract available subsidy types
     const availableSubsidies = React.useMemo(() => {
         if (!showSubsidized) return [];
         const types = new Set();
@@ -188,18 +182,17 @@ export default function Insights({ data, onSelect, toolboxEnabled }) {
                                 )}
                             </div>
 
-
                             <div className="grid grid-cols-2 gap-4 mb-6">
                                 <div className="space-y-0.5">
-                                    <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Properties</div>
+                                    <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Total Parcel Records</div>
                                     <div className="text-xl font-black text-slate-900">
                                         {showSubsidized ? (
                                             <span className="flex items-baseline gap-1">
                                                 <span className="text-emerald-600">{network.subsidized_property_count || 0}</span>
-                                                <span className="text-xs text-slate-400 font-medium">({network.value})</span>
+                                                <span className="text-xs text-slate-400 font-medium">({network.property_count || network.value || 0})</span>
                                             </span>
                                         ) : (
-                                            network.value
+                                            network.property_count || network.value || 0
                                         )}
                                     </div>
                                 </div>
@@ -208,17 +201,16 @@ export default function Insights({ data, onSelect, toolboxEnabled }) {
                                     <div className="text-xl font-black text-slate-900">{network.business_count || 0}</div>
                                 </div>
                                 <div className="space-y-0.5">
-                                    <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Est. Value (Assessed)</div>
+                                    <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Assessed Value</div>
                                     <div className="text-xl font-black text-slate-900">${(network.total_assessed_value / 1000000).toFixed(1)}M</div>
                                 </div>
-                                <div className="pt-2 border-t border-slate-50 mt-2">
+                                <div className="col-span-2 pt-2 border-t border-slate-50 mt-1">
                                     <div className="flex justify-between items-center">
                                         <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Appraised Value</span>
                                         <span className="text-sm font-bold text-slate-700">${(network.total_appraised_value / 1000000).toFixed(1)}M</span>
                                     </div>
                                 </div>
                             </div>
-
 
                             <div className="pt-4 border-t border-slate-50 space-y-3">
                                 {showSubsidized && network.subsidy_programs && network.subsidy_programs.length > 0 && (
@@ -262,6 +254,6 @@ export default function Insights({ data, onSelect, toolboxEnabled }) {
                     </div>
                 )}
             </div>
-        </div >
+        </div>
     );
 }

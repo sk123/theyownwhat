@@ -251,6 +251,7 @@ export default function PropertyTable({
             if (g.units.length > 1) {
                 let totalAssessed = 0;
                 let totalAppraised = 0;
+                let totalUnits = 0;
 
                 g.units.sort((a, b) => {
                     const uA = a.derivedUnit || '';
@@ -263,6 +264,7 @@ export default function PropertyTable({
                     const appraised = parseFloat(String(u.appraised_value || '0').replace(/[^0-9.-]+/g, "")) || 0;
                     totalAssessed += assessed;
                     totalAppraised += appraised;
+                    totalUnits += parseInt(u.number_of_units || u.unit_count || 1);
                 });
 
                 const ownerList = Array.from(g.owners);
@@ -279,7 +281,8 @@ export default function PropertyTable({
                     address: g.rawAddress,
                     city: g.rawCity,
                     owner: ownerDisplay,
-                    unit_count: g.units.length,
+                    unit_count: totalUnits,
+                    parcel_count: g.units.length,
                     assessed_value: currencyFmt.format(totalAssessed),
                     appraised_value: currencyFmt.format(totalAppraised),
                     subProperties: g.units,
@@ -292,7 +295,8 @@ export default function PropertyTable({
                 result.push({
                     ...p,
                     unit_count: unitCount,
-                    isComplex: unitCount > 1 && !p.isComplex ? false : p.isComplex // Keep false if it's a single row, but we'll show the badge
+                    parcel_count: 1,
+                    isComplex: false
                 });
             }
         });
@@ -595,6 +599,14 @@ export default function PropertyTable({
                                                     </span>
                                                 )}
 
+                                                {/* Neighbor Badge (If not network member) */}
+                                                {(p.details?.is_network_member === false) && (
+                                                    <span className="inline-flex max-w-fit items-center gap-1 mb-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-100 text-slate-500 border border-slate-200">
+                                                        <LayoutGrid size={10} />
+                                                        Neighbor
+                                                    </span>
+                                                )}
+
                                                 <span className={`${p.management_info?.name ? 'text-xs text-gray-500' : 'text-sm font-medium text-gray-900'} truncate`}>
                                                     {p.address}
                                                 </span>
@@ -820,9 +832,12 @@ export default function PropertyTable({
                             <span className="text-xs font-bold text-white/90 bg-white/20 px-2 py-1 rounded-md">
                                 {properties.filter(p => p.is_in_network !== false).length} Parcels
                             </span>
-                            {groupedProperties.filter(g => g.units?.some(u => u.is_in_network !== false)).length < properties.filter(p => p.is_in_network !== false).length && (
+                            <span className="text-xs font-bold text-white/90 bg-white/20 px-2 py-1 rounded-md">
+                                {properties.filter(p => p.is_in_network !== false).reduce((acc, p) => acc + (parseInt(p.number_of_units || p.unit_count || 1)), 0)} Units
+                            </span>
+                            {groupedProperties.length < properties.length && (
                                 <span className="text-xs font-bold text-white bg-indigo-500/30 px-2 py-1 rounded-md">
-                                    {groupedProperties.filter(g => g.isComplex).length} Complexes
+                                    {groupedProperties.filter(g => g.isComplex).length} Buildings
                                 </span>
                             )}
                         </div>

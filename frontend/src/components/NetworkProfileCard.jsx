@@ -108,6 +108,22 @@ export default function NetworkProfileCard({ networkData, stats }) {
         // Falback to simple slice.
         .slice(0, 4);
 
+    // Terminology Calculations
+    const parcelsCount = propCount;
+    const unitsCount = networkData.properties ? networkData.properties.reduce((acc, p) => acc + (p.number_of_units || 1), 0) : 0;
+
+    // Group properties by street address (without unit) to count complexes
+    const uniqueAddresses = new Set();
+    if (networkData.properties) {
+        networkData.properties.forEach(p => {
+            const addr = p.address || p.location || "";
+            // Very simple address normalization: strip after '#' or 'UNIT' or 'APT'
+            const baseAddr = addr.split(/#|UNIT|APT/i)[0].trim().toUpperCase();
+            if (baseAddr) uniqueAddresses.add(`${baseAddr}|${p.city}`);
+        });
+    }
+    const complexesCount = uniqueAddresses.size;
+
     const businessList = topBusinesses.map((b, i) => (
         <span key={i} className="inline-block mr-1">
             <span className="italic text-slate-100">{b.name}</span>
@@ -130,24 +146,27 @@ export default function NetworkProfileCard({ networkData, stats }) {
                         <h2 className="text-sm md:text-base lg:text-xl font-black text-white tracking-tight truncate" title={managerName}>
                             {managerName}
                         </h2>
-                        {activeBusinesses.length > 0 && (
+                        {(activeBusinesses.length > 0 || humanPrincipals.length > 0) && (
                             <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider truncate max-w-[200px] hidden md:block">
-                                {activeBusinesses.length + entityPrincipals.length} Entities
+                                {activeBusinesses.length + humanPrincipals.length + entityPrincipals.length} Network Entities
                             </span>
                         )}
                     </div>
                 </div>
 
-                {/* Right: Stats & Actions Combined */}
                 <div className="flex items-center gap-3 lg:gap-6 shrink-0">
                     <div className="hidden sm:flex items-center gap-4 border-r border-white/10 pr-4 mr-1">
                         <div className="flex flex-col items-center">
-                            <span className="text-[10px] font-bold text-slate-500 uppercase leading-none mb-1">Assets</span>
-                            <span className="text-sm lg:text-base font-black text-white leading-none">{propCount}</span>
+                            <span className="text-[10px] font-bold text-slate-500 uppercase leading-none mb-1">Buildings</span>
+                            <span className="text-sm lg:text-base font-black text-white leading-none">{uniqueAddresses.size}</span>
                         </div>
                         <div className="flex flex-col items-center">
-                            <span className="text-[10px] font-bold text-slate-500 uppercase leading-none mb-1">Entities</span>
-                            <span className="text-sm lg:text-base font-black text-white leading-none">{networkData.businesses.length + entityPrincipals.length}</span>
+                            <span className="text-[10px] font-bold text-slate-500 uppercase leading-none mb-1">Units</span>
+                            <div className="flex items-baseline gap-1">
+                                <span className="text-sm lg:text-base font-black text-white leading-none">
+                                    {unitsCount}
+                                </span>
+                            </div>
                         </div>
                         <div className="flex flex-col items-end">
                             <span className="text-[10px] font-bold text-blue-400 uppercase leading-none mb-1">Valuation</span>
