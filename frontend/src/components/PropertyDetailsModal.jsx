@@ -1,7 +1,7 @@
 import React from 'react';
 import { X, Building2, MapPin, DollarSign, User, ExternalLink, Link as LinkIcon, Copy, Check, FolderPlus, Loader2, List as ListIcon } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import PropertyPublicDetails from './PropertyPublicDetails';
+import property_public_details from './property_public_details.jsx';
 
 // Helper to safely render a detail field
 function DetailItem({ icon: Icon, label, value }) {
@@ -308,7 +308,7 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
 
                     {/* Content */}
                     <div className="flex-1 overflow-y-auto p-6">
-                        <PropertyPublicDetails
+                        <property_public_details
                             property={property}
                             networkData={networkData}
                             onViewEntity={handleViewEntity}

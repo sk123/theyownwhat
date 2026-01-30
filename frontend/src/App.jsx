@@ -8,7 +8,6 @@ import Insights from './components/Insights';
 import SearchResults from './components/SearchResults';
 const PropertyDetailsModal = React.lazy(() => import('./components/PropertyDetailsModal'));
 const EntityDetailsModal = React.lazy(() => import('./components/EntityDetailsModal'));
-const NetworkAnalysisModal = React.lazy(() => import('./components/NetworkAnalysisModal'));
 const AboutModal = React.lazy(() => import('./components/AboutModal'));
 const MultiPropertyMapModal = React.lazy(() => import('./components/MultiPropertyMapModal'));
 import LoadingScreen from './components/LoadingScreen';
@@ -591,7 +590,6 @@ function App() {
             onClose={() => setSelectedDetailEntity(null)}
           />
 
-          <NetworkAnalysisModal
             isOpen={showAnalysis}
             onClose={() => setShowAnalysis(false)}
             networkData={networkData}
