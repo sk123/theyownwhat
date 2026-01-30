@@ -1327,6 +1327,8 @@ class InsightItem(BaseModel):
     entity_type: str
     value: Optional[int] = 0  # Default for backward compatibility with old cache
     property_count: Optional[int] = None  # Frontend expects this field
+    building_count: Optional[int] = 0
+    unit_count: Optional[int] = 0
     total_assessed_value: Optional[float] = None
     total_appraised_value: Optional[float] = None
     subsidized_property_count: Optional[int] = 0

@@ -44,6 +44,8 @@ def _calculate_and_cache_insights(cursor, town_col, town_filter):
             SELECT
                 ptn.network_id,
                 COUNT(DISTINCT ptn.property_id) as property_count,
+                COUNT(DISTINCT p.location) as building_count,
+                COALESCE(SUM(p.number_of_units), 0) as unit_count,
                 COALESCE(SUM(p.assessed_value), 0) as total_assessed_value,
                 COALESCE(SUM(p.appraised_value), 0) as total_appraised_value,
                 (SELECT COUNT(*) FROM entity_networks en WHERE en.network_id = ptn.network_id AND en.entity_type = 'business') as business_count
@@ -59,6 +61,8 @@ def _calculate_and_cache_insights(cursor, town_col, town_filter):
             SELECT DISTINCT ON (tn.network_id)
                 tn.network_id,
                 tn.property_count,
+                tn.building_count,
+                tn.unit_count,
                 tn.total_assessed_value,
                 tn.total_appraised_value,
                 tn.business_count,
@@ -102,6 +106,8 @@ def _calculate_and_cache_insights(cursor, town_col, town_filter):
             nde.entity_name,
             nde.entity_type,
             nde.property_count,
+            nde.building_count,
+            nde.unit_count,
             nde.total_assessed_value,
             nde.total_appraised_value,
             nde.business_count,
@@ -139,6 +145,8 @@ def _calculate_and_cache_insights(cursor, town_col, town_filter):
             
             if network['property_count'] > existing_net['property_count']:
                 existing_net['property_count'] = network['property_count']
+                existing_net['building_count'] = network.get('building_count', 0)
+                existing_net['unit_count'] = network.get('unit_count', 0)
                 existing_net['total_assessed_value'] = network['total_assessed_value']
                 existing_net['total_appraised_value'] = network['total_appraised_value']
             

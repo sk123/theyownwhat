@@ -1,30 +1,23 @@
 /* src/components/LoadingScreen.jsx */
-import React, { useEffect, useRef } from 'react';
-import { motion, AnimatePresence, useSpring } from 'framer-motion';
-
-function AnimatedCounter({ value, className }) {
-    const ref = useRef(null);
-    const motionValue = useSpring(0, { stiffness: 60, damping: 20 });
-
-    useEffect(() => {
-        motionValue.set(value || 0);
-    }, [value, motionValue]);
-
-    useEffect(() => {
-        return motionValue.on("change", (latest) => {
-            if (ref.current) {
-                ref.current.textContent = Math.round(latest).toLocaleString();
-            }
-        });
-    }, [motionValue]);
-
-    return <span ref={ref} className={className}>0</span>;
-}
+import React from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 
 export default function LoadingScreen({ visible, entities, properties }) {
-    let statusText = "Tracing ownership links and aggregating property data...";
-    if (properties > 0) statusText = "Linking properties to network...";
-    else if (entities > 0) statusText = "Found entities, retrieving properties...";
+    // Calculate progress percentage (capped at 100%)
+    // The previous formula used entities * 10 as a goal. 
+    // We'll keep it simple: progress is based on properties loaded relative to an expected depth.
+    const rawProgress = entities > 0 ? Math.min((properties / Math.max(entities * 8, 50)) * 100, 100) : 10;
+    const progress = Math.min(Math.round(rawProgress), 100);
+
+    // Fleeting one-liners for what's actually happening
+    const getStatusMessage = () => {
+        if (progress < 15) return "Scanning ownership registry...";
+        if (progress < 35) return "Resolving corporate hierarchies...";
+        if (progress < 55) return "Cross-referencing secondary entities...";
+        if (progress < 75) return "Linking property portfolios...";
+        if (progress < 90) return "Calculating aggregate valuations...";
+        return "Finalizing network visualization...";
+    };
 
     return (
         <AnimatePresence>
@@ -52,33 +45,26 @@ export default function LoadingScreen({ visible, entities, properties }) {
                             transition={{ delay: 0.2 }}
                         >
                             <h3 className="text-2xl font-black text-white mb-2 tracking-tight">Building Network</h3>
-                            <p className="text-sm text-slate-400 font-medium mb-8">
-                                {statusText}
+                            <p className="text-sm text-slate-400 font-medium mb-8 h-5 italic">
+                                {getStatusMessage()}
                             </p>
 
-                            {/* Progress Bar */}
+                            {/* Progress Bar - Minimal, no bullshit */}
                             <div className="space-y-3">
-                                <div className="bg-white/5 p-4 rounded-2xl border border-white/10 backdrop-blur-md">
-                                    <div className="mb-3">
-                                        <div className="flex justify-between items-baseline mb-2">
-                                            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Progress</span>
-                                            <span className="text-2xl font-black text-blue-400">
-                                                {Math.round((properties / Math.max(entities * 10, 100)) * 100)}%
-                                            </span>
-                                        </div>
-                                        <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
-                                            <motion.div
-                                                className="h-full bg-gradient-to-r from-blue-500 to-indigo-500"
-                                                initial={{ width: "0%" }}
-                                                animate={{ width: `${Math.min((properties / Math.max(entities * 10, 100)) * 100, 100)}%` }}
-                                                transition={{ duration: 0.5, ease: "easeOut" }}
-                                            />
-                                        </div>
+                                <div className="bg-white/5 p-5 rounded-2xl border border-white/10 backdrop-blur-md">
+                                    <div className="flex justify-between items-baseline mb-3">
+                                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Progress</span>
+                                        <span className="text-3xl font-black text-blue-400">
+                                            {progress}%
+                                        </span>
                                     </div>
-                                    <div className="text-xs text-slate-500 font-medium">
-                                        {entities > 0 && `${entities} entities found`}
-                                        {properties > 0 && entities > 0 && " • "}
-                                        {properties > 0 && `${properties} parcel records loaded`}
+                                    <div className="h-2.5 bg-slate-800 rounded-full overflow-hidden">
+                                        <motion.div
+                                            className="h-full bg-gradient-to-r from-blue-600 via-blue-500 to-indigo-500"
+                                            initial={{ width: "0%" }}
+                                            animate={{ width: `${progress}%` }}
+                                            transition={{ duration: 0.8, ease: "easeOut" }}
+                                        />
                                     </div>
                                 </div>
                             </div>
