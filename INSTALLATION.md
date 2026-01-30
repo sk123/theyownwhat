@@ -119,8 +119,8 @@ To enrich the database with detailed property information (listing details, zoni
 
 ```bash
 # Run for all configured municipalities
-docker compose run --rm updater python updater/update_vision_data.py
+docker compose run --rm updater python updater/update_data.py
 
 # Run for specific municipalities (e.g., ANSONIA and HARTFORD)
-docker compose run --rm updater python updater/update_vision_data.py -m "ANSONIA" "HARTFORD"
+docker compose run --rm updater python updater/update_data.py -m "ANSONIA" "HARTFORD"
 ```

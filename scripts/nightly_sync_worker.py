@@ -86,9 +86,9 @@ def main():
             print(f"Found {len(outdated_munis)} municipalities to refresh: {outdated_munis}")
             for muni in outdated_munis:
                 if not args.dry_run:
-                    run_script("updater/update_vision_data.py", ["-m", muni])
+                    run_script("updater/update_data.py", ["-m", muni])
                 else:
-                    print(f"Dry-run: Would run update_vision_data.py for {muni}")
+                    print(f"Dry-run: Would run update_data.py for {muni}")
         else:
             print("All municipalities are up to date.")
 

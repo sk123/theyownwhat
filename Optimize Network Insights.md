@@ -106,7 +106,7 @@ except Exception as e:
 
 *Searched filesystem*
 
-*Viewed [update_vision_data.py](file:///home/sk/dev/theyownwhat/updater/update_vision_data.py) *
+*Viewed [update_data.py](file:///home/sk/dev/theyownwhat/updater/update_data.py) *
 
 *Viewed [PropertyTable.jsx](file:///home/sk/dev/theyownwhat/frontend/src/components/PropertyTable.jsx) *
 
