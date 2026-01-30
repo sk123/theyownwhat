@@ -19,7 +19,7 @@ VISION_SCHEDULE_URL = "https://www.vgsi.com/connecticut-online-database/"
 
 # Delayed import to ensure sys.path is set
 def get_muni_configs():
-    from updater.update_vision_data import MUNICIPAL_DATA_SOURCES
+    from updater.update_data import MUNICIPAL_DATA_SOURCES
     return MUNICIPAL_DATA_SOURCES
 
 def get_db_connection():

@@ -53,7 +53,7 @@ def main():
             # Run enrichment on HOST (updater not mounted in container)
             # Assumes virtual environment or system Python has dependencies
             cmd = [
-                'python3', 'updater/update_vision_data.py',
+                'python3', 'updater/update_data.py',
                 town, '--force'
             ]
             

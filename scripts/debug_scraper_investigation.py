@@ -35,7 +35,7 @@ def test_new_haven_prop():
         location = data.get('Location', '')
         print(f"Extracted Location: {location}")
         
-        # Try fallbacks from update_vision_data.py
+        # Try fallbacks from update_data.py
         # KEYWORDS including 'Unit', 'Location'
         
         # Regex for unit in location
