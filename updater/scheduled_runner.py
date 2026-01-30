@@ -48,10 +48,10 @@ def run_nightly_update():
         try:
             logger.info(f"Updating {town}...")
             # Import here to avoid import errors if module not ready
-            from updater.update_vision_data import main as vision_main
+            from updater.update_data import main as vision_main
             
             # Run with current-owner-only flag (don't force full refresh nightly)
-            sys.argv = ['update_vision_data.py', town, '--current-owner-only']
+            sys.argv = ['update_data.py', town, '--current-owner-only']
             vision_main()
             
             logger.info(f"✓ {town} completed")
@@ -78,8 +78,8 @@ def run_weekly_full_scan():
     
     try:
         logger.info(f"Running full scan for {town} (week {week_number} rotation)")
-        from updater.update_vision_data import main as vision_main
-        sys.argv = ['update_vision_data.py', town, '--force']
+        from updater.update_data import main as vision_main
+        sys.argv = ['update_data.py', town, '--force']
         vision_main()
         logger.info(f"✓ Full scan of {town} completed")
     except Exception as e:

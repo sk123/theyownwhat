@@ -7,17 +7,18 @@ import { api } from './api';
 import Insights from './components/Insights';
 import NetworkProfileCard from './components/NetworkProfileCard';
 import SearchResults from './components/SearchResults';
-const PropertyDetailsModal = React.lazy(() => import('./components/PropertyDetailsModal'));
-const EntityDetailsModal = React.lazy(() => import('./components/EntityDetailsModal'));
-const AboutModal = React.lazy(() => import('./components/AboutModal'));
-const MultiPropertyMapModal = React.lazy(() => import('./components/MultiPropertyMapModal'));
-const FreshnessModal = React.lazy(() => import('./components/FreshnessModal'));
 import LoadingScreen from './components/LoadingScreen';
 import ToolboxDashboard from './components/ToolboxDashboard';
 import StatCard from './components/StatCard';
 import BackgroundGrid from './components/BackgroundGrid';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Sparkles, Loader2, Search, ArrowRight, Building2, TrendingUp, Users } from 'lucide-react';
+
+const PropertyDetailsModal = React.lazy(() => import('./components/PropertyDetailsModal'));
+const EntityDetailsModal = React.lazy(() => import('./components/EntityDetailsModal'));
+const AboutModal = React.lazy(() => import('./components/AboutModal'));
+const MultiPropertyMapModal = React.lazy(() => import('./components/MultiPropertyMapModal'));
+const FreshnessModal = React.lazy(() => import('./components/FreshnessModal'));
 
 // NOTE: This is a simplified App.jsx. In a real scenario we'd use React Router.
 function App() {

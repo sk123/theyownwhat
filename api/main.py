@@ -2314,9 +2314,9 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                     for s_row in cursor.fetchall():
                         subsidies_map[s_row['property_id']].append(dict(s_row))
 
-                    # Now yield in batches of 100
-                    for i in range(0, len(all_raw_rows), 100):
-                        batch = all_raw_rows[i:i+100]
+                    # Now yield in batches of 25 for smoother updates
+                    for i in range(0, len(all_raw_rows), 25):
+                        batch = all_raw_rows[i:i+25]
                         shaped_rows = [shape_property_row(r, subsidies_map.get(r['id'])) for r in batch]
                         yield _yield(json.dumps(
                             {"type": "properties", "data": shaped_rows},

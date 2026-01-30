@@ -3,7 +3,7 @@ import os
 import requests
 import psycopg2
 from bs4 import BeautifulSoup
-from updater.update_vision_data import scrape_individual_property_page
+from updater.update_data import scrape_individual_property_page
 
 def test():
     url = "https://gis.vgsi.com/WinchesterCT/Parcel.aspx?pid=3678"
@@ -32,7 +32,7 @@ def test():
     
     if data:
         print("Scraper success. Attempting DB update...")
-        from updater.update_vision_data import update_property_in_db
+        from updater.update_data import update_property_in_db
         success = update_property_in_db(conn, db_id, data, restricted_mode=False)
         print(f"DB Update success: {success}")
     else:

@@ -4,7 +4,7 @@ from bs4 import BeautifulSoup
 import re
 import sys
 
-# Scrape logic copied from update_vision_data.py
+# Scrape logic copied from update_data.py
 def scrape_individual_property_page(prop_page_url, session):
     try:
         response = session.get(prop_page_url, verify=False, timeout=20)
@@ -34,7 +34,7 @@ def scrape_individual_property_page(prop_page_url, session):
                 for cell in cells:
                     # Look for labels inside bold or just text
                     # The layout is usually Label: Value or Label <br> Value
-                    # This generic parser is what update_vision_data uses
+                    # This generic parser is what update_data uses
                      
                     # We can try to just get all pairs
                     # West Hartford specific check:
