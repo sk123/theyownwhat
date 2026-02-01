@@ -195,16 +195,20 @@ function App() {
         // On Complete
         setNetworkData(newData);
 
-        // Calc stats
+        // on Complete calc stats
         const totalVal = newData.properties.reduce((acc, p) => {
+          if (p.is_network_member === false) return acc; // Only sum value of owned properties
           const val = parseFloat(String(p.assessed_value || '0').replace(/[^0-9.]/g, ''));
           return acc + val;
         }, 0);
 
         const totalApp = newData.properties.reduce((acc, p) => {
+          if (p.is_network_member === false) return acc;
           const val = parseFloat(String(p.appraised_value || '0').replace(/[^0-9.]/g, ''));
           return acc + val;
         }, 0);
+
+        const ownedCount = newData.properties.filter(p => p.is_network_member !== false).length;
 
         // Calculate Principal Breakdown
         let hCount = 0;
@@ -218,7 +222,8 @@ function App() {
         });
 
         setStats({
-          totalProperties: newData.properties.length,
+          totalProperties: newData.properties.length, // All fetched properties (including neighbors)
+          ownedProperties: ownedCount, // Only explicit network members
           totalValue: totalVal,
           totalAppraised: totalApp,
           humanCount: hCount,
@@ -324,6 +329,28 @@ function App() {
 
 
 
+  // Maintenance Mode State
+  const [maintenanceMode, setMaintenanceMode] = useState(false);
+
+  // Poll System Status
+  React.useEffect(() => {
+    const checkStatus = () => {
+      api.get('/system/status')
+        .then(data => {
+          if (data && data.maintenance !== undefined) {
+            setMaintenanceMode(data.maintenance);
+          }
+        })
+        .catch(() => {
+          // If status check fails, assume ok or ignore
+        });
+    };
+
+    checkStatus();
+    const interval = setInterval(checkStatus, 10000); // Check every 10s
+    return () => clearInterval(interval);
+  }, []);
+
   return (
     <div className="h-screen bg-slate-50 flex flex-col overflow-hidden font-sans text-slate-900 selection:bg-blue-100 selection:text-blue-900">
       <Header
@@ -334,6 +361,28 @@ function App() {
         toolboxEnabled={toolboxEnabled}
       />
 
+      {/* Maintenance Overlay */}
+      <AnimatePresence>
+        {maintenanceMode && (
+          <motion.div
+            initial={{ opacity: 0, y: -50 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -50 }}
+            className="absolute top-20 left-0 right-0 z-50 flex justify-center pointer-events-none"
+          >
+            <div className="bg-amber-50 border border-amber-200 text-amber-800 px-6 py-4 rounded-xl shadow-xl flex items-center gap-4 max-w-lg pointer-events-auto">
+              <div className="p-2 bg-amber-100 rounded-full animate-pulse">
+                <Loader2 size={24} className="animate-spin text-amber-600" />
+              </div>
+              <div>
+                <h3 className="font-bold text-lg">System Maintenance in Progress</h3>
+                <p className="text-sm text-amber-700">The network graph is currently being rebuilt to improve data accuracy. Some features may be unavailable or slower than usual. This message will disappear when complete.</p>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <LoadingScreen
         visible={streamingStatus.active}
         entities={streamingStatus.entities}
@@ -341,6 +390,7 @@ function App() {
       />
 
       <main className="flex-1 overflow-hidden relative z-10">
+
         {/* HERO / SEARCH SECTION */}
         <AnimatePresence mode="wait">
           {view === 'home' && (

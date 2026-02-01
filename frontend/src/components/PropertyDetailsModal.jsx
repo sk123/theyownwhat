@@ -1,6 +1,7 @@
 import React from 'react';
-import { X, Building2, MapPin, DollarSign, User, ExternalLink, Link as LinkIcon, Copy, Check, FolderPlus, Loader2 } from 'lucide-react';
+import { X, Building2, MapPin, DollarSign, User, ExternalLink, Link as LinkIcon, Copy, Check, FolderPlus, Loader2, List as ListIcon } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import PropertyPublicDetails from './property_public_details.jsx';
 
 // Helper to safely render a detail field
 function DetailItem({ icon: Icon, label, value }) {
@@ -21,6 +22,20 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
 
     const isComplex = property.isComplex;
     const details = property.details || {};
+
+    // Property (location) address
+    const propertyAddress = property.address || property.location || details.location || null;
+    // Owner mailing address
+    const mailingAddress =
+        details.mail_address ||
+        details.mailing_address ||
+        details.owner_address ||
+        (networkData.businesses?.find(b => {
+            const bid = property.details?.business_id;
+            if (bid && String(b.id) === String(bid)) return true;
+            const ownerName = property.owner || '';
+            return b.name && ownerName && b.name.toUpperCase().trim() === ownerName.toUpperCase().trim();
+        })?.mail_address || null);
 
     // Find related business and principals using IDs
     const relatedBusiness = networkData.businesses?.find(b => {
@@ -49,26 +64,22 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
         return false;
     }) || [];
 
-    // Mailing address from business or property details
-    // Check both top-level business fields and nested details
-    const mailingAddress =
-        relatedBusiness?.mail_address ||
-        relatedBusiness?.details?.mail_address ||
-        details.mail_address ||
-        details.mailing_address ||
-        (relatedBusiness?.mail_city ?
-            `${relatedBusiness.mail_city}, ${relatedBusiness.mail_state || 'CT'} ${relatedBusiness.mail_zip || ''}`.trim()
-            : (relatedBusiness?.details?.mail_city ?
-                `${relatedBusiness.details.mail_city}, ${relatedBusiness.details.mail_state || 'CT'} ${relatedBusiness.details.mail_zip || ''}`.trim()
-                : null));
 
-    // Helper to find first valid URL
+    // Helper to find first valid URL, robust for Hartford
     const getValidUrl = (...args) => {
         for (const arg of args) {
             if (arg && typeof arg === 'string') {
                 if (arg.startsWith('http://') || arg.startsWith('https://') || arg.startsWith('/api/static/')) {
                     return arg;
                 }
+            }
+        }
+        // If Hartford and no valid photo, use proxy endpoint
+        if ((property.city || '').toUpperCase() === 'HARTFORD') {
+            let pid = details.account_number || details.link || property.id;
+            if (pid) {
+                pid = pid.toString().replace(/[^0-9]/g, '');
+                return `/api/hartford/image/${pid}`;
             }
         }
         return null;
@@ -197,35 +208,36 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
                                 {isComplex ? <Building2 size={24} /> : <MapPin size={24} />}
                             </div>
                             <div>
-                                <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-                                    {property.complex_name && (
-                                        <div className="text-sm font-medium text-gray-500 mb-1">{property.complex_name}</div>
-                                    )}
-                                    {property.address}
-                                    {!isComplex && property.derivedUnit && (
-                                        <span className="text-blue-500">#{property.derivedUnit}</span>
-                                    )}
-                                    <button
-                                        onClick={(e) => {
-                                            const addr = `${property.address}${!isComplex && property.derivedUnit ? ' #' + property.derivedUnit : ''}, ${property.city} CT`;
-                                            navigator.clipboard.writeText(addr);
-                                            const el = e.currentTarget;
-                                            const original = el.innerHTML;
-                                            el.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
-                                            setTimeout(() => { if (el) el.innerHTML = original; }, 1000);
-                                        }}
-                                        className="p-1 hover:bg-gray-100 rounded text-gray-400 hover:text-blue-600 transition-colors"
-                                        title="Copy Full Address"
-                                    >
-                                        <Copy size={16} />
-                                    </button>
-                                    {isComplex && property.unit_count && (
-                                        <span className="text-indigo-500 ml-2 bg-indigo-50 px-2 py-0.5 rounded-lg text-sm uppercase tracking-wide">
-                                            {property.unit_count} Units
-                                        </span>
-                                    )}
-                                </h2>
-                                <div className="flex flex-col md:flex-row md:items-center gap-2 mt-1">
+                                {property.complex_name && (
+                                    <div className="text-sm font-medium text-gray-500 mb-1">{property.complex_name}</div>
+                                )}
+                                <div className="flex flex-col gap-1">
+                                    <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Property Address</span>
+                                    <span className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                                        {propertyAddress || 'N/A'}
+                                        {!isComplex && (property.unit || property.derivedUnit) && (
+                                            <span className="text-blue-500">#{property.unit || property.derivedUnit}</span>
+                                        )}
+                                        <button
+                                            onClick={(e) => {
+                                                const unitStr = (property.unit || property.derivedUnit) ? ` #${property.unit || property.derivedUnit}` : '';
+                                                const addr = `${propertyAddress}${!isComplex ? unitStr : ''}, ${property.city} CT`;
+                                                navigator.clipboard.writeText(addr);
+                                                const el = e.currentTarget;
+                                                const original = el.innerHTML;
+                                                el.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+                                                setTimeout(() => { if (el) el.innerHTML = original; }, 1000);
+                                            }}
+                                            className="p-1 hover:bg-gray-100 rounded text-gray-400 hover:text-blue-600 transition-colors"
+                                            title="Copy Full Address"
+                                        >
+                                            <Copy size={16} />
+                                        </button>
+                                    </span>
+                                    <span className="text-xs font-bold text-gray-400 uppercase tracking-wider mt-2">Owner Mailing Address</span>
+                                    <span className="text-sm text-gray-700">{mailingAddress || 'N/A'}</span>
+                                </div>
+                                <div className="flex flex-col md:flex-row md:items-center gap-2 mt-2">
                                     <div className="flex items-center gap-2">
                                         <span className="text-sm font-medium text-gray-500">{property.city}</span>
                                         {isComplex && (
@@ -233,14 +245,67 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
                                                 {property.unit_count} Units
                                             </span>
                                         )}
-                                        {property.subsidies && property.subsidies.length > 0 && (
-                                            <span className="text-xs font-bold text-white bg-amber-500 px-2 py-0.5 rounded-full">
-                                                Housing Preservation
-                                            </span>
-                                        )}
+                                        {property.subsidies && property.subsidies.length > 0 && (() => {
+                                            // Gather all program types and names
+                                            const programTypes = property.subsidies.map(s => (s.program_type || '').toLowerCase());
+                                            const programNames = property.subsidies.map(s => (s.program_name || '').toLowerCase());
+                                            // Define clear subsidy keywords
+                                            const subsidyKeywords = [
+                                                'public housing',
+                                                'project-based',
+                                                'project based',
+                                                'pbv',
+                                                'section 8',
+                                                'ct sh moderate rental',
+                                                'mod rehab',
+                                                'mod. rehab',
+                                                'mod. rental',
+                                                'mod rental',
+                                                'hud',
+                                                'lihtc',
+                                                'tax credit',
+                                                'rental assistance',
+                                                'rental subsidy',
+                                                'subsidized',
+                                                '811',
+                                                '202',
+                                                '236',
+                                                '221(d)(3)',
+                                                '221d3',
+                                                'section 236',
+                                                'section 202',
+                                                'section 221',
+                                                'section 811',
+                                            ];
+                                            // Define restrictive covenant keywords
+                                            const restrictiveKeywords = [
+                                                'restrictive covenant',
+                                                'deed restriction',
+                                                'affordability covenant',
+                                            ];
+                                            // Check for clear subsidy
+                                            const hasSubsidy = programTypes.concat(programNames).some(type =>
+                                                subsidyKeywords.some(keyword => type.includes(keyword))
+                                            );
+                                            // Check for restrictive covenant only
+                                            const allRestrictive = programTypes.concat(programNames).every(type =>
+                                                restrictiveKeywords.some(keyword => type.includes(keyword))
+                                            );
+                                            let label = 'Preservation';
+                                            if (hasSubsidy) {
+                                                label = 'Subsidized';
+                                            } else if (allRestrictive) {
+                                                label = 'Restricted Covenant';
+                                            }
+                                            return (
+                                                <span className="text-xs font-bold text-white bg-amber-500 px-2 py-0.5 rounded-full">
+                                                    {label}
+                                                </span>
+                                            );
+                                        })()}
                                     </div>
                                     <a
-                                        href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${property.address}${!isComplex && property.derivedUnit ? ' #' + property.derivedUnit : ''}, ${property.city} CT`)}`}
+                                        href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${propertyAddress}${!isComplex && (property.unit || property.derivedUnit) ? ' #' + (property.unit || property.derivedUnit) : ''}, ${property.city} CT`)}`}
                                         target="_blank"
                                         rel="noreferrer"
                                         className="text-[10px] text-blue-600 hover:text-blue-800 font-bold uppercase tracking-widest flex items-center gap-1 group"
@@ -306,165 +371,16 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
                     </div>
 
                     {/* Content */}
-                    <div className="flex-1 overflow-y-auto p-6 space-y-6">
-
-                        {/* Image Section */}
-                        {imageUrl && (
-                            <div className="w-full h-48 bg-gray-100 rounded-xl overflow-hidden border border-gray-200 relative group">
-                                <img
-                                    src={imageUrl}
-                                    alt={property.address}
-                                    className="w-full h-full object-cover"
-                                    onError={(e) => {
-                                        e.target.onerror = null;
-                                        e.target.src = 'https://via.placeholder.com/400x200?text=No+Image+Available';
-                                    }}
-                                />
-                            </div>
-                        )}
-
-                        {/* Financials Row */}
-                        <div className="grid grid-cols-2 gap-4">
-                            <div className="p-4 bg-green-50 rounded-xl border border-green-100">
-                                <div className="text-xs font-bold text-green-700 uppercase tracking-wider mb-1 flex items-center gap-1">
-                                    <DollarSign size={12} /> Assessed Value
-                                </div>
-                                <div className="text-2xl font-mono font-bold text-gray-900">
-                                    {property.assessed_value}
-                                </div>
-                            </div>
-                            <div className="p-4 bg-blue-50 rounded-xl border border-blue-100">
-                                <div className="text-xs font-bold text-blue-700 uppercase tracking-wider mb-1 flex items-center gap-1">
-                                    <DollarSign size={12} /> Appraised Value
-                                </div>
-                                <div className="text-2xl font-mono font-bold text-gray-900">
-                                    {property.appraised_value || '-'}
-                                </div>
-                            </div>
-                        </div>
-
-                        {/* Ownership */}
-                        <div className="space-y-2">
-                            <h3 className="text-xs font-bold text-gray-900 uppercase tracking-wider flex items-center gap-2 mb-2">
-                                <User size={14} /> Ownership
-                            </h3>
-                            <div className="p-4 bg-gray-50 rounded-xl border border-gray-100">
-                                <div
-                                    className={`text-lg font-medium ${relatedBusiness ? 'text-blue-600 hover:text-blue-700 cursor-pointer underline decoration-2 decoration-blue-400/30 hover:decoration-blue-600' : 'text-gray-900'}`}
-                                    onClick={() => relatedBusiness && handleViewEntity(relatedBusiness, 'business')}
-                                    title={relatedBusiness ? 'Click to view business details' : ''}
-                                >
-                                    {property.owner}
-                                </div>
-                                {property.details?.co_owner && (
-                                    <div className="text-sm text-gray-600 mt-1 flex items-center gap-1">
-                                        <span className="text-xs font-bold text-gray-400">CO-OWNER:</span>
-                                        {property.details.co_owner}
-                                    </div>
-                                )}
-                                <div className="text-sm text-gray-500 mt-2 pt-2 border-t border-gray-200">
-                                    <span className="text-xs font-bold text-gray-400 block mb-0.5">OWNER MAILING ADDRESS</span>
-                                    {mailingAddress || details.mail_address || details.mailing_address || details.owner_address || (details.mail_city ? `${details.mail_city}, ${details.mail_state || 'CT'} ${details.mail_zip || ''}`.trim() : 'N/A')}
-                                </div>
-
-                                {/* PRINCIPALS SECTION */}
-                                {relatedPrincipals.length > 0 && (
-                                    <div className="mt-3 pt-3 border-t border-gray-200">
-                                        <span className="text-xs font-bold text-gray-400 block mb-2">PRINCIPALS</span>
-                                        <div className="space-y-2">
-                                            {relatedPrincipals.map((principal, idx) => (
-                                                <div
-                                                    key={idx}
-                                                    className="flex items-start gap-2 text-sm cursor-pointer hover:bg-blue-50/50 p-2 rounded-lg transition-colors"
-                                                    onClick={() => handleViewEntity(principal, 'principal')}
-                                                    title="Click to view principal details"
-                                                >
-                                                    <div className="w-1.5 h-1.5 rounded-full bg-indigo-400 mt-1.5 shrink-0"></div>
-                                                    <div className="flex-1">
-                                                        <div className="font-medium text-blue-600 hover:text-blue-700">{principal.name || principal.name_c}</div>
-                                                        {principal.details?.title && (
-                                                            <div className="text-xs text-gray-500">{principal.details.title}</div>
-                                                        )}
-                                                    </div>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-
-                        {/* SUBSIDIES SECTION */}
-                        {property.subsidies && property.subsidies.length > 0 && (
-                            <div className="space-y-2">
-                                <h3 className="text-xs font-bold text-gray-900 uppercase tracking-wider flex items-center gap-2 mb-2 text-amber-600">
-                                    <span className="w-3.5 h-3.5 flex items-center justify-center rounded-full bg-amber-100 text-amber-600 font-bold text-[10px]">$</span>
-                                    Housing Programs & Preservation
-                                </h3>
-                                <div className="p-4 bg-amber-50 rounded-xl border border-amber-100 space-y-3">
-                                    {property.management_company && (
-                                        <div className="flex flex-col gap-1 pb-3 border-b border-amber-200/50">
-                                            <span className="text-[10px] font-bold text-amber-700/50 uppercase tracking-wider">Management Company</span>
-                                            <div className="font-medium text-amber-900">{property.management_company}</div>
-                                        </div>
-                                    )}
-                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                        {property.subsidies.map((sub, idx) => (
-                                            <div key={idx} className="bg-white p-3 rounded-lg border border-amber-100 shadow-sm">
-                                                <div className="flex justify-between items-start mb-1">
-                                                    <span className="font-bold text-amber-700 text-xs">{sub.subsidy_type}</span>
-                                                    {sub.units_subsidized > 0 && (
-                                                        <span className="text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded-full font-bold">
-                                                            {sub.units_subsidized} Units
-                                                        </span>
-                                                    )}
-                                                </div>
-                                                <div className="text-xs font-medium text-gray-800 mb-1">{sub.program_name}</div>
-                                                {sub.expiry_date && (
-                                                    <div className="text-[10px] text-gray-500 flex items-center gap-1">
-                                                        <span>Expires:</span>
-                                                        <span className={`font-mono font-bold ${new Date(sub.expiry_date) < new Date() ? 'text-red-500' : 'text-gray-700'}`}>
-                                                            {sub.expiry_date}
-                                                        </span>
-                                                    </div>
-                                                )}
-                                                {sub.source_url && (
-                                                    <a href={sub.source_url} target="_blank" rel="noreferrer" className="block mt-2 text-[10px] text-blue-500 hover:underline flex items-center gap-1">
-                                                        View NHPD Record (Account Required) <ExternalLink size={8} />
-                                                    </a>
-                                                )}
-                                            </div>
-                                        ))}
-                                    </div>
-                                    <div className="text-[10px] text-amber-700/60 pt-1 italic">
-                                        Source: National Housing Preservation Database (NHPD)
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-
-                        {/* Property Attributes Grid - Single Properties Only */}
-                        {!isComplex && (
-                            <div className="space-y-2">
-                                <h3 className="text-xs font-bold text-gray-900 uppercase tracking-wider flex items-center gap-2 mb-2">
-                                    <Building2 size={14} /> Attributes
-                                </h3>
-                                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                                    <DetailItem label="Year Built" value={details.year_built} />
-                                    <DetailItem label="Living Area" value={details.living_area ? `${details.living_area} sqft` : null} />
-                                    <DetailItem label="Acres" value={details.acres} />
-                                    <DetailItem label="Zone" value={details.zone} />
-                                    <DetailItem label="Land Use" value={details.land_use} />
-                                    <DetailItem label="Style" value={details.style} />
-                                    <DetailItem label="Sale Date" value={details.sale_date} />
-                                    <DetailItem label="Sale Price" value={details.sale_price} />
-                                </div>
-                            </div>
-                        )}
+                    <div className="flex-1 overflow-y-auto p-6">
+                        <PropertyPublicDetails
+                            property={property}
+                            networkData={networkData}
+                            onViewEntity={handleViewEntity}
+                        />
 
                         {/* Complex Sub-Units List */}
                         {isComplex && (
-                            <div className="space-y-3">
+                            <div className="space-y-3 mt-6">
                                 <div className="flex justify-between items-center">
                                     <h3 className="text-xs font-bold text-gray-900 uppercase tracking-wider flex items-center gap-2">
                                         <ListIcon size={14} /> Units in Complex
@@ -496,13 +412,12 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
                         )}
 
                         {/* Metadata / Debug */}
-                        <div className="pt-4 border-t border-gray-100">
+                        <div className="pt-4 border-t border-gray-100 mt-6">
                             <div className="grid grid-cols-2 gap-4 text-[10px] text-gray-400 font-mono">
                                 <div>ID: {property.id}</div>
                                 <div>PARCEL: {property.parcel_id || 'N/A'}</div>
                             </div>
                         </div>
-
                     </div>
 
                     {/* Footer Action */}
@@ -535,9 +450,3 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
     );
 }
 
-// Icon helper
-function ListIcon({ size }) {
-    return (
-        <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
-    )
-}

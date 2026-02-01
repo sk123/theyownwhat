@@ -446,20 +446,20 @@ def discover_networks(graph):
     """Wrapper to maintain compatibility"""
     return discover_networks_depth_limited(graph, max_depth=3)
 
-def store_networks(conn, networks, entity_info):
-    logger.info("STEP 4: Storing networks in database...")
+def store_networks(conn, networks, entity_info, networks_table='networks', entity_networks_table='entity_networks', should_truncate=True):
+    logger.info(f"STEP 4: Storing networks in database (Target: {networks_table})...")
     with conn.cursor() as cursor:
-        # --- FIXED: Use explicit TRUNCATE instead of CASCADE ---
-        logger.info("Clearing old network and insight data...")
-        cursor.execute("TRUNCATE cached_insights, entity_networks, networks RESTART IDENTITY;")
-        conn.commit()
-
+        if should_truncate:
+             logger.info(f"Clearing old network data from {networks_table}...")
+             # Only restart identity for the networks table
+             cursor.execute(f"TRUNCATE {entity_networks_table}, {networks_table} RESTART IDENTITY;")
+        
         entity_data_to_copy = []
         for network in networks:
             businesses = [entity_info.get(n) for n in network if n[0] == 'business' and entity_info.get(n)]
             primary_name = businesses[0]['name'] if businesses else entity_info.get(network[0], {}).get('name', 'Unknown')
             
-            cursor.execute("INSERT INTO networks (primary_name) VALUES (%s) RETURNING id", (primary_name,))
+            cursor.execute(f"INSERT INTO {networks_table} (primary_name) VALUES (%s) RETURNING id", (primary_name,))
             network_id = cursor.fetchone()[0]
             
             for entity_type, entity_key in network:
@@ -473,10 +473,10 @@ def store_networks(conn, networks, entity_info):
         
         logger.info(f"Preparing to bulk-insert {len(entity_data_to_copy):,} entity-network links...")
         execute_values(cursor, 
-            "INSERT INTO entity_networks (network_id, entity_type, entity_id, entity_name, normalized_name) VALUES %s",
+            f"INSERT INTO {entity_networks_table} (network_id, entity_type, entity_id, entity_name, normalized_name) VALUES %s",
             entity_data_to_copy)
     conn.commit()
-    logger.info(f"✅ Successfully stored {len(networks)} new networks.")
+    logger.info(f"✅ Successfully stored {len(networks)} new networks in {networks_table}.")
 
 # --- Update Statistics ---
 def update_network_statistics(conn):

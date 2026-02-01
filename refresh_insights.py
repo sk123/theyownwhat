@@ -18,24 +18,19 @@ def force_refresh():
             logger.info("Starting manual insights refresh...")
             
             insights_by_municipality = {}
-            insights_by_municipality['STATEWIDE'] = _calculate_and_cache_insights(cursor, None, None, sort_mode='total')
-            insights_by_municipality['STATEWIDE_SUBSIDIZED'] = _calculate_and_cache_insights(cursor, None, None, sort_mode='subsidized')
+                insights_by_municipality['STATEWIDE'] = _calculate_and_cache_insights(cursor, None, None, sort_mode='total')
+                # Removed subsidized insights
+                # insights_by_municipality['STATEWIDE_SUBSIDIZED'] = _calculate_and_cache_insights(cursor, None, None, sort_mode='subsidized')
             
             major_cities = ['Bridgeport', 'New Haven', 'Hartford', 'Stamford', 'Waterbury', 'Norwalk', 'Danbury', 'New Britain']
             for t in major_cities:
                 town_col = 'property_city'
-                # Standard
+                    # Standard only (no subsidized filter)
                 town_networks = _calculate_and_cache_insights(cursor, town_col, t, sort_mode='total')
                 if town_networks:
                     insights_by_municipality[t.upper()] = town_networks
                 
-                # Subsidized
-                try:
-                    sub_networks = _calculate_and_cache_insights(cursor, town_col, t, sort_mode='subsidized')
-                    if sub_networks:
-                        insights_by_municipality[f"{t.upper()}_SUBSIDIZED"] = sub_networks
-                except Exception as e:
-                    logger.error(f"Failed to calc subsidized for {t}: {e}")
+                    # Removed subsidized insights logic
             
             insights_json = json.dumps(insights_by_municipality, default=json_converter)
             

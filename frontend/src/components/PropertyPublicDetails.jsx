@@ -42,11 +42,15 @@ export default function PropertyPublicDetails({ property, networkData = {}, onVi
         return false;
     }) || [];
 
+    // Property (location) address
+    const propertyAddress = property.address || property.location || details.location || null;
+    // Owner mailing address
     const mailingAddress =
         relatedBusiness?.mail_address ||
         relatedBusiness?.details?.mail_address ||
         details.mail_address ||
         details.mailing_address ||
+        details.owner_address ||
         (relatedBusiness?.mail_city ?
             `${relatedBusiness.mail_city}, ${relatedBusiness.mail_state || 'CT'} ${relatedBusiness.mail_zip || ''}`.trim()
             : (relatedBusiness?.details?.mail_city ?
@@ -56,9 +60,17 @@ export default function PropertyPublicDetails({ property, networkData = {}, onVi
     const getValidUrl = (...args) => {
         for (const arg of args) {
             if (arg && typeof arg === 'string') {
-                if (arg.startsWith('http://') || arg.startsWith('https://') || arg.startsWith('/api/static/') || arg.startsWith('/api/hartford/')) {
+                if (arg.startsWith('http://') || arg.startsWith('https://') || arg.startsWith('/api/static/')) {
                     return arg;
                 }
+            }
+        }
+        // If Hartford and no valid photo, use proxy endpoint
+        if ((property.city || '').toUpperCase() === 'HARTFORD') {
+            let pid = details.account_number || details.link || property.id;
+            if (pid) {
+                pid = pid.toString().replace(/[^0-9]/g, '');
+                return `/api/hartford/image/${pid}`;
             }
         }
         return null;
@@ -93,6 +105,12 @@ export default function PropertyPublicDetails({ property, networkData = {}, onVi
                     />
                 </div>
             )}
+
+            {/* Property and Owner Addresses */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <DetailItem icon={MapPin} label="Property Address" value={propertyAddress || 'N/A'} />
+                <DetailItem icon={User} label="Owner Mailing Address" value={mailingAddress || 'N/A'} />
+            </div>
 
             {/* Financials Row */}
             <div className="grid grid-cols-2 gap-4">
@@ -132,10 +150,6 @@ export default function PropertyPublicDetails({ property, networkData = {}, onVi
                             {property.details.co_owner}
                         </div>
                     )}
-                    <div className="text-sm text-gray-500 mt-2 pt-2 border-t border-gray-200">
-                        <span className="text-xs font-bold text-gray-400 block mb-0.5">OWNER MAILING ADDRESS</span>
-                        {mailingAddress || details.mail_address || details.mailing_address || details.owner_address || (details.mail_city ? `${details.mail_city}, ${details.mail_state || 'CT'} ${details.mail_zip || ''}`.trim() : 'N/A')}
-                    </div>
 
                     {relatedPrincipals.length > 0 && (
                         <div className="mt-3 pt-3 border-t border-gray-200">
@@ -189,19 +203,6 @@ export default function PropertyPublicDetails({ property, networkData = {}, onVi
                             </div>
                         ))}
                     </div>
-                    {(() => {
-                        const totalSubsidized = property.subsidies.reduce((acc, s) => acc + (s.units_subsidized || 0), 0);
-                        const physicalUnits = property.number_of_units || details.number_of_units || 0;
-                        if (totalSubsidized > physicalUnits && physicalUnits > 0) {
-                            return (
-                                <div className="mt-2 p-2 bg-amber-50/50 rounded-lg border border-dashed border-amber-200 text-[10px] text-amber-800 leading-tight">
-                                    <span className="font-bold uppercase tracking-widest block mb-0.5">Note on Unit Mismatch</span>
-                                    Subsidized unit counts may represent an entire project development spanning multiple parcels, while physical unit counts (if available) reflect this specific property record.
-                                </div>
-                            );
-                        }
-                        return null;
-                    })()}
                 </div>
             )}
 
@@ -215,14 +216,10 @@ export default function PropertyPublicDetails({ property, networkData = {}, onVi
                         <DetailItem label="Year Built" value={details.year_built} />
                         <DetailItem label="Living Area" value={details.living_area ? `${details.living_area} sqft` : null} />
                         <DetailItem label="Unit Count" value={property.number_of_units || details.number_of_units} />
-                        <DetailItem label="Unit" value={property.unit || details.unit} />
                         <DetailItem label="Acres" value={details.acres} />
                         <DetailItem label="Zone" value={details.zone} />
                         <DetailItem label="Land Use" value={details.land_use} />
                         <DetailItem label="Style" value={details.style} />
-                        <DetailItem label="Rooms" value={details.total_rooms} />
-                        <DetailItem label="Beds" value={details.total_bedrooms} />
-                        <DetailItem label="Baths" value={details.total_baths} />
                     </div>
                 </div>
             )}

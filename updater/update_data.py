@@ -1,5 +1,6 @@
 import threading
 import os
+import pandas as pd
 import time
 import psycopg2
 from psycopg2 import sql
@@ -15,6 +16,8 @@ import random
 import traceback
 from io import StringIO
 import argparse
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 # Add scripts directory to path for sibling imports
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
@@ -47,6 +50,19 @@ MUNICIPAL_DATA_SOURCES = {
     'BETHLEHEM': {'type': 'MAPXPRESS', 'domain': 'bethlehem.mapxpress.net'},
     'BRIDGEPORT': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/bridgeportct/'},
     'BRISTOL': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/bristolct/'},
+    'MANSFIELD': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/mansfieldct/'},
+    # Additional Vision Appraisal municipalities with missing photos
+    'NORWALK': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/norwalkct/'},
+    'GLASTONBURY': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/glastonburyct/'},
+    'WINDSOR': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/windsorct/'},
+    'WETHERSFIELD': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/wethersfieldct/'},
+    'VERNON': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/vernonct/'},
+    'STONINGTON': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/stoningtonct/'},
+    'BLOOMFIELD': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/bloomfieldct/'},
+    'AVON': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/avonct/'},
+    'WOLCOTT': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/wolcottct/'},
+    'WINDHAM': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/windhamct/'},
+    'WOODSTOCK': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/woodstockct/'},
     'BROOKFIELD': {'type': 'MAPXPRESS', 'domain': 'brookfield.mapxpress.net'},
     'BURLINGTON': {'type': 'MAPXPRESS', 'domain': 'burlington.mapxpress.net'},
     'CANTON': {'type': 'MAPXPRESS', 'domain': 'canton.mapxpress.net'},
@@ -54,7 +70,7 @@ MUNICIPAL_DATA_SOURCES = {
     'COLCHESTER': {'type': 'MAPXPRESS', 'domain': 'colchester.mapxpress.net'},
     'COVENTRY': {'type': 'MAPXPRESS', 'domain': 'coventry.mapxpress.net'},
     'DERBY': {'type': 'MAPXPRESS', 'domain': 'derby.mapxpress.net'},
-    'EAST HAVEN': {'type': 'MAPXPRESS', 'domain': 'easthaven.mapxpress.net'},
+    # 'EAST HAVEN': {'type': 'MAPXPRESS', 'domain': 'easthaven.mapxpress.net'},
     'FARMINGTON': {'type': 'MAPXPRESS', 'domain': 'farmington.mapxpress.net'},
     'LITCHFIELD': {'type': 'MAPXPRESS', 'domain': 'litchfield.mapxpress.net'},
     'MIDDLEBURY': {'type': 'MAPXPRESS', 'domain': 'middlebury.mapxpress.net'},
@@ -130,12 +146,12 @@ MUNICIPAL_DATA_SOURCES = {
     'WOODBURY': {'type': 'PROPERTYRECORDCARDS', 'towncode': '168'},
     # CT Geodata Portal (Statewide 2025)
     # 'NEW HAVEN': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'New Haven'},
-    'WATERBURY': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Waterbury'},
+    # 'WATERBURY': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Waterbury'},
     # 'BRIDGEPORT': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Bridgeport'},
     'HARTFORD': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Hartford'},
     'STAMFORD': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/stamfordct/'},
     'NORWALK': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Norwalk'},
-    'DANBURY': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Danbury'},
+    # 'DANBURY': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Danbury'},
     # 'NEW BRITAIN': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'New Britain'},
     # 'WEST HARTFORD': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'West Hartford'},
     'GREENWICH': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Greenwich'},
@@ -159,8 +175,8 @@ MUNICIPAL_DATA_SOURCES = {
     'GROTON': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Groton'},
     'SOUTHINGTON': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/southingtonct/'},
     'WALLINGFORD': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/wallingfordct/'},
-    'SHELTON': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Shelton'},
-    'TORRINGTON': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Torrington'},
+    # 'SHELTON': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Shelton'},
+    # 'TORRINGTON': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Torrington'},
     'TRUMBULL': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/trumbullct/'},
 }
 
@@ -635,11 +651,12 @@ def process_municipality_with_ct_geodata(conn, municipality_name, config, curren
                 loc = loc1
             else:
                 loc = loc2
-                
-            if not loc: continue
-            
+
+            if not loc:
+                continue
+
             norm_addr = normalize_address_for_matching(loc)
-            
+
             p_data = {}
             for src, target in mapping.items():
                 val = row.get(src)
@@ -649,9 +666,9 @@ def process_municipality_with_ct_geodata(conn, municipality_name, config, curren
                          except: pass
                     else:
                          p_data[target] = val
-            
+
             p_data['appraised_value'] = row['appraised_value']
-            
+
             # --- Auto-Calculate missing values (70% Rule) ---
             if p_data.get('appraised_value', 0) > 0:
                 if 'assessed_value' not in p_data or not p_data['assessed_value']:
@@ -659,18 +676,18 @@ def process_municipality_with_ct_geodata(conn, municipality_name, config, curren
             elif p_data.get('assessed_value', 0) > 0:
                 if 'appraised_value' not in p_data or not p_data['appraised_value']:
                     p_data['appraised_value'] = round(p_data['assessed_value'] / 0.70, 2)
-            
+
             if 'cama_site_link' not in p_data and pd.notna(row.get('Link_From_CAMA')):
                 p_data['cama_site_link'] = row['Link_From_CAMA']
 
-            # Fallback: Inference for missing unit
-            if 'unit' not in p_data or not p_data['unit']:
-                import re
-                m = re.search(r'\s([A-Z]|\d{1,4})$', loc)
-                if m:
-                    p_data['unit'] = m.group(1)
+            # Only assign unit if present in official record
+            official_unit = str(row.get('Unit_Type', '')).strip()
+            if official_unit:
+                p_data['unit'] = official_unit
+            # Do NOT infer or assign a unit if official record does not have one
 
-            if norm_addr not in processed_data: processed_data[norm_addr] = []
+            if norm_addr not in processed_data:
+                processed_data[norm_addr] = []
             processed_data[norm_addr].append(p_data)
         except: continue
         
@@ -780,7 +797,7 @@ def parse_mapxpress_html(html_content):
     # Look for image with 'Photo' in ID or src, or residing in a photo container
     photo_img = soup.find('img', id=re.compile(r'Photo|MainImage', re.I))
     if not photo_img:
-        photo_img = soup.find('img', src=re.compile(r'/photos/|/images/prop', re.I))
+        photo_img = soup.find('img', src=re.compile(r'/photos/|/bldgphotos/|/images/prop', re.I))
     
     if photo_img and photo_img.get('src'):
         data['building_photo'] = photo_img.get('src')
@@ -832,7 +849,7 @@ def discover_mapxpress_properties(conn, municipality_name, domain, id_param='UNI
     base_url = f"https://{domain}"
     search_url = f"{base_url}/PAGES/search.asp"
     
-    session = requests.Session()
+    session = get_session()
     session.verify = False
     session.headers.update({
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
@@ -940,7 +957,7 @@ def process_municipality_with_mapxpress(conn, municipality_name, data_source_con
         query += " AND (ppl.last_processed_date IS NULL OR ppl.last_processed_date < CURRENT_DATE)"
     
     if current_owner_only:
-        query += " AND p.owner ILIKE '%Current Owner%'"
+        query += " AND p.owner ILIKE '%%Current Owner%%'"
         
     query += " ORDER BY p.location" 
     
@@ -959,7 +976,7 @@ def process_municipality_with_mapxpress(conn, municipality_name, data_source_con
     updated_count = 0
     processed_count = 0
     
-    session = requests.Session()
+    session = get_session()
     session.headers.update({
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
     })
@@ -1035,7 +1052,9 @@ def parse_propertyrecordcards_html(html_content):
         'Year Built:': 'year_built',
         'Style:': 'property_type',
         'Use Code:': 'property_type', # Fallback
-        'Unit:': 'unit'
+        'Unit:': 'unit',
+        'Beds/Units:': 'number_of_units', # Waterbury specific
+        'GLA:': 'living_area' # Waterbury specific
     }
     
     tables = soup.find_all('table')
@@ -1060,16 +1079,33 @@ def parse_propertyrecordcards_html(html_content):
                         data[db_field] = val
                 except: pass
                 
+    # 3. Parse Photos
+    # Look for image with 'Photo' in ID or src
+    photo_img = soup.find('img', id=re.compile(r'Photo|MainImage|imgPhoto', re.I))
+    if not photo_img:
+        photo_img = soup.find('img', src=re.compile(r'/Photos/|/bldgphotos/|/images/prop', re.I))
+    
+    if photo_img and photo_img.get('src'):
+        data['building_photo'] = photo_img.get('src')
+                
     return data
 
-def scrape_propertyrecordcards_property(session, base_url_template, row):
+def scrape_propertyrecordcards_property(session, base_url_template, row, towncode=None):
     """Worker function to scrape a single PropertyRecordCards property."""
     import time
     import random
     
     prop_id, location, account_num, serial_num, current_link = row
-    unique_id = account_num if account_num else serial_num
+    unique_id = account_num if account_num else (serial_num if serial_num else current_link)
     
+    # Waterbury (151) ID Fix: 80070-0273-0020-0006 -> 027300200006
+    if towncode == '151' and unique_id:
+        tmp_id = str(unique_id).strip()
+        if tmp_id.startswith('80070-'):
+             tmp_id = tmp_id.replace('80070-', '')
+        tmp_id = tmp_id.replace('-', '')
+        unique_id = tmp_id
+        
     if not unique_id:
         return prop_id, None, None # Cannot scrape w/o ID
         
@@ -1108,11 +1144,116 @@ def scrape_propertyrecordcards_property(session, base_url_template, row):
     except Exception as e:
         return prop_id, None, str(e)
 
+
+def discover_propertyrecordcards_properties(conn, municipality_name, towncode, path_prefix=''):
+    """Crawls PropertyRecordCards search to find ALL properties and insert missing ones."""
+    log(f"Starting discovery for {municipality_name} (PRC)...", municipality=municipality_name)
+    base_url = f"https://www.propertyrecordcards.com{path_prefix}"
+    search_url = f"{base_url}/SearchMaster.aspx?towncode={towncode}"
+    
+    session = get_session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+        'Referer': f"https://www.propertyrecordcards.com{path_prefix}/Search.aspx"
+    })
+    
+    # 1. Initialize session and get ViewState
+    try:
+        resp = session.get(search_url, timeout=15)
+        soup = BeautifulSoup(resp.content, 'html.parser')
+        viewstate = soup.find('input', id='__VIEWSTATE')['value']
+        valgen = soup.find('input', id='__VIEWSTATEGENERATOR')['value'] if soup.find('input', id='__VIEWSTATEGENERATOR') else ""
+        eventval = soup.find('input', id='__EVENTVALIDATION')['value'] if soup.find('input', id='__EVENTVALIDATION') else ""
+    except Exception as e:
+        log(f"Discovery Init Failed: {e}", municipality=municipality_name)
+        return
+
+    # Iteration keys: A-Z
+    search_keys = [chr(i) for i in range(65, 91)]
+    
+    discovered_count = 0
+    new_count = 0
+    
+    for key in search_keys:
+        try:
+            # log(f"  Searching '{key}'...", municipality=municipality_name)
+            # PRC search usually requires a POST with __VIEWSTATE
+            # The field for name search is often MainContent_tbPropertySearchName
+            payload = {
+                '__VIEWSTATE': viewstate,
+                '__VIEWSTATEGENERATOR': valgen,
+                '__EVENTVALIDATION': eventval,
+                'ctl00$MainContent$tbPropertySearchName': key,
+                'ctl00$MainContent$btnPropertySearch': 'Search'
+            }
+            
+            resp = session.post(search_url, data=payload, timeout=20)
+            
+            if resp.status_code != 200:
+                continue
+                
+            soup = BeautifulSoup(resp.content, 'html.parser')
+            # Look for property links in the results table
+            # Link Format: propertyresults.aspx?towncode=...&uniqueid=...
+            links = soup.find_all('a', href=re.compile(r'propertyresults\.aspx\?.*uniqueid=', re.I))
+            
+            for link in links:
+                href = link.get('href', '')
+                match = re.search(r'uniqueid=([^&]+)', href, re.I)
+                if match:
+                    unique_id = match.group(1)
+                    # The link text is usually the address
+                    raw_address = link.text.strip()
+                    
+                    if not raw_address or "View" in raw_address:
+                        # Try to find address in the same row
+                        row = link.find_parent('tr')
+                        if row:
+                            cells = row.find_all('td')
+                            if len(cells) > 1:
+                                raw_address = cells[1].text.strip()
+
+                    if not raw_address:
+                        continue
+                        
+                    with conn.cursor() as cursor:
+                        full_link = f"https://www.propertyrecordcards.com{path_prefix}/propertyresults.aspx?towncode={towncode}&uniqueid={unique_id}"
+                        
+                        cursor.execute("""
+                            INSERT INTO properties (property_city, location, account_number, cama_site_link, source)
+                            VALUES (%s, %s, %s, %s, 'PRC_DISCOVERY')
+                            ON CONFLICT (property_city, location) 
+                            DO UPDATE SET 
+                                account_number = COALESCE(properties.account_number, EXCLUDED.account_number),
+                                cama_site_link = COALESCE(properties.cama_site_link, EXCLUDED.cama_site_link)
+                            RETURNING id
+                        """, (municipality_name.title(), raw_address, unique_id, full_link))
+                        
+                        if cursor.fetchone():
+                            new_count += 1
+                    
+                    discovered_count += 1
+            
+            # Commit per letter to save progress
+            conn.commit()
+                    
+        except Exception as e:
+            log(f"  Discovery Error on key {key}: {e}", municipality=municipality_name)
+            
+    log(f"Discovery Complete: Found {discovered_count} total, Updated/Inserted {new_count} properties.", municipality=municipality_name)
+
 def process_municipality_with_propertyrecordcards(conn, municipality_name, data_source_config, current_owner_only=False, force_process=False):
     """Process a municipality using PropertyRecordCards (Parallel)."""
     
     log(f"--- Processing municipality: {municipality_name} via PropertyRecordCards (Force={force_process}) ---", municipality=municipality_name)
     
+    # 0. Run Discovery Phase
+    towncode = data_source_config['towncode']
+    path_prefix = data_source_config.get('path_prefix', '')
+    
+    if not current_owner_only:
+        discover_propertyrecordcards_properties(conn, municipality_name, towncode, path_prefix)
+
     # 1. Get Properties (same logic as MapXpress)
     # 1. Get Properties (same logic as MapXpress)
     query = """
@@ -1120,12 +1261,12 @@ def process_municipality_with_propertyrecordcards(conn, municipality_name, data_
         FROM properties p
         LEFT JOIN property_processing_log ppl ON p.id = ppl.property_id
         WHERE p.property_city ILIKE %s 
-        AND (p.account_number IS NOT NULL AND p.account_number != '')
+        AND ((p.account_number IS NOT NULL AND p.account_number != '') OR (p.cama_site_link IS NOT NULL AND p.cama_site_link != ''))
     """
     if not force_process:
         query += " AND (ppl.last_processed_date IS NULL OR ppl.last_processed_date < CURRENT_DATE)"
     if current_owner_only:
-        query += " AND p.owner ILIKE '%Current Owner%'"
+        query += " AND p.owner ILIKE '%%Current Owner%%'"
     query += " ORDER BY p.location" 
     
     with conn.cursor() as cursor:
@@ -1149,7 +1290,7 @@ def process_municipality_with_propertyrecordcards(conn, municipality_name, data_
     updated_count = 0
     processed_count = 0
     
-    session = requests.Session()
+    session = get_session()
     session.headers.update({
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
     })
@@ -1157,7 +1298,7 @@ def process_municipality_with_propertyrecordcards(conn, municipality_name, data_
     # 3. Parallel Execution
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
         future_to_prop = {
-            executor.submit(scrape_propertyrecordcards_property, session, base_url_template, row): row 
+            executor.submit(scrape_propertyrecordcards_property, session, base_url_template, row, towncode): row 
             for row in properties
         }
         
@@ -1170,6 +1311,11 @@ def process_municipality_with_propertyrecordcards(conn, municipality_name, data_
             elif error_msg:
                 # log(f"Scrape error for {prop_id}: {error_msg}")
                 pass
+            
+            # Resolve relative photo URL
+            # PropertyRecordCards photos are often relative to the site root or current page
+            # But the scraper currently gets whatever is in src.
+            # We'll handle normalization in update_property_in_db or here.
             
             mark_property_processed_today(conn, prop_id)
             processed_count += 1
@@ -1420,7 +1566,7 @@ def scrape_street_properties(street_link, municipality_url, referer, session=Non
             # When sharing a session, we stay in the same "ASP.NET Session"
             response = session.get(street_link, headers={'Referer': referer} if referer else {}, verify=False, timeout=30)
         else:
-            with requests.Session() as s:
+            with get_session() as s:
                 s.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
                 response = s.get(street_link, verify=False, timeout=30)
 
@@ -1468,7 +1614,7 @@ def scrape_all_properties_by_address(municipality_url, municipality_name):
     all_props_data = {}
     street_list_base_url = f"{municipality_url}Streets.aspx"
     
-    with requests.Session() as main_session:
+    with get_session() as main_session:
         main_session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
         try:
             log(f"  -> Fetching street index for {municipality_name}...")
@@ -1502,7 +1648,7 @@ def scrape_all_properties_by_address(municipality_url, municipality_name):
                 # Since this is low volume (26 requests), simple requests.get is fine or we create a session.
                 # Reuse main_session with caution or just new requests.
                 # Let's use a new request to be thread-safe/simple.
-                with requests.Session() as s:
+                with get_session() as s:
                     s.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
                     resp = s.get(letter_link, verify=False, timeout=20, headers={'Referer': street_list_base_url})
                     l_soup = BeautifulSoup(resp.content, 'html.parser')
@@ -1553,7 +1699,17 @@ def scrape_all_properties_by_address(municipality_url, municipality_name):
     log(f"  -> Scraped {len(all_props_data)} properties total for {municipality_name}.")
     return all_props_data
 
-# --- Database & Matching Functions ---
+def get_session(pool_size=50):
+    """Returns a requests session with optimized connection pooling."""
+    session = requests.Session()
+    adapter = HTTPAdapter(
+        pool_connections=pool_size,
+        pool_maxsize=pool_size,
+        max_retries=Retry(total=3, backoff_factor=1, status_forcelist=[502, 503, 504])
+    )
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
 def update_property_in_db(conn, property_db_id, vision_data, restricted_mode=False, municipality_name=None):
     """
     Updates a property record in the database with new information.
@@ -1726,7 +1882,7 @@ def process_municipality_with_realtime_updates(conn, municipality_name, municipa
         group1_processed_count = 0  # <--- NEW COUNTER
         referer_url = f"{municipality_url}Streets.aspx" # Use a generic valid referer
 
-        with requests.Session() as session:
+        with get_session() as session:
             session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
             with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
                 future_to_id = {
@@ -1937,8 +2093,17 @@ def main():
             
             # Query DB for list of towns sorted by "Current Owner" count
             current_owner_municipalities = get_current_owner_properties_by_municipality(conn)
+            
+            # Filter by specified municipalities if provided
+            if args.municipalities:
+                target_munis = {m.upper() for m in args.municipalities}
+                current_owner_municipalities = [
+                    (city, count) for city, count in current_owner_municipalities 
+                    if city and city.upper() in target_munis
+                ]
+            
             if not current_owner_municipalities:
-                log("No municipalities found with 'Current Owner' properties.")
+                log("No matching municipalities found with 'Current Owner' properties.")
                 return
             
             log("Found municipalities with 'Current Owner' properties:")

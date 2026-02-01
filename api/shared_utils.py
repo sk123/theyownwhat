@@ -124,6 +124,8 @@ def get_name_variations(name: str, entity_type: str) -> Set[str]:
 
     return {v for v in variations if v} # Return a cleaned set of non-empty variations
 
+    return norm
+
 def normalize_mailing_address(address: str) -> str:
     """
     Standardizes a mailing address to detect hidden links.
@@ -161,6 +163,48 @@ def normalize_mailing_address(address: str) -> str:
 
     return norm
 
+def extract_base_address(address: str) -> str:
+    """
+    Standardizes an address and strips unit/apt/suite for grouping into buildings.
+    Matches the logic in main.py but refined for shared use.
+    """
+    if not address: return ""
+    
+    # 1. Basic normalization (but keep it close to raw for display/grouping consistency)
+    addr = address.strip()
+    
+    # 2. Strip unit info
+    # Use \b (word bound) or (?=\d) (followed by digit) to avoid partial matches 
+    # on street names (e.g. 'FL' matching 'FLORENCE').
+    # regex matches: (comma or space) + (keyword) + (boundary/digit) + space? + (alphanumeric/dash) until end
+    
+    pattern = r'(?:,|\s+)\s*(?:(?:UNIT|APT|APARTMENT|SUITE|STE|FL|FLOOR|RM|ROOM)(?:\b|(?=\d))|#)\s*[\w\d-]+$'
+    
+    clean = re.sub(pattern, '', addr, flags=re.IGNORECASE).strip()
+    
+    # Remove trailing comma if unit was after a comma
+    if clean.endswith(','):
+        clean = clean[:-1].strip()
+        
+    return clean
+
+def is_likely_street_address(addr: str) -> bool:
+    """
+    Heuristic: Valid street addresses usually start with a digit (house number)
+    AND have at least one text part (street name).
+    Avoids grouping outliers like '93' or '0'.
+    """
+    if not addr: return False
+    addr = addr.strip()
+    if not addr or not addr[0].isdigit():
+        return False
+    
+    parts = addr.split()
+    if len(parts) < 2:
+        return False
+        
+    return True
+
 def get_email_match_key(email: str, email_rules: dict) -> str | None:
     """Classifies an email and returns a matching key based on the 3-category logic."""
     if not email or '@' not in email: return None
@@ -175,20 +219,17 @@ def get_email_match_key(email: str, email_rules: dict) -> str | None:
     if rule == 'registrar': return None
     if rule == 'custom': return domain
     
-    # Default behavior for unknown:
-    # If the user provided a robust list of "public" providers, we should check it.
-    # Logic: If domain is in rules as 'public', exact match.
-    # If domain is NOT in rules, assume custom? Or assume public?
-    # User said: "if the email is gmail... match using full email address. if custom domain... match domain".
-    
-    # We will assume the caller passes a rules dict populated with public domains marked as 'public'
+    # If the domain is in the rules as 'public', we return the FULL EMAIL 
+    # so that individuals are NOT merged (unique identity).
     if rule == 'public':
         return email
     
-    # If not in rules at all, assume it might be custom?
-    # Or safest: use full email unless explicitly known as custom.
-    # But user implied: "if custom... match domain".
-    # We need a list of public domains.
-    # If we don't have it, we default to full email match to be safe.
-    
-    return email 
+    # If the domain is marked as 'registrar', we ignore it entirely.
+    if rule == 'registrar':
+        return None
+
+    # Default logic for undefined domains:
+    # If it's a domain with multiple dots (except common ones like .co.uk), 
+    # or if it looks very specialized, it's likely a custom business domain.
+    # For now, we return the domain to group everyone on that domain.
+    return domain

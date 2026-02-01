@@ -7,6 +7,8 @@ from bs4 import BeautifulSoup
 import re
 import concurrent.futures
 import threading
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 BASE_URL = "http://assessor1.hartford.gov"
@@ -18,9 +20,20 @@ SUMMARY_URL = f"{BASE_URL}/summary-bottom.asp"
 # Better to create a session per task/batch or use a thread-local.
 thread_local = threading.local()
 
-def get_session():
+def get_session(pool_size=20):
+    session = requests.Session()
+    adapter = HTTPAdapter(
+        pool_connections=pool_size,
+        pool_maxsize=pool_size,
+        max_retries=Retry(total=3, backoff_factor=1, status_forcelist=[502, 503, 504])
+    )
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
+
+def get_session_local():
     if not hasattr(thread_local, "session"):
-        thread_local.session = requests.Session()
+        thread_local.session = get_session()
         # Establish initial session cookies
         thread_local.session.get(SEARCH_PAGE, timeout=15)
     return thread_local.session
@@ -37,7 +50,7 @@ def format_parcel_id(pid):
 
 def enrich_property(prop_id, pid, old_loc, conn_params):
     """Enriches a single property record."""
-    session = get_session()
+    session = get_session_local()
     formatted_pid = format_parcel_id(pid)
     # print(f"Processing Prop ID {prop_id}: {old_loc} ({formatted_pid})...")
 
@@ -80,22 +93,94 @@ def enrich_property(prop_id, pid, old_loc, conn_params):
         # Scrape Values
         total_val_td = sum_soup.find(string=re.compile("Total\s+Value"))
         if total_val_td:
-            val_td = total_val_td.find_parent('td').find_next_sibling('td')
-            if val_td:
-                val_str = val_td.get_text(strip=True).replace(',', '').replace('$', '')
-                try:
-                new_data['assessed_value'] = float(val_str)
-                # Hartford condos/units in these complexes often have a 36.75% ratio
-                new_data['appraised_value'] = round(new_data['assessed_value'] / 0.3675, 2)
-            except:
-                pass
+            parent_td = total_val_td.find_parent('td')
+            if parent_td:
+                val_td = parent_td.find_next_sibling('td')
+                if val_td:
+                    val_str = val_td.get_text(strip=True).replace(',', '').replace('$', '')
+                    try:
+                        new_data['assessed_value'] = float(val_str)
+                        # Hartford condos/units in these complexes often have a 36.75% ratio
+                        new_data['appraised_value'] = round(new_data['assessed_value'] / 0.3675, 2)
+                    except:
+                        pass
 
-        # Scrape Image - Store source URL instead of downloading
+        # --- NARRATIVE PARSING ---
+        # "This property contains 0 - of land mainly classified as CONDO CONV RES with a(n) Condo Flat style building, 
+        # built about 1940, having Brick exterior and Tar & Gravel roof cover, with 0 commercial unit(s) 
+        # and 1 residential unit(s), 4 total room(s), 3 total bedroom(s), 1 total bath(s), ..."
+        narrative_node = sum_soup.find(string=re.compile("This property contains", re.IGNORECASE))
+        if narrative_node:
+            parent_tag = narrative_node.find_parent()
+            text = parent_tag.get_text(" ", strip=True)
+            # Property Type / Style
+            type_match = re.search(r'classified as\s+(.*?)\s+with a', text, re.IGNORECASE)
+            if type_match: new_data['property_type'] = type_match.group(1).strip()
+            
+            style_match = re.search(r'with a\(n\)\s+(.*?)\s+style building', text, re.IGNORECASE)
+            if style_match: new_data['style'] = style_match.group(1).strip()
+            
+            # Year Built
+            yb_match = re.search(r'built about\s+(\d{4})', text, re.IGNORECASE)
+            if yb_match: new_data['year_built'] = int(yb_match.group(1))
+            
+            # Acres
+            acres_match = re.search(r'contains\s+([\d.]+)\s+-', text, re.IGNORECASE)
+            if acres_match: 
+                try: new_data['acres'] = float(acres_match.group(1))
+                except: pass
+
+            # Units
+            res_units = re.search(r'(\d+)\s+residential unit', text, re.IGNORECASE)
+            comm_units = re.search(r'(\d+)\s+commercial unit', text, re.IGNORECASE)
+            total_units = 0
+            if res_units: total_units += int(res_units.group(1))
+            if comm_units: total_units += int(comm_units.group(1))
+            if total_units > 0: new_data['number_of_units'] = total_units
+
+            # Rooms/Beds/Baths
+            rooms_match = re.search(r'(\d+)\s+total room', text, re.IGNORECASE)
+            if rooms_match: new_data['total_rooms'] = int(rooms_match.group(1))
+            beds_match = re.search(r'(\d+)\s+total bedroom', text, re.IGNORECASE)
+            if beds_match: new_data['total_bedrooms'] = int(beds_match.group(1))
+            baths_match = re.search(r'(\d+)\s+total bath', text, re.IGNORECASE)
+            if baths_match: new_data['total_baths'] = int(baths_match.group(1))
+            
+            # If the above fails, try more flexible match for "(s)"
+            if 'total_rooms' not in new_data:
+                rooms_match = re.search(r'(\d+)\s+room', text, re.IGNORECASE)
+                if rooms_match: new_data['total_rooms'] = int(rooms_match.group(1))
+            if 'total_bedrooms' not in new_data:
+                beds_match = re.search(r'(\d+)\s+bedroom', text, re.IGNORECASE)
+                if beds_match: new_data['total_bedrooms'] = int(beds_match.group(1))
+            if 'total_baths' not in new_data:
+                baths_match = re.search(r'(\d+)\s+bath', text, re.IGNORECASE)
+                if baths_match: new_data['total_baths'] = int(baths_match.group(1))
+
+        # --- ADDITIONAL FIELD: ZONE ---
+        zone_td = sum_soup.find('td', string=re.compile("Zoning", re.IGNORECASE))
+        if zone_td:
+            val_td = zone_td.find_next_sibling('td')
+            if val_td:
+                new_data['zone'] = val_td.get_text(strip=True)
+
+        # --- PHOTO DOWNLOAD ---
         img_tag = sum_soup.find('img', src=re.compile('showimage'))
         if img_tag:
-             # Storing the absolute URL on the assessor's site. 
-             # Note: This may require a valid session to display in the browser.
-             new_data['building_photo'] = f"{BASE_URL}/showimage.asp"
+            try:
+                img_url = f"{BASE_URL}/showimage.asp?{int(time.time()*1000)}"
+                img_resp = session.get(img_url, timeout=10)
+                if img_resp.status_code == 200 and len(img_resp.content) > 1000:
+                    os.makedirs("api/static/hartford_images", exist_ok=True)
+                    local_path = f"api/static/hartford_images/hartford_{acc_num}.jpg"
+                    with open(local_path, "wb") as f:
+                        f.write(img_resp.content)
+                    new_data['building_photo'] = f"/api/static/hartford_images/hartford_{acc_num}.jpg"
+                else:
+                    # Fallback to the account number URL if we can't download now, maybe proxy will help later
+                    new_data['building_photo'] = f"{BASE_URL}/showimage.asp?AccountNumber={acc_num}&Width=500"
+            except:
+                new_data['building_photo'] = f"{BASE_URL}/showimage.asp?AccountNumber={acc_num}&Width=500"
         
         # Scrape Location/Unit
         new_unit = None
@@ -119,7 +204,7 @@ def enrich_property(prop_id, pid, old_loc, conn_params):
                      parsed_val = match.group(1).strip().replace('\xa0', ' ')
                      if parsed_val and not new_unit:
                          new_unit = parsed_val
-
+  
         if new_location:
             new_data['location'] = new_location
             new_data['unit'] = new_unit
@@ -131,7 +216,7 @@ def enrich_property(prop_id, pid, old_loc, conn_params):
 
 def run_enrichment(limit=None):
     if not DATABASE_URL:
-        # ... existing ...
+        print("DATABASE_URL not set.")
         return
 
     conn = psycopg2.connect(DATABASE_URL)
@@ -143,9 +228,9 @@ def run_enrichment(limit=None):
         FROM properties 
         WHERE property_city = 'Hartford' 
         AND link IS NOT NULL 
-        AND (owner = 'Current Owner' OR assessed_value = 0 OR unit IS NULL OR unit LIKE '%CNDASC%')
+        AND (building_photo IS NULL OR owner = 'Current Owner' OR assessed_value = 0 OR unit IS NULL OR unit LIKE '%CNDASC%')
     """
-    # ... rest ...
+    
     if limit:
         query += f" LIMIT {limit}"
         
@@ -175,7 +260,16 @@ def run_enrichment(limit=None):
                                 account_number = %s,
                                 assessed_value = COALESCE(%s, assessed_value),
                                 appraised_value = COALESCE(%s, appraised_value),
-                                building_photo = COALESCE(%s, building_photo)
+                                building_photo = COALESCE(%s, building_photo),
+                                property_type = COALESCE(%s, property_type),
+                                year_built = COALESCE(%s, year_built),
+                                living_area = COALESCE(%s, living_area),
+                                number_of_units = COALESCE(%s, number_of_units),
+                                zone = COALESCE(%s, zone),
+                                acres = COALESCE(%s, acres),
+                                total_rooms = %s,
+                                total_bedrooms = %s,
+                                total_baths = %s
                             WHERE id = %s
                         """, (
                             data.get("location"), 
@@ -184,6 +278,15 @@ def run_enrichment(limit=None):
                             data.get("assessed_value"),
                             data.get("appraised_value"),
                             data.get("building_photo"),
+                            data.get("property_type"),
+                            data.get("year_built"),
+                            data.get("living_area"),
+                            data.get("number_of_units"),
+                            data.get("zone"),
+                            data.get("acres"),
+                            data.get("total_rooms"),
+                            data.get("total_bedrooms"),
+                            data.get("total_baths"),
                             prop_id
                         ))
                 updated_count += 1

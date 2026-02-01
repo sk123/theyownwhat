@@ -174,7 +174,10 @@ export default function EntityDetailsModal({ entity, type, networkData, onNaviga
                                                 }}
                                             >
                                                 <div className="flex-1">
-                                                    <div className="font-medium text-gray-900 text-sm group-hover:text-blue-600 transition-colors">{prop.address || prop.location}</div>
+                                                    <div className="font-medium text-gray-900 text-sm group-hover:text-blue-600 transition-colors">
+                                                        {prop.address || prop.location}
+                                                        {(prop.unit || prop.derivedUnit) && <span className="text-blue-500 ml-1">#{prop.unit || prop.derivedUnit}</span>}
+                                                    </div>
                                                     <div className="text-xs text-gray-500">{prop.city}</div>
                                                 </div>
                                                 <div className="text-right">

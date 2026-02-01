@@ -16,3 +16,23 @@ pip-delete-this-directory.txt
 # OS
 .DS_Store
 Thumbs.db
+
+# Scraped Assets
+api/static/hartford_images/
+api/static/*_images/
+
+# Logs
+*.log
+logs/
+enrichment_log.txt
+nohup.out
+
+# Temp / Lock files
+*.lock
+insights.json
+statewide.json
+*.html
+
+# Environments
+.venv/
+node_modules/
