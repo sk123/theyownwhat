@@ -81,13 +81,28 @@ def setup_schema(conn):
 def load_data_and_build_graph(conn):
     uf = UnionFind()
     
-    # 1. Load Business Emails
-    logger.info("Loading Businesses and grouping by Email...")
-    
     email_rules = {
+        # Webmail & Common Providers (Match full email)
         'gmail.com': 'public', 'yahoo.com': 'public', 'hotmail.com': 'public', 'outlook.com': 'public', 'aol.com': 'public',
-        'comcast.net': 'public', 'verizon.net': 'public', 'icloud.com': 'public', 'me.com': 'public', 'msn.com': 'public',
-        'live.com': 'public', 'sbcglobal.net': 'public', 'att.net': 'public', 'cox.net': 'public',
+        'live.com': 'public', 'msn.com': 'public', 'rocketmail.com': 'public', 'protonmail.com': 'public', 'proton.me': 'public',
+        'zoho.com': 'public', 'yandex.com': 'public', 'gmx.com': 'public', 'mail.com': 'public', 'inbox.com': 'public',
+        'fastmail.com': 'public', 'fastmail.fm': 'public', 'hushmail.com': 'public',
+        
+        # Apple / Cloud (Match full email)
+        'icloud.com': 'public', 'me.com': 'public', 'mac.com': 'public',
+        
+        # ISPs (Match full email)
+        'comcast.net': 'public', 'verizon.net': 'public', 'att.net': 'public', 'sbcglobal.net': 'public', 'cox.net': 'public',
+        'snet.net': 'public', 'snet.com': 'public', 'optonline.net': 'public', 'optonline.com': 'public', 'charter.net': 'public',
+        'frontier.com': 'public', 'frontiernet.net': 'public', 'earthlink.net': 'public', 'juno.com': 'public', 'netzero.net': 'public',
+        'mindspring.com': 'public', 'roadrunner.com': 'public', 'rr.com': 'public', 'centurylink.net': 'public',
+        'windstream.net': 'public', 'cablevision.com': 'public', 'bell.net': 'public', 'shaw.ca': 'public',
+        'sympatico.ca': 'public', 'rogers.com': 'public', 'telus.net': 'public',
+        
+        # Education (Match full email)
+        'yale.edu': 'public', 'aya.yale.edu': 'public', 'uchc.edu': 'public', 'uconn.edu': 'public',
+        
+        # Registrars & Agents (Ignore entirely)
         'cscinfo.com': 'registrar', 
         'incfile.com': 'registrar', 
         'cscglobal.com': 'registrar', 
@@ -95,7 +110,11 @@ def load_data_and_build_graph(conn):
         'wolterskluwer.com': 'registrar',
         'cogencyglobal.com': 'registrar',
         'legalzoom.com': 'registrar',
-        'zenbusiness.com': 'registrar'
+        'registeredagentsinc.com': 'registrar',
+        'registeredagentinc.com': 'registrar',
+        'regesteredinc.com': 'registrar', # User noted typo variation
+        'zenbusiness.com': 'registrar',
+        'ct.gov': 'registrar', # Department of State / Govt agents
     }
     
     known_connectors = {
@@ -119,13 +138,18 @@ def load_data_and_build_graph(conn):
         for row in cur:
             bid = row['id']
             email = row['business_email_address']
+            domain = email.split('@')[1].lower() if email and '@' in email else None
             
             uf.find(bid)
             
             key = get_email_match_key(email, email_rules)
             if key:
                 if key in email_map:
-                    uf.union(bid, email_map[key])
+                    original_bid = email_map[key]
+                    if uf.union(bid, original_bid):
+                        # Only log if it's a custom domain merge (not a full public email)
+                        if domain and key == domain:
+                            logger.info(f"🔗 Merged business {bid} ('{row['name']}') into network via custom domain: @{key}")
                 else:
                     email_map[key] = bid
                     
@@ -218,11 +242,55 @@ def save_networks(conn, uf):
         
         primary = "Unknown Network"
         if p_counts:
-            # Pick the principal name with the highest frequency in this network
-            best_pid = max(p_counts.items(), key=lambda x: x[1])[0]
-            primary = p_names.get(best_pid)
+            # 1. Separate principals into "Corporate" vs "Human" (heuristic)
+            def is_corporate(name):
+                # Common corporate suffixes/keywords
+                keywords = ['LLC', 'INC', 'CORP', 'LTD', 'REALTY', 'MANAGEMENT', 'PROPERTIES', 'GROUP', 'HOLDINGS', 'ASSOCIATES', 'PARTNERS', 'TRUST', 'ESTATE', 'HOUSING', 'APTS', 'APARTMENTS', 'CONDO', 'CONDOMINIUM']
+                upper = name.upper()
+                # Check suffix or presence of keywords
+                parts = upper.split()
+                if not parts: return False
+                if parts[-1].replace('.', '') in keywords: return True
+                for k in keywords:
+                    if f" {k} " in f" {upper} " or f" {k}," in f" {upper} ": return True
+                return False
+
+            human_candidates = []
+            corporate_candidates = []
+            
+            for pid, count in p_counts.items():
+                name = p_names.get(pid, "Unknown")
+                if is_corporate(name):
+                    corporate_candidates.append((pid, count, name))
+                else:
+                    human_candidates.append((pid, count, name))
+            
+            # Sort by count (desc)
+            human_candidates.sort(key=lambda x: x[1], reverse=True)
+            corporate_candidates.sort(key=lambda x: x[1], reverse=True)
+            
+            if human_candidates:
+                # We have humans!
+                # If we have 2 significant humans, combine them.
+                # Significant = top 2.
+                if len(human_candidates) >= 2:
+                    p1 = human_candidates[0]
+                    p2 = human_candidates[1]
+                    # Only combine if the second one is somewhat significant? (e.g. > 20% of first?)
+                    # User request: "Zvi Horowitz and Samuel Pollack".
+                    # Let's just always combine top 2 if available to be safe/inclusive for partners.
+                    primary = f"{p1[2]} & {p2[2]}"
+                else:
+                    primary = human_candidates[0][2]
+            elif corporate_candidates:
+                # Fallback to top corporate principal
+                primary = corporate_candidates[0][2]
+            else:
+                # Should not happen if p_counts is non-empty
+                best_pid = max(p_counts.items(), key=lambda x: x[1])[0]
+                primary = p_names.get(best_pid)
         
-        # Fallback to business name if no principal or principal name is missing
+        # Fallback to business name if no network name determined yet
         if not primary or primary == "Unknown Network":
             if b_counts:
                 primary = max(b_counts.items(), key=lambda x: x[1])[0]
@@ -311,16 +379,41 @@ def save_networks(conn, uf):
     conn.commit()
     logger.info("✅ Network Discovery Complete.")
 
+
+LOCK_FILE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'maintenance.lock')
+
+def create_lock_file():
+    try:
+        with open(LOCK_FILE_PATH, 'w') as f:
+            f.write(str(time.time()))
+        logger.info(f"🔒 Created lock file at {LOCK_FILE_PATH}")
+    except Exception as e:
+        logger.error(f"Failed to create lock file: {e}")
+
+def remove_lock_file():
+    try:
+        if os.path.exists(LOCK_FILE_PATH):
+            os.remove(LOCK_FILE_PATH)
+            logger.info(f"🔓 Removed lock file at {LOCK_FILE_PATH}")
+    except Exception as e:
+        logger.error(f"Failed to remove lock file: {e}")
+
 def main():
     logger.info("🚀 Starting Network Discovery (Recursive/Connected Components)...")
+    create_lock_file()
     conn = get_db_connection()
     try:
         setup_schema(conn)
         uf = load_data_and_build_graph(conn)
         save_networks(conn, uf)
         logger.info("✅ Network Discovery Complete.")
+    except Exception as e:
+        logger.exception("❌ Network Discovery Failed")
+        raise e
     finally:
         conn.close()
+        remove_lock_file()
 
 if __name__ == "__main__":
     main()
+

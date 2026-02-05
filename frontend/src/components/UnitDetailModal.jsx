@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Camera, Save, UserPlus, Tag, Trash2, Edit2, Info, Layout, StickyNote, Building2, MapPin, DollarSign, User, ExternalLink, List as ListIcon } from 'lucide-react';
 import { api } from '../api';
-import property_public_details from './property_public_details.jsx';
+import PropertyPublicDetails from './property_public_details.jsx';
 
 export default function UnitDetailModal({ property, group, onClose, onUpdate }) {
     const [metadata, setMetadata] = useState({
@@ -89,6 +89,59 @@ export default function UnitDetailModal({ property, group, onClose, onUpdate }) 
                             <p className="text-sm text-slate-400 font-bold uppercase tracking-wider flex items-center gap-2">
                                 <MapPin size={14} className="text-blue-500" />
                                 {property.address} {property.city && `, ${property.city}`}
+                                {property.subsidies && property.subsidies.length > 0 && (() => {
+                                    const programTypes = property.subsidies.map(s => (s.program_type || '').toLowerCase());
+                                    const programNames = property.subsidies.map(s => (s.program_name || '').toLowerCase());
+                                    const subsidyKeywords = [
+                                        'public housing',
+                                        'project-based',
+                                        'project based',
+                                        'pbv',
+                                        'section 8',
+                                        'ct sh moderate rental',
+                                        'mod rehab',
+                                        'mod. rehab',
+                                        'mod. rental',
+                                        'mod rental',
+                                        'hud',
+                                        'lihtc',
+                                        'tax credit',
+                                        'rental assistance',
+                                        'rental subsidy',
+                                        'subsidized',
+                                        '811',
+                                        '202',
+                                        '236',
+                                        '221(d)(3)',
+                                        '221d3',
+                                        'section 236',
+                                        'section 202',
+                                        'section 221',
+                                        'section 811',
+                                    ];
+                                    const restrictiveKeywords = [
+                                        'restrictive covenant',
+                                        'deed restriction',
+                                        'affordability covenant',
+                                    ];
+                                    const hasSubsidy = programTypes.concat(programNames).some(type =>
+                                        subsidyKeywords.some(keyword => type.includes(keyword))
+                                    );
+                                    const allRestrictive = programTypes.concat(programNames).every(type =>
+                                        restrictiveKeywords.some(keyword => type.includes(keyword))
+                                    );
+                                    let label = 'Preservation';
+                                    if (hasSubsidy) {
+                                        label = 'Subsidized';
+                                    } else if (allRestrictive) {
+                                        label = 'Restricted Covenant';
+                                    }
+                                    return (
+                                        <span className="ml-2 text-[10px] font-bold px-2 py-0.5 rounded-full border border-amber-100 bg-amber-50 text-amber-600 uppercase">
+                                            {label}
+                                        </span>
+                                    );
+                                })()}
                             </p>
                         </div>
                     </div>

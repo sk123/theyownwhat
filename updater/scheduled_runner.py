@@ -41,27 +41,38 @@ PRIORITY_TOWNS = [
 def run_nightly_update():
     """Run nightly update for Current Owner properties in priority towns"""
     logger.info("=" * 80)
-    logger.info("Starting nightly Vision data update")
+    logger.info("Starting nightly Vision data update (Parallel)")
     logger.info("=" * 80)
     
-    for town in PRIORITY_TOWNS:
-        try:
-            logger.info(f"Updating {town}...")
-            # Import here to avoid import errors if module not ready
-            from updater.update_data import main as vision_main
-            
-            # Run with current-owner-only flag (don't force full refresh nightly)
-            sys.argv = ['update_data.py', town, '--current-owner-only']
-            vision_main()
-            
-            logger.info(f"✓ {town} completed")
-            
-            # Brief pause between towns to avoid overwhelming servers
-            time.sleep(30)
-            
-        except Exception as e:
-            logger.error(f"✗ {town} failed: {e}")
-            continue
+    
+    try:
+        # 0. Refresh System Data (Businesses, Principals) & Run Network Discovery
+        logger.info("Starting System Data Refresh & Network Discovery...")
+        system_refresh_cmd = [sys.executable, "updater/refresh_system_data.py"]
+        subprocess.run(system_refresh_cmd, check=False)
+        logger.info("✓ System Data Refresh finished")
+
+        # Run update_data.py as a subprocess for better isolation
+        import subprocess
+        
+        cmd = [
+            sys.executable, 
+            "updater/update_data.py", 
+            "-m"
+        ] + PRIORITY_TOWNS
+        
+        logger.info(f"Executing: {' '.join(cmd)}")
+        # We don't use check=True to allow the scheduler to continue even if one run fails
+        subprocess.run(cmd, check=False)
+        
+        logger.info("Starting Hartford Code Enforcement ingestion...")
+        enforcement_cmd = [sys.executable, "updater/ingest_hartford_enforcement.py"]
+        subprocess.run(enforcement_cmd, check=False)
+        
+        logger.info("✓ Parallel town update process finished")
+
+    except Exception as e:
+        logger.error(f"✘ Nightly update failed: {e}")
     
     logger.info("=" * 80)
     logger.info("Nightly update completed")
@@ -99,8 +110,8 @@ def main():
     logger.info("  - Weekly full scan: 3:00 AM Sunday")
     
     # Run immediately on startup for testing
-    logger.info("Running initial update...")
-    run_nightly_update()
+    # logger.info("Running initial update...")
+    # run_nightly_update()
     
     # Keep running
     while True:

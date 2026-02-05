@@ -108,6 +108,24 @@ export default function NetworkProfileCard({ networkData, stats }) {
         // Falback to simple slice.
         .slice(0, 4);
 
+    // Terminology Calculations
+    const parcelsCount = propCount;
+    // Prefer backend unit_count, fallback to calculation
+    const unitsCount = networkData.unit_count || (networkData.properties ? networkData.properties.reduce((acc, p) => acc + (p.number_of_units || 1), 0) : 0);
+
+    // Group properties by street address (without unit) to count complexes
+    const uniqueAddresses = new Set();
+    if (networkData.properties) {
+        networkData.properties.forEach(p => {
+            const addr = p.address || p.location || "";
+            // Robust address normalization: strip unit info
+            const unitPattern = /(?:,|\s+)\s*(?:(?:UNIT|APT|APARTMENT|SUITE|STE|FL|FLOOR|RM|ROOM)(?:\b|(?=\d))|#)\s*[\w\d-]+$/i;
+            const baseAddr = addr.replace(unitPattern, '').replace(/,$/, '').trim().toUpperCase();
+            if (baseAddr) uniqueAddresses.add(`${baseAddr}|${p.city}`);
+        });
+    }
+    const complexesCount = networkData.building_count || uniqueAddresses.size;
+
     const businessList = topBusinesses.map((b, i) => (
         <span key={i} className="inline-block mr-1">
             <span className="italic text-slate-100">{b.name}</span>
@@ -130,24 +148,27 @@ export default function NetworkProfileCard({ networkData, stats }) {
                         <h2 className="text-sm md:text-base lg:text-xl font-black text-white tracking-tight truncate" title={managerName}>
                             {managerName}
                         </h2>
-                        {activeBusinesses.length > 0 && (
+                        {(activeBusinesses.length > 0 || humanPrincipals.length > 0) && (
                             <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider truncate max-w-[200px] hidden md:block">
-                                {activeBusinesses.length + entityPrincipals.length} Entities
+                                {activeBusinesses.length + humanPrincipals.length + entityPrincipals.length} Network Entities
                             </span>
                         )}
                     </div>
                 </div>
 
-                {/* Right: Stats & Actions Combined */}
                 <div className="flex items-center gap-3 lg:gap-6 shrink-0">
                     <div className="hidden sm:flex items-center gap-4 border-r border-white/10 pr-4 mr-1">
                         <div className="flex flex-col items-center">
-                            <span className="text-[10px] font-bold text-slate-500 uppercase leading-none mb-1">Assets</span>
-                            <span className="text-sm lg:text-base font-black text-white leading-none">{propCount}</span>
+                            <span className="text-[10px] font-bold text-slate-500 uppercase leading-none mb-1">Buildings</span>
+                            <span className="text-sm lg:text-base font-black text-white leading-none">{complexesCount}</span>
                         </div>
                         <div className="flex flex-col items-center">
-                            <span className="text-[10px] font-bold text-slate-500 uppercase leading-none mb-1">Entities</span>
-                            <span className="text-sm lg:text-base font-black text-white leading-none">{networkData.businesses.length + entityPrincipals.length}</span>
+                            <span className="text-[10px] font-bold text-slate-500 uppercase leading-none mb-1">Units</span>
+                            <div className="flex items-baseline gap-1">
+                                <span className="text-sm lg:text-base font-black text-white leading-none">
+                                    {unitsCount}
+                                </span>
+                            </div>
                         </div>
                         <div className="flex flex-col items-end">
                             <span className="text-[10px] font-bold text-blue-400 uppercase leading-none mb-1">Valuation</span>
@@ -155,14 +176,34 @@ export default function NetworkProfileCard({ networkData, stats }) {
                         </div>
                     </div>
 
-                    <button
-                        onClick={handleGenerateReport}
-                        className="flex items-center gap-1.5 text-[10px] font-bold text-amber-300 hover:text-amber-200 transition-all uppercase tracking-widest bg-amber-500/10 hover:bg-amber-500/20 px-3 py-1.5 rounded-lg border border-amber-500/20 shrink-0"
-                    >
-                        <Sparkles size={12} className="shrink-0" />
-                        <span className="hidden lg:inline">AI Report</span>
-                        <span className="lg:hidden">Digest</span>
-                    </button>
+                    {/* AI Report Button - Only for networks with 10+ parcels */}
+                    <div className="relative group">
+                        <button
+                            onClick={parcelsCount >= 10 ? handleGenerateReport : undefined}
+                            disabled={parcelsCount < 10}
+                            className={`flex items-center gap-1.5 text-[10px] font-bold transition-all uppercase tracking-widest px-3 py-1.5 rounded-lg border shrink-0 ${parcelsCount >= 10
+                                ? 'text-amber-300 hover:text-amber-200 bg-amber-500/10 hover:bg-amber-500/20 border-amber-500/20 cursor-pointer'
+                                : 'text-slate-500 bg-slate-500/5 border-slate-500/10 cursor-not-allowed opacity-50'
+                                }`}
+                            title={parcelsCount < 10 ? `AI Reports require 10+ parcels (currently ${parcelsCount})` : ''}
+                        >
+                            <Sparkles size={12} className="shrink-0" />
+                            <span className="hidden lg:inline">AI Report</span>
+                            <span className="lg:hidden">Digest</span>
+                        </button>
+
+                        {/* Tooltip for disabled state */}
+                        {parcelsCount < 10 && (
+                            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-2 bg-slate-900 text-white text-xs rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-[9999] shadow-xl border border-slate-700">
+                                <div className="font-bold mb-0.5">AI Reports require 10+ parcels</div>
+                                <div className="text-slate-400">Currently: {parcelsCount} {parcelsCount === 1 ? 'parcel' : 'parcels'}</div>
+                                <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-px">
+                                    <div className="w-2 h-2 bg-slate-900 border-b border-r border-slate-700 transform rotate-45"></div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
                 </div>
             </section >
 

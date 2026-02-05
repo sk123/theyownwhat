@@ -17,6 +17,7 @@ Thumbs.db
 dist/
 build/
 .cache/
+api/static/
 
 # Ignore git metadata
 .git

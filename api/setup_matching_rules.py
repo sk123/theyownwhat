@@ -77,8 +77,11 @@ REGISTRAR_DOMAINS = [
     'mastec.com', 'nrg.com', 'asplundh.com', 'theupsstore.com', 'citi.com', 'nm.com', 
     'compass-usa.com', 'unitedcorporate.com', 'maples.com', 'zedra.com', 'uragents.com', 
     'telyon.com', 'nfp.com', 'kpmg.com', 'pwc.com', 'raymondjames.com', 'lpl.com', 
-    'bankofamerica.com', 'jpmorgan.com', 'morganstanley.com'
+
+    'registeredagent.com', 'registered-agent.com', 'northwestregisteredagent.com',
+    'legalinc.com', 'vstatefilings.com', 'interstatefilings.com'
 ]
+
 CUSTOM_NETWORK_DOMAINS = [
     'starwood.com', 'bltoffice.com', 'belpointe.com', 'thepropertygroup.net', 
     'carabetta.com', 'simonkonover.com', 'mandymanagement.com', 'navarinoproperty.com',
@@ -88,7 +91,7 @@ CUSTOM_NETWORK_DOMAINS = [
     'centerplan.com', 'fusco.com', 'trefz-corp.com', 'fdrich.com', 'manafort.com',
     'dattco.com', 'gaultfamilyco.com', 'lovleydevelopment.com', 'seaboardproperties.com',
     'newcastlehotels.com', 'waterfordhotelgroup.com', 'scalzogroup.com',
-    'athenahealthcare.com', 'apple-rehab.com'
+    'athenahealthcare.com', 'apple-rehab.com', 'towerfunding.net'
 ]
 REGISTRAR_ADDRESS_SUBSTRINGS = [
     'NO INFORMATION PROVIDED', 'NONE', 'N/A', 'NOT APPLICABLE', 'UNKNOWN', 
@@ -118,7 +121,11 @@ PRINCIPAL_IGNORE_LIST = [
     'DOUGLAS L. POLING', 'Randy Larsen', 'ELIZABETH MOOTS', 'STEVEN P. BAUM',
     
     # Common Junk values
-    'X'
+    'X',
+    
+    # Law Firms / Attorneys (Generic blocks)
+    'KB LAW', 'KB LAW, LLC', 'KB LAW LLC',
+    'ATTORNEY AT LAW', 'LAW OFFICE', 'LAW GROUP', 'LEGAL SERVICES'
 ]
 
 

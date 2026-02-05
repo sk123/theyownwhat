@@ -19,6 +19,7 @@ const EntityDetailsModal = React.lazy(() => import('./components/EntityDetailsMo
 const AboutModal = React.lazy(() => import('./components/AboutModal'));
 const MultiPropertyMapModal = React.lazy(() => import('./components/MultiPropertyMapModal'));
 const FreshnessModal = React.lazy(() => import('./components/FreshnessModal'));
+const FeedbackModal = React.lazy(() => import('./components/FeedbackModal'));
 
 // NOTE: This is a simplified App.jsx. In a real scenario we'd use React Router.
 function App() {
@@ -48,6 +49,7 @@ function App() {
   const [selectedEntityId, setSelectedEntityId] = useState(null);
   const [showAbout, setShowAbout] = useState(false);
   const [showFreshness, setShowFreshness] = useState(false);
+  const [showFeedback, setShowFeedback] = useState(false);
 
   // Mobile Tabs
   const [activeMobileTab, setActiveMobileTab] = useState('properties');
@@ -96,13 +98,14 @@ function App() {
     setLoading(true);
     setSearchResults(null); // Clear previous results
     try {
-      const results = await api.get(`/search?type=${type}&term=${term}`);
+      // Use 'all' type for unified search
+      const results = await api.get(`/search?type=all&term=${encodeURIComponent(term)}`);
       console.log("Search results:", results);
 
       if (results && results.length > 0) {
         setSearchResults(results);
       } else {
-        console.warn("No results found for", type, term);
+        console.warn("No results found for", term);
         alert("No results found.");
       }
     } catch (err) {
@@ -195,16 +198,20 @@ function App() {
         // On Complete
         setNetworkData(newData);
 
-        // Calc stats
+        // on Complete calc stats
         const totalVal = newData.properties.reduce((acc, p) => {
+          if (p.is_network_member === false) return acc; // Only sum value of owned properties
           const val = parseFloat(String(p.assessed_value || '0').replace(/[^0-9.]/g, ''));
           return acc + val;
         }, 0);
 
         const totalApp = newData.properties.reduce((acc, p) => {
+          if (p.is_network_member === false) return acc;
           const val = parseFloat(String(p.appraised_value || '0').replace(/[^0-9.]/g, ''));
           return acc + val;
         }, 0);
+
+        const ownedCount = newData.properties.filter(p => p.is_network_member !== false).length;
 
         // Calculate Principal Breakdown
         let hCount = 0;
@@ -218,7 +225,8 @@ function App() {
         });
 
         setStats({
-          totalProperties: newData.properties.length,
+          totalProperties: newData.properties.length, // All fetched properties (including neighbors)
+          ownedProperties: ownedCount, // Only explicit network members
           totalValue: totalVal,
           totalAppraised: totalApp,
           humanCount: hCount,
@@ -314,15 +322,48 @@ function App() {
   }, [networkData.properties, selectedCity, selectedEntityId, networkData.links]);
 
   // Compute cities list for the filter, derived from ALL properties (unfiltered)
+  // Show the largest 15 municipalities by property count, not alphabetically
   const allCities = React.useMemo(() => {
-    const set = new Set(networkData.properties.map(p => p.city).filter(Boolean));
-    return ['All', ...Array.from(set).sort()];
+    const cityCounts = {};
+    networkData.properties.forEach(p => {
+      if (p.city) {
+        cityCounts[p.city] = (cityCounts[p.city] || 0) + 1;
+      }
+    });
+    // Sort cities by count descending, then alphabetically for ties
+    const sortedCities = Object.entries(cityCounts)
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([city]) => city);
+    // Take the largest 15
+    return ['All', ...sortedCities.slice(0, 15)];
   }, [networkData.properties]);
 
   const [selectedProperty, setSelectedProperty] = useState(null);
   const [selectedDetailEntity, setSelectedDetailEntity] = useState(null);
 
 
+
+  // Maintenance Mode State
+  const [maintenanceMode, setMaintenanceMode] = useState(false);
+
+  // Poll System Status
+  React.useEffect(() => {
+    const checkStatus = () => {
+      api.get('/system/status')
+        .then(data => {
+          if (data && data.maintenance !== undefined) {
+            setMaintenanceMode(data.maintenance);
+          }
+        })
+        .catch(() => {
+          // If status check fails, assume ok or ignore
+        });
+    };
+
+    checkStatus();
+    const interval = setInterval(checkStatus, 10000); // Check every 10s
+    return () => clearInterval(interval);
+  }, []);
 
   return (
     <div className="h-screen bg-slate-50 flex flex-col overflow-hidden font-sans text-slate-900 selection:bg-blue-100 selection:text-blue-900">
@@ -332,7 +373,31 @@ function App() {
         onAbout={() => setShowAbout(true)}
         OnOpenToolbox={() => setView('toolbox')}
         toolboxEnabled={toolboxEnabled}
+        onShowFreshness={() => setShowFreshness(true)}
+        onReportIssue={() => setShowFeedback(true)}
       />
+
+      {/* Maintenance Overlay */}
+      <AnimatePresence>
+        {maintenanceMode && (
+          <motion.div
+            initial={{ opacity: 0, y: -50 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -50 }}
+            className="absolute top-20 left-0 right-0 z-50 flex justify-center pointer-events-none"
+          >
+            <div className="bg-amber-50 border border-amber-200 text-amber-800 px-6 py-4 rounded-xl shadow-xl flex items-center gap-4 max-w-lg pointer-events-auto">
+              <div className="p-2 bg-amber-100 rounded-full animate-pulse">
+                <Loader2 size={24} className="animate-spin text-amber-600" />
+              </div>
+              <div>
+                <h3 className="font-bold text-lg">System Maintenance in Progress</h3>
+                <p className="text-sm text-amber-700">The network graph is currently being rebuilt to improve data accuracy. Some features may be unavailable or slower than usual. This message will disappear when complete.</p>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <LoadingScreen
         visible={streamingStatus.active}
@@ -341,6 +406,7 @@ function App() {
       />
 
       <main className="flex-1 overflow-hidden relative z-10">
+
         {/* HERO / SEARCH SECTION */}
         <AnimatePresence mode="wait">
           {view === 'home' && (
@@ -374,27 +440,38 @@ function App() {
                     <div className="max-w-2xl mx-auto relative group">
                       <div className="absolute -inset-1 bg-gradient-to-r from-blue-500 to-indigo-500 rounded-2xl opacity-20 group-hover:opacity-30 blur transition duration-500"></div>
                       <div className="relative bg-white rounded-xl shadow-xl border border-slate-100">
-                        <SearchBar
+                        {!maintenanceMode && <SearchBar
                           onSearch={handleSearch}
                           isLoading={loading}
-                          onSelect={(item) => {
+                          onSelect={async (item) => {
                             let type = 'owner';
-                            let id = item.value;
+                            let id = item.id || item.value;
 
-                            if (item.type === 'Business') {
+                            if (item.type === 'Business' || item.type === 'business') {
                               type = 'business';
                               id = item.id;
-                            } else if (item.type === 'Business Principal') {
+                              loadNetwork(id, type, item.label || item.value);
+                            } else if (item.type === 'Business Principal' || item.type === 'principal') {
                               type = 'principal';
-                            } else if (item.type === 'Address') {
-                              type = 'address';
+                              loadNetwork(id, type, item.label || item.value);
+                            } else if (item.type === 'Address' || item.type === 'address') {
+                              // If the autocomplete result has a business_id, treat as business owner
+                              if (item.business_id && item.owner) {
+                                loadNetwork(item.business_id, 'business', item.owner);
+                              } else if (item.principal_id && item.owner) {
+                                loadNetwork(item.principal_id, 'principal', item.owner);
+                              } else if (item.owner) {
+                                loadNetwork(item.owner, 'owner', item.owner);
+                              } else {
+                                // Fallback: load address network
+                                loadNetwork(item.value, 'address', item.value);
+                              }
+                            } else {
+                              // Property Owner fallback
+                              loadNetwork(id, 'owner', item.label || item.value);
                             }
-                            // Property Owner/Co-Owner fallback to 'owner' and use name (item.value)
-
-                            console.log("Direct load:", id, type, item.value);
-                            loadNetwork(id, type, item.value);
                           }}
-                        />
+                        />}
                       </div>
                     </div>
 
@@ -423,12 +500,16 @@ function App() {
                               <div key={i} className="h-48 bg-white rounded-2xl border border-slate-100 shadow-sm animate-pulse"></div>
                             ))}
                           </div>
-                        ) : (
+                        ) : !maintenanceMode ? (
                           <Insights
                             data={insights}
                             onSelect={(id, type, name) => loadNetwork(id, type, name)}
                             toolboxEnabled={toolboxEnabled}
                           />
+                        ) : (
+                          <div className="p-12 text-center bg-white/50 rounded-3xl border border-dashed border-slate-200 backdrop-blur-sm">
+                            <p className="text-slate-400 font-medium">Top networks are temporarily hidden during system maintenance.</p>
+                          </div>
                         )}
                       </div>
                     )}
@@ -659,6 +740,11 @@ function App() {
           <FreshnessModal
             isOpen={showFreshness}
             onClose={() => setShowFreshness(false)}
+          />
+          <FeedbackModal
+            isOpen={showFeedback}
+            onClose={() => setShowFeedback(false)}
+            initialEntity={selectedEntityId ? { id: selectedEntityId, title: 'Selected Entity' } : null}
           />
           <MultiPropertyMapModal
             properties={selectedMapProperties}

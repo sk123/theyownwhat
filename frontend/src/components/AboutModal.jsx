@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Info } from 'lucide-react';
+import { X, Info, Heart } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import readmeContent from '../../../README.md?raw';
@@ -59,13 +59,24 @@ export default function AboutModal({ isOpen, onClose, onShowFreshness }) {
                                 <span className="text-xs font-bold text-gray-400 uppercase tracking-widest">Transparency</span>
                                 <span className="text-sm text-gray-500">View data update logs and source freshness.</span>
                             </div>
-                            <button
-                                onClick={onShowFreshness}
-                                className="px-6 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl transition-all shadow-lg flex items-center gap-2"
-                            >
-                                <Info size={16} />
-                                Data Freshness Report
-                            </button>
+                            <div className="flex gap-3">
+                                <a
+                                    href="https://github.com/sponsors/sk123"
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="px-6 py-2.5 bg-pink-100 hover:bg-pink-200 text-pink-700 font-bold rounded-xl transition-all shadow-sm flex items-center gap-2"
+                                >
+                                    <Heart size={16} className="fill-pink-700" />
+                                    Pledge Support
+                                </a>
+                                <button
+                                    onClick={onShowFreshness}
+                                    className="px-6 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl transition-all shadow-lg flex items-center gap-2"
+                                >
+                                    <Info size={16} />
+                                    Data Freshness Report
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </motion.div>

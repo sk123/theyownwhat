@@ -1,6 +1,0 @@
-2025-09-14 17:22:43,833 - INFO - Database connection successful.
-2025-09-14 17:22:43,841 - INFO - Finding unlinked properties with business-like owner names...
-2025-09-14 17:22:43,841 - INFO - Loading business names for comparison...
-2025-09-14 17:22:47,282 - INFO - Loaded 1229363 business names for comparison.
-2025-09-14 17:22:54,651 - INFO - Found 1241167 unlinked properties to analyze.
-2025-09-14 17:28:53,182 - INFO - Database connection closed.

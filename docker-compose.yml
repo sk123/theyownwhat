@@ -44,7 +44,48 @@ services:
     networks:
       - default
 
+  updater:
+    build:
+      context: .
+      dockerfile: Dockerfile.updater
+    container_name: ctdata_updater
+    restart: unless-stopped
+    volumes:
+      - .:/app
+    environment:
+      - DATABASE_URL=postgresql://user:password@ctdata_db:5432/ctdata
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - SERPAPI_API_KEY=${SERPAPI_API_KEY}
+    networks:
+      - default
+
+  ctdata_db:
+    image: postgres:15-alpine
+    container_name: ctdata_db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=ctdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - default
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U user -d ctdata" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    shm_size: 1gb
+
 networks:
   default:
     name: theyownwhat_default
     external: true
+
+volumes:
+  postgres_data:
+
+

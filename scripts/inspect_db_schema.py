@@ -1,20 +1,29 @@
 
-import os
 import psycopg2
+from psycopg2.extras import RealDictCursor
 
-def inspect():
-    db_url = os.getenv('DATABASE_URL')
+def inspect_schema():
     try:
-        conn = psycopg2.connect(db_url)
-        with conn.cursor() as cur:
-            cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'properties'")
-            cols = [r[0] for r in cur.fetchall()]
-            print("Columns in 'properties' table:")
-            for col in sorted(cols):
-                print(f" - {col}")
+        conn = psycopg2.connect(
+            dbname="ctdata",
+            user="user",
+            password="password",
+            host="localhost",
+            port="5432"
+        )
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT column_name, data_type 
+            FROM information_schema.columns 
+            WHERE table_name = 'properties';
+        """)
+        rows = cur.fetchall()
+        print("--- Properties Table Schema ---")
+        for r in rows:
+            print(f"{r[0]} ({r[1]})")
         conn.close()
     except Exception as e:
         print(f"Error: {e}")
 
 if __name__ == "__main__":
-    inspect()
+    inspect_schema()

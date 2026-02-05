@@ -25,7 +25,7 @@ def _calculate_and_cache_insights(cursor, town_col, town_filter):
             JOIN entity_networks en ON p.business_id::text = en.entity_id AND en.entity_type = 'business'
             WHERE p.business_id IS NOT NULL
             
-            UNION
+            UNION ALL
             
             SELECT p.id, en.network_id
             FROM properties p
@@ -33,7 +33,7 @@ def _calculate_and_cache_insights(cursor, town_col, town_filter):
             JOIN entity_networks en ON pr.name_c = en.entity_id AND en.entity_type = 'principal'
             WHERE p.principal_id IS NOT NULL
 
-            UNION
+            UNION ALL
 
             SELECT p.id, en.network_id
             FROM properties p
@@ -55,10 +55,22 @@ def _calculate_and_cache_insights(cursor, town_col, town_filter):
             ORDER BY property_count DESC
             LIMIT 50
         ),
+        top_network_stats AS (
+           SELECT 
+               tn.network_id,
+               COUNT(DISTINCT p.location) as building_count,
+               COALESCE(SUM(p.number_of_units), 0) as unit_count
+           FROM top_networks tn
+           JOIN property_to_network ptn ON tn.network_id = ptn.network_id
+           JOIN properties p ON ptn.property_id = p.id
+           GROUP BY tn.network_id
+        ),
         network_display_entity AS (
             SELECT DISTINCT ON (tn.network_id)
                 tn.network_id,
                 tn.property_count,
+                tns.building_count,
+                tns.unit_count,
                 tn.total_assessed_value,
                 tn.total_appraised_value,
                 tn.business_count,
@@ -74,6 +86,7 @@ def _calculate_and_cache_insights(cursor, town_col, town_filter):
                        OR (p_inner.owner_norm = en.entity_id AND en.entity_type = 'principal')
                 ) as entity_property_count
             FROM top_networks tn
+            JOIN top_network_stats tns ON tn.network_id = tns.network_id
             JOIN entity_networks en ON tn.network_id = en.network_id
             ORDER BY tn.network_id, 
                      CASE WHEN en.entity_type = 'principal' THEN 0 ELSE 1 END,
@@ -101,7 +114,9 @@ def _calculate_and_cache_insights(cursor, town_col, town_filter):
             nde.entity_id,
             nde.entity_name,
             nde.entity_type,
-            nde.property_count as value,
+            nde.property_count,
+            nde.building_count,
+            nde.unit_count,
             nde.total_assessed_value,
             nde.total_appraised_value,
             nde.business_count,
@@ -137,8 +152,10 @@ def _calculate_and_cache_insights(cursor, town_col, town_filter):
                      if len(existing_net['entity_name']) < 60: 
                         existing_net['entity_name'] += f" & {network['entity_name']}"
             
-            if network['value'] > existing_net['value']:
-                existing_net['value'] = network['value']
+            if network['property_count'] > existing_net['property_count']:
+                existing_net['property_count'] = network['property_count']
+                existing_net['building_count'] = network.get('building_count', 0)
+                existing_net['unit_count'] = network.get('unit_count', 0)
                 existing_net['total_assessed_value'] = network['total_assessed_value']
                 existing_net['total_appraised_value'] = network['total_appraised_value']
             
@@ -178,6 +195,9 @@ def _calculate_and_cache_insights(cursor, town_col, town_filter):
             LIMIT 5;
         """, (network['network_id'],))
         network['representative_entities'] = cursor.fetchall()
+        # Ensure both value and property_count are set for frontend
+        # Ensure both value and property_count are set for frontend (value is required by API model)
+        network['value'] = network.get('property_count', 0)
         result.append(network)
         
     return result
@@ -196,6 +216,9 @@ def run():
                 def default(self, obj):
                     if hasattr(obj, 'isoformat'):
                         return obj.isoformat()
+                    from decimal import Decimal
+                    if isinstance(obj, Decimal):
+                        return float(obj)
                     return super().default(obj)
 
             insights_json = json.dumps(insights_by_municipality, cls=DateTimeEncoder)
@@ -213,7 +236,7 @@ def run():
                 top = insights_by_municipality['STATEWIDE'][0]
                 print(f"Name: {top['entity_name']}")
                 print(f"Type: {top['entity_type']}")
-                print(f"Count: {top['value']}")
+                print(f"Count: {top['property_count']}")
             else:
                 print("No statewide networks found!")
 

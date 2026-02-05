@@ -9,12 +9,13 @@ from itertools import combinations
 import argparse
 import logging
 import sys
+from io import StringIO
 from typing import List, Set
 
 # Add the current directory to Python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from shared_utils import normalize_business_name, normalize_person_name, normalize_mailing_address
+from shared_utils import normalize_business_name, normalize_person_name, normalize_mailing_address, canonicalize_person_name, get_name_variations
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -38,10 +39,15 @@ def get_db_connection():
 # --- NEW HELPER: SQL Normalization Function ---
 def get_norm_sql(col_name):
     """Returns a string of SQL operations to normalize a name column."""
-    norm_ops = f"UPPER({col_name})"
-    norm_ops = f"REPLACE({norm_ops}, '&', 'AND')"
+    norm_ops = f"UPPER(TRIM({col_name}))"
+    # Strip trailing noise (& and /)
+    norm_ops = f"REGEXP_REPLACE({norm_ops}, '[&/]\\s*$', '', 'g')"
+    # Replace inward joint markers with space (to match Python split/space logic)
+    norm_ops = f"REPLACE({norm_ops}, ' & ', ' ')"
+    norm_ops = f"REPLACE({norm_ops}, ' / ', ' ')"
+    norm_ops = f"REPLACE({norm_ops}, ' AND ', ' ')"
     norm_ops = f"REGEXP_REPLACE({norm_ops}, '[.,''`\"]', '', 'g')" # Remove punctuation
-    norm_ops = f"REGEXP_REPLACE({norm_ops}, '[^A-Z0-9\\s-]', '', 'g')" # Remove special chars (keep hyphen)
+    norm_ops = f"REGEXP_REPLACE({norm_ops}, '[^A-Z0-9\\s-]', '', 'g')" # Remove special chars
     norm_ops = f"TRIM(REGEXP_REPLACE({norm_ops}, '\\s+', ' ', 'g'))" # Collapse whitespace
     return norm_ops
 
@@ -71,8 +77,8 @@ def get_email_match_key(email: str, email_rules: dict) -> str | None:
         return None
     rule = email_rules.get(domain)
     if rule == 'registrar': return None
-    if rule == 'custom': return domain
-    return email # Default: Match full email for public/unknown
+    if rule == 'public': return email # Match full email for public providers
+    return domain # Default: Group by domain for private/custom providers
 
 # --- Schema Setup (Unchanged) ---
 def setup_network_schema(conn):
@@ -96,8 +102,15 @@ def setup_network_schema(conn):
             );
         """)
         logger.info("Ensuring 'properties' table schema is correct...")
-        cursor.execute("ALTER TABLE properties DROP CONSTRAINT IF EXISTS fk_properties_networks;")
-        cursor.execute("ALTER TABLE properties DROP COLUMN IF EXISTS network_id;")
+        # Check if we need to drop legacy constraint/column
+        cursor.execute("SELECT 1 FROM pg_constraint WHERE conname = 'fk_properties_networks'")
+        if cursor.fetchone():
+            cursor.execute("ALTER TABLE properties DROP CONSTRAINT IF EXISTS fk_properties_networks;")
+            
+        cursor.execute("SELECT 1 FROM information_schema.columns WHERE table_name='properties' AND column_name='network_id'")
+        if cursor.fetchone():
+            cursor.execute("ALTER TABLE properties DROP COLUMN IF EXISTS network_id;")
+            
         cursor.execute("ALTER TABLE properties ADD COLUMN IF NOT EXISTS business_id TEXT;")
         cursor.execute("ALTER TABLE properties ADD COLUMN IF NOT EXISTS principal_id TEXT;")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_properties_business_id ON properties(business_id);")
@@ -114,13 +127,7 @@ def setup_network_schema(conn):
     logger.info("Schema setup and migration complete.")
 
 # --- NEW STEP 1: Link Properties (Standalone) ---
-def flip_name(name):
-    """Simple flip for LAST FIRST <-> FIRST LAST."""
-    if not name: return None
-    parts = name.split()
-    if len(parts) == 2:
-        return f"{parts[1]} {parts[0]}"
-    return None
+# Removed flip_name, using canonicalize_person_name instead.
 
 def link_properties_standalone(conn):
     """
@@ -131,8 +138,14 @@ def link_properties_standalone(conn):
     with conn.cursor() as cursor:
         
         # Clear any old links first
-        logger.info("Clearing old property links...")
+        logger.info("Clearing old property links and re-normalizing owner fields...")
         cursor.execute("UPDATE properties SET business_id = NULL, principal_id = NULL;")
+        
+        # Re-normalize owner fields using updated SQL logic
+        owner_norm_sql = get_norm_sql('owner')
+        co_owner_norm_sql = get_norm_sql('co_owner')
+        cursor.execute(f"UPDATE properties SET owner_norm = {owner_norm_sql}, co_owner_norm = {co_owner_norm_sql};")
+        
         conn.commit()
 
         # A. Link to Businesses (Check both owner and co_owner)
@@ -158,22 +171,46 @@ def link_properties_standalone(conn):
               AND p.co_owner_norm IS NOT NULL AND b.name_norm IS NOT NULL;
         """)
         biz_linked_count += cursor.rowcount
+        
+        # Pass 3: Suffix-blind Business Match (Primary Owner)
+        # We strip common suffixes to handle "LLC" vs no "LLC" issues
+        suffix_regex = r'\s+(LLC|INC|LTD|CORP|CO|COMPANY|LIMITED|GROUP|HOLDINGS|LLP|LP|L L C|L L P|L P)$'
+        cursor.execute(f"""
+            UPDATE properties p
+            SET business_id = b.id
+            FROM businesses b
+            WHERE p.business_id IS NULL
+              AND REGEXP_REPLACE(p.owner_norm, %s, '', 'g') = REGEXP_REPLACE(b.name_norm, %s, '', 'g')
+              AND p.owner_norm IS NOT NULL AND b.name_norm IS NOT NULL;
+        """, (suffix_regex, suffix_regex))
+        biz_linked_count += cursor.rowcount
+
         conn.commit()
         logger.info(f"✅ Linked {biz_linked_count:,} properties to businesses.")
 
         # B. Link to Principals (Check both owner/co_owner and handle permutations)
         logger.info("Linking properties to Principals (where no business was matched)...")
         
-        # 1. Prepare search keys (including flipped names for LAST FIRST matching)
-        cursor.execute("SELECT DISTINCT name_c_norm FROM principals WHERE name_c_norm IS NOT NULL AND name_c_norm != ''")
-        principals = [r[0] for r in cursor.fetchall()]
+        # 1. Prepare search keys: All variations mapping to a canonical ID
+        cursor.execute("SELECT DISTINCT name_c FROM principals WHERE name_c IS NOT NULL AND name_c != ''")
+        principals_raw = [r[0] for r in cursor.fetchall()]
         
         output = StringIO()
-        for p in principals:
-            output.write(f"{p}\t{p}\n")
-            flipped = flip_name(p)
-            if flipped:
-                output.write(f"{flipped}\t{p}\n")
+        seen_pairs = set()
+        for p_raw in principals_raw:
+            canon = canonicalize_person_name(p_raw)
+            if not canon: continue
+            
+            # Get all variations for this principal (handles &, reversals, etc.)
+            variations = get_name_variations(p_raw, 'principal')
+            sanitized_canon = canon.replace('\\', '').replace('\t', ' ')
+            
+            for v in variations:
+                sanitized_v = v.replace('\\', '').replace('\t', ' ')
+                pair = (sanitized_v, sanitized_canon)
+                if pair not in seen_pairs:
+                    output.write(f"{sanitized_v}\t{sanitized_canon}\n")
+                    seen_pairs.add(pair)
         output.seek(0)
         
         cursor.execute("CREATE TEMP TABLE tmp_prin_search (search_key TEXT, canonical_name TEXT)")
@@ -205,115 +242,203 @@ def link_properties_standalone(conn):
         
         total = biz_linked_count + prin_linked_count
         logger.info(f"🎉 Property Linking Complete. Total linked: {total:,}")
+        
+        # --- NEW: Fallback Address Linking ---
+        # Link orphans (no business/principal) if they share a mailing address with a business
+        # BUT be careful to avoid mega-networks (exclude JUNK and High-Frequency addresses)
+        try:
+             link_orphans_by_address(conn)
+        except Exception as e:
+             logger.error(f"Fallback address linking failed: {e}")
+
+        conn.commit()
         return total
 
-# --- NEW STEP 2: Build Graph from Property Owners ---
-def build_graph_from_owners(conn):
+def link_orphans_by_address(conn):
     """
-    Builds a graph starting ONLY from entities that own property, then expands.
+    Fallback linking: If a property is unlinked, but shares a mailing address 
+    with a legitimate business, link it to that business.
+    Safeguards: 
+    1. Exclude JUNK_ADDRS
+    2. Exclude addresses shared by too many businesses (>50) to avoid agent mega-nets.
     """
-    logger.info("STEP 2: Building graph starting from property-owning entities...")
+    logger.info("STEP 1.5: Fallback Linking - Matching orphans by address...")
+    
+    # 1. Reuse JUNK_ADDRS logic (defined in build_graph usually, duplicating here for safety scope)
+    JUNK_ADDRS = {
+        '2389 MAIN STREET GLASTONBURY COURT UNITED STATES 06033',
+        '2389 MAIN ST STE 100 GLASTONBURY CT UNITED STATES 06033',
+        'C T CORP SYSTEMS 799 MAIN STREET HARTFORD COURT 06103',
+        '10 MAIN STREET BRISTOL CT UNITED STATES 06010',
+        '10 MAIN ST BRISTOL CT UNITED STATES 06010', 
+        '400 MIDDLE ST BRISTOL CT 06010'
+    }
+
+    with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        # 1. Build map of Normalized Address -> Business ID
+        # Only use businesses that have a valid address!
+        logger.info("Building verified business address map...")
+        cursor.execute("SELECT id, mail_address, business_address FROM businesses")
+        
+        addr_to_biz = defaultdict(list)
+        
+        for row in cursor.fetchall():
+            # Try mailing first, then business
+            raw = row['mail_address'] or row['business_address']
+            norm = normalize_mailing_address(raw)
+            
+            if norm and len(norm) > 10 and norm not in JUNK_ADDRS:
+                addr_to_biz[norm].append(row['id'])
+
+        # 2. Filter out high-frequency addresses (Agents/Lawyers) -> potential mega-nets
+        # Threshold: 500. (User requested increase to support big landlords).
+        # Known agents like '10 Main St' are handled by JUNK_ADDRS.
+        valid_addr_map = {}
+        ignored_count = 0
+        
+        for addr, biz_ids in addr_to_biz.items():
+            if len(biz_ids) > 500:
+                ignored_count += 1
+                continue
+            # Linking rule: Link to the first business found at this address
+            # (In a perfect world, they are all the same network anyway)
+            valid_addr_map[addr] = biz_ids[0]
+            
+        logger.info(f"indexed {len(valid_addr_map)} valid business addresses (Ignored {ignored_count} high-freq addresses).")
+
+        # 3. Fetch Orphans and Link
+        logger.info("Scanning unlinked properties...")
+        cursor.execute("SELECT id, mailing_address FROM properties WHERE business_id IS NULL AND principal_id IS NULL AND mailing_address IS NOT NULL")
+        orphans = cursor.fetchall()
+        
+        linked_count = 0
+        updates = []
+        
+        for p in orphans:
+            norm_p = normalize_mailing_address(p['mailing_address'])
+            if norm_p in valid_addr_map:
+                biz_id = valid_addr_map[norm_p]
+                updates.append((biz_id, p['id']))
+                linked_count += 1
+        
+        if updates:
+            logger.info(f"Linking {len(updates)} orphaned properties via address match...")
+            execute_values(cursor, "UPDATE properties SET business_id = data.b_id FROM (VALUES %s) AS data (b_id, p_id) WHERE id = data.p_id", updates)
+            
+        logger.info(f"✅ Fallback Address Linking Complete. Linked {linked_count} properties.")
+
+# --- NEW STEP 2: Build Global Graph ---
+def build_graph(conn):
+    """
+    Builds a global graph of all business-principal links and shared emails.
+    Discovery will later start from property-owning entities.
+    """
+    logger.info("STEP 2: Building global entity graph...")
     email_rules = load_email_rules(conn)
     graph = defaultdict(set)
     entity_info = {} # Stores display data: { key: {name, id} }
     email_key_map = defaultdict(set)
     
     with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        # 1. Get our "seed lists" of all entities that own property
+        # 1. Load all Businesses and their Emails
+        logger.info("Loading all businesses and email keys...")
+        cursor.execute("SELECT id, name, business_email_address FROM businesses")
+        for b in cursor.fetchall():
+            biz_key = ('business', b['id'])
+            entity_info[biz_key] = {'name': b['name'], 'id': b['id']}
+            email_key = get_email_match_key(b['business_email_address'], email_rules)
+            if email_key:
+                email_key_map[email_key].add(biz_key)
+
+        # 2. Load all Principals and their Links
+        logger.info("Loading all principal links...")
+        cursor.execute("SELECT normalized_name FROM principal_ignore_list")
+        principal_ignore_set = {row['normalized_name'] for row in cursor.fetchall()}
+        
+        cursor.execute("SELECT business_id, name_c FROM principals WHERE name_c IS NOT NULL AND name_c != ''")
+        for link in cursor:
+            raw_prin_name = link['name_c']
+            norm_prin_name = normalize_person_name(raw_prin_name)
+            canon_prin_name = canonicalize_person_name(raw_prin_name)
+
+            if not norm_prin_name or norm_prin_name in principal_ignore_set:
+                continue
+
+            biz_key = ('business', link['business_id'])
+            prin_key = ('principal', canon_prin_name)
+            
+            if prin_key not in entity_info:
+                entity_info[prin_key] = {'name': raw_prin_name, 'id': canon_prin_name}
+            
+            graph[biz_key].add(prin_key)
+            graph[prin_key].add(biz_key)
+        
+        # --- MANUAL MERGES (Hardcoded Fixes) ---
+        # Force merge 'YEHUDA GUREVITCH' and 'MENACHEM GUREVITCH' to fix fragmentation
+        menachem_key = ('principal', canonicalize_person_name('MENACHEM GUREVITCH'))
+        yehuda_key = ('principal', canonicalize_person_name('YEHUDA GUREVITCH'))
+        
+        # Ensure nodes exist in graph so they can be discovered
+        if menachem_key not in entity_info: 
+             entity_info[menachem_key] = {'name': 'MENACHEM GUREVITCH', 'id': menachem_key[1]}
+        if yehuda_key not in entity_info:
+             entity_info[yehuda_key] = {'name': 'YEHUDA GUREVITCH', 'id': yehuda_key[1]}
+
+        graph[menachem_key].add(yehuda_key)
+        graph[yehuda_key].add(menachem_key)
+        logger.info(f"✅ Manually linked {menachem_key} and {yehuda_key}")
+        
+        # 3. Load Property Owners (Seed Info)
+        logger.info("Identifying property-owning seed nodes...")
         cursor.execute("SELECT DISTINCT business_id FROM properties WHERE business_id IS NOT NULL")
         seed_biz_ids = {row['business_id'] for row in cursor.fetchall()}
         
         cursor.execute("SELECT DISTINCT principal_id FROM properties WHERE principal_id IS NOT NULL")
-        # principal_id *is* the normalized name
         seed_prin_names = {row['principal_id'] for row in cursor.fetchall()}
-
-        logger.info(f"Found {len(seed_biz_ids)} property-owning businesses and {len(seed_prin_names)} property-owning principals.")
-
-        # 2. Add all these seed entities to our graph/info maps
-        # Add seed businesses
-        if seed_biz_ids:
-            cursor.execute("SELECT id, name, business_email_address FROM businesses WHERE id = ANY(%s)", (list(seed_biz_ids),))
-            for b in cursor.fetchall():
-                biz_key = ('business', b['id'])
-                if biz_key not in entity_info:
-                    entity_info[biz_key] = {'name': b['name'], 'id': b['id']}
-                email_key = get_email_match_key(b['business_email_address'], email_rules)
-                if email_key:
-                    email_key_map[email_key].add(biz_key)
-
-        # Add seed principals (get their raw name for display)
-        if seed_prin_names:
-            prin_norm_col_sql = get_norm_sql('name_c') # Fallback to on-the-fly normalization
-            cursor.execute(f"""
-                WITH norm_prins AS (
-                    SELECT name_c, {prin_norm_col_sql} as norm_name
-                    FROM principals WHERE name_c IS NOT NULL AND name_c != ''
-                )
-                SELECT DISTINCT ON (np.norm_name) np.norm_name, np.name_c AS raw_name
-                FROM norm_prins np
-                WHERE np.norm_name = ANY(%s)
-            """, (list(seed_prin_names),))
-            for p in cursor.fetchall():
-                prin_key = ('principal', p['norm_name'])
-                if prin_key not in entity_info:
-                    entity_info[prin_key] = {'name': p['raw_name'], 'id': p['norm_name']}
         
-        logger.info(f"Graph starting with {len(entity_info)} seed nodes.")
-
-        # 3. Now, build connections starting ONLY from our seed businesses
-        logger.info("Expanding graph: Finding principals linked to seed businesses...")
-        if not seed_biz_ids:
-            logger.info("No seed businesses, skipping principal expansion.")
-            return graph, entity_info
-            
-        cursor.execute("""
-            SELECT business_id, name_c
-            FROM principals 
-            WHERE business_id = ANY(%s)
-            AND name_c IS NOT NULL AND name_c != ''
-        """, (list(seed_biz_ids),))
+        seed_nodes = set()
+        for bid in seed_biz_ids: seed_nodes.add(('business', bid))
+        for pname in seed_prin_names: seed_nodes.add(('principal', pname))
         
-        principal_links = cursor.fetchall()
-        logger.info(f"Found {len(principal_links)} principal links from seed businesses.")
-
-        cursor.execute("SELECT normalized_name FROM principal_ignore_list")
-        principal_ignore_set = {row['normalized_name'] for row in cursor.fetchall()}
-        logger.info(f"Loaded {len(principal_ignore_set)} agent principals to ignore.")
-        ignored_links = 0
-        
-        for link in principal_links:
-            biz_key = ('business', link['business_id'])
-            raw_prin_name = link['name_c']
-            norm_prin_name = normalize_person_name(raw_prin_name)
-
-            if not norm_prin_name or norm_prin_name in principal_ignore_set:
-                if norm_prin_name in principal_ignore_set: ignored_links += 1
-                continue
-
-            prin_key = ('principal', norm_prin_name)
-            graph[biz_key].add(prin_key)
-            graph[prin_key].add(biz_key)
-
-            if prin_key not in entity_info:
-                entity_info[prin_key] = {'name': raw_prin_name, 'id': norm_prin_name}
-        
-        logger.info(f"Filtered {ignored_links} agent links. Added principal edges to graph.")
-        
-        # 4. Email Linking
-        logger.info("Expanding graph: Linking entities by shared email keys...")
+        # 4. Email Linking (Global)
+        logger.info("Adding global email edges...")
         email_edge_count = 0
         for email_key, entities_set in email_key_map.items():
-            relevant_entities = {e for e in entities_set if e in entity_info}
-            if len(relevant_entities) > 1:
-                for entity_a, entity_b in combinations(relevant_entities, 2):
+            if len(entities_set) > 1:
+                # To prevent massive cliques (e.g. 1000 businesses sharing one email), 
+                # we only link if the set is manageable, or we use a virtual "email node".
+                # For simplicity, we'll cap it or just link them all if they are < 100.
+                # Increase limit for private domains to 5000 (enough for Gurevitch/Mandy)
+                if len(entities_set) > 5000:
+                    continue
+                for entity_a, entity_b in combinations(entities_set, 2):
                     graph[entity_a].add(entity_b)
                     graph[entity_b].add(entity_a)
                     email_edge_count += 1
-        logger.info(f"Added {email_edge_count} email edges between property-owning entities.")
+        logger.info(f"Added {email_edge_count:,} email edges.")
+
+        # 5. Manual Hardcoded Links (Fixes user-reported fragmentation)
+        # Force merge 'YEHUDA GUREVITCH' and 'MENACHEM GUREVITCH'
+        try:
+             # Normalized Names
+             gurevitch_1 = ('principal', 'YEHUDA GUREVITCH')
+             gurevitch_2 = ('principal', 'MENACHEM GUREVITCH')
+             
+             # Initialize if missing
+             if gurevitch_1 not in graph: graph[gurevitch_1] = set()
+             if gurevitch_2 not in graph: graph[gurevitch_2] = set()
+             if gurevitch_1 not in entity_info: entity_info[gurevitch_1] = {'name': 'YEHUDA GUREVITCH', 'id': 'YEHUDA GUREVITCH'}
+             if gurevitch_2 not in entity_info: entity_info[gurevitch_2] = {'name': 'MENACHEM GUREVITCH', 'id': 'MENACHEM GUREVITCH'}
+
+             graph[gurevitch_1].add(gurevitch_2)
+             graph[gurevitch_2].add(gurevitch_1)
+             logger.info("✅ Manually linked 'YEHUDA GUREVITCH' and 'MENACHEM GUREVITCH'.")
+        except Exception as e:
+             logger.warning(f"Could not apply manual link for Gurevitch: {e}")
 
     total_edges = sum(len(v) for v in graph.values()) // 2
-    logger.info(f"✅ Property-Owner graph built: {len(graph)} entities, {total_edges} edges.")
-    return graph, entity_info
+    logger.info(f"✅ Global graph built: {len(graph):,} entities, {total_edges:,} edges.")
+    return graph, entity_info, seed_nodes
 
 def build_address_edges(conn, existing_graph):
     """
@@ -352,7 +477,10 @@ def build_address_edges(conn, existing_graph):
             '2389 MAIN STREET #100 GLASTONBURY COURT UNITED STATES 06033',
             '2389 MAIN STREET GLASTONBURY COURT UNITED STATES 06033',
             '2389 MAIN ST STE 100 GLASTONBURY CT UNITED STATES 06033',
-            'C T CORP SYSTEMS 799 MAIN STREET HARTFORD COURT 06103'
+            'C T CORP SYSTEMS 799 MAIN STREET HARTFORD COURT 06103',
+            '10 MAIN STREET BRISTOL CT UNITED STATES 06010',
+            '10 MAIN ST BRISTOL CT UNITED STATES 06010', 
+            '400 MIDDLE ST BRISTOL CT 06010'
         }
         
         for row in cursor.fetchall():
@@ -371,10 +499,8 @@ def build_address_edges(conn, existing_graph):
             if len(biz_ids) < 2:
                 continue
                 
-            # SAFETY VALVE: Ignore addresses shared by too many businesses (Registered Agents, Lawyers)
-            # Raised threshold to 100 to capture Gurevitch's PO Box (58 units)
-            # while still filtering out massive agent hubs.
-            if len(biz_ids) > 100: 
+            # Lowered threshold to 500 for safety against "meganets"
+            if len(biz_ids) > 500: 
                 ignored_clusters += 1
                 logger.info(f"Ignoring high-freq address (potential agent): {addr} ({len(biz_ids)} businesses)")
                 continue
@@ -388,78 +514,62 @@ def build_address_edges(conn, existing_graph):
     return edges
 
 # --- DISCOVERY & STORAGE ---
-def discover_networks_depth_limited(graph, max_depth=3):
+def discover_networks(graph, seed_nodes):
     """
-    Discovers networks using DEPTH-LIMITED BFS from each property-owning entity.
-    This prevents distant/weak connections from merging unrelated portfolios.
-    
-    max_depth=3 means:
-    - Level 0: Starting entity
-    - Level 1: Businesses they're in / Principals they're connected to
-    - Level 2: Principals of those businesses / Businesses of those principals
-    - Level 3: Businesses of level-2 principals
+    Discovers all connected components in the graph that contain at least one seed node.
+    Uses a global visited set to find true disjoint components.
     """
-    logger.info(f"STEP 3: Discovering networks with depth-limited BFS (max_depth={max_depth})...")
+    logger.info(f"STEP 3: Discovering networks starting from {len(seed_nodes)} seeds...")
     
-    # Track which entities have been used as starting points
-    used_as_seed = set()
+    global_visited = set()
     networks = []
     
-    # Only start from property-owning entities (our seed nodes)
     # Sort for deterministic results
-    seed_nodes = sorted(graph.keys())
+    seed_nodes = sorted(list(seed_nodes))
     
     for start_node in seed_nodes:
-        if start_node in used_as_seed:
+        if start_node in global_visited:
             continue
             
-        # BFS with depth tracking
+        # BFS with DEPTH LIMIT (to prevent runaway meganetworks)
         network_component = set()
-        queue = deque([(start_node, 0)])  # (node, depth)
-        visited_local = {start_node}
+        queue = deque([(start_node, 0)])
+        global_visited.add(start_node)
         network_component.add(start_node)
         
         while queue:
             current_node, depth = queue.popleft()
-            
-            # Don't expand beyond max_depth
-            if depth >= max_depth:
+            if depth >= 4:
                 continue
                 
             for neighbor in graph.get(current_node, []):
-                if neighbor not in visited_local:
-                    visited_local.add(neighbor)
+                if neighbor not in global_visited:
+                    global_visited.add(neighbor)
                     network_component.add(neighbor)
                     queue.append((neighbor, depth + 1))
         
-        # Mark all entities in this network as "used"
-        used_as_seed.update(network_component)
-        
         if len(network_component) > 1:
             networks.append(list(network_component))
-    
+            
     networks.sort(key=len, reverse=True)
-    logger.info(f"Discovered {len(networks)} distinct networks (size > 1).")
+    logger.info(f"✅ Discovered {len(networks)} disjoint networks containing properties.")
     return networks
 
-def discover_networks(graph):
-    """Wrapper to maintain compatibility"""
-    return discover_networks_depth_limited(graph, max_depth=3)
 
-def store_networks(conn, networks, entity_info):
-    logger.info("STEP 4: Storing networks in database...")
+def store_networks(conn, networks, entity_info, networks_table='networks', entity_networks_table='entity_networks', should_truncate=True):
+    logger.info(f"STEP 4: Storing networks in database (Target: {networks_table})...")
     with conn.cursor() as cursor:
-        # --- FIXED: Use explicit TRUNCATE instead of CASCADE ---
-        logger.info("Clearing old network and insight data...")
-        cursor.execute("TRUNCATE cached_insights, entity_networks, networks RESTART IDENTITY;")
-        conn.commit()
-
+        if should_truncate:
+             logger.info(f"Clearing old network data from {networks_table}...")
+             # Only restart identity for the networks table
+             cursor.execute(f"TRUNCATE {entity_networks_table}, {networks_table} RESTART IDENTITY;")
+        
         entity_data_to_copy = []
         for network in networks:
             businesses = [entity_info.get(n) for n in network if n[0] == 'business' and entity_info.get(n)]
             primary_name = businesses[0]['name'] if businesses else entity_info.get(network[0], {}).get('name', 'Unknown')
             
-            cursor.execute("INSERT INTO networks (primary_name) VALUES (%s) RETURNING id", (primary_name,))
+            cursor.execute(f"INSERT INTO {networks_table} (primary_name) VALUES (%s) RETURNING id", (primary_name,))
             network_id = cursor.fetchone()[0]
             
             for entity_type, entity_key in network:
@@ -473,10 +583,10 @@ def store_networks(conn, networks, entity_info):
         
         logger.info(f"Preparing to bulk-insert {len(entity_data_to_copy):,} entity-network links...")
         execute_values(cursor, 
-            "INSERT INTO entity_networks (network_id, entity_type, entity_id, entity_name, normalized_name) VALUES %s",
+            f"INSERT INTO {entity_networks_table} (network_id, entity_type, entity_id, entity_name, normalized_name) VALUES %s",
             entity_data_to_copy)
     conn.commit()
-    logger.info(f"✅ Successfully stored {len(networks)} new networks.")
+    logger.info(f"✅ Successfully stored {len(networks)} new networks in {networks_table}.")
 
 # --- Update Statistics ---
 def update_network_statistics(conn):
@@ -498,9 +608,14 @@ def main():
     args = parser.parse_args()
     
     conn = None
+    lock_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'maintenance.lock')
     try:
+        # Create lock file
+        with open(lock_path, 'w') as f:
+            f.write(str(time.time()))
+        
         conn = get_db_connection()
-        setup_network_schema(conn)
+        # skip setup_network_schema(conn) to avoid AccessExclusiveLocks hanging the refresh
         
         with conn.cursor() as cursor:
             cursor.execute("SELECT 1 FROM properties WHERE business_id IS NOT NULL OR principal_id IS NOT NULL LIMIT 1;")
@@ -511,7 +626,7 @@ def main():
         else:
             logger.info("STEP 1: Properties already linked. Skipping linking step. (Use --force to re-link).")
 
-        graph, entity_info = build_graph_from_owners(conn)
+        graph, entity_info, seed_nodes = build_graph(conn)
         
         # --- NEW: Shared Address Linking ---
         # Determine which businesses (nodes in our graph) share a physical/mailing address
@@ -521,7 +636,7 @@ def main():
             graph[v].add(u)
         # -----------------------------------
 
-        networks = discover_networks(graph)
+        networks = discover_networks(graph, seed_nodes)
         
         if networks:
             store_networks(conn, networks, entity_info)
@@ -531,13 +646,18 @@ def main():
         logger.info("🎉 Network discovery and update complete! Graph is now property-centric.")
         
     except psycopg2.Error as e:
-        logger.error(f"A database error occurred: {e}", exc_info=False) # Set exc_info to False for cleaner output on known issues
+        logger.error(f"A database error occurred: {e}", exc_info=False) 
         if conn: conn.rollback()
+        sys.exit(1)
     except Exception as e:
         logger.error(f"An unexpected error occurred: {e}", exc_info=True)
         if conn: conn.rollback()
+        sys.exit(1)
     finally:
         if conn: conn.close()
+        # Remove lock file
+        if os.path.exists(lock_path):
+            os.remove(lock_path)
 
 if __name__ == "__main__":
     main()

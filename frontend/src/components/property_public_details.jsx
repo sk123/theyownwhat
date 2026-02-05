@@ -56,7 +56,7 @@ export default function PropertyPublicDetails({ property, networkData = {}, onVi
     const getValidUrl = (...args) => {
         for (const arg of args) {
             if (arg && typeof arg === 'string') {
-                if (arg.startsWith('http://') || arg.startsWith('https://') || arg.startsWith('/api/static/')) {
+                if (arg.startsWith('http://') || arg.startsWith('https://') || arg.startsWith('/api/static/') || arg.startsWith('/api/hartford/')) {
                     return arg;
                 }
             }
@@ -189,6 +189,19 @@ export default function PropertyPublicDetails({ property, networkData = {}, onVi
                             </div>
                         ))}
                     </div>
+                    {(() => {
+                        const totalSubsidized = property.subsidies.reduce((acc, s) => acc + (s.units_subsidized || 0), 0);
+                        const physicalUnits = property.number_of_units || details.number_of_units || 0;
+                        if (totalSubsidized > physicalUnits && physicalUnits > 0) {
+                            return (
+                                <div className="mt-2 p-2 bg-amber-50/50 rounded-lg border border-dashed border-amber-200 text-[10px] text-amber-800 leading-tight">
+                                    <span className="font-bold uppercase tracking-widest block mb-0.5">Note on Unit Mismatch</span>
+                                    Subsidized unit counts may represent an entire project development spanning multiple parcels, while physical unit counts (if available) reflect this specific property record.
+                                </div>
+                            );
+                        }
+                        return null;
+                    })()}
                 </div>
             )}
 
@@ -202,10 +215,14 @@ export default function PropertyPublicDetails({ property, networkData = {}, onVi
                         <DetailItem label="Year Built" value={details.year_built} />
                         <DetailItem label="Living Area" value={details.living_area ? `${details.living_area} sqft` : null} />
                         <DetailItem label="Unit Count" value={property.number_of_units || details.number_of_units} />
+                        <DetailItem label="Unit" value={property.unit || details.unit} />
                         <DetailItem label="Acres" value={details.acres} />
                         <DetailItem label="Zone" value={details.zone} />
                         <DetailItem label="Land Use" value={details.land_use} />
                         <DetailItem label="Style" value={details.style} />
+                        <DetailItem label="Rooms" value={details.total_rooms} />
+                        <DetailItem label="Beds" value={details.total_bedrooms} />
+                        <DetailItem label="Baths" value={details.total_baths} />
                     </div>
                 </div>
             )}
