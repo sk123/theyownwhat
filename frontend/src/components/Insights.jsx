@@ -1,6 +1,6 @@
 /* src/components/Insights.jsx */
 import React, { useState, useMemo, useEffect } from 'react';
-import { Building2, Landmark, Briefcase, FileText, Globe, Users } from 'lucide-react';
+import { Building2, Landmark, Briefcase, FileText, Globe, Users, AlertCircle } from 'lucide-react';
 
 export default function Insights({ data, onSelect }) {
     // Determine initial city: STATEWIDE if exists, otherwise first alphabetical city, or null
@@ -20,19 +20,26 @@ export default function Insights({ data, onSelect }) {
         const statewideKey = allCities.find(c => c.toUpperCase() === 'STATEWIDE');
         const otherCities = allCities.filter(c => c.toUpperCase() !== 'STATEWIDE');
 
-        // 3. Sort other cities by their "importance" (total property count in their networks)
-        const sortedOtherCities = otherCities.sort((a, b) => {
-            const sumA = (data[a] || []).reduce((acc, n) => acc + (n.property_count || 0), 0);
-            const sumB = (data[b] || []).reduce((acc, n) => acc + (n.property_count || 0), 0);
-            return sumB - sumA;
+        // 3. Static Top 15 largest CT municipalities
+        const top15Cities = [
+            'Bridgeport', 'Stamford', 'New Haven', 'Hartford', 'Waterbury',
+            'Norwalk', 'Danbury', 'New Britain', 'West Hartford', 'Greenwich',
+            'Hamden', 'Fairfield', 'Meriden', 'Bristol', 'Manchester'
+        ];
+
+        // 4. Filter data for these cities + Statewide
+        // Use case-insensitive matching because API keys are uppercase
+        const result = top15Cities.filter(cityName =>
+            allCities.some(apiCity => apiCity.toUpperCase() === cityName.toUpperCase())
+        ).map(cityName => {
+            // Return the actual key from the API data to ensure matching works later
+            return allCities.find(apiCity => apiCity.toUpperCase() === cityName.toUpperCase());
         });
 
-        // 4. Take Top 15 + Statewide
-        const result = sortedOtherCities.slice(0, 15);
         if (statewideKey) {
-            return [statewideKey, ...result.sort()];
+            return [statewideKey, ...result];
         }
-        return result.sort();
+        return result;
     }, [data]);
 
     // Update selected city when data loads if none selected or if selected doesn't exist anymore
@@ -148,6 +155,7 @@ function NetworkCard({ network, onSelect }) {
                             <span>{network.building_count || 0} Buildings</span>
                             <span className="text-slate-300">•</span>
                             <span>{network.unit_count || 0} Units</span>
+                            {/* Code violation count removed as requested */}
                         </div>
                     </div>
                     <div className="space-y-1">

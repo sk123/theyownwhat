@@ -1,7 +1,7 @@
 import React from 'react';
-import { Home, BookOpen, AlertCircle, RefreshCw, Toolbox, LogIn, LayoutDashboard } from 'lucide-react';
+import { Home, BookOpen, AlertCircle, RefreshCw, Toolbox, LogIn, LayoutDashboard, Database, MessageSquare } from 'lucide-react';
 
-export default function Header({ onHome, onReset, onAbout, OnOpenToolbox, toolboxEnabled }) {
+export default function Header({ onHome, onReset, onAbout, OnOpenToolbox, toolboxEnabled, onShowFreshness, onReportIssue }) {
     const [user, setUser] = React.useState(null);
 
     React.useEffect(() => {
@@ -39,6 +39,16 @@ export default function Header({ onHome, onReset, onAbout, OnOpenToolbox, toolbo
                 </div>
 
                 <div className="flex items-center gap-2">
+                    {onShowFreshness && (
+                        <button
+                            onClick={onShowFreshness}
+                            className="flex items-center gap-2 px-3 py-1.5 text-sm font-semibold text-teal-700 bg-teal-50 hover:bg-teal-100 rounded-lg transition-colors border border-teal-100 mr-2"
+                        >
+                            <Database className="w-4 h-4" />
+                            <span className="hidden sm:inline">Data Freshness</span>
+                        </button>
+                    )}
+
                     {user ? (
                         <button
                             onClick={OnOpenToolbox}
@@ -76,6 +86,17 @@ export default function Header({ onHome, onReset, onAbout, OnOpenToolbox, toolbo
                         <AlertCircle className="w-4 h-4" />
                         <span className="hidden sm:inline">About</span>
                     </button>
+
+                    {onReportIssue && (
+                        <button
+                            className="flex items-center gap-2 px-3 py-1.5 text-sm font-semibold text-rose-600 bg-rose-50 hover:bg-rose-100 rounded-lg transition-colors border border-rose-100 ml-2"
+                            onClick={onReportIssue}
+                            title="Report Data Issue"
+                        >
+                            <MessageSquare className="w-4 h-4" />
+                            <span className="hidden lg:inline">Report Issue</span>
+                        </button>
+                    )}
                 </div>
             </div>
         </header>

@@ -78,6 +78,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    shm_size: 1gb
 
 networks:
   default:
@@ -86,4 +87,5 @@ networks:
 
 volumes:
   postgres_data:
-    
+
+

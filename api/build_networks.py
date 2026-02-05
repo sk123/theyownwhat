@@ -242,11 +242,55 @@ def save_networks(conn, uf):
         
         primary = "Unknown Network"
         if p_counts:
-            # Pick the principal name with the highest frequency in this network
-            best_pid = max(p_counts.items(), key=lambda x: x[1])[0]
-            primary = p_names.get(best_pid)
+            # 1. Separate principals into "Corporate" vs "Human" (heuristic)
+            def is_corporate(name):
+                # Common corporate suffixes/keywords
+                keywords = ['LLC', 'INC', 'CORP', 'LTD', 'REALTY', 'MANAGEMENT', 'PROPERTIES', 'GROUP', 'HOLDINGS', 'ASSOCIATES', 'PARTNERS', 'TRUST', 'ESTATE', 'HOUSING', 'APTS', 'APARTMENTS', 'CONDO', 'CONDOMINIUM']
+                upper = name.upper()
+                # Check suffix or presence of keywords
+                parts = upper.split()
+                if not parts: return False
+                if parts[-1].replace('.', '') in keywords: return True
+                for k in keywords:
+                    if f" {k} " in f" {upper} " or f" {k}," in f" {upper} ": return True
+                return False
+
+            human_candidates = []
+            corporate_candidates = []
+            
+            for pid, count in p_counts.items():
+                name = p_names.get(pid, "Unknown")
+                if is_corporate(name):
+                    corporate_candidates.append((pid, count, name))
+                else:
+                    human_candidates.append((pid, count, name))
+            
+            # Sort by count (desc)
+            human_candidates.sort(key=lambda x: x[1], reverse=True)
+            corporate_candidates.sort(key=lambda x: x[1], reverse=True)
+            
+            if human_candidates:
+                # We have humans!
+                # If we have 2 significant humans, combine them.
+                # Significant = top 2.
+                if len(human_candidates) >= 2:
+                    p1 = human_candidates[0]
+                    p2 = human_candidates[1]
+                    # Only combine if the second one is somewhat significant? (e.g. > 20% of first?)
+                    # User request: "Zvi Horowitz and Samuel Pollack".
+                    # Let's just always combine top 2 if available to be safe/inclusive for partners.
+                    primary = f"{p1[2]} & {p2[2]}"
+                else:
+                    primary = human_candidates[0][2]
+            elif corporate_candidates:
+                # Fallback to top corporate principal
+                primary = corporate_candidates[0][2]
+            else:
+                # Should not happen if p_counts is non-empty
+                best_pid = max(p_counts.items(), key=lambda x: x[1])[0]
+                primary = p_names.get(best_pid)
         
-        # Fallback to business name if no principal or principal name is missing
+        # Fallback to business name if no network name determined yet
         if not primary or primary == "Unknown Network":
             if b_counts:
                 primary = max(b_counts.items(), key=lambda x: x[1])[0]

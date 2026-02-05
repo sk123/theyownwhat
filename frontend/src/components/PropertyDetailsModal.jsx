@@ -1,5 +1,5 @@
 import React from 'react';
-import { X, Building2, MapPin, DollarSign, User, ExternalLink, Link as LinkIcon, Copy, Check, FolderPlus, Loader2, List as ListIcon } from 'lucide-react';
+import { X, Building2, MapPin, DollarSign, User, ExternalLink, Link as LinkIcon, Copy, Check, FolderPlus, Loader2, List as ListIcon, AlertCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import PropertyPublicDetails from './property_public_details.jsx';
 
@@ -149,6 +149,8 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
     const [isAdding, setIsAdding] = React.useState(false);
     const [addedSuccess, setAddedSuccess] = React.useState(false);
 
+    const [enforcements, setEnforcements] = React.useState([]);
+
     React.useEffect(() => {
         if (property) {
             fetch('/api/auth/me')
@@ -160,6 +162,14 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
                             .then(setUserGroups);
                     }
                 });
+
+            // Fetch Hartford Code Enforcement details
+            if (property.city?.toUpperCase() === 'HARTFORD') {
+                fetch(`/api/properties/${property.id}/enforcement`)
+                    .then(res => res.json())
+                    .then(setEnforcements)
+                    .catch(err => console.error("Failed to fetch enforcement data", err));
+            }
         }
     }, [property]);
 
@@ -379,7 +389,7 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
                         />
 
                         {/* Complex Sub-Units List */}
-                        {isComplex && (
+                        {isComplex && property.subProperties && property.subProperties.length > 0 && (
                             <div className="space-y-3 mt-6">
                                 <div className="flex justify-between items-center">
                                     <h3 className="text-xs font-bold text-gray-900 uppercase tracking-wider flex items-center gap-2">
@@ -408,6 +418,54 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
                                         ))}
                                     </div>
                                 </div>
+                            </div>
+                        )}
+
+                        {/* Hartford Code Violations */}
+                        {enforcements && enforcements.length > 0 && (
+                            <div className="space-y-3 mt-6">
+                                <h3 className="text-xs font-bold text-red-600 uppercase tracking-wider flex items-center gap-2">
+                                    <AlertCircle size={14} /> Code Enforcement (Hartford Only)
+                                </h3>
+                                <div className="border border-red-100 rounded-xl overflow-hidden bg-white shadow-sm overflow-x-auto">
+                                    <table className="w-full text-sm divide-y divide-gray-100">
+                                        <thead className="bg-red-50/30">
+                                            <tr className="text-left text-[10px] font-bold text-red-700 uppercase tracking-widest">
+                                                <th className="px-4 py-2">Date</th>
+                                                <th className="px-4 py-2">Complaint / Record</th>
+                                                <th className="px-4 py-2">Status</th>
+                                                <th className="px-4 py-2">Type</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-gray-50">
+                                            {enforcements.map((e, idx) => (
+                                                <tr key={idx} className="hover:bg-red-50/10 transition-colors">
+                                                    <td className="px-4 py-2 text-gray-500 whitespace-nowrap">
+                                                        {e.date_opened}
+                                                    </td>
+                                                    <td className="px-4 py-2 font-medium text-gray-900">
+                                                        {e.record_name || 'N/A'}
+                                                        <div className="text-[10px] text-gray-400 font-mono mt-0.5">{e.case_number}</div>
+                                                    </td>
+                                                    <td className="px-4 py-2">
+                                                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${e.record_status?.toLowerCase().includes('closed')
+                                                            ? 'bg-gray-100 text-gray-500'
+                                                            : 'bg-red-100 text-red-700'
+                                                            }`}>
+                                                            {e.record_status}
+                                                        </span>
+                                                    </td>
+                                                    <td className="px-4 py-2 text-xs text-gray-600">
+                                                        {e.record_type}
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                                <p className="text-[10px] text-gray-400 italic">
+                                    Source: Hartford Open Data. Statuses and types are provided as-is from city records.
+                                </p>
                             </div>
                         )}
 
@@ -446,7 +504,7 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
 
                 </motion.div>
             </motion.div>
-        </AnimatePresence>
+        </AnimatePresence >
     );
 }
 

@@ -18,32 +18,48 @@ def normalize_person_name(name: str) -> str:
     if not name: return ''
     normalized = name.upper().strip()
     
+    # 0. Pre-strip noise and handle joint names
+    # If name is "KAZEROUNIAN KAZEM &", remove the trailing &
+    normalized = re.sub(r'[&/]\s*$', '', normalized).strip()
+    # If name contains " & ", " AND ", or " / ", we take the first part for normalization
+    # but the matching logic in variations will handle permutations.
+    # Actually, for the principal list, we want to split them.
+    # For now, let's just clean common joint markers to a space or split.
+    normalized = normalized.replace(' & ', ' ')
+    normalized = normalized.replace(' / ', ' ')
+    normalized = normalized.replace(' AND ', ' ')
+
     # 1. Contextual typo corrections for the Gurevitch network
-    # We only apply these if the name contains GUREVITCH (or a common typo of it)
-    is_gurevitch = any(x in normalized for x in ['GUREVITCH', 'GURAVITCH', 'GUREVICH', 'GUREVITH', 'GUTVITCH'])
+    is_gurevitch = any(x in normalized for x in ['GUREVITCH', 'GURAVITCH', 'GUREVICH', 'GUREVITH', 'GUTVITCH', 'GUREVITOH', 'GURVITCH'])
+    is_edelkopf = any(x in normalized for x in ['EDELKOPF', 'EDELKOPH'])
     
     if is_gurevitch:
         g_typos = {
             'MENACHERM': 'MENACHEM',
             'MENAHEM': 'MENACHEM',
             'MENACHER': 'MENACHEM',
+            'MANACHEM': 'MENACHEM',
             'GURAVITCH': 'GUREVITCH',
             'GUREVICH': 'GUREVITCH', 
+            'GUREVITOH': 'GUREVITCH',
             'GUREVITH': 'GUREVITCH',
             'GUTVITCH': 'GUREVITCH',
+            'GURVITCH': 'GUREVITCH',
         }
         for typo, correction in g_typos.items():
             normalized = re.sub(rf"\b{typo}\b", correction, normalized)
 
-    # 2. Generalizable Cleaning (Apply to ALL)
-    
+    if is_edelkopf:
+        e_typos = {'EDELKOPH': 'EDELKOPF'}
+        for typo, correction in e_typos.items():
+            normalized = re.sub(rf"\b{typo}\b", correction, normalized)
+
+    # 2. Generalizable Cleaning
     # Remove middle initials: "MENACHEM M GUREVITCH" -> "MENACHEM GUREVITCH"
     parts = normalized.split()
     if len(parts) > 2:
         new_parts = []
         for i, part in enumerate(parts):
-            # If it's a single letter (with or without a dot) and not the first or last word
-            # e.g. "M." or "M"
             clean_part = re.sub(r"\.", "", part)
             if len(clean_part) == 1 and 0 < i < len(parts) - 1:
                 continue
@@ -59,6 +75,16 @@ def normalize_person_name(name: str) -> str:
         normalized = pattern.sub('', normalized)
         
     return normalized.strip()
+
+def canonicalize_person_name(name: str) -> str:
+    """
+    Creates a word-sorted version of a name to treat "LAST FIRST" 
+    the same as "FIRST LAST" during network building/graph matching.
+    """
+    norm = normalize_person_name(name)
+    if not norm: return ""
+    parts = sorted(norm.split())
+    return " ".join(parts)
 
 # List of suffixes to remove, kept outside the function for clarity
 BUSINESS_SUFFIXES_TO_REMOVE = [
@@ -101,30 +127,26 @@ def get_name_variations(name: str, entity_type: str) -> Set[str]:
                     break # Restart with the new shorter name
                     
     elif entity_type == 'principal':
-        # Normalizing the name removes commas and standardizes spacing
-        normalized = normalize_person_name(name)
-        variations.add(normalized)
-        
-        parts = normalized.split()
-        
-        # --- NEW: More robust permutation logic ---
-        # If a name has at least two parts, generate both possible orders
-        if len(parts) >= 2:
-            # Assumes the first part is FIRST and last part is LAST
-            first_last_order = f"{parts[0]} {' '.join(parts[1:])}"
-            variations.add(first_last_order)
+        # Handle joint names like "KAZEM KAZEROUNIAN & SALMUN KAZEROUNIAN"
+        # We split by common markers
+        raw_names = re.split(r'\s+(?:&|AND|/)\s+', name.upper())
+        for rn in raw_names:
+            normalized = normalize_person_name(rn)
+            if not normalized: continue
+            variations.add(normalized)
             
-            # Assumes the first part is LAST and rest is FIRST/MIDDLE
-            last_first_order = f"{' '.join(parts[1:])} {parts[0]}"
-            variations.add(last_first_order)
+            parts = normalized.split()
+            if len(parts) >= 2:
+                # Permutation: LAST FIRST -> FIRST LAST
+                variations.add(f"{parts[-1]} {' '.join(parts[:-1])}")
+                # Permutation: FIRST LAST -> LAST FIRST
+                variations.add(f"{' '.join(parts[1:])} {parts[0]}")
+                
+                # Initials: LAST, F
+                variations.add(f"{parts[-1]}, {parts[0][0]}")
+                variations.add(f"{parts[0]}, {parts[-1][0]}")
 
-            # Also create common "LAST, F" variation from both interpretations
-            variations.add(f"{parts[-1]}, {parts[0][0]}") # FIRST LAST -> LAST, F
-            variations.add(f"{parts[0]}, {parts[1][0]}") # LAST FIRST -> LAST, F
-
-    return {v for v in variations if v} # Return a cleaned set of non-empty variations
-
-    return norm
+    return {v for v in variations if v}
 
 def normalize_mailing_address(address: str) -> str:
     """

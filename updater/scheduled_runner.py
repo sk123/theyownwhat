@@ -44,7 +44,14 @@ def run_nightly_update():
     logger.info("Starting nightly Vision data update (Parallel)")
     logger.info("=" * 80)
     
+    
     try:
+        # 0. Refresh System Data (Businesses, Principals) & Run Network Discovery
+        logger.info("Starting System Data Refresh & Network Discovery...")
+        system_refresh_cmd = [sys.executable, "updater/refresh_system_data.py"]
+        subprocess.run(system_refresh_cmd, check=False)
+        logger.info("✓ System Data Refresh finished")
+
         # Run update_data.py as a subprocess for better isolation
         import subprocess
         
@@ -57,6 +64,10 @@ def run_nightly_update():
         logger.info(f"Executing: {' '.join(cmd)}")
         # We don't use check=True to allow the scheduler to continue even if one run fails
         subprocess.run(cmd, check=False)
+        
+        logger.info("Starting Hartford Code Enforcement ingestion...")
+        enforcement_cmd = [sys.executable, "updater/ingest_hartford_enforcement.py"]
+        subprocess.run(enforcement_cmd, check=False)
         
         logger.info("✓ Parallel town update process finished")
 
@@ -99,8 +110,8 @@ def main():
     logger.info("  - Weekly full scan: 3:00 AM Sunday")
     
     # Run immediately on startup for testing
-    logger.info("Running initial update...")
-    run_nightly_update()
+    # logger.info("Running initial update...")
+    # run_nightly_update()
     
     # Keep running
     while True:

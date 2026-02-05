@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { ArrowUpDown, Map, List, Grid3X3, X, Check, Building2, MapPin, ChevronRight, ChevronDown, LayoutGrid, Sparkles, Download, Share2, ExternalLink, Copy } from 'lucide-react';
+import { ArrowUpDown, Map, List, Grid3X3, X, Check, Building2, MapPin, ChevronRight, ChevronDown, LayoutGrid, Sparkles, Download, Share2, ExternalLink, Copy, AlertCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 // Helper Components
@@ -256,6 +256,7 @@ export default function PropertyTable({
                 let totalAssessed = 0;
                 let totalAppraised = 0;
                 let totalUnits = 0;
+                let totalViolations = 0;
 
                 g.units.sort((a, b) => {
                     const uA = a.derivedUnit || '';
@@ -269,6 +270,7 @@ export default function PropertyTable({
                     totalAssessed += assessed;
                     totalAppraised += appraised;
                     totalUnits += parseInt(u.number_of_units || u.unit_count || 1);
+                    totalViolations += parseInt(u.violation_count || 0);
                 });
 
                 const ownerList = Array.from(g.owners);
@@ -291,7 +293,8 @@ export default function PropertyTable({
                     appraised_value: currencyFmt.format(totalAppraised),
                     subProperties: g.units,
                     representativeId: g.units[0].id,
-                    representativePhoto // Added for complex thumbnail
+                    representativePhoto, // Added for complex thumbnail
+                    violation_count: totalViolations
                 });
             } else {
                 const p = g.units[0];
@@ -569,13 +572,16 @@ export default function PropertyTable({
                                                 <span className={`${p.management_info?.name ? 'text-[11px] text-gray-500 font-medium' : 'text-sm font-medium text-indigo-900'} truncate`}>
                                                     {p.address}
                                                 </span>
-                                                ...
-
-                                                {/* Unit Count & Official Link Badge */}
                                                 <div className="flex items-center gap-2 mt-1">
-                                                    <span className="text-[10px] bg-blue-100 text-blue-700 font-bold px-1.5 py-0.5 rounded uppercase">
+                                                    <span className="text-[10px] bg-blue-50 text-blue-600 font-bold px-1.5 py-0.5 rounded uppercase tracking-tighter shrink-0">
                                                         {p.unit_count} Units
                                                     </span>
+                                                    {p.violation_count > 0 && (
+                                                        <span className="text-[10px] bg-red-100 text-red-700 font-bold px-1.5 py-0.5 rounded uppercase flex items-center gap-1 shrink-0" title="Active Code Violations (Hartford Only)">
+                                                            <AlertCircle size={10} />
+                                                            {p.violation_count} Violations
+                                                        </span>
+                                                    )}
                                                     {p.management_info?.url && (
                                                         <a
                                                             href={p.management_info.url}

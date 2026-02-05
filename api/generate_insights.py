@@ -255,6 +255,7 @@ def compute_top_principals(cur, town_col: Optional[str], town_filter: Optional[s
         principal_name,
         principal_state,
         network_id,
+        n.primary_name as network_primary_name,
         total_properties as property_count,
         total_assessed_value,
         0 as total_appraised_value,
@@ -311,6 +312,7 @@ def compute_top_business_networks(cur, town_col: Optional[str], town_filter: Opt
             COALESCE(SUM(p.assessed_value), 0) AS total_assessed_value,
             COALESCE(SUM(p.appraised_value), 0) AS total_appraised_value,
             (SELECT business_count FROM {SCHEMA}.networks WHERE id = en.network_id) as business_count,
+            (SELECT primary_name FROM {SCHEMA}.networks WHERE id = en.network_id) as network_primary_name,
             (SELECT COUNT(DISTINCT regexp_replace(UPPER(location), '\s*(?:UNIT|APT|#|STE|SUITE|FL|RM|BLDG|BUILDING|DEPT|DEPARTMENT|OFFICE).*$', '', 'g')) FROM {SCHEMA}.properties WHERE business_id = b.id) as building_count,
             (SELECT COALESCE(SUM(number_of_units), 0) FROM {SCHEMA}.properties WHERE business_id = b.id) as unit_count
         FROM {SCHEMA}.entity_networks en
@@ -389,7 +391,12 @@ def merge_and_rank(cur, principals: List[Dict], businesses: List[Dict], limit: i
         # Calculate categories
         def classify(name, type_str):
             if not name: return 0 # Unknown
-            if is_state_ct(name): return 3 # Top Priority
+            if is_state_ct(name): return 4 # Change from 3 to 4
+            
+            # Specific high-priority name for the user
+            upper_name = name.upper()
+            if "MENACHEM" in upper_name and "GUREVITCH" in upper_name: return 3
+            if "NETZ" in upper_name: return 3
             
             # Check for Entity Keywords
             # using the broad pattern
@@ -459,6 +466,14 @@ def merge_and_rank(cur, principals: List[Dict], businesses: List[Dict], limit: i
         if len(ranked) >= limit: break
         
         nid = item.get('network_id')
+        
+        # Use authoritative name from networks table if available
+        db_net_name = item.get('network_primary_name')
+        if db_net_name and db_net_name != 'Unknown Network':
+            display_net_name = db_net_name
+        else:
+            display_net_name = item.get("principal_name") or item.get("business_name") or "[unknown]"
+
         name = item.get("principal_name") or item.get("business_name") or "Unknown"
         norm_name = name.strip().upper()
         
@@ -493,7 +508,7 @@ def merge_and_rank(cur, principals: List[Dict], businesses: List[Dict], limit: i
         insert_item = {
             "rank": current_rank,
             "network_id": item.get('network_id'),
-            "network_name": name or "[unknown]",
+            "network_name": display_net_name,
             "property_count": int(item.get("property_count") or 0),
             "total_assessed_value": float(item.get("total_assessed_value") or 0),
             "total_appraised_value": float(item.get("total_appraised_value") or 0),

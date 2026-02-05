@@ -1,6 +1,8 @@
 # they own WHAT??
 
 [![Open Source | Love](https://img.shields.io/badge/Open%20Source-Love-red)](https://github.com/sk123/theyownwhat)
+[![Sponsor](https://img.shields.io/badge/Sponsor-Pink?style=flat&logo=github-sponsors&logoColor=white)](https://github.com/sponsors/sk123)
+
 **Source Code:** [https://github.com/sk123/theyownwhat](https://github.com/sk123/theyownwhat)
 
 **Published at:** [https://theyownwhat.net](https://theyownwhat.net)
@@ -54,9 +56,14 @@ Want to run this locally? See the [Installation Guide](https://github.com/sk123/
 
 This tool is for informational and advocacy purposes. While every effort is made for 100% accuracy in the linking logic, users should verify critical findings with primary municipal and state sources.
 
-## Contact
+## Contact & Support
 
-Questions? Reach out to [salmunk@gmail.com](mailto:salmunk@gmail.com)
+> [!NOTE]
+> **they own WHAT??** is currently in active development. We are still ironing out the kinks in the network discovery and property linking logic. If you encounter incorrect data or "meganetworks," please let us know!
+
+Feel free to report issues via **GitHub Issues** or reach out to [salmunk@gmail.com](mailto:salmunk@gmail.com).
+
+> "I will do this work regardless of whether I'm paid or not. However, the more funding Dr. Benjamin provides, the more time I can dedicate to this project instead of taking on solely-for-money jobs."
 
 ## License
 
