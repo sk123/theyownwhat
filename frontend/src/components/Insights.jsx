@@ -188,7 +188,7 @@ function NetworkCard({ network, onSelect }) {
                         <div>
                             <div className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-1.5 border-t border-slate-50 pt-3">
                                 <Briefcase size={10} />
-                                {network.business_count || 0} Businesses
+                                {network.business_count || 0} Businesses · {network.principal_count || 0} Principals
                             </div>
                             <div className="flex flex-wrap gap-1.5">
                                 {network.representative_entities.slice(0, 3).map((b, idx) => (

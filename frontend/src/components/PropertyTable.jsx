@@ -532,14 +532,7 @@ export default function PropertyTable({
                                     {/* Robust Hartford photo logic: construct static path if missing */}
                                     {(() => {
                                         let photoUrl = p.representativePhoto || p.details?.building_photo || p.image_url;
-                                        // If Hartford and no valid photo, try static asset
-                                        if (!photoUrl && (p.city || '').toUpperCase() === 'HARTFORD') {
-                                            let pid = p.details?.account_number || p.details?.link || p.id;
-                                            if (pid) {
-                                                pid = pid.toString().replace(/[^0-9]/g, '');
-                                                photoUrl = `/api/hartford/image/${pid}`;
-                                            }
-                                        }
+
                                         if (photoUrl) {
                                             return (
                                                 <div className="shrink-0 w-10 h-10 rounded-lg overflow-hidden border border-gray-100 bg-gray-50 hidden sm:block">

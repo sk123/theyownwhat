@@ -233,6 +233,7 @@ def compute_top_principals(cur, town_col: Optional[str], town_filter: Optional[s
                 ELSE 'human'
             END as p_kind,
             n.business_count,
+            n.primary_name as network_primary_name,
             -- Partition by network_id to avoid duplicate entries for the same portfolio
             ROW_NUMBER() OVER (
                 PARTITION BY na.network_id 
@@ -255,7 +256,7 @@ def compute_top_principals(cur, town_col: Optional[str], town_filter: Optional[s
         principal_name,
         principal_state,
         network_id,
-        n.primary_name as network_primary_name,
+        network_primary_name,
         total_properties as property_count,
         total_assessed_value,
         0 as total_appraised_value,

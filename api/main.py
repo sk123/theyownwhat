@@ -2149,13 +2149,22 @@ def _calculate_completeness_matrix(conn):
                 # Try generic Vision URL pattern if nothing else
                 # e.g. https://gis.vgsi.com/townct/
                 portal_url = None # Default to None if not found
-                # Removed unsafe Vision fallback: f"https://gis.vgsi.com/{town_upper.lower().replace(' ', '')}ct/"
+
+            # Determine Source Date Display
+            source_date_display = row['external_last_updated']
+            if town_upper in MUNICIPAL_DATA_SOURCES:
+                 freq = MUNICIPAL_DATA_SOURCES[town_upper].get('frequency')
+                 if freq:
+                     if source_date_display:
+                         source_date_display = f"{freq} ({row['external_last_updated']})"
+                     else:
+                         source_date_display = freq
 
             sources.append({
                 "municipality": row['town'],
                 "status": row['refresh_status'] or 'unknown',
                 "last_updated": row['last_refreshed_at'],
-                "source_date": row['external_last_updated'], # New Field
+                "source_date": source_date_display, 
                 "total_properties": row['total_properties'],
                 "portal_url": portal_url,
                 "metrics": {
