@@ -7,8 +7,43 @@ def normalize_business_name(name: str) -> str:
     if not name: return ''
     normalized = name.upper().strip()
     normalized = re.sub(r"[,.'`\"]", '', normalized)
-    normalized = normalized.replace('&', 'AND')
-    # --- CHANGE: Kept hyphens as they are common in business names ---
+    
+    # Standardize conjunctions
+    normalized = normalized.replace('&', ' AND ')
+    normalized = normalized.replace('+', ' AND ')
+    
+    # Standardize common abbreviations for better cross-matching
+    # Using \b for word boundaries to avoid partial matches
+    abbrevs = {
+        'CO': 'COMPANY',
+        'CORP': 'CORPORATION',
+        'INC': 'INCORPORATED',
+        'ASSOC': 'ASSOCIATION',
+        'ASSOCIATES': 'ASSOCIATION',
+        'ASSOCIATED': 'ASSOCIATION',
+        'ASSC': 'ASSOCIATION',
+        'ASSN': 'ASSOCIATION',
+        'MGMT': 'MANAGEMENT',
+        'MGT': 'MANAGEMENT',
+        'PROP': 'PROPERTIES',
+        'PROPS': 'PROPERTIES',
+        'PROPERTY': 'PROPERTIES',
+        'SVCS': 'SERVICES',
+        'DEVL': 'DEVELOPMENT',
+        'DEV': 'DEVELOPMENT',
+        'SYS': 'SYSTEM',
+        'SYST': 'SYSTEM',
+        'SYSTS': 'SYSTEM',
+        'HLDG': 'HOLDING',
+        'HLDGS': 'HOLDINGS',
+        'BLDG': 'BUILDING',
+        'CTR': 'CENTER',
+        'CNTR': 'CENTER',
+    }
+    for abbr, full in abbrevs.items():
+        normalized = re.sub(rf"\b{abbr}\b", full, normalized)
+
+    # Clean up non-alphanumeric (except space and hyphen)
     normalized = re.sub(r"[^A-Z0-9\s-]", '', normalized) 
     normalized = re.sub(r"\s+", ' ', normalized).strip()
     return normalized
@@ -86,15 +121,36 @@ def canonicalize_person_name(name: str) -> str:
     parts = sorted(norm.split())
     return " ".join(parts)
 
+def canonicalize_business_name(name: str) -> str:
+    """
+    Strips suffixes and word-sorts for robust business matching.
+    e.g. 'THE ACME CORP' -> 'ACME'
+    """
+    # 1. Start with variations which already gives us the most-stripped version
+    variations = sorted(list(get_name_variations(name, 'business')), key=len)
+    if not variations: return ""
+    
+    # 2. Take the shortest variation (most stripped)
+    base = variations[0]
+    
+    # 3. Strip 'THE' specifically if it's a prefix
+    base = re.sub(r'^THE\s+', '', base)
+    
+    # 4. Word sort
+    parts = sorted(base.split())
+    return " ".join(parts)
+
 # List of suffixes to remove, kept outside the function for clarity
 BUSINESS_SUFFIXES_TO_REMOVE = [
     'LIMITED LIABILITY COMPANY', 'LIMITED LIABILITY PARTNERSHIP', 
     'PROFESSIONAL LIMITED LIABILITY COMPANY', 'LIMITED PARTNERSHIP',
     'INCORPORATED', 'CORPORATION', 'MANAGEMENT', 'PROPERTIES', 
     'INVESTMENTS', 'PARTNERSHIP', 'COMPANY', 'LIMITED', 'PARTNERS',
-    'REALTY', 'GROUP', 'TRUST', 'ESTATE', 'HOLDINGS', 'VENTURES',
+    'ASSOCIATION', 'ASSOCIATES', 'ASSOCIATED', 'REALTY', 'GROUP', 
+    'TRUST', 'ESTATE', 'HOLDINGS', 'VENTURES', 'SYSTEM', 'SYSTEMS',
     'ENTERPRISES', 'SERVICES', 'DEVELOPMENT', 'REAL ESTATE',
-    'L L C', 'L L P', 'L P', 'LLC', 'LLP', 'LTD', 'INC', 'CORP', 'LP', 'CO'
+    'L L C', 'L L P', 'L P', 'LLC', 'LLP', 'LTD', 'INC', 'CORP', 'LP', 'CO',
+    'ASSC', 'ASSOC', 'ASSN', 'MGMT', 'MGT', 'PROP', 'PROPS'
 ]
 
 BUSINESS_SUFFIX_PATTERNS = [re.compile(r"\s+" + re.escape(suffix) + r"$") for suffix in BUSINESS_SUFFIXES_TO_REMOVE]
@@ -109,11 +165,14 @@ def get_name_variations(name: str, entity_type: str) -> Set[str]:
     if not name:
         return set()
 
-    variations = {name.upper()}
+    variations = set()
     
     if entity_type == 'business':
         # --- NEW LOGIC: Iteratively strip suffixes to find more potential matches ---
-        current_name = normalize_business_name(name)
+        normed = normalize_business_name(name)
+        if not normed: return set()
+        
+        current_name = normed
         variations.add(current_name)
         
         changed = True
@@ -182,6 +241,14 @@ def normalize_mailing_address(address: str) -> str:
     
     # Remove any double spaces created
     norm = re.sub(r"\s+", " ", norm).strip()
+
+    # Blacklist generic placeholders
+    if norm in ['NO INFORMATION PROVIDED', 'NOT PROVIDED', 'NONE', 'N/A', 'UNKNOWN', 'NO ADDRESS', 'ADDRESS NOT PROVIDED', 'NOT APPLICABLE']:
+        return ""
+    
+    # Check for empty numeric placeholders like "0" or "000"
+    if re.match(r'^0+$', norm):
+        return ""
 
     return norm
 

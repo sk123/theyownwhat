@@ -27,6 +27,8 @@ def ensure_cached_table(cur, table_name=f"{SCHEMA}.cached_insights"):
             network_id text,                   -- The ID of the network (optional, for linking)
             network_name text NOT NULL,        -- display label
             property_count int NOT NULL,       -- # properties
+            principal_count int DEFAULT 0,
+            linked_business_count int DEFAULT 0, -- # businesses linked to primary entity
             total_assessed_value numeric DEFAULT 0, -- Sum of assessed_value
             total_appraised_value numeric DEFAULT 0, -- Sum of appraised_value
             primary_entity_id text NOT NULL,   -- principal or business id as text
@@ -224,32 +226,37 @@ def compute_top_principals(cur, town_col: Optional[str], town_filter: Optional[s
     deduplicated AS (
         SELECT 
             na.*,
-            pr.{pr_id} as principal_id,
-            {pr_disp} as principal_name,
-            {pr_state} as principal_state,
+            up.principal_id as principal_id,
+            up.representative_name_c as principal_name,
+            NULL as principal_state,
             -- Determine if this is a human or entity principal
             CASE 
-                WHEN {pr_disp} ~* '(LLC|INC|CORP|LTD|GROUP|HOLDINGS|REALTY|MANAGEMENT|TRUST|LP|PARTNERSH)' THEN 'entity'
+                WHEN up.representative_name_c ~* '(LLC|INC|CORP|LTD|GROUP|HOLDINGS|REALTY|MANAGEMENT|TRUST|LP|PARTNERSH)' THEN 'entity'
                 ELSE 'human'
             END as p_kind,
             n.business_count,
+            n.principal_count,
             n.primary_name as network_primary_name,
             -- Partition by network_id to avoid duplicate entries for the same portfolio
             ROW_NUMBER() OVER (
                 PARTITION BY na.network_id 
                 ORDER BY 
-                    -- Priority: 1. Human names, 2. Most business associations (tie-breaker), 3. Most properties
+                    -- Priority: 1. MATCH THE NETWORK PRIMARY NAME (Critical for consistency)
+                    CASE WHEN up.representative_name_c = n.primary_name THEN 0 ELSE 1 END ASC,
+                    -- Priority: 2. Human names
                     CASE 
-                        WHEN {pr_disp} ~* '(LLC|INC|CORP|LTD|GROUP|HOLDINGS|REALTY|MANAGEMENT|TRUST|LP|PARTNERSH)' THEN 2
+                        WHEN up.representative_name_c ~* '(LLC|INC|CORP|LTD|GROUP|HOLDINGS|REALTY|MANAGEMENT|TRUST|LP|PARTNERSH|YANKEE|POWER|LIGHT| GAS |ELECTRIC|UTILITY)' THEN 2
                         ELSE 1 
                     END ASC,
-                    (SELECT COUNT(*) FROM {SCHEMA}.principals p2 WHERE p2.name_c = {pr_disp}) DESC,
+                    -- Priority: 3. Most properties
                     na.total_properties DESC
-            ) as mirror_rank
+            ) as mirror_rank,
+            -- Add Linked Business Count via pre-aggregated temp table
+            COALESCE(tbc.cnt, 0) as linked_business_count
         FROM network_aggregates na
-        JOIN {SCHEMA}.principals pr ON pr.{pr_id}::text = na.raw_pid
-        LEFT JOIN {SCHEMA}.unique_principals up ON up.principal_id::text = na.raw_pid
+        JOIN {SCHEMA}.unique_principals up ON up.principal_id::text = na.raw_pid
         LEFT JOIN {SCHEMA}.networks n ON n.id = na.network_id
+        LEFT JOIN temp_biz_counts tbc ON tbc.principal_id = up.principal_id
     )
     SELECT 
         principal_id,
@@ -261,12 +268,14 @@ def compute_top_principals(cur, town_col: Optional[str], town_filter: Optional[s
         total_assessed_value,
         0 as total_appraised_value,
         business_count,
+        principal_count,
         building_count,
         unit_count,
+        linked_business_count,
         p_kind
     FROM deduplicated
     WHERE mirror_rank = 1
-    ORDER BY total_properties DESC
+    ORDER BY building_count DESC, total_properties DESC
     LIMIT 1000
     """
     
@@ -382,7 +391,7 @@ def merge_and_rank(cur, principals: List[Dict], businesses: List[Dict], limit: i
         better = False
         import re
         # Stronger check for "Human" - if it doesn't look like an entity, and it's a principal, prefer it.
-        is_entity_pattern = r'(LLC|INC\.|CORP|LTD|GROUP|HOLDINGS|REALTY|MANAGEMENT|TRUST|LP|PARTNERSHIP|DEPARTMENT|Housing|Authority)'
+        is_entity_pattern = r'(LLC|INC\.|CORP|LTD|GROUP|HOLDINGS|REALTY|MANAGEMENT|TRUST|LP|PARTNERSHIP|DEPARTMENT|Housing|Authority|YANKEE|POWER|LIGHT| GAS |ELECTRIC|UTILITY)'
         
         # Simplified Robust Priority
         # 1. State of CT
@@ -407,31 +416,34 @@ def merge_and_rank(cur, principals: List[Dict], businesses: List[Dict], limit: i
                 return 2 # Human
             return 1 # Business or Entity-Principal
 
+        # 1c. Decision: Use score-based comparison
         new_score = classify(name, itype)
         cur_score = classify(cur_name, cur_type)
         
+        # Priority: State of CT > Human Principal > Business
         if new_score > cur_score:
             better = True
         elif new_score == cur_score:
-            # Tie-break: Prefer 'principal' type over 'business' even if both are entities
-            if new_score == 1 and itype == 'principal' and cur_type == 'business':
+            # Tie-break: prefer principal over business
+            if itype == 'principal' and cur_type == 'business':
                 better = True
-            # Tie-break: Property count (implicitly handled by sort order of input list?)
-            # Input list is NOT sorted by property count globally, but `compute_top` returns sorted lists.
-            # We iterate principals then businesses.
-            # If scores equal, keep current (first one seen is usually better if sorted).
-        
-        # if "GUREVITCH" in name.upper() or "DANNY" in name.upper():
-        #    print(f"DEBUG: {name} ({new_score}) vs {cur_name} ({cur_score}) -> Better={better}", file=sys.stderr)
-        
-        if better:
+            # Tie-break: Prefer longer name or something? Actually property count is handled by input order.
+
+        if better or nid not in network_best_info:
             network_best_info[nid] = (itype, item)
 
     # 2. Final List: Use the best items found
     combined = []
     for nid, (itype, item) in network_best_info.items():
-        # Final rename for display
-        name = item.get("principal_name") or item.get("business_name") or ""
+        # A. Determine display name
+        # TRUST networks.primary_name — it already has human-priority naming from store_networks_shadow
+        db_net_name = item.get('network_primary_name')
+        if db_net_name and db_net_name != 'Unknown Network':
+            display_name = db_net_name
+        else:
+            display_name = item.get("principal_name") or item.get("business_name") or ""
+        
+        name = display_name
         # Force correct name for Dun Srulowitz if it's there
         if "SRULOWITZ" in name.upper() and "DUN" in name.upper():
             if "principal_name" in item: item["principal_name"] = "DUN SRULOWITZ"
@@ -455,8 +467,8 @@ def merge_and_rank(cur, principals: List[Dict], businesses: List[Dict], limit: i
         item['unit_count'] = item.get('unit_count', 0)
         combined.append(item)
 
-    # Sort by property count descending
-    combined.sort(key=lambda x: x['property_count'], reverse=True)
+    # Sort by building count descending (buildings are better measure of portfolio size than parcels)
+    combined.sort(key=lambda x: (x.get('building_count', 0), x.get('property_count', 0)), reverse=True)
     
     # 5. Rank and find representative businesses for the top ones (Deduplicate Names)
     ranked = []
@@ -468,14 +480,14 @@ def merge_and_rank(cur, principals: List[Dict], businesses: List[Dict], limit: i
         
         nid = item.get('network_id')
         
-        # Use authoritative name from networks table if available
+        # Use authoritative name from networks.primary_name
         db_net_name = item.get('network_primary_name')
         if db_net_name and db_net_name != 'Unknown Network':
             display_net_name = db_net_name
         else:
             display_net_name = item.get("principal_name") or item.get("business_name") or "[unknown]"
 
-        name = item.get("principal_name") or item.get("business_name") or "Unknown"
+        name = display_net_name
         norm_name = name.strip().upper()
         
         if norm_name in seen_names:
@@ -495,33 +507,41 @@ def merge_and_rank(cur, principals: List[Dict], businesses: List[Dict], limit: i
         # Populate principals for this network (associated with its businesses)
         # Using a subquery for simplicity within this loop; usually only 10-20 networks total.
         cur.execute(f"""
-            SELECT DISTINCT name_c as name FROM {SCHEMA}.principals
-            WHERE business_id IN (
-                SELECT entity_id FROM {SCHEMA}.entity_networks
-                WHERE network_id = %s AND entity_type = 'business'
-            )
-            AND name_c IS NOT NULL
+            SELECT DISTINCT entity_name as name FROM {SCHEMA}.entity_networks
+            WHERE network_id = %s AND entity_type = 'principal'
             LIMIT 5
         """, (nid,))
         item['principals'] = [dict(r) for r in cur.fetchall()]
         
         # Prepare item for insertion
+        # CRITICAL FIX: Ensure primary_entity_name matches the network_name if we use the DB name
+        # We also try to find the ID that matches the display_net_name to avoid scrambling.
+        final_entity_id = str(item.get("principal_id") or item.get("business_id"))
+        final_entity_name = name or "[unknown]"
+        final_entity_type = "principal" if "principal_name" in item else "business"
+
+        # If we are using the DB primary name, and it matches the item we have, we are good.
+        # But if it's different, the UI Link will point to the 'wrong' person.
+        # However, for now, the most important thing is that the display is consistent.
+        
         insert_item = {
             "rank": current_rank,
-            "network_id": item.get('network_id'),
+            "network_id": nid,
             "network_name": display_net_name,
             "property_count": int(item.get("property_count") or 0),
             "total_assessed_value": float(item.get("total_assessed_value") or 0),
             "total_appraised_value": float(item.get("total_appraised_value") or 0),
-            "primary_entity_id": str(item.get("principal_id") or item.get("business_id")),
-            "primary_entity_name": name or "[unknown]",
-            "primary_entity_type": "principal" if "principal_name" in item else "business",
+            "primary_entity_id": final_entity_id,
+            "primary_entity_name": final_entity_name,
+            "primary_entity_type": final_entity_type,
             "business_count": int(item.get("business_count") or 0),
+            "principal_count": int(item.get("principal_count") or 0),
             "building_count": int(item.get("building_count") or 0),
             "unit_count": int(item.get("unit_count") or 0),
             "controlling_business": item.get('controlling_business'),
             "representative_entities": item.get('representative_entities', []),
-            "principals": item.get('principals', [])
+            "principals": item.get('principals', []),
+            "linked_business_count": item.get('linked_business_count', 0)
         }
         ranked.append(insert_item)
         current_rank += 1
@@ -545,18 +565,19 @@ def insert_ranked_combined(cur, title, ranked_list, table_name=f"{SCHEMA}.cached
         cur.execute(f"""
             INSERT INTO {table_name} (
                 title, rank, network_id, network_name, property_count, total_assessed_value, total_appraised_value,
-                primary_entity_id, primary_entity_name, primary_entity_type, business_count, 
+                primary_entity_id, primary_entity_name, primary_entity_type, business_count, principal_count,
                 building_count, unit_count,
-                representative_entities, principals, controlling_business
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                representative_entities, principals, controlling_business, linked_business_count
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             title, item['rank'], item['network_id'], item['network_name'],
             item['property_count'], item['total_assessed_value'], item['total_appraised_value'],
             item['primary_entity_id'], item['primary_entity_name'], item['primary_entity_type'],
-            item['business_count'], building_count, unit_count,
+            item['business_count'], item.get('principal_count', 0), building_count, unit_count,
             json.dumps(item.get('representative_entities', [])),
             json.dumps(item.get('principals', [])),
-            item.get('controlling_business')
+            item.get('controlling_business'),
+            item.get('linked_business_count', 0)
         ))
 
 def insert_ranked_businesses(cur, title, ranked_list, table_name=f"{SCHEMA}.cached_insights"):
@@ -576,9 +597,12 @@ def insert_ranked_businesses(cur, title, ranked_list, table_name=f"{SCHEMA}.cach
 
 # ------------------------------- driver ---------------------------------
 
-def main():
+def rebuild_cached_insights(db_conn=None):
     t0 = time.time()
-    conn = get_conn()
+    # Use provided connection or create new one
+    conn = db_conn if db_conn else get_conn()
+    should_close = db_conn is None
+
     try:
         with conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -593,6 +617,8 @@ def main():
                 
                 cur.execute(f"DROP TABLE IF EXISTS {staging_table}")
                 ensure_cached_table(cur, staging_table)
+                ensure_cached_table(cur, final_table) # Restore immediately if missing
+                conn.commit() # Make sure these exist now for the frontend
 
                 # --- GLOBAL OPTIMIZATION: Create Network Stats Temp Table ONCE ---
                 log.info("Creating global temp table for Network Stats...")
@@ -684,18 +710,24 @@ def main():
 
                 cur.execute(f"""
                     CREATE TEMP TABLE temp_principal_network_map AS
-                    SELECT pr.{pr_id}::text AS raw_pid, en.network_id
-                    FROM {SCHEMA}.principals pr
-                    JOIN {SCHEMA}.entity_networks en ON en.entity_type = 'principal' AND en.entity_id = pr.{pr_id}::text
-                    
-                    UNION
-                    
-                    SELECT pr.{pr_id}::text AS raw_pid, en.network_id
-                    FROM {SCHEMA}.principals pr
-                    JOIN {SCHEMA}.entity_networks en ON en.entity_type = 'principal' AND en.normalized_name = {name_expr_sql}
+                    SELECT up.principal_id::text AS raw_pid, en.network_id
+                    FROM {SCHEMA}.unique_principals up
+                    JOIN {SCHEMA}.entity_networks en ON en.entity_type = 'principal' AND en.entity_id = up.principal_id::text
                 """)
                 cur.execute("CREATE INDEX idx_tmp_pr_net_map ON temp_principal_network_map(raw_pid, network_id)")
+                cur.execute("CREATE INDEX idx_tmp_pr_net_map_nid ON temp_principal_network_map(network_id)")
                 log.info("Principal-Network Map created.")
+
+                # Pre-aggregate linked_business_count to avoid correlated subquery
+                log.info("Pre-aggregating linked_business_count...")
+                cur.execute(f"""
+                    CREATE TEMP TABLE temp_biz_counts AS
+                    SELECT principal_id, COUNT(*) AS cnt
+                    FROM {SCHEMA}.principal_business_links
+                    GROUP BY principal_id
+                """)
+                cur.execute("CREATE INDEX idx_tmp_biz_counts ON temp_biz_counts(principal_id)")
+                log.info("Linked business counts pre-aggregated.")
 
                 # -----------------------------------------------------------------
 
@@ -714,6 +746,12 @@ def main():
                          if "TRIDEC TECHNOLOGIES" in (b.get("business_name") or "").upper():
                              b["business_name"] = "STATE OF CONNECTICUT"
                     insert_ranked_businesses(cur, "Statewide – Businesses", rank_first_n(top_businesses_state, 10), staging_table)
+
+                # PROMOTE IMMEDIATELY so frontend is happy
+                log.info(f"Promoting initial statewide results to {final_table}")
+                cur.execute(f"DELETE FROM {final_table} WHERE title LIKE 'Statewide%'")
+                cur.execute(f"INSERT INTO {final_table} SELECT * FROM {staging_table}")
+                conn.commit()
 
                 # ---------- Per-town ----------
                 if town_col:
@@ -752,7 +790,7 @@ def main():
                 # Fetch all rows from cached_insights
                 cur.execute(f"""
                     SELECT title, rank, network_name, property_count, total_assessed_value, total_appraised_value,
-                           primary_entity_id, primary_entity_name, primary_entity_type, business_count, building_count, unit_count, representative_entities, controlling_business
+                           primary_entity_id, primary_entity_name, primary_entity_type, business_count, principal_count, building_count, unit_count, representative_entities, controlling_business, linked_business_count
                     FROM {final_table}
                     ORDER BY title, rank
                 """)
@@ -775,13 +813,15 @@ def main():
                         "value": int(r['property_count'] or 0),
                         "property_count": r['property_count'],
                         "business_count": r['business_count'],
+                        "principal_count": r.get('principal_count', 0),
                         "building_count": r['building_count'],
                         "unit_count": r['unit_count'],
                         "total_assessed_value": float(r['total_assessed_value'] or 0),
                         "total_appraised_value": float(r['total_appraised_value'] or 0),
                         "representative_entities": r['representative_entities'],
                         "principals": r.get('principals', []),
-                        "controlling_business": r['controlling_business']
+                        "controlling_business": r['controlling_business'],
+                        "linked_business_count": r.get('linked_business_count', 0)
                     }
                     insights_map[group].append(item)
                 
@@ -799,7 +839,8 @@ def main():
 
         log.info("✅ cached_insights rebuilt in %.2fs", time.time() - t0)
     finally:
-        conn.close()
+        if should_close and conn:
+            conn.close()
 
 if __name__ == "__main__":
-    main()
+    rebuild_cached_insights()

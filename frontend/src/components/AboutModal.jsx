@@ -54,6 +54,16 @@ export default function AboutModal({ isOpen, onClose, onShowFreshness }) {
                             {readmeContent}
                         </ReactMarkdown>
 
+                        <div className="mt-8 p-4 bg-blue-50 border-l-4 border-blue-400 rounded-r-lg">
+                            <h3 className="text-sm font-bold text-blue-800 mb-1 flex items-center gap-2">
+                                <Info size={16} />
+                                Note on Network Data & Rankings
+                            </h3>
+                            <p className="text-xs text-blue-700 leading-relaxed italic">
+                                Portfolios and rankings on this site are iteratively refined. Because we are constantly improving the core backend matching logic, cleaning legacy parcel records, and filtering generic registrar entities, network counts and primary headers may shift as accuracy improves. This project is a work-in-progress—if you spot an error, please use the "Report Issue" button.
+                            </p>
+                        </div>
+
                         <div className="mt-10 pt-6 border-t border-gray-100 flex items-center justify-between">
                             <div className="flex flex-col">
                                 <span className="text-xs font-bold text-gray-400 uppercase tracking-widest">Transparency</span>

@@ -137,7 +137,7 @@ function NetworkCard({ network, onSelect }) {
                     </div>
                     <div>
                         <h4 className="font-black text-slate-900 leading-none group-hover:text-blue-600 transition-colors">
-                            {network.entity_name}
+                            {network.primary_entity_name || network.entity_name}
                         </h4>
                         <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-1">Network Portfolio</p>
                     </div>

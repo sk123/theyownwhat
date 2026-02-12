@@ -1,5 +1,9 @@
 # they own WHAT??
 
+> [!IMPORTANT]
+> **Service Restoration Notice (February 2026)**
+> We apologize for the prolonged downtime while we migrated to a new database infrastructure and refined our network matching algorithms. Thank you for your patience as we work to bring more transparency to Connecticut's housing landscape.
+
 [![Open Source | Love](https://img.shields.io/badge/Open%20Source-Love-red)](https://github.com/sk123/theyownwhat)
 [![Sponsor](https://img.shields.io/badge/Sponsor-Pink?style=flat&logo=github-sponsors&logoColor=white)](https://github.com/sponsors/sk123)
 
@@ -7,19 +11,24 @@
 
 **Published at:** [https://theyownwhat.net](https://theyownwhat.net)
 
-**Version 2.0 // 2026**
+**Version 2.1 // February 2026**
 
 ## Purpose
 
 **they own WHAT??** is an investigative and advocacy tool designed to bring transparency to **Connecticut's** property landscape. By linking fragmented public records, the tool reveals the hidden networks of ownership that shape neighborhoods.
 
-## Recent Updates (January 2026)
+## Recent Updates (February 2026)
 
-*   **Subsidized Housing Integration:** Integrated the **National Housing Preservation Database (NHPD)**. The system flags properties with active subsidies (Section 8, LIHTC, etc.) and displays program info in the property modal.
-*   **Search Interface:** Merged the search bar and button into a unified interface with autocomplete and "No results" messaging.
-*   **Complex Grouping:** Updated address normalization logic in the Property Table.
-*   **Performance & Stability:** Fixed geocoding errors and updated the backend to handle batch requests.
-*   **Home Page:** Updated the hero section and the "Top Networks" display.
+*   **Network Accuracy & Link Restoration:** Fixed core synchronization issues between principals and business records. Cross-link "badges" and "Related Businesses" in detail modals are now fully restored.
+*   **Ranking Improvements:** Updated statewide ranking algorithms to prioritize portfolio significance by building count rather than simple parcel count.
+*   **Header Resolution:** Fixed an issue where network headers incorrectly defaulted to secondary entities.
+*   **Data Backfill:** Re-run ownership matching across 25,000+ unique principals, increasing linked property counts by ~48%.
+*   **Performance:** Restored real-time property streaming and resolved frontend/backend key format mismatches.
+
+## Previous Updates (January 2026)
+
+*   **Subsidized Housing Integration:** Integrated the **National Housing Preservation Database (NHPD)**.
+*   **Search Interface:** Merged the search bar and button into a unified interface with autocomplete.
 
 ## Key Features
 

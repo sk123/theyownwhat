@@ -35,8 +35,18 @@ def setup_shadow_tables(conn):
                 PRIMARY KEY (network_id, entity_type, entity_id)
             );
         """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS ownership_links_shadow (
+                network_id INTEGER,
+                from_entity TEXT NOT NULL,
+                to_entity TEXT NOT NULL,
+                link_type TEXT NOT NULL
+            );
+        """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_entity_networks_shadow_network ON entity_networks_shadow(network_id);")
-        cursor.execute("TRUNCATE networks_shadow, entity_networks_shadow RESTART IDENTITY;")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_ownership_links_shadow_network ON ownership_links_shadow(network_id);")
+        # Truncate all shadow tables
+        cursor.execute("TRUNCATE networks_shadow, entity_networks_shadow, ownership_links_shadow RESTART IDENTITY;")
     conn.commit()
 
 def validate_shadow_data(conn):
@@ -65,24 +75,49 @@ def atomic_swap(conn):
     with conn.cursor() as cursor:
         cursor.execute("ALTER TABLE networks RENAME TO networks_old;")
         cursor.execute("ALTER TABLE entity_networks RENAME TO entity_networks_old;")
+        cursor.execute("ALTER TABLE ownership_links RENAME TO ownership_links_old;")
+        
         cursor.execute("ALTER TABLE networks_shadow RENAME TO networks;")
         cursor.execute("ALTER TABLE entity_networks_shadow RENAME TO entity_networks;")
+        cursor.execute("ALTER TABLE ownership_links_shadow RENAME TO ownership_links;")
+        
         cursor.execute("DROP TABLE networks_old CASCADE;")
         cursor.execute("DROP TABLE entity_networks_old CASCADE;")
+        cursor.execute("DROP TABLE ownership_links_old CASCADE;")
     conn.commit()
 
-def run_refresh(dry_run=False):
+def run_refresh(dry_run=False, skip_linking=False, skip_emails=False):
     """Executes the full refresh cycle."""
-    logger.info(f"🚀 Starting Network Refresh (DryRun={dry_run})")
+    logger.info(f"🚀 Starting Network Refresh (DryRun={dry_run}, SkipLinking={skip_linking}, SkipEmails={skip_emails})")
     conn = None
     try:
         conn = get_db_connection()
-        
-        # 1. Update links in properties table
-        link_properties_to_entities(conn)
+
+        if not skip_linking:
+            # 0. Clear stale links (Important for correctness after logic changes)
+            with conn.cursor() as cur:
+                logger.info("🧹 PHASE 0: Clearing stale property links...")
+                # Optimization: Only update rows that actually have data
+                cur.execute("""
+                    UPDATE properties 
+                    SET business_id = NULL, principal_id = NULL
+                    WHERE business_id IS NOT NULL OR principal_id IS NOT NULL
+                """)
+            conn.commit()
+            
+            # 1. Link properties
+            link_properties_to_entities(conn)
+
+        else:
+            logger.info("⏩ PHASES 0 & 1 SKIPPED: Assuming property links are already set.")
         
         # 2. Build graph and discover networks
-        graph = build_graph(conn)
+        if skip_emails:
+            logger.info("⚠️ DIAGNOSTIC MODE: Skipping email matching.")
+        else:
+            logger.info("📧 Email Matching ENABLED.")
+            
+        graph_data = build_graph(conn, skip_emails=skip_emails)
         
         logger.info("Gathering seed nodes...")
         seeds = set()
@@ -92,11 +127,11 @@ def run_refresh(dry_run=False):
             cur.execute("SELECT DISTINCT principal_id FROM properties WHERE principal_id IS NOT NULL")
             for r in cur: seeds.add(('principal', r['principal_id']))
             
-        networks = discover_networks_depth_limited(graph, list(seeds))
+        networks = discover_networks_depth_limited(graph_data, list(seeds))
         
         # 3. Setup shadow and store
         setup_shadow_tables(conn)
-        store_networks_shadow(conn, networks)
+        store_networks_shadow(conn, networks, graph_data=graph_data)
         
         # 4. Validate and Swap
         if validate_shadow_data(conn):
@@ -119,6 +154,8 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Safe Network Refresh")
     parser.add_argument('--dry-run', action='store_true', help="Run without swapping tables")
+    parser.add_argument('--skip-linking', action='store_true', help="Skip property linking phases (0 and 1)")
+    parser.add_argument('--skip-emails', action='store_true', help="Skip email matching (Phase 2)")
     args = parser.parse_args()
 
-    run_refresh(dry_run=args.dry_run)
+    run_refresh(dry_run=args.dry_run, skip_linking=args.skip_linking, skip_emails=args.skip_emails)

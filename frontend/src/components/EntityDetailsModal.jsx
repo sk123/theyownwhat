@@ -119,15 +119,26 @@ export default function EntityDetailsModal({ entity, type, networkData, onNaviga
                                                 const s = String(l.source);
                                                 const t = String(l.target);
 
-                                                // Check for straight match or prefix match
-                                                const sClean = s.replace(/^(principal_|business_)/, '');
-                                                const tClean = t.replace(/^(principal_|business_)/, '');
-                                                const myIdClean = myId.replace(/^(principal_|business_)/, '');
+                                                // Helper for canonical matching (sorted name parts)
+                                                const canonMatch = (linkKey, myId) => {
+                                                    const cleanKey = linkKey.replace(/^(principal_|business_)/, '');
+                                                    const cleanMyId = myId.replace(/^(principal_|business_)/, '');
 
-                                                if (sClean === myIdClean) {
-                                                    relatedIds.add(tClean);
-                                                } else if (tClean === myIdClean) {
-                                                    relatedIds.add(sClean);
+                                                    // Direct ID match
+                                                    if (cleanKey === cleanMyId) return true;
+
+                                                    // Name-based match with sorting (matching backend's canonicalize_person_name)
+                                                    if (isPrincipal && entity.name) {
+                                                        const myCanon = entity.name.toUpperCase().trim().replace(/[`"'.]/g, '').replace(/\s+/g, ' ').split(' ').sort().join(' ');
+                                                        if (cleanKey === myCanon) return true;
+                                                    }
+                                                    return false;
+                                                };
+
+                                                if (canonMatch(s, myId)) {
+                                                    relatedIds.add(t.replace(/^(principal_|business_)/, ''));
+                                                } else if (canonMatch(t, myId)) {
+                                                    relatedIds.add(s.replace(/^(principal_|business_)/, ''));
                                                 }
                                             });
 

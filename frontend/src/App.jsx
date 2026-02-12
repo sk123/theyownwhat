@@ -126,7 +126,12 @@ function App() {
 
     api.streamNetwork(id, type, name,
       (chunk) => {
-        if (chunk.type === 'entities') {
+        if (chunk.type === 'network_info') {
+          // Store backend-provided network name and stats
+          if (chunk.data.name) newData.networkName = chunk.data.name;
+          if (chunk.data.building_count) newData.building_count = chunk.data.building_count;
+          if (chunk.data.unit_count) newData.unit_count = chunk.data.unit_count;
+        } else if (chunk.type === 'entities') {
           if (chunk.data.entities) {
             setStreamingStatus(prev => ({
               ...prev,
@@ -278,6 +283,19 @@ function App() {
       if (!sId.startsWith('principal_')) variants.add(`principal_${sId}`);
       if (!sId.startsWith('business_')) variants.add(`business_${sId}`);
 
+      // Also try name-based matching (backend uses canonicalized names as link keys)
+      const matchPrincipal = networkData.principals.find(p => String(p.id) === sId);
+      if (matchPrincipal && matchPrincipal.name) {
+        // Canonicalize: uppercase, sort parts alphabetically (matches backend canonicalize_person_name)
+        const canon = matchPrincipal.name.toUpperCase().trim().replace(/[`"'.]/g, '').replace(/\s+/g, ' ').split(' ').sort().join(' ');
+        variants.add(`principal_${canon}`);
+        variants.add(canon);
+      }
+      const business = networkData.businesses.find(b => String(b.id) === sId);
+      if (business) {
+        variants.add(`business_${business.id}`);
+      }
+
       networkData.links.forEach(link => {
         const src = String(link.source);
         const tgt = String(link.target);
@@ -392,7 +410,7 @@ function App() {
               </div>
               <div>
                 <h3 className="font-bold text-lg">System Maintenance in Progress</h3>
-                <p className="text-sm text-amber-700">The network graph is currently being rebuilt to improve data accuracy. Some features may be unavailable or slower than usual. This message will disappear when complete.</p>
+                <p className="text-sm text-amber-700">We're performing updates and improvements to enhance your experience. <strong>Expected return: Monday, February 10th.</strong> Thank you for your patience.</p>
               </div>
             </div>
           </motion.div>
@@ -532,7 +550,7 @@ function App() {
 
                 {/* Compact Dashboard Header Strip */}
                 <div className="flex flex-col xl:flex-row justify-between items-center gap-3 shrink-0">
-                  <NetworkProfileCard networkData={networkData} stats={stats} />
+                  <NetworkProfileCard networkData={networkData} stats={stats} networkName={networkData.networkName} />
 
                   <div className="flex items-center gap-2 w-full xl:w-auto justify-end shrink-0">
                     <button

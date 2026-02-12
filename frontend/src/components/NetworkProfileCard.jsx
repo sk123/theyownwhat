@@ -2,7 +2,7 @@ import React from 'react';
 import { Users, Building2, TrendingUp, Info, Sparkles, X, Loader2 } from 'lucide-react';
 import { useState } from 'react';
 
-export default function NetworkProfileCard({ networkData, stats }) {
+export default function NetworkProfileCard({ networkData, stats, networkName }) {
     const [showReport, setShowReport] = useState(false);
     const [reportLoading, setReportLoading] = useState(false);
     const [reportContent, setReportContent] = useState(null);
@@ -50,7 +50,32 @@ export default function NetworkProfileCard({ networkData, stats }) {
 
     const normalizeId = (id) => {
         if (!id) return '';
-        return String(id).toUpperCase().trim().replace(/[`"'.]/g, '').replace(/\s+/g, ' ');
+        let n = String(id).toUpperCase().trim();
+        n = n.replace(/[`"'.]/g, ''); // remove punctuation
+
+        // Remove Suffixes
+        const suffixes = ['JR', 'SR', 'III', 'IV', 'II', 'ESQ', 'MD', 'PHD', 'DDS'];
+        const suffixRegex = new RegExp(`\\s+(${suffixes.join('|')})$`);
+        n = n.replace(suffixRegex, '');
+
+        n = n.replace(/\s+/g, ' '); // collapse spaces
+        n = n.trim();
+
+        // Handle Last, First
+        if (n.includes(',')) {
+            const parts = n.split(',').map(s => s.trim());
+            if (parts.length >= 2) {
+                const last = parts[0];
+                const first = parts[1];
+                n = `${first} ${last}`;
+            }
+        }
+        n = n.replace(/\s+/g, ' ').trim();
+
+        // Sort parts alphabetically (matches backend canonicalize_person_name)
+        n = n.split(' ').sort().join(' ');
+
+        return n;
     };
 
     const getCount = (p) => {
@@ -86,16 +111,21 @@ export default function NetworkProfileCard({ networkData, stats }) {
     const activeBusinesses = networkData.businesses.filter(b => !b.status || b.status.toUpperCase() === 'ACTIVE');
 
     // Determine Manager Name
-    let managerName = 'Unknown Entity';
+    let managerName = networkName || 'Unknown Entity';
     let isHuman = false;
 
-    if (humanPrincipals.length > 0) {
-        managerName = humanPrincipals[0].name;
-        isHuman = true;
-    } else if (entityPrincipals.length > 0) {
-        managerName = entityPrincipals[0].name;
-    } else if (networkData.businesses.length > 0) {
-        managerName = networkData.businesses[0].name;
+    if (!networkName) {
+        if (humanPrincipals.length > 0) {
+            managerName = humanPrincipals[0].name;
+            isHuman = true;
+        } else if (entityPrincipals.length > 0) {
+            managerName = entityPrincipals[0].name;
+        } else if (networkData.businesses.length > 0) {
+            managerName = networkData.businesses[0].name;
+        }
+    } else {
+        // If we have networkName, check if it's one of our human principals to set isHuman
+        isHuman = humanPrincipals.some(p => p.name === networkName);
     }
 
     // Safely handle missing stats object

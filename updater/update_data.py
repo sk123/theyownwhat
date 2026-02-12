@@ -189,15 +189,24 @@ def get_unprocessed_current_owner_properties(conn, municipality_name, force_proc
     If force_process is False, it gets only unprocessed ones.
     If force_process is True, it gets ALL 'Current Owner' properties.
     """
+    placeholder_names = (
+        'CURRENT OWNER', 'UNKNOWN OWNER', 'OCCUPANT', 'OWNER', 
+        'UNKNOWN', 'CT', 'CONNECTICUT', 'THE', 'INC', 'LLC', 'CORP',
+        'USA', 'UNITED STATES', 'NO NAME', 'N/A', 'NA', 'NONE',
+        'NO INFORMATION PROVIDED', 'NOT PROVIDED', 'VACANT', 'NULL',
+        'NOT AVAILABLE', '[UNKNOWN]', 'CURRENT COMPANY OWNER', 'CURRENT COMPANY-OWNER',
+        'SV', 'SURVIVORSHIP', 'JT', 'TIC', 'TC', 'ET AL', 'LII', 'ETAL'
+    )
+    
     base_query = """
         SELECT p.id, p.location, p.cama_site_link 
         FROM properties p
         LEFT JOIN property_processing_log ppl ON p.id = ppl.property_id
         WHERE UPPER(p.property_city) = %s 
-        AND p.owner = 'Current Owner'
+        AND (p.owner IS NULL OR UPPER(TRIM(p.owner)) IN %s)
     """
     
-    params = [municipality_name.upper()]
+    params = [municipality_name.upper(), placeholder_names]
     query_parts = [base_query]
     
     if not force_process:
@@ -286,6 +295,16 @@ def normalize_address_for_matching(address):
         normalized = normalized.replace(old, new)
     
     return normalized
+
+def is_placeholder_address(addr):
+    """Returns True if the address is a known placeholder/generic address."""
+    if not addr or str(addr).strip() == '' or str(addr).strip().upper() in ['NULL', 'NONE', 'UNKNOWN', 'ADDRESS']:
+        return True
+    # Numeric placeholders like "93" (common in New Haven)
+    stripped = str(addr).strip().replace(' ', '')
+    if stripped.isdigit() and len(stripped) < 6:
+        return True
+    return False
 
 def process_arcgis_data(df, column_mapping, municipality_name):
     """Processes ArcGIS DataFrame and returns a dictionary mapping addresses to A LIST OF property data dicts."""
@@ -430,6 +449,13 @@ def process_municipality_with_arcgis(conn, municipality_name, data_source_config
     processed_count = 0
     
     for norm_addr, prop_ids in db_props_by_address.items():
+        # SKIP PLACEHOLDERS: Do not attempt matching if the address is a known placeholder
+        if is_placeholder_address(norm_addr):
+            for prop_id in prop_ids:
+                mark_property_processed_today(conn, prop_id)
+            processed_count += len(prop_ids) # Increment processed_count for skipped properties
+            continue
+
         matched_data_list = []
         
         # Direct match
@@ -450,13 +476,14 @@ def process_municipality_with_arcgis(conn, municipality_name, data_source_config
                  if update_property_in_db(conn, prop_id, vision_data):
                     updated_count += 1
         
+        # Mark all as processed even if not matched
+        for prop_id in prop_ids:
+            mark_property_processed_today(conn, prop_id)
+        
         processed_count += len(prop_ids)
         if processed_count % 100 == 0:
             log(f"  -> Progress: {processed_count}/{len(db_properties)}, updated {updated_count} so far...")
     
-    # Mark all properties as processed
-    log(f"Marking all {len(all_property_ids)} properties as processed for today.")
-    for prop_id in all_property_ids:
         mark_property_processed_today(conn, prop_id)
     
     log(f"Finished {municipality_name}. Updated {updated_count} of {len(db_properties)} properties.")
@@ -475,13 +502,13 @@ def download_ct_geodata_csv(url):
             local_path = "/tmp/ct_geodata.csv"
             if "geodata.ct.gov" in url and os.path.exists(local_path):
                 log(f"  -> Using local file: {local_path}")
-                df = pd.read_csv(local_path, low_memory=False)
+                df = pd.read_csv(local_path, low_memory=False, encoding='utf-8-sig')
             else:
                 log(f"  -> Downloading from: {url}")
                 headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
                 response = requests.get(url, headers=headers, timeout=300)
                 response.raise_for_status()
-                df = pd.read_csv(StringIO(response.text), low_memory=False)
+                df = pd.read_csv(StringIO(response.content.decode('utf-8-sig')), low_memory=False)
             
             GEODATA_CACHE[url] = df
             log(f"Successfully loaded {len(df)} records into cache.")
@@ -616,6 +643,10 @@ def process_municipality_with_ct_geodata(conn, municipality_name, config, curren
     # 5. Update DB
     updated_count = 0
     processed_count = 0
+    
+    # Tracker for multi-unit matches at same address
+    addr_match_index = {} # norm_addr -> next_index_in_matches_list
+
     for prop_id, prop_location, _ in db_properties:
         processed_count += 1
         if not prop_location: 
@@ -623,11 +654,23 @@ def process_municipality_with_ct_geodata(conn, municipality_name, config, curren
             continue
             
         norm_addr = normalize_address_for_matching(prop_location)
+        
+        # SKIP PLACEHOLDERS: Do not attempt matching if the address is a known placeholder
+        # to prevent "smearing" one record across thousands of generic records.
+        if is_placeholder_address(norm_addr):
+            mark_property_processed_today(conn, prop_id)
+            continue
+
         matches = processed_data.get(norm_addr)
         if matches:
-            v_data = matches[0] 
-            if update_property_in_db(conn, prop_id, v_data):
-                updated_count += 1
+            # Use index tracking to avoid reusing the same CSV record for multiple DB records (unless intended)
+            idx = addr_match_index.get(norm_addr, 0)
+            if idx < len(matches):
+                v_data = matches[idx] 
+                if update_property_in_db(conn, prop_id, v_data):
+                    updated_count += 1
+                addr_match_index[norm_addr] = idx + 1
+            
         mark_property_processed_today(conn, prop_id)
         
         if processed_count % 100 == 0:
@@ -1735,18 +1778,31 @@ def update_property_in_db(conn, property_db_id, vision_data, restricted_mode=Fal
         current_val = current_state.get(key)
         
         # 1. Placeholder logic: Always update if current is placeholder
+        placeholder_names = {
+            'CURRENT OWNER', 'UNKNOWN OWNER', 'OCCUPANT', 'OWNER', 
+            'UNKNOWN', 'CT', 'CONNECTICUT', 'THE', 'INC', 'LLC', 'CORP',
+            'USA', 'UNITED STATES', 'NO NAME', 'N/A', 'NA', 'NONE',
+            'NO INFORMATION PROVIDED', 'NOT PROVIDED', 'VACANT', 'NULL',
+            'NOT AVAILABLE', '[UNKNOWN]', 'CURRENT COMPANY OWNER', 'CURRENT COMPANY-OWNER',
+            'SV', 'SURVIVORSHIP', 'JT', 'TIC', 'TC', 'ET AL', 'LII', 'ETAL'
+        }
+        
         is_placeholder = (
             current_val is None or
             str(current_val).strip() == '' or 
-            str(current_val).strip().upper() in ['CURRENT OWNER', 'NULL', 'NONE'] or
+            str(current_val).strip().upper() in placeholder_names or
             (key == 'location' and str(current_val).strip().replace(' ', '').isdigit() and len(str(current_val).strip()) < 6)
         )
 
         # 2. Field-specific logic
         if key in PROTECTED_FIELDS:
+            # Explicit protection for geocoding and enriched data
+            if key in ['latitude', 'longitude']:
+                should_update = False
+            
             # Special logic for enriched data (Hartford)
             # If account_number is set, we consider the current unit/location to be high-quality
-            if current_state.get('account_number') and key in ['unit', 'location']:
+            elif current_state.get('account_number') and key in ['unit', 'location']:
                 should_update = False
             
             # Standard protection: Only update if it's currently a placeholder
@@ -1919,13 +1975,6 @@ def process_municipality_with_realtime_updates(conn, municipality_name, municipa
                     update_freshness_status(conn, municipality_name, 'vision_appraisal', 'running', details=f"Slow Path: {processed_in_group}/{len(props_without_urls)} checked")
 
 
-            def is_placeholder_address(addr):
-                if not addr or addr.strip() == '' or addr.strip().upper() == 'NULL':
-                    return True
-                # Numeric placeholders like "93"
-                if addr.strip().replace(' ', '').isdigit() and len(addr.strip()) < 6:
-                    return True
-                return False
 
             unmatched_db_props = [(pid, addr) for pid, addr in props_without_urls 
                                   if is_placeholder_address(addr)]

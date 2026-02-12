@@ -47,6 +47,9 @@ export default function NetworkView({ networkData, onSelectEntity, selectedEntit
         n = n.replace(/MANACHEM/g, "MENACHEM");
         n = n.replace(/GURAVITCH/g, "GUREVITCH");
 
+        // Sort parts alphabetically to match backend canonicalize_person_name
+        n = n.split(' ').sort().join(' ');
+
         return n;
     };
 
