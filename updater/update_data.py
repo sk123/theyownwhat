@@ -39,154 +39,15 @@ MAX_WORKERS = 20  # Increased workers for faster scraping
 DEFAULT_MUNI_WORKERS = 8 # Process more municipalities in parallel
 
 # --- Municipality-specific data sources ---
-MUNICIPAL_DATA_SOURCES = {
-# update_data.py
+# --- Municipality-specific data sources ---
+try:
+    from api.municipal_config import MUNICIPAL_DATA_SOURCES
+    print("Successfully imported MUNICIPAL_DATA_SOURCES from api.municipal_config")
+except ImportError as e:
+    print(f"Failed to import MUNICIPAL_DATA_SOURCES from api.municipal_config: {e}")
+    # Fallback to empty if import fails (shouldn't happen in Docker if paths are right)
+    MUNICIPAL_DATA_SOURCES = {}
 
-# ... inside MUNICIPAL_DATA_SOURCES dictionary ...
-    "HARTFORD": {
-        'type': 'ct_geodata_csv',
-        'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0',
-        'town_filter': 'Hartford'
-    },
-# ...
-    # Add more municipalities here as needed
-    'ANSONIA': {'type': 'MAPXPRESS', 'domain': 'ansonia.mapxpress.net'},
-    'POMFRET': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/pomfretct/'},
-    'BEACON FALLS': {'type': 'MAPXPRESS', 'domain': 'beaconfalls.mapxpress.net'},
-    # 'BERLIN': {'type': 'MAPXPRESS', 'domain': 'berlin.mapxpress.net'},
-    'BETHANY': {'type': 'MAPXPRESS', 'domain': 'bethany.mapxpress.net'},
-    'BETHLEHEM': {'type': 'MAPXPRESS', 'domain': 'bethlehem.mapxpress.net'},
-    'BRIDGEPORT': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/bridgeportct/'},
-    'BRISTOL': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/bristolct/'},
-    'MANSFIELD': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/mansfieldct/'},
-    # Additional Vision Appraisal municipalities with missing photos
-    'NORWALK': {'type': 'actdatascout', 'url': 'https://www.actdatascout.com/RealProperty/Connecticut/Norwalk', 'county_id': '9103'},
-    'GLASTONBURY': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/glastonburyct/'},
-    'WINDSOR': {'type': 'windsor_api', 'url': 'https://windsorct.com'},
-    'WETHERSFIELD': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/wethersfieldct/'},
-    'VERNON': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/vernonct/'},
-    'STONINGTON': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/stoningtonct/'},
-    'BLOOMFIELD': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/bloomfieldct/'},
-    'AVON': {'type': 'avon_static', 'url': 'http://assessor.avonct.gov'},
-    'WOLCOTT': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/wolcottct/'},
-    'WINDHAM': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/windhamct/'},
-    'WOODSTOCK': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/woodstockct/'},
-    'BROOKFIELD': {'type': 'MAPXPRESS', 'domain': 'brookfield.mapxpress.net'},
-    'BURLINGTON': {'type': 'MAPXPRESS', 'domain': 'burlington.mapxpress.net'},
-    'CANTON': {'type': 'MAPXPRESS', 'domain': 'canton.mapxpress.net'},
-    'CHESHIRE': {'type': 'MAPXPRESS', 'domain': 'cheshire.mapxpress.net'},
-    'COLCHESTER': {'type': 'MAPXPRESS', 'domain': 'colchester.mapxpress.net'},
-    'COVENTRY': {'type': 'MAPXPRESS', 'domain': 'coventry.mapxpress.net'},
-    'DERBY': {'type': 'MAPXPRESS', 'domain': 'derby.mapxpress.net'},
-    # 'EAST HAVEN': {'type': 'MAPXPRESS', 'domain': 'easthaven.mapxpress.net'},
-    'FARMINGTON': {'type': 'MAPXPRESS', 'domain': 'farmington.mapxpress.net'},
-    'LITCHFIELD': {'type': 'MAPXPRESS', 'domain': 'litchfield.mapxpress.net'},
-    'MIDDLEBURY': {'type': 'MAPXPRESS', 'domain': 'middlebury.mapxpress.net'},
-    'NAUGATUCK': {'type': 'MAPXPRESS', 'domain': 'naugatuck.mapxpress.net'},
-    'NEW BRITAIN': {'type': 'MAPXPRESS', 'domain': 'newbritain.mapxpress.net', 'id_param': 'parid'},
-    'NEWTOWN': {'type': 'MAPXPRESS', 'domain': 'newtown.mapxpress.net'},
-    'OXFORD': {'type': 'MAPXPRESS', 'domain': 'oxford.mapxpress.net'},
-    'PLAINVILLE': {'type': 'MAPXPRESS', 'domain': 'plainville.mapxpress.net'},
-    'SALEM': {'type': 'MAPXPRESS', 'domain': 'salem.mapxpress.net'},
-    'SEYMOUR': {'type': 'MAPXPRESS', 'domain': 'seymour.mapxpress.net'},
-    'SOUTHBURY': {'type': 'MAPXPRESS', 'domain': 'southbury.mapxpress.net'},
-    'SUFFIELD': {'type': 'MAPXPRESS', 'domain': 'suffield.mapxpress.net'},
-    'WEST HAVEN': {'type': 'MAPXPRESS', 'domain': 'westhaven.mapxpress.net'},
-    # PropertyRecordCards Municipalities
-    # 'ANSONIA': {'type': 'PROPERTYRECORDCARDS', 'towncode': '002'}, # Moved to MapXpress
-    'ASHFORD': {'type': 'PROPERTYRECORDCARDS', 'towncode': '003'},
-    'BETHANY': {'type': 'PROPERTYRECORDCARDS', 'towncode': '008'},
-    'BOZRAH': {'type': 'PROPERTYRECORDCARDS', 'towncode': '013'},
-    'BRIDGEWATER': {'type': 'PROPERTYRECORDCARDS', 'towncode': '16'},
-    'CANAAN': {'type': 'PROPERTYRECORDCARDS', 'towncode': '21'},
-    'CHESHIRE': {'type': 'PROPERTYRECORDCARDS', 'towncode': '025'},
-    'CHESTER': {'type': 'PROPERTYRECORDCARDS', 'towncode': '026'},
-    'COLEBROOK': {'type': 'PROPERTYRECORDCARDS', 'towncode': '029'},
-    'COLUMBIA': {'type': 'PROPERTYRECORDCARDS', 'towncode': '030'},
-    'DANBURY': {'type': 'PROPERTYRECORDCARDS', 'towncode': '034'},
-    'DERBY': {'type': 'PROPERTYRECORDCARDS', 'towncode': 'DRB'},
-    'DURHAM': {'type': 'PROPERTYRECORDCARDS', 'towncode': '38'},
-    'EAST HAMPTON': {'type': 'PROPERTYRECORDCARDS', 'towncode': '42'},
-    'EAST HAVEN': {'type': 'PROPERTYRECORDCARDS', 'towncode': '044'},
-    'EASTFORD': {'type': 'PROPERTYRECORDCARDS', 'towncode': '039'},
-    'EASTON': {'type': 'PROPERTYRECORDCARDS', 'towncode': '046'},
-    'ELLINGTON': {'type': 'PROPERTYRECORDCARDS', 'towncode': '048'},
-    # 'FARMINGTON': {'type': 'PROPERTYRECORDCARDS', 'towncode': '052'},
-    'FRANKLIN': {'type': 'PROPERTYRECORDCARDS', 'towncode': '053'},
-    'GUILFORD': {'type': 'PROPERTYRECORDCARDS', 'towncode': '060'},
-    'HADDAM': {'type': 'PROPERTYRECORDCARDS', 'towncode': '061'},
-    'HEBRON': {'type': 'PROPERTYRECORDCARDS', 'towncode': '067'},
-    'KILLINGLY': {'type': 'PROPERTYRECORDCARDS', 'towncode': '069'},
-    'KILLINGWORTH': {'type': 'PROPERTYRECORDCARDS', 'towncode': '070'},
-    'MARLBOROUGH': {'type': 'PROPERTYRECORDCARDS', 'towncode': '079'},
-    'MONTVILLE': {'type': 'PROPERTYRECORDCARDS', 'towncode': '086'},
-    'NAUGATUCK': {'type': 'PROPERTYRECORDCARDS', 'towncode': '088'},
-    'NEW CANAAN': {'type': 'PROPERTYRECORDCARDS', 'towncode': '090'},
-    'NEWINGTON': {'type': 'PROPERTYRECORDCARDS', 'towncode': '094'},
-    'NORFOLK': {'type': 'PROPERTYRECORDCARDS', 'towncode': '098'},
-    'NORTH CANAAN': {'type': 'PROPERTYRECORDCARDS', 'towncode': '100'},
-    'NORTH HAVEN': {'type': 'PROPERTYRECORDCARDS', 'towncode': '101'},
-    'NORTH STONINGTON': {'type': 'PROPERTYRECORDCARDS', 'towncode': '102'},
-    'OXFORD': {'type': 'PROPERTYRECORDCARDS', 'towncode': '108'},
-    'PLAINVILLE': {'type': 'PROPERTYRECORDCARDS', 'towncode': '110'},
-    'PLYMOUTH': {'type': 'PROPERTYRECORDCARDS', 'towncode': '111'},
-    'PROSPECT': {'type': 'PROPERTYRECORDCARDS', 'towncode': '115'},
-    'RIDGEFIELD': {'type': 'PROPERTYRECORDCARDS', 'towncode': '118'},
-    'ROCKY HILL': {'type': 'PROPERTYRECORDCARDS', 'towncode': '119'},
-    'ROXBURY': {'type': 'PROPERTYRECORDCARDS', 'towncode': '120'},
-    'SALISBURY': {'type': 'PROPERTYRECORDCARDS', 'towncode': '122'},
-    'SCOTLAND': {'type': 'PROPERTYRECORDCARDS', 'towncode': '123'},
-    'SEYMOUR': {'type': 'PROPERTYRECORDCARDS', 'towncode': '124'},
-    'SHELTON': {'type': 'PROPERTYRECORDCARDS', 'towncode': '126'},
-    'SHERMAN': {'type': 'PROPERTYRECORDCARDS', 'towncode': '127', 'path_prefix': '/Sherman'},
-    'SIMSBURY': {'type': 'PROPERTYRECORDCARDS', 'towncode': '128'},
-    'SUFFIELD': {'type': 'PROPERTYRECORDCARDS', 'towncode': '139'},
-    'TORRINGTON': {'type': 'PROPERTYRECORDCARDS', 'towncode': '143'},
-    'VOLUNTOWN': {'type': 'PROPERTYRECORDCARDS', 'towncode': '147'},
-    'WARREN': {'type': 'PROPERTYRECORDCARDS', 'towncode': '149'},
-    'WASHINGTON': {'type': 'PROPERTYRECORDCARDS', 'towncode': '150'},
-    'WATERBURY': {'type': 'PROPERTYRECORDCARDS', 'towncode': '151'},
-    'WATERTOWN': {'type': 'PROPERTYRECORDCARDS', 'towncode': '153'},
-    'WESTON': {'type': 'PROPERTYRECORDCARDS', 'towncode': '157'},
-    'WILTON': {'type': 'PROPERTYRECORDCARDS', 'towncode': '161'},
-    'WINDSOR LOCKS': {'type': 'PROPERTYRECORDCARDS', 'towncode': '165'},
-    'WOODBRIDGE': {'type': 'PROPERTYRECORDCARDS', 'towncode': '167'},
-    'WOODBURY': {'type': 'PROPERTYRECORDCARDS', 'towncode': '168'},
-    # CT Geodata Portal (Statewide 2025)
-    # 'NEW HAVEN': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'New Haven'},
-    # 'WATERBURY': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Waterbury'},
-    # 'BRIDGEPORT': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Bridgeport'},
-    'HARTFORD': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Hartford'},
-    'STAMFORD': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/stamfordct/'},
-    # 'NORWALK': {'type': 'ct_geodata_csv', ... REPLACED BY ACTDATASCOUT above ... },
-    # 'DANBURY': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Danbury'},
-    # 'NEW BRITAIN': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'New Britain'},
-    # 'WEST HARTFORD': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'West Hartford'},
-    'GREENWICH': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Greenwich'},
-    'HAMDEN': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/hamdenct/'},
-    'MERIDEN': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/meridenct/'},
-    'BRISTOL': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/bristolct/'},
-    'WEST HAVEN': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/westhavenct/'},
-    'MIDDLETOWN': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/middletownct/'},
-    'ENFIELD': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/enfieldct/'},
-    'MILFORD': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/milfordct/'},
-    'STRATFORD': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/stratfordct/'},
-    'EAST HARTFORD': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'East Hartford'},
-    'MANCHESTER': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/manchesterct/'},
-    'CLINTON': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/clintonct/'},
-    'EAST HAMPTON': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'East Hampton'},
-    'CROMWELL': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Cromwell'},
-    'OLD LYME': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/oldlymect/'},
-    'ESSEX': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/essexct/'},
-    'LYME': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/lymect/'},
-    'NORWICH': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/norwichct/'},
-    'GROTON': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Groton'},
-    'SOUTHINGTON': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/southingtonct/'},
-    'WALLINGFORD': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/wallingfordct/'},
-    # 'SHELTON': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Shelton'},
-    # 'TORRINGTON': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Torrington'},
-    'TRUMBULL': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/trumbullct/'},
-}
 
 # --- Shared Cache for Large CSVs ---
 GEODATA_CACHE = {}
@@ -328,15 +189,24 @@ def get_unprocessed_current_owner_properties(conn, municipality_name, force_proc
     If force_process is False, it gets only unprocessed ones.
     If force_process is True, it gets ALL 'Current Owner' properties.
     """
+    placeholder_names = (
+        'CURRENT OWNER', 'UNKNOWN OWNER', 'OCCUPANT', 'OWNER', 
+        'UNKNOWN', 'CT', 'CONNECTICUT', 'THE', 'INC', 'LLC', 'CORP',
+        'USA', 'UNITED STATES', 'NO NAME', 'N/A', 'NA', 'NONE',
+        'NO INFORMATION PROVIDED', 'NOT PROVIDED', 'VACANT', 'NULL',
+        'NOT AVAILABLE', '[UNKNOWN]', 'CURRENT COMPANY OWNER', 'CURRENT COMPANY-OWNER',
+        'SV', 'SURVIVORSHIP', 'JT', 'TIC', 'TC', 'ET AL', 'LII', 'ETAL'
+    )
+    
     base_query = """
         SELECT p.id, p.location, p.cama_site_link 
         FROM properties p
         LEFT JOIN property_processing_log ppl ON p.id = ppl.property_id
         WHERE UPPER(p.property_city) = %s 
-        AND p.owner = 'Current Owner'
+        AND (p.owner IS NULL OR UPPER(TRIM(p.owner)) IN %s)
     """
     
-    params = [municipality_name.upper()]
+    params = [municipality_name.upper(), placeholder_names]
     query_parts = [base_query]
     
     if not force_process:
@@ -425,6 +295,16 @@ def normalize_address_for_matching(address):
         normalized = normalized.replace(old, new)
     
     return normalized
+
+def is_placeholder_address(addr):
+    """Returns True if the address is a known placeholder/generic address."""
+    if not addr or str(addr).strip() == '' or str(addr).strip().upper() in ['NULL', 'NONE', 'UNKNOWN', 'ADDRESS']:
+        return True
+    # Numeric placeholders like "93" (common in New Haven)
+    stripped = str(addr).strip().replace(' ', '')
+    if stripped.isdigit() and len(stripped) < 6:
+        return True
+    return False
 
 def process_arcgis_data(df, column_mapping, municipality_name):
     """Processes ArcGIS DataFrame and returns a dictionary mapping addresses to A LIST OF property data dicts."""
@@ -569,6 +449,13 @@ def process_municipality_with_arcgis(conn, municipality_name, data_source_config
     processed_count = 0
     
     for norm_addr, prop_ids in db_props_by_address.items():
+        # SKIP PLACEHOLDERS: Do not attempt matching if the address is a known placeholder
+        if is_placeholder_address(norm_addr):
+            for prop_id in prop_ids:
+                mark_property_processed_today(conn, prop_id)
+            processed_count += len(prop_ids) # Increment processed_count for skipped properties
+            continue
+
         matched_data_list = []
         
         # Direct match
@@ -589,13 +476,14 @@ def process_municipality_with_arcgis(conn, municipality_name, data_source_config
                  if update_property_in_db(conn, prop_id, vision_data):
                     updated_count += 1
         
+        # Mark all as processed even if not matched
+        for prop_id in prop_ids:
+            mark_property_processed_today(conn, prop_id)
+        
         processed_count += len(prop_ids)
         if processed_count % 100 == 0:
             log(f"  -> Progress: {processed_count}/{len(db_properties)}, updated {updated_count} so far...")
     
-    # Mark all properties as processed
-    log(f"Marking all {len(all_property_ids)} properties as processed for today.")
-    for prop_id in all_property_ids:
         mark_property_processed_today(conn, prop_id)
     
     log(f"Finished {municipality_name}. Updated {updated_count} of {len(db_properties)} properties.")
@@ -614,13 +502,13 @@ def download_ct_geodata_csv(url):
             local_path = "/tmp/ct_geodata.csv"
             if "geodata.ct.gov" in url and os.path.exists(local_path):
                 log(f"  -> Using local file: {local_path}")
-                df = pd.read_csv(local_path, low_memory=False)
+                df = pd.read_csv(local_path, low_memory=False, encoding='utf-8-sig')
             else:
                 log(f"  -> Downloading from: {url}")
                 headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
                 response = requests.get(url, headers=headers, timeout=300)
                 response.raise_for_status()
-                df = pd.read_csv(StringIO(response.text), low_memory=False)
+                df = pd.read_csv(StringIO(response.content.decode('utf-8-sig')), low_memory=False)
             
             GEODATA_CACHE[url] = df
             log(f"Successfully loaded {len(df)} records into cache.")
@@ -755,6 +643,10 @@ def process_municipality_with_ct_geodata(conn, municipality_name, config, curren
     # 5. Update DB
     updated_count = 0
     processed_count = 0
+    
+    # Tracker for multi-unit matches at same address
+    addr_match_index = {} # norm_addr -> next_index_in_matches_list
+
     for prop_id, prop_location, _ in db_properties:
         processed_count += 1
         if not prop_location: 
@@ -762,11 +654,23 @@ def process_municipality_with_ct_geodata(conn, municipality_name, config, curren
             continue
             
         norm_addr = normalize_address_for_matching(prop_location)
+        
+        # SKIP PLACEHOLDERS: Do not attempt matching if the address is a known placeholder
+        # to prevent "smearing" one record across thousands of generic records.
+        if is_placeholder_address(norm_addr):
+            mark_property_processed_today(conn, prop_id)
+            continue
+
         matches = processed_data.get(norm_addr)
         if matches:
-            v_data = matches[0] 
-            if update_property_in_db(conn, prop_id, v_data):
-                updated_count += 1
+            # Use index tracking to avoid reusing the same CSV record for multiple DB records (unless intended)
+            idx = addr_match_index.get(norm_addr, 0)
+            if idx < len(matches):
+                v_data = matches[idx] 
+                if update_property_in_db(conn, prop_id, v_data):
+                    updated_count += 1
+                addr_match_index[norm_addr] = idx + 1
+            
         mark_property_processed_today(conn, prop_id)
         
         if processed_count % 100 == 0:
@@ -805,64 +709,103 @@ def parse_mapxpress_html(html_content):
     soup = BeautifulSoup(html_content, 'lxml')
     data = {}
     
-    # Helper to find value in key-value tables
-    # Usually Structure: <tr><td ...>Key</td><td ...>Value</td></tr>
-    # But looking at snippet:
-    # <tr><td ...>Living Area - sqft</td><td ...>1598</td></tr>
+    # 1. Image Extraction (Robust)
+    # Looking for: <img ... src='/AGS_MAP/bldgphotos/06351680-01.jpg'>
+    # Usually in a table cell. Code above looks for just containing 'bldgphotos'
+    img = soup.find('img', src=re.compile(r'bldgphotos', re.I))
+    if img:
+        src = img.get('src')
+        if src.startswith('/'):
+            # Need base domain, but usually scraper handles relative if we return just path
+            # The calling scraper code usually prepends base url if needed, or we return full if possible.
+            # Here we return the path, scrape_mapxpress_property should handle full URL construction if needed
+            # or we can try to guess. But better to return path and let scraper handle.
+            data['image_url'] = src
     
-    # Find all tables
-    tables = soup.find_all('table')
-    for table in tables:
+    # 2. Detail Extraction (Generic Table Parsing)
+    # The HTML uses simple tables with keys in one TD and values in the next.
+    # No classes or IDs are reliable.
+    
+    # Normalize keys helper
+    def clean_key(t):
+        return t.replace(':', '').strip().lower()
+
+    for table in soup.find_all('table'):
         rows = table.find_all('tr')
         for row in rows:
             cells = row.find_all('td')
-            if len(cells) >= 2: # Looking for key-value pairs, often spanning columns
-                # Iterate through cells to find keys
-                for i in range(len(cells)):
-                    text = cells[i].get_text(strip=True)
-                    next_text = ""
-                    # The value might be in the next cell (i+1) or next-next?
-                    # In the provided snippet:
-                    # <td colspan="2">Living Area - sqft</td><td colspan="3">1598</td>
-                    # So it is the very next sibling cell element in the DOM?
-                    # bs4 finds cells in linear order.
+            # Look for 2 or more cells where first is key, second is value
+            # Note: The HTML shows <td colspan="2">Key</td> <td colspan="3">Value</td> sometimes.
+            # But essentially it's sequences of cells.
+            
+            # Simple iteration through cells to find key->value pairs
+            # Sometimes a row has multiple pairs: Key | Value | Key | Value
+            
+            i = 0
+            while i < len(cells) - 1:
+                key_cell = cells[i]
+                val_cell = cells[i+1]
+                
+                key_text = key_cell.get_text(strip=True)
+                val_text = val_cell.get_text(strip=True)
+                
+                k = clean_key(key_text)
+                
+                if not k:
+                    i += 1
+                    continue
                     
-                    if i + 1 < len(cells):
-                         val = cells[i+1].get_text(strip=True)
-                         
-                         if "Living Area - sqft" in text:
-                             try: data['living_area'] = float(val.replace(',', ''))
-                             except: pass
-                         elif "Year Built" == text:
-                             try: data['year_built'] = int(val)
-                             except: pass
-                         elif "Building Style" == text:
-                             data['property_type'] = val
-                         elif "Total Acres" in text or "Acres" == text: # Guessing for Acres
-                             try: data['acres'] = float(val)
-                             except: pass
-                         elif "Zone" == text or "Zoning" == text: # Guessing
-                             data['zone'] = val
-                         elif "Unit" in text or "Apt" in text:
-                             data['unit'] = val
-                         elif "Unit" in text or "Apt" in text:
-                             data['unit'] = val
-                         elif "Occupancy" in text:
-                             try: data['number_of_units'] = int(float(val))
-                             except: pass
-    
-    # Try to find Appraisal/Assessment if available
-    # Usually in a summary table at top.
-    
-    # --- MapXpress Photo Extraction ---
-    # Look for image with 'Photo' in ID or src, or residing in a photo container
-    photo_img = soup.find('img', id=re.compile(r'Photo|MainImage', re.I))
-    if not photo_img:
-        photo_img = soup.find('img', src=re.compile(r'/photos/|/bldgphotos/|/images/prop', re.I))
-    
-    if photo_img and photo_img.get('src'):
-        data['building_photo'] = photo_img.get('src')
-    
+                # Map keys
+                if 'year built' in k:
+                    data['year_built'] = val_text
+                    # Stop after consuming this pair
+                    i += 2 
+                    continue
+                elif 'living area' in k or 'gross living area' in k or 'building gross' in k:
+                     # Prioritize specific living area if multiple match
+                     if 'living area' in k and 'gross' not in k:
+                         data['living_area'] = val_text
+                     elif 'living_area' not in data: # Fallback
+                         data['living_area'] = val_text
+                     i += 2
+                     continue
+                elif 'total acres' in k:
+                    data['acres'] = val_text
+                    i += 2
+                    continue
+                elif 'sale date' in k:
+                    data['sale_date'] = val_text
+                    i += 2
+                    continue
+                elif 'sale price' in k:
+                    data['sale_price'] = val_text
+                    i += 2
+                    continue
+                elif 'owner' in k and 'ownership' not in k:
+                     if 'current' not in k: # avoid "Current Owner" header if it exists alone
+                         data['owner'] = val_text
+                     i += 2
+                     continue
+                elif 'appraised value' in k: # header sometimes
+                     pass
+                elif 'assessed value' in k: # header sometimes
+                     pass
+                elif 'total:' in k:
+                     # This usually follows Appraised | Assessed
+                     # Need to be careful with column alignment.
+                     # <td align=LEFT>TOTAL:</td><td align=center>346600</td><td align=center>242620</td>
+                     # 2nd cell is Appraised, 3rd is Assessed
+                     if i + 2 < len(cells):
+                         data['appraised_value'] = val_text # 2nd cell
+                         data['assessed_value'] = cells[i+2].get_text(strip=True) # 3rd cell
+                         i += 3
+                         continue
+                
+                # Advance if not matched
+                i += 1
+
+    # Log what we found for debugging
+    # print(f"DEBUG: Parsed MapXpress Data: {data}")
     return data
 
 
@@ -1469,7 +1412,7 @@ def normalize_address(address):
     
     return normalized
 
-def scrape_individual_property_page(prop_page_url, session, referer):
+def scrape_individual_property_page(prop_page_url, session, referer, municipality=None):
     """Scrapes data from a single property detail page."""
     # print(f"DEBUG: START Scraping {prop_page_url}", flush=True) # Commented out to avoid spam, uncomment if needed
     try:
@@ -1607,11 +1550,16 @@ def scrape_individual_property_page(prop_page_url, session, referer):
                     data['unit'] = last_part
 
     if 'location' not in data or not data['location']:
+        if municipality: log(f"[Scraper] Failed: No Location for {prop_page_url}", municipality=municipality)
         return None
     if 'owner' not in data or not data['owner']:
+        if municipality: log(f"[Scraper] Failed: No Owner for {prop_page_url}", municipality=municipality)
         return None
         
-    return data if data else None
+    if 'building_photo' in data and municipality:
+         log(f"[Scraper] Found photo for {prop_page_url}", municipality=municipality)
+
+    return data
 
 
 def scrape_street_properties(street_link, municipality_url, referer, session=None, municipality_name=None):
@@ -1656,7 +1604,7 @@ def scrape_street_properties(street_link, municipality_url, referer, session=Non
             
             prop_page_url = urljoin(municipality_url, href)
             # Use provided session for individual property scraping too
-            prop_details = scrape_individual_property_page(prop_page_url, session, street_link)
+            prop_details = scrape_individual_property_page(prop_page_url, session, street_link, municipality=municipality_name)
             
             if prop_details:
                 # Add the specific parcel URL to the data dict so it can be saved in the DB
@@ -1830,18 +1778,31 @@ def update_property_in_db(conn, property_db_id, vision_data, restricted_mode=Fal
         current_val = current_state.get(key)
         
         # 1. Placeholder logic: Always update if current is placeholder
+        placeholder_names = {
+            'CURRENT OWNER', 'UNKNOWN OWNER', 'OCCUPANT', 'OWNER', 
+            'UNKNOWN', 'CT', 'CONNECTICUT', 'THE', 'INC', 'LLC', 'CORP',
+            'USA', 'UNITED STATES', 'NO NAME', 'N/A', 'NA', 'NONE',
+            'NO INFORMATION PROVIDED', 'NOT PROVIDED', 'VACANT', 'NULL',
+            'NOT AVAILABLE', '[UNKNOWN]', 'CURRENT COMPANY OWNER', 'CURRENT COMPANY-OWNER',
+            'SV', 'SURVIVORSHIP', 'JT', 'TIC', 'TC', 'ET AL', 'LII', 'ETAL'
+        }
+        
         is_placeholder = (
             current_val is None or
             str(current_val).strip() == '' or 
-            str(current_val).strip().upper() in ['CURRENT OWNER', 'NULL', 'NONE'] or
+            str(current_val).strip().upper() in placeholder_names or
             (key == 'location' and str(current_val).strip().replace(' ', '').isdigit() and len(str(current_val).strip()) < 6)
         )
 
         # 2. Field-specific logic
         if key in PROTECTED_FIELDS:
+            # Explicit protection for geocoding and enriched data
+            if key in ['latitude', 'longitude']:
+                should_update = False
+            
             # Special logic for enriched data (Hartford)
             # If account_number is set, we consider the current unit/location to be high-quality
-            if current_state.get('account_number') and key in ['unit', 'location']:
+            elif current_state.get('account_number') and key in ['unit', 'location']:
                 should_update = False
             
             # Standard protection: Only update if it's currently a placeholder
@@ -1955,7 +1916,7 @@ def process_municipality_with_realtime_updates(conn, municipality_name, municipa
             session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
             with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
                 future_to_id = {
-                    executor.submit(scrape_individual_property_page, prop_url, session, referer_url): prop_id
+                    executor.submit(scrape_individual_property_page, prop_url, session, referer_url, municipality_name): prop_id
                     for prop_id, prop_url in props_with_urls
                 }
                 
@@ -1963,6 +1924,8 @@ def process_municipality_with_realtime_updates(conn, municipality_name, municipa
                     prop_id = future_to_id[future]
                     vision_data = future.result()
                     if vision_data:
+                        # Ensure we persist the URL we just scraped (Fast Path implies we have it, but consistent re-save is good)
+                        vision_data['cama_site_link'] = prop_url
                         if update_property_in_db(conn, prop_id, vision_data, restricted_mode=restricted_mode, municipality_name=municipality_name):
                             group1_updated_count += 1
                     
@@ -2012,13 +1975,6 @@ def process_municipality_with_realtime_updates(conn, municipality_name, municipa
                     update_freshness_status(conn, municipality_name, 'vision_appraisal', 'running', details=f"Slow Path: {processed_in_group}/{len(props_without_urls)} checked")
 
 
-            def is_placeholder_address(addr):
-                if not addr or addr.strip() == '' or addr.strip().upper() == 'NULL':
-                    return True
-                # Numeric placeholders like "93"
-                if addr.strip().replace(' ', '').isdigit() and len(addr.strip()) < 6:
-                    return True
-                return False
 
             unmatched_db_props = [(pid, addr) for pid, addr in props_without_urls 
                                   if is_placeholder_address(addr)]

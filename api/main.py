@@ -490,9 +490,9 @@ def startup_event():
         # backfill_owner_norm_columns(conn) # Commented out to prevent startup block
         logger.info("✅ Startup DB bootstrap completed.")
         
-        logger.info("Triggering initial insights cache refresh in the background...")
-        thread = threading.Thread(target=_update_insights_cache_sync, daemon=True)
-        thread.start()
+        # logger.info("Triggering initial insights cache refresh in the background...")
+        # thread = threading.Thread(target=_update_insights_cache_sync, daemon=True)
+        # thread.start()
 
     finally:
         db_module.db_pool.putconn(conn)
@@ -584,6 +584,7 @@ class InsightItem(BaseModel):
     violation_count: Optional[int] = 0
     business_name: Optional[str] = None
     business_count: Optional[int] = 0
+    principal_count: Optional[int] = 0
     principals: Optional[List[PrincipalInfo]] = None
     representative_entities: Optional[List[BusinessInfo]] = None
 
@@ -863,20 +864,29 @@ def autocomplete(q: str, type: str, conn=Depends(get_db_connection)):
                         "rank": 1 if r["name"].lower().startswith(q) or any(r["name"].lower().startswith(word) for word in terms) else 2
                     })
 
-                # C. Property Owners + Location Hint
-                # Optimization: Use ILIKE on owner (GIN indexed)
+                # C. Property Owners / Co-Owners + Location Hint
                 where_clauses_owner = " AND ".join(["owner ILIKE %s" for _ in terms])
+                where_clauses_co = " AND ".join(["co_owner ILIKE %s" for _ in terms])
                 cursor.execute(
                     f"""
-                    SELECT DISTINCT ON (owner_norm) 
-                           owner AS name, owner_norm,
-                           (SELECT location FROM properties WHERE owner_norm = p.owner_norm LIMIT 1) as example_addr,
-                           (SELECT count(*) FROM properties WHERE owner_norm = p.owner_norm) as prop_count
-                    FROM properties p 
-                    WHERE {where_clauses_owner}
-                    LIMIT 15
+                    SELECT DISTINCT ON (normalized_name) 
+                           name, normalized_name, example_addr, prop_count
+                    FROM (
+                        SELECT owner AS name, owner_norm AS normalized_name,
+                               (SELECT location FROM properties WHERE owner_norm = p.owner_norm LIMIT 1) as example_addr,
+                               (SELECT count(*) FROM properties WHERE owner_norm = p.owner_norm) as prop_count
+                        FROM properties p 
+                        WHERE {where_clauses_owner}
+                        UNION ALL
+                        SELECT co_owner AS name, co_owner_norm AS normalized_name,
+                               (SELECT location FROM properties WHERE co_owner_norm = p2.co_owner_norm LIMIT 1) as example_addr,
+                               (SELECT count(*) FROM properties WHERE co_owner_norm = p2.co_owner_norm) as prop_count
+                        FROM properties p2 
+                        WHERE {where_clauses_co}
+                    ) sub
+                    LIMIT 20
                     """,
-                    params
+                    params + params
                 )
                 for r in cursor.fetchall():
                     ctx = f"Owner of {r['prop_count']} props (e.g. {r['example_addr']})" if r['prop_count'] > 1 else f"Owner of {r['example_addr']}"
@@ -960,9 +970,10 @@ def search_entities(type: str, term: str, conn=Depends(get_db_connection)):
                     ctx = f"Principals: {r['principals']}" if r['principals'] else r.get("business_address", "Business")
                     results.append(SearchResult(id=str(r["id"]), name=r["name"], type="business", context=ctx))
 
-                # B. Principals / Owners (Multi-word support)
+                # B. Principals / Owners / Co-Owners (Multi-word support)
                 where_clauses_prin = " AND ".join(["name_c ILIKE %s" for _ in terms])
-                where_clauses_prop = " AND ".join(["owner ILIKE %s" for _ in terms])
+                where_clauses_owner = " AND ".join(["owner ILIKE %s" for _ in terms])
+                where_clauses_co = " AND ".join(["co_owner ILIKE %s" for _ in terms])
                 params = [f"%{word}%" for word in terms]
                 
                 cursor.execute(
@@ -978,15 +989,25 @@ def search_entities(type: str, term: str, conn=Depends(get_db_connection)):
                         FROM principals
                         WHERE {where_clauses_prin}
                         UNION ALL
-                        SELECT owner AS name, owner_norm AS normalized_name, false as is_principal,
-                               (SELECT location FROM properties WHERE owner_norm = properties.owner_norm LIMIT 1) as context_hint
+                        SELECT properties.owner AS name, 
+                               COALESCE(p_link.name_c_norm, properties.owner_norm) AS normalized_name, 
+                               false as is_principal,
+                               (SELECT location FROM properties p3 WHERE p3.owner_norm = properties.owner_norm LIMIT 1) as context_hint
                         FROM properties
-                        WHERE {where_clauses_prop}
+                        LEFT JOIN principals p_link ON properties.principal_id::integer = p_link.id
+                        WHERE {where_clauses_owner}
+                        UNION ALL
+                        SELECT properties.co_owner AS name, 
+                               properties.co_owner_norm AS normalized_name, 
+                               false as is_principal,
+                               (SELECT location FROM properties p3 WHERE p3.co_owner_norm = properties.co_owner_norm LIMIT 1) as context_hint
+                        FROM properties
+                        WHERE {where_clauses_co}
                     ) sub
-                    ORDER BY normalized_name, name
+                    ORDER BY normalized_name, is_principal DESC, name
                     LIMIT 30
                     """,
-                    params + params # once for each subquery
+                    params + params + params # once for each subquery
                 )
                 for r in cursor.fetchall():
                     if r["is_principal"]:
@@ -1254,6 +1275,25 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                     if row:
                         network_ids = [row["network_id"]]
 
+                elif entity_type == "owner":
+                    # Lookup property by exact owner OR co_owner name
+                    cursor.execute(
+                        "SELECT business_id, principal_id FROM properties WHERE owner = %s OR co_owner = %s LIMIT 1",
+                        (entity_id, entity_id)
+                    )
+                    prop = cursor.fetchone()
+                    if prop:
+                        # Try to pivot to the owner's network via principal_id (strongest) or business_id
+                        if prop["principal_id"]:
+                            cursor.execute("SELECT network_id FROM entity_networks WHERE entity_type='principal' AND entity_id=%s", (str(prop["principal_id"]),))
+                            row = cursor.fetchone()
+                            if row: network_ids = [row["network_id"]]
+
+                        if not network_ids and prop["business_id"]:
+                            cursor.execute("SELECT network_id FROM entity_networks WHERE entity_type='business' AND entity_id=%s", (str(prop["business_id"]),))
+                            row = cursor.fetchone()
+                            if row: network_ids = [row["network_id"]]
+
                 elif entity_type == "address":
                     # Lookup property by exact location (assuming entity_id passed is the address string)
                     cursor.execute(
@@ -1283,14 +1323,16 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
 
                          # FALLBACK: If still no network found, but we have an owner, pivot to the owner's isolated view
                          if not network_ids and prop["owner"]:
-                              entity_id = prop["owner"]
-                              entity_name = prop["owner"]
-                              entity_type = "owner"
-                              # Fall through to the isolated view logic below
+                               entity_id = prop["owner"]
+                               entity_name = prop["owner"]
+                               entity_type = "owner"
+                               # Fall through to the isolated view logic below
 
                 else:
-                    pname_norm = normalize_person_name(entity_name or entity_id)
-                    # Fetch ALL networks this principal is part of
+                    pname_norm = canonicalize_person_name(entity_name or entity_id)
+                    logger.info(f"🔍 stream_load: resolving principal entity_id={entity_id}, entity_name={entity_name}, pname_norm={pname_norm}")
+                    
+                    # 1. DIRECT: Look up principal in entity_networks by ID or normalized name
                     cursor.execute(
                         "SELECT network_id FROM entity_networks "
                         "WHERE entity_type = 'principal' AND (entity_id = %s OR normalized_name = %s)",
@@ -1299,9 +1341,10 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                     rows = cursor.fetchall()
                     if rows:
                         network_ids = [r["network_id"] for r in rows]
+                        logger.info(f"✅ Resolved via entity_networks direct: network_ids={network_ids}")
                     
-                    # Fallback: If ID didn't match, check if ID exists in principals table and try matching by that name
-                    if not network_ids and entity_id.isdigit():
+                    # 2. FALLBACK: If ID is numeric, look up the principal's name first
+                    if not network_ids and entity_id and str(entity_id).isdigit():
                          cursor.execute("SELECT name_c FROM principals WHERE id = %s", (entity_id,))
                          pr_row = cursor.fetchone()
                          if pr_row and pr_row['name_c']:
@@ -1315,8 +1358,9 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                              rows = cursor.fetchall()
                              if rows:
                                  network_ids = [r["network_id"] for r in rows]
+                                 logger.info(f"✅ Resolved via principals table name lookup: network_ids={network_ids}")
                              
-                    # Fallback 2: Check by entity_name from payload (e.g. "Menachem Gurevitch")
+                    # 3. FALLBACK: Check by entity_name from payload
                     if not network_ids and entity_name and entity_name != entity_id:
                          fallback_norm = normalize_person_name(entity_name)
                          cursor.execute(
@@ -1327,6 +1371,38 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                          rows = cursor.fetchall()
                          if rows:
                              network_ids = [r["network_id"] for r in rows]
+                             logger.info(f"✅ Resolved via entity_name fallback: network_ids={network_ids}")
+
+                    # 4. LAST RESORT: Check cached_insights for controlling_business
+                    if not network_ids:
+                        cursor.execute(
+                            "SELECT controlling_business FROM cached_insights "
+                            "WHERE title = 'STATEWIDE' AND primary_entity_name = %s LIMIT 1",
+                            (entity_name,)
+                        )
+                        insight = cursor.fetchone()
+                        if insight and insight.get('controlling_business'):
+                            biz_name = insight['controlling_business']
+                            cursor.execute(
+                                "SELECT id FROM businesses WHERE name = %s LIMIT 1",
+                                (biz_name,)
+                            )
+                            biz_row = cursor.fetchone()
+                            if biz_row:
+                                unified_biz_id = str(biz_row['id'])
+                                cursor.execute(
+                                    "SELECT network_id FROM entity_networks "
+                                    "WHERE entity_type = 'business' AND entity_id = %s LIMIT 1",
+                                    (unified_biz_id,)
+                                )
+                                row = cursor.fetchone()
+                                if row:
+                                    network_ids = [row["network_id"]]
+                                    logger.info(f"✅ Resolved via cached_insights controlling_business: {biz_name} → network_ids={network_ids}")
+                    
+                    if not network_ids:
+                        logger.warning(f"⚠️ No network found for principal: entity_id={entity_id}, entity_name={entity_name}")
+
 
 
 
@@ -1392,24 +1468,30 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                     return
 
                 # --- If network found → load entire network (businesses, principals, properties)
-                # Lookup "Human" Name from Cached Insights if available
-                cursor.execute(
-                    "SELECT network_name, primary_entity_name, building_count, unit_count FROM cached_insights "
-                    "WHERE title = 'Statewide' AND (primary_entity_id = %s OR network_name = %s OR primary_entity_name = %s) LIMIT 1",
-                    (entity_id, entity_name, entity_name)
-                )
-                insight_row = cursor.fetchone()
-                
-                # We need the Network ID name from the networks table first to be safe
-                # Summing up business count if multiple networks
+                # Get network stats from networks table
                 cursor.execute("SELECT SUM(business_count) as bc, MIN(primary_name) as bn FROM networks WHERE id = ANY(%s)", (network_ids,))
                 net_row = cursor.fetchone()
                 
                 header_name = net_row.get("bn") if net_row else "Unknown Network"
+                insight_row = {}
                 
-                # Override if Insight has a better name (Human Principal)
+                # Lookup insight by network_id (most reliable) to get human name and stats
+                for nid in network_ids:
+                    cursor.execute(
+                        "SELECT network_name, primary_entity_name, building_count, unit_count FROM cached_insights "
+                        "WHERE title = 'Statewide' AND network_id = %s LIMIT 1",
+                        (str(nid),)
+                    )
+                    insight_row = cursor.fetchone() or {}
+                    if insight_row:
+                        break
+                
+                # Override header with human principal name from insights
                 if insight_row and insight_row.get('primary_entity_name') and insight_row['primary_entity_name'] not in ('NULL', 'None', ''):
                      header_name = insight_row['primary_entity_name']
+                     logger.info(f"Header name set from insights: {header_name}")
+                else:
+                     logger.info(f"Header name from networks table: {header_name} (no insight match for network_ids={network_ids})")
 
                 yield _yield(json.dumps({
                     "type": "network_info", 
@@ -1493,21 +1575,70 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                     }
 
 
-                # Build links
+                # Build links — match principals to businesses within this network
+                # Build a reverse lookup: canonical name → entity key (handles name normalization differences)
+                _canonical_to_pkey = {}
+                _entity_id_to_pkey = {}
+                for pr in principals_in_network:
+                    principal_name = pr.get("principal_name") or pr["principal_id"]
+                    p_key = _principal_key(principal_name)
+                    if p_key in entities_dict:
+                        canon = canonicalize_person_name(principal_name)
+                        _canonical_to_pkey[canon] = p_key
+                        _entity_id_to_pkey[str(pr["principal_id"])] = p_key
+
                 if businesses:
+                    biz_id_list = [b["id"] for b in businesses]
+                    # PRIMARY: Use principal_business_links for robust ID-based matching
+                    principal_entity_ids = [str(pr["principal_id"]) for pr in principals_in_network]
+                    logger.info(f"🔗 Link resolution: {len(biz_id_list)} businesses, {len(principal_entity_ids)} principals. Sample principal_ids: {principal_entity_ids[:5]}")
+                    if principal_entity_ids:
+                        cursor.execute(
+                            "SELECT business_id, principal_id FROM principal_business_links "
+                            "WHERE business_id = ANY(%s) AND principal_id::text = ANY(%s)",
+                            (biz_id_list, principal_entity_ids)
+                        )
+                        seen_links = set()
+                        pbl_count = 0
+                        for r in cursor.fetchall():
+                            b_key = f"business_{r['business_id']}"
+                            p_key = _entity_id_to_pkey.get(str(r['principal_id']))
+                            if b_key in entities_dict and p_key and p_key in entities_dict:
+                                link_pair = (b_key, p_key)
+                                if link_pair not in seen_links:
+                                    seen_links.add(link_pair)
+                                    links["business_to_principal"].append({"source": b_key, "target": p_key})
+                                    links["principal_to_business"].append({"source": p_key, "target": b_key})
+                                    pbl_count += 1
+                        logger.info(f"🔗 PRIMARY (principal_business_links): found {pbl_count} links")
+
+                    # FALLBACK: Name-based matching for any principals not matched above
                     cursor.execute(
                         "SELECT business_id, COALESCE(name_c, trim(concat_ws(' ', firstname,middlename,lastname,suffix))) AS pname "
                         "FROM principals WHERE business_id = ANY(%s)",
-                        ([b["id"] for b in businesses],)
+                        (biz_id_list,)
                     )
+                    fallback_count = 0
                     for r in cursor.fetchall():
                         if not r.get("pname"):
                             continue
                         b_key = f"business_{r['business_id']}"
+                        if b_key not in entities_dict:
+                            continue
+                        # Try direct key match first
                         p_key = _principal_key(r["pname"])
-                        if b_key in entities_dict and p_key in entities_dict:
-                            links["business_to_principal"].append({"source": b_key, "target": p_key})
-                            links["principal_to_business"].append({"source": p_key, "target": b_key})
+                        if p_key not in entities_dict:
+                            # Try canonical name reverse lookup
+                            canon = canonicalize_person_name(r["pname"])
+                            p_key = _canonical_to_pkey.get(canon)
+                        if p_key and p_key in entities_dict:
+                            link_pair = (b_key, p_key)
+                            if link_pair not in seen_links:
+                                seen_links.add(link_pair)
+                                links["business_to_principal"].append({"source": b_key, "target": p_key})
+                                links["principal_to_business"].append({"source": p_key, "target": b_key})
+                                fallback_count += 1
+                    logger.info(f"🔗 FALLBACK (name-based): found {fallback_count} additional links. Total: {len(links['business_to_principal'])}")
 
                 # --- NEW: Shared Address Links for Visualization ---
                 # We want to show the user that these businesses are linked because they share an address.
@@ -1558,48 +1689,71 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                 # Stream flat properties (Frontend handles grouping)
                 # DEDUPLICATION FIX: Use DISTINCT ON to return only one row per physical address
                 # NEIGHBOR FETCH: Find "Base Addresses" and fetch ALL units, flagging ownership.
-                cursor.execute(
-                    r"""
-                    WITH network_bases AS (
-                        SELECT DISTINCT 
-                            property_city,
-                            -- Heuristic: Remove trailing unit (Space + 1 Letter OR Space + 1-4 Digits)
-                            REGEXP_REPLACE(location, '\s+([A-Z]|\d{1,4})$', '') as base_loc
+                
+                is_large_network = (insight_row.get('building_count') or 0) > 2000
+                if is_large_network:
+                    logger.info(f"🚀 Large network detected ({insight_row.get('building_count')} bldgs). Using simplified property query.")
+                    cursor.execute(
+                        """
+                        SELECT DISTINCT ON (p.location, p.property_city, p.unit)
+                            p.*, 0 as violation_count, true as is_in_network
                         FROM properties p
-                        JOIN entity_networks en ON p.business_id::text = en.entity_id
-                        WHERE en.network_id = ANY(%s)
-                    ),
-                    property_violations AS (
-                        SELECT property_id, COUNT(*)::int as violation_count
-                        FROM code_enforcement
-                        WHERE record_status NOT ILIKE 'Closed%%' 
-                          AND record_status NOT ILIKE 'Entered in error%%'
-                          AND record_status IS NOT NULL
-                          AND record_status != 'NaN'
-                          AND record_status != 'Closed'
-                        GROUP BY property_id
-                    )
-                    SELECT DISTINCT ON (p.location, p.property_city, p.unit) 
-                        p.*,
-                        COALESCE(v.violation_count, 0) as violation_count,
-                        CASE WHEN en.entity_id IS NOT NULL THEN true ELSE false END as is_in_network
-                    FROM properties p
-                    JOIN network_bases nb ON p.property_city = nb.property_city
-                    LEFT JOIN property_violations v ON p.id = v.property_id
-                    LEFT JOIN entity_networks en ON p.business_id::text = en.entity_id AND en.network_id = ANY(%s)
-                    -- Match: Exact Base, OR Base + Space + Unit
-                    -- OPTIMIZATION: Use LIKE as primary filter (with %% for wildcard escaping in psycopg2)
-                    WHERE (
-                        p.location = nb.base_loc 
-                        OR (
-                            p.location LIKE (nb.base_loc || ' %%') 
-                            AND p.location ~ ('^' || REGEXP_REPLACE(nb.base_loc, '([!$()*+.:<=>?[\\\]^{|}-])', '\\\\1', 'g') || '\s+([A-Z]|\d{1,4})$')
+                        JOIN entity_networks en ON (
+                            (en.entity_type = 'business' AND p.business_id::text = en.entity_id)
+                            OR (en.entity_type = 'principal' AND p.principal_id::text = en.entity_id)
                         )
+                        WHERE en.network_id = ANY(%s)
+                        ORDER BY p.location, p.property_city, p.unit, p.id DESC
+                        """,
+                        (network_ids,)
                     )
-                    ORDER BY p.location, p.property_city, p.unit, p.id DESC
-                    """,
-                    (network_ids, network_ids)
-                )
+                else:
+                    cursor.execute(
+                        r"""
+                        WITH network_bases AS (
+                            SELECT DISTINCT 
+                                property_city,
+                                -- Heuristic: Remove trailing unit (Space + 1 Letter OR Space + 1-4 Digits)
+                                REGEXP_REPLACE(location, '\s+([A-Z]|\d{1,4})$', '') as base_loc
+                            FROM properties p
+                            JOIN entity_networks en ON (
+                                (en.entity_type = 'business' AND p.business_id::text = en.entity_id)
+                                OR (en.entity_type = 'principal' AND p.principal_id::text = en.entity_id)
+                            )
+                            WHERE en.network_id = ANY(%s)
+                        ),
+                        property_violations AS (
+                            SELECT property_id, COUNT(*)::int as violation_count
+                            FROM code_enforcement
+                            WHERE record_status NOT ILIKE 'Closed%%' 
+                              AND record_status NOT ILIKE 'Entered in error%%'
+                              AND record_status IS NOT NULL
+                              AND record_status != 'NaN'
+                              AND record_status != 'Closed'
+                            GROUP BY property_id
+                        )
+                        SELECT DISTINCT ON (p.location, p.property_city, p.unit) 
+                            p.*,
+                            COALESCE(v.violation_count, 0) as violation_count,
+                            CASE WHEN en_b.entity_id IS NOT NULL OR en_p.entity_id IS NOT NULL THEN true ELSE false END as is_in_network
+                        FROM properties p
+                        JOIN network_bases nb ON p.property_city = nb.property_city
+                        LEFT JOIN property_violations v ON p.id = v.property_id
+                        LEFT JOIN entity_networks en_b ON p.business_id::text = en_b.entity_id AND en_b.entity_type = 'business' AND en_b.network_id = ANY(%s)
+                        LEFT JOIN entity_networks en_p ON p.principal_id::text = en_p.entity_id AND en_p.entity_type = 'principal' AND en_p.network_id = ANY(%s)
+                        -- Match: Exact Base, OR Base + Space + Unit
+                        -- OPTIMIZATION: Use LIKE as primary filter (with %% for wildcard escaping in psycopg2)
+                        WHERE (
+                            p.location = nb.base_loc 
+                            OR (
+                                p.location LIKE (nb.base_loc || ' %%') 
+                                AND p.location ~ ('^' || REGEXP_REPLACE(nb.base_loc, '([!$()*+.:<=>?[\\\]^{|}-])', '\\\\1', 'g') || '\s+([A-Z]|\d{1,4})$')
+                            )
+                        )
+                        ORDER BY p.location, p.property_city, p.unit, p.id DESC
+                        """,
+                        (network_ids, network_ids, network_ids)
+                    )
                   
                 # Stream flat properties (Frontend handles grouping)
                 # First, fetch ALL properties to get their subsidies in one go
@@ -2018,45 +2172,16 @@ def _calculate_and_cache_insights(cursor, town_col: Optional[str], town_filter: 
 def _update_insights_cache_sync():
     """
     Background worker to refresh the heavy insights query.
+    DELEGATES to api/generate_insights.py to avoid duplication.
     """
     if db_module.db_pool:
+        # Get a connection from the pool
         conn = db_module.db_pool.getconn()
         try:
-            logger.info("Starting background refresh of insights cache...")
-            
-            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-                # Load existing cache to preserve other cities if we crash
-                cursor.execute("SELECT value FROM kv_cache WHERE key = 'insights'")
-                row = cursor.fetchone()
-                insights_by_municipality = row['value'] if row and row['value'] else {}
-                
-                # 1. Statewide
-                logger.info("Calculating STATEWIDE insights...")
-                insights_by_municipality['STATEWIDE'] = _calculate_and_cache_insights(cursor, None, None)
-                
-                # Helper to save partial results
-                def save_partial(data):
-                     cursor.execute("""
-                        INSERT INTO kv_cache (key, value) VALUES (%s, %s::jsonb)
-                        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, created_at = now()
-                    """, ('insights', json.dumps(data, default=json_converter)))
-                     conn.commit()
-
-                save_partial(insights_by_municipality)
-                
-                # 2. Major Cities
-                major_cities = ['Bridgeport', 'New Haven', 'Hartford', 'Stamford', 'Waterbury', 'Norwalk', 'Danbury', 'New Britain']
-                for t in major_cities:
-                    logger.info("Calculating insights for %s...", t)
-                    try:
-                        town_networks = _calculate_and_cache_insights(cursor, 'property_city', t)
-                        if town_networks:
-                            insights_by_municipality[t.upper()] = town_networks
-                            save_partial(insights_by_municipality)
-                            logger.info("✅ Saved insights for %s", t)
-                    except Exception:
-                        logger.exception("Failed to calculate insights for %s", t)
-                
+            logger.info("Starting background refresh of insights cache (delegating to generate_insights)...")
+            from api.generate_insights import rebuild_cached_insights
+            # Pass the connection to reuse the pool
+            rebuild_cached_insights(db_conn=conn)
             logger.info("✅ Background refresh of insights cache complete.")
         except Exception:
             logger.exception("Background cache refresh failed")
@@ -2069,15 +2194,54 @@ def _update_insights_cache_sync():
 @app.get("/api/insights", response_model=Dict[str, List[InsightItem]])
 def get_insights(conn=Depends(get_db_connection)):
     """
-    Serves pre-calculated insights from the cache table for fast response times.
+    Serves pre-calculated insights from the cached_insights table for fast response times.
     """
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-            cursor.execute("SELECT value FROM kv_cache WHERE key = 'insights'")
-            row = cursor.fetchone()
-            if not row or not row['value']:
+            # Fetch all insights from cached_insights table
+            cursor.execute("""
+                SELECT title, rank, network_name, property_count, 
+                       principal_count, total_assessed_value, total_appraised_value,
+                       primary_entity_id, primary_entity_name, primary_entity_type,
+                       business_count, building_count, unit_count,
+                       controlling_business, representative_entities, principals
+                FROM cached_insights
+                ORDER BY title, rank
+            """)
+            rows = cursor.fetchall()
+            
+            if not rows:
                 return {}
-            return row['value']
+            
+            # Group by title (city/statewide)
+            result = {}
+            for row in rows:
+                title = row['title']
+                if title not in result:
+                    result[title] = []
+                
+                result[title].append({
+                    'rank': row['rank'],
+                    'entity_id': row['primary_entity_id'],
+                    'entity_name': row['network_name'],  # Keep for backwards compatibility
+                    'primary_entity_name': row['primary_entity_name'],  # Human principal name
+                    'primary_entity_id': row['primary_entity_id'],  # Principal ID for loading
+                    'entity_type': row['primary_entity_type'],
+                    'value': row['property_count'],
+                    'property_count': row['property_count'],
+                    'principal_count': row['principal_count'] or 0,
+                    'total_assessed_value': float(row['total_assessed_value']) if row['total_assessed_value'] else 0.0,
+                    'total_appraised_value': float(row['total_appraised_value']) if row['total_appraised_value'] else 0.0,
+                    'business_name': row['controlling_business'],
+                    'business_count': row['business_count'] or 0,
+                    'building_count': row['building_count'] or 0,
+                    'unit_count': row['unit_count'] or 0,
+                    'violation_count': 0,  # Not tracked in new schema
+                    'principals': row['principals'] or [],
+                    'representative_entities': row['representative_entities']
+                })
+            
+            return result
     except Exception:
         logger.exception("Could not fetch insights from cache.")
         raise HTTPException(status_code=500, detail="Failed to retrieve insights.")
@@ -2149,13 +2313,22 @@ def _calculate_completeness_matrix(conn):
                 # Try generic Vision URL pattern if nothing else
                 # e.g. https://gis.vgsi.com/townct/
                 portal_url = None # Default to None if not found
-                # Removed unsafe Vision fallback: f"https://gis.vgsi.com/{town_upper.lower().replace(' ', '')}ct/"
+
+            # Determine Source Date Display
+            source_date_display = row['external_last_updated']
+            if town_upper in MUNICIPAL_DATA_SOURCES:
+                 freq = MUNICIPAL_DATA_SOURCES[town_upper].get('frequency')
+                 if freq:
+                     if source_date_display:
+                         source_date_display = f"{freq} ({row['external_last_updated']})"
+                     else:
+                         source_date_display = freq
 
             sources.append({
                 "municipality": row['town'],
                 "status": row['refresh_status'] or 'unknown',
                 "last_updated": row['last_refreshed_at'],
-                "source_date": row['external_last_updated'], # New Field
+                "source_date": source_date_display, 
                 "total_properties": row['total_properties'],
                 "portal_url": portal_url,
                 "metrics": {

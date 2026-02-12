@@ -57,17 +57,8 @@ export default function Header({ onHome, onReset, onAbout, OnOpenToolbox, toolbo
                             <LayoutDashboard className="w-4 h-4" />
                             <span className="hidden sm:inline">Toolbox</span>
                         </button>
-                    ) : (
-                        toolboxEnabled && (
-                            <button
-                                onClick={handleLogin}
-                                className="flex items-center gap-2 px-3 py-1.5 text-sm font-semibold text-gray-700 bg-gray-50 hover:bg-gray-100 rounded-lg transition-colors border border-gray-200"
-                            >
-                                <LogIn className="w-4 h-4" />
-                                <span className="hidden sm:inline">Sign In</span>
-                            </button>
-                        )
-                    )}
+                    ) : null}
+
 
                     {onReset && (
                         <button
