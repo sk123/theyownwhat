@@ -40,6 +40,28 @@ SKIP_NAMES = {
     'SV', 'SURVIVORSHIP', 'JT', 'TIC', 'TC', 'ET AL', 'LII', 'ETAL'
 }
 
+# Institutional/Service regex to catch pseudo-hubs and exclude them from graph
+INSTITUTIONAL_PATTERN = re.compile(
+    r'HOUSING AUTHORITY|UNIVERSITY|COLLEGE|SCHOOL|ACADEMY|'
+    r'STATE OF |CONNECTICUT STATE|TOWN OF |CITY OF |REDEVELOPMENT|'
+    r'BOARD OF EDUCATION|MUNICIPAL|FEDERAL|DEPARTMENT OF|AUTHORITY|'
+    r'HOSPITAL|MEDICAL CENTER|HEALTHCARE|HEALTH CENTER|CLINIC|NEW SAMARITAN|'
+    r'CHURCH|TEMPLE|SYNAGOGUE|CATHOLIC|DIOCESE|'
+    r'LODGING|HOSPITALITY|HOTEL|MOTEL|INN |SUITES|'
+    r'CORPORATION SERVICE COMPANY|CT CORPORATION|C T CORPORATION|CSC ENTITY|'
+    r'NORTHWEST REGISTERED AGENT|COGENCY GLOBAL|VCORP SERVICES|WOLTERS KLUWER|'
+    r'NATIONAL REGISTERED AGENTS|REGISTERED AGENT|'
+    r'CORP CREATIONS|UNITED AGENT GROUP|PRIME CORPORATE SERVICES|'
+    # Utility companies — prevent mega-network merging through shared agents
+    r'WATER COMPANY|LIGHT AND POWER|GAS SERVICES|ELECTRIC COMPANY|POWER COMPANY|'
+    r'WATER UTILITY|SEWER |AQUARION|EVERSOURCE|UNITED ILLUMINATING|'
+    r'YANKEE GAS|SOUTHERN CONN.* GAS|AVANGRID|BERKSHIRE GAS|CONNECTICUT NATURAL GAS', 
+    re.IGNORECASE
+)
+
+# Care O / Attention pattern to ignore property managers/mailing addresses
+CARE_OF_PATTERN = re.compile(r'^\s*(C/O|CIO|CARE OF|ATTN|ATTENTION|%)\s+', re.IGNORECASE)
+
 # --- Database Connection ---
 def get_db_connection():
     try:
@@ -116,28 +138,41 @@ def link_properties_to_entities(conn):
                         onorm = normalize_business_name(oname)
                         cnorm = normalize_business_name(cname)
                         
+                        # Institutional Filter: If owner is institutional, do not link to business/principal
+                        # This effectively removes them from the network graph
+                        if INSTITUTIONAL_PATTERN.search(oname) or INSTITUTIONAL_PATTERN.search(cname):
+                            continue
+
+                        # Care-Of Filter: If name starts with C/O, ignore it (it's likely a manager or mailing address)
+                        # We only skip the specific field that matches.
+                        
+                        skip_owner = bool(CARE_OF_PATTERN.match(oname))
+                        skip_co_owner = bool(CARE_OF_PATTERN.match(cname))
+
                         # Pass 1: Primary Business matches
                         bid = None
-                        if onorm not in SKIP_NAMES:
+                        if not skip_owner and onorm not in SKIP_NAMES:
                             bid = b_map.get(onorm)
-                        if not bid and cnorm not in SKIP_NAMES:
+                        if not bid and not skip_co_owner and cnorm not in SKIP_NAMES:
                             bid = b_map.get(cnorm)
                         
                         # Pass 2: Canonical Business matches (Suffix-stripped)
                         if not bid:
-                            if onorm not in SKIP_NAMES:
+                            if not skip_owner and onorm not in SKIP_NAMES:
                                 bc_owner = canonicalize_business_name(oname)
                                 bid = b_canon_map.get(bc_owner)
-                            if not bid and cnorm not in SKIP_NAMES:
+                            if not bid and not skip_co_owner and cnorm not in SKIP_NAMES:
                                 bc_co = canonicalize_business_name(cname)
                                 bid = b_canon_map.get(bc_co)
                         
                         # Pass 3: Principal matches (with LAST FIRST ↔ FIRST LAST reversal)
                         pid = None
                         if not bid: # Only check principal if no business found
-                            for raw_name in (oname, cname):
-                                if pid:
-                                    break
+                            # Iterate over checking owner then co-owner, skipping if C/O matches
+                            for raw_name, skip in [(oname, skip_owner), (cname, skip_co_owner)]:
+                                if skip: continue
+                                if pid: break # Found one already
+                                
                                 name_clean = normalize_person_name(raw_name)
                                 if not name_clean:
                                     continue
@@ -218,17 +253,24 @@ def build_graph(conn, skip_emails=False):
 
         # Institutional/Service regex to catch pseudo-hubs
         INSTITUTIONAL_PATTERN = re.compile(
-            r'HOUSING AUTHORITY|UNIVERSITY|STATE OF |CONNECTICUT STATE|TOWN OF |CITY OF |REDEVELOPMENT|'
+            r'HOUSING AUTHORITY|UNIVERSITY|COLLEGE|SCHOOL|ACADEMY|'
+            r'STATE OF |CONNECTICUT STATE|TOWN OF |CITY OF |REDEVELOPMENT|'
             r'BOARD OF EDUCATION|MUNICIPAL|FEDERAL|DEPARTMENT OF|AUTHORITY|'
+            r'HOSPITAL|MEDICAL CENTER|HEALTHCARE|HEALTH CENTER|CLINIC|NEW SAMARITAN|'
+            r'CHURCH|TEMPLE|SYNAGOGUE|CATHOLIC|DIOCESE|'
+            r'LODGING|HOSPITALITY|HOTEL|MOTEL|INN |SUITES|'
             r'CORPORATION SERVICE COMPANY|CT CORPORATION|C T CORPORATION|CSC ENTITY|'
             r'NORTHWEST REGISTERED AGENT|COGENCY GLOBAL|VCORP SERVICES|WOLTERS KLUWER|'
             r'NATIONAL REGISTERED AGENTS|REGISTERED AGENT|'
+            r'CORP CREATIONS|UNITED AGENT GROUP|PRIME CORPORATE SERVICES|'
             # Utility companies — prevent mega-network merging through shared agents
             r'WATER COMPANY|LIGHT AND POWER|GAS SERVICES|ELECTRIC COMPANY|POWER COMPANY|'
+            r'WATER UTILITY|SEWER |AQUARION|EVERSOURCE|UNITED ILLUMINATING|'
             r'WATER UTILITY|SEWER |AQUARION|EVERSOURCE|UNITED ILLUMINATING|'
             r'YANKEE GAS|SOUTHERN CONN.* GAS|AVANGRID|BERKSHIRE GAS|CONNECTICUT NATURAL GAS', 
             re.IGNORECASE
         )
+
         # Whitelist patterns to protect known large legitimate networks from anti-hub filters
         WHITELIST_PATTERN = re.compile(r'GUREVITCH|MANDY|NETZ|ACME', re.IGNORECASE)
 
@@ -277,10 +319,13 @@ def build_graph(conn, skip_emails=False):
             if bid in hub_businesses: continue
             
             # Extra safety: name-based filter for institutional entities that might have low degree
-            if INSTITUTIONAL_PATTERN.search(row['p_name'] or ""):
-                continue
-            if INSTITUTIONAL_PATTERN.search(row['b_name'] or ""):
-                continue
+            is_whitelisted = WHITELIST_PATTERN.search(row['p_name'] or "") or WHITELIST_PATTERN.search(row['b_name'] or "")
+            
+            if not is_whitelisted:
+                if INSTITUTIONAL_PATTERN.search(row['p_name'] or ""):
+                    continue
+                if INSTITUTIONAL_PATTERN.search(row['b_name'] or ""):
+                    continue
             
             u_node = ('business', bid)
             v_node = ('principal', pid)
@@ -317,13 +362,24 @@ def build_graph(conn, skip_emails=False):
             email_rules[d] = 'registrar'
 
         logger.info(f"  - Loaded {len(email_rules)} email rules.")
+        
+        # User Specific Whitelist for Custom Domains
+        # (Removed: Loaded from DB)
 
-        cur.execute("SELECT id, business_email_address FROM businesses WHERE business_email_address IS NOT NULL")
+        cur.execute("SELECT id, name, business_email_address FROM businesses WHERE business_email_address IS NOT NULL")
         email_map = defaultdict(list)
         for row in cur:
             # --- FILTER: Must be an owning business ---
             if row['id'] not in owning_business_ids:
                 continue
+
+            # --- FILTER: Exclude Institutional Entities from Email Linking ---
+            # If an entity is generic/institutional (Housing Authority, University), 
+            # its email (e.g. info@university.edu) should not bridge other entities.
+            if INSTITUTIONAL_PATTERN.search(row['name'] or ""):
+                # Unless it's whitelisted
+                if not WHITELIST_PATTERN.search(row['name'] or ""):
+                    continue
 
             key = get_email_match_key(row['business_email_address'], email_rules)
             if key: email_map[key].append(row['id']) # Store string ID directly
@@ -576,8 +632,24 @@ def store_networks_shadow(conn, networks, graph_data=None):
 
         # 3. Store network record
         # Visible counts only include active owners
-        visible_p_count = len([p for p in principals if p in owning_principals])
+            
+        # Visible counts: Use active_ps for principals (indirect owners included)
+        # For businesses, we keep owning_businesses (direct) because listing all 100 non-owning LLCs might be noisy?
+        # Actually, let's keep business count as owning_only for now to match "Portfolio" logic, 
+        # but Principal count MUST be all connected humans who own something indirectly.
+        visible_p_count = len(active_ps)
         visible_b_count = len([b for b in businesses if b in owning_businesses])
+        
+        # --- DEBUG LOGGING FOR GUREVITCH / SRULOWITZ ---
+        if primary_name and ("GUREVITCH" in primary_name.upper() or "SRULOWITZ" in primary_name.upper()):
+            logger.info(f"--- DEBUG NETWORK: {primary_name} ---")
+            logger.info(f"  Principals in Net: {principals}")
+            logger.info(f"  Businesses in Net: {len(businesses)}")
+            logger.info(f"  Owning Businesses in Net: {visible_b_count}")
+            logger.info(f"  Active Principals (ActivePS): {len(active_ps)}")
+            logger.info(f"  Principal Weights: {[ (p, p_weights.get(p,0)) for p in principals ]}")
+            logger.info(f"  Sample Biz Props: {[(b, biz_props.get(b,0)) for b in businesses[:5]]}")
+        # -----------------------------------------------
         
         # Calculate totals across the entire network (not just visible in sidebar if we want full count)
         net_total_props = sum(prin_props.get(p, 0) for p in principals) + sum(biz_props.get(b, 0) for b in businesses)
@@ -697,7 +769,11 @@ def run_full_rebuild():
         # 0. Clear stale links (to remove old name-based IDs)
         logger.info("🧹 PHASE 0: Clearing stale property links...")
         with conn.cursor() as cur:
-            cur.execute("UPDATE properties SET business_id = NULL, principal_id = NULL")
+            cur.execute("""
+                UPDATE properties 
+                SET business_id = NULL, principal_id = NULL 
+                WHERE business_id IS NOT NULL OR principal_id IS NOT NULL
+            """)
         conn.commit()
 
         link_properties_to_entities(conn)

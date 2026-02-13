@@ -31,6 +31,7 @@ def ensure_cached_table(cur, table_name=f"{SCHEMA}.cached_insights"):
             linked_business_count int DEFAULT 0, -- # businesses linked to primary entity
             total_assessed_value numeric DEFAULT 0, -- Sum of assessed_value
             total_appraised_value numeric DEFAULT 0, -- Sum of appraised_value
+            residential_assessed_value numeric DEFAULT 0, -- Sum of residential assessed value
             primary_entity_id text NOT NULL,   -- principal or business id as text
             primary_entity_name text NOT NULL, -- display name of the primary entity
             primary_entity_type text NOT NULL CHECK (primary_entity_type IN ('principal','business')),
@@ -218,6 +219,7 @@ def compute_top_principals(cur, town_col: Optional[str], town_filter: Optional[s
             pl.network_id,
             ns.total_properties,
             ns.total_assessed_value,
+            ns.residential_assessed_value,
             ns.building_count,
             ns.unit_count
         FROM temp_principal_network_map pl
@@ -266,6 +268,7 @@ def compute_top_principals(cur, town_col: Optional[str], town_filter: Optional[s
         network_primary_name,
         total_properties as property_count,
         total_assessed_value,
+        residential_assessed_value,
         0 as total_appraised_value,
         business_count,
         principal_count,
@@ -275,7 +278,7 @@ def compute_top_principals(cur, town_col: Optional[str], town_filter: Optional[s
         p_kind
     FROM deduplicated
     WHERE mirror_rank = 1
-    ORDER BY building_count DESC, total_properties DESC
+    ORDER BY unit_count DESC, building_count DESC, total_properties DESC
     LIMIT 1000
     """
     
@@ -320,6 +323,7 @@ def compute_top_business_networks(cur, town_col: Optional[str], town_filter: Opt
             b.{bname} AS business_name,
             COUNT(DISTINCT p.id) AS property_count,
             COALESCE(SUM(p.assessed_value), 0) AS total_assessed_value,
+            COALESCE(SUM(CASE WHEN NOT (p.property_type ILIKE ANY(%s)) THEN p.assessed_value ELSE 0 END), 0) as residential_assessed_value,
             COALESCE(SUM(p.appraised_value), 0) AS total_appraised_value,
             (SELECT business_count FROM {SCHEMA}.networks WHERE id = en.network_id) as business_count,
             (SELECT primary_name FROM {SCHEMA}.networks WHERE id = en.network_id) as network_primary_name,
@@ -334,10 +338,18 @@ def compute_top_business_networks(cur, town_col: Optional[str], town_filter: Opt
         WHERE 1=1 {where}
         GROUP BY en.network_id, b.id, b.{bname}
         HAVING COUNT(DISTINCT p.id) > 0
-        ORDER BY COUNT(DISTINCT p.id) DESC, b.{bname} ASC
+        ORDER BY COALESCE(SUM(number_of_units), 0) DESC, COUNT(DISTINCT p.id) DESC, b.{bname} ASC
         LIMIT 1000
     """
-    cur.execute(sql, params)
+    # Exclusion list for unit/value calculations (re-defined here or passed? ideally passed but let's redefine for safety)
+    EXCLUDE_UNIT = ['%Storage%', '%Commercial%', '%Industrial%', '%Vacant%', '%Hotel%', '%Motel%', '%Nursing%', '%Assisted%', '%Office%', '%Retail%', '%Warehouse%']
+    EXCLUDE_RES_VAL = EXCLUDE_UNIT + ['%Lodging%', '%Research%', '%School%', '%University%']
+    
+    # We need to prepend the exclusion param to params
+    # Wait, %s usage in multiline string?
+    # Yes.
+    
+    cur.execute(sql, [EXCLUDE_RES_VAL] + params)
     return [dict(r) for r in cur.fetchall()]
 
 # ------------------------------- ranking --------------------------------
@@ -371,6 +383,22 @@ def merge_and_rank(cur, principals: List[Dict], businesses: List[Dict], limit: i
         if not nid: continue
         
         name = item.get("principal_name") or item.get("business_name") or ""
+        
+        # --- EXCLUSION FILTER ---
+        # Exclude Universities, Colleges, Housing Authorities, etc.
+        import re
+        INSTITUTIONAL_PATTERN = re.compile(
+            r'HOUSING AUTHORITY|UNIVERSITY|COLLEGE|SCHOOL|ACADEMY|'
+            r'STATE OF |CONNECTICUT STATE|TOWN OF |CITY OF |REDEVELOPMENT|'
+            r'BOARD OF EDUCATION|MUNICIPAL|FEDERAL|DEPARTMENT OF|AUTHORITY|'
+            r'HOSPITAL|MEDICAL CENTER|HEALTHCARE|HEALTH CENTER|CLINIC|NEW SAMARITAN|'
+            r'CHURCH|TEMPLE|SYNAGOGUE|CATHOLIC|DIOCESE|'
+            r'LODGING|HOSPITALITY|HOTEL|MOTEL|INN |SUITES',
+            re.IGNORECASE
+        )
+        if INSTITUTIONAL_PATTERN.search(name):
+            continue
+
         p_kind = item.get("p_kind", "entity")
         
         # If this is the first time seeing this network, or if this item is "better"
@@ -467,8 +495,8 @@ def merge_and_rank(cur, principals: List[Dict], businesses: List[Dict], limit: i
         item['unit_count'] = item.get('unit_count', 0)
         combined.append(item)
 
-    # Sort by building count descending (buildings are better measure of portfolio size than parcels)
-    combined.sort(key=lambda x: (x.get('building_count', 0), x.get('property_count', 0)), reverse=True)
+    # Sort by UNIT count descending (units are best measure of portfolio size)
+    combined.sort(key=lambda x: (x.get('unit_count', 0), x.get('building_count', 0), x.get('property_count', 0)), reverse=True)
     
     # 5. Rank and find representative businesses for the top ones (Deduplicate Names)
     ranked = []
@@ -531,6 +559,7 @@ def merge_and_rank(cur, principals: List[Dict], businesses: List[Dict], limit: i
             "property_count": int(item.get("property_count") or 0),
             "total_assessed_value": float(item.get("total_assessed_value") or 0),
             "total_appraised_value": float(item.get("total_appraised_value") or 0),
+            "residential_assessed_value": float(item.get("residential_assessed_value") or 0),
             "primary_entity_id": final_entity_id,
             "primary_entity_name": final_entity_name,
             "primary_entity_type": final_entity_type,
@@ -556,22 +585,34 @@ def rank_first_n(rows: List[Dict], n: int = 10) -> List[Dict]:
         ranked_list.append(r)
     return ranked_list
 
+    return ranked_list
+
+
 import json
+
 def insert_ranked_combined(cur, title, ranked_list, table_name=f"{SCHEMA}.cached_insights"):
-    for item in ranked_list:
-        # Ensure building_count and unit_count are always present and integers
+    # Sort by RESIDENTIAL assessed value ONLY (push purely commercial/institutional to bottom)
+    # The 'item' dict comes from 'compute_top_...' which queries the temp table.
+    ranked_list.sort(key=lambda x: float(x.get('residential_assessed_value') or 0), reverse=True)
+    
+    # Re-rank
+    for i, item in enumerate(ranked_list, start=1):
+        item['rank'] = i
+        
         building_count = int(item.get('building_count') or 0)
         unit_count = int(item.get('unit_count') or 0)
         cur.execute(f"""
             INSERT INTO {table_name} (
                 title, rank, network_id, network_name, property_count, total_assessed_value, total_appraised_value,
+                residential_assessed_value,
                 primary_entity_id, primary_entity_name, primary_entity_type, business_count, principal_count,
                 building_count, unit_count,
                 representative_entities, principals, controlling_business, linked_business_count
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             title, item['rank'], item['network_id'], item['network_name'],
             item['property_count'], item['total_assessed_value'], item['total_appraised_value'],
+            item.get('residential_assessed_value', 0),
             item['primary_entity_id'], item['primary_entity_name'], item['primary_entity_type'],
             item['business_count'], item.get('principal_count', 0), building_count, unit_count,
             json.dumps(item.get('representative_entities', [])),
@@ -620,18 +661,22 @@ def rebuild_cached_insights(db_conn=None):
                 ensure_cached_table(cur, final_table) # Restore immediately if missing
                 conn.commit() # Make sure these exist now for the frontend
 
+                # Exclusion list for unit/value calculations
+                EXCLUDE_UNIT = ['%Storage%', '%Commercial%', '%Industrial%', '%Vacant%', '%Hotel%', '%Motel%', '%Nursing%', '%Assisted%', '%Office%', '%Retail%', '%Warehouse%']
+                EXCLUDE_RES_VAL = EXCLUDE_UNIT + ['%Lodging%', '%Research%', '%School%', '%University%']
+
                 # --- GLOBAL OPTIMIZATION: Create Network Stats Temp Table ONCE ---
                 log.info("Creating global temp table for Network Stats...")
                 cur.execute(f"""
                     CREATE TEMP TABLE temp_network_stats AS
                     WITH property_networks AS (
-                        SELECT p.id as property_id, p.assessed_value, p.location, p.number_of_units, en.network_id
+                        SELECT p.id as property_id, p.assessed_value, p.location, p.number_of_units, p.property_type, en.network_id
                         FROM {SCHEMA}.properties p
                         JOIN {SCHEMA}.entity_networks en ON en.entity_type = 'business' AND p.business_id::text = en.entity_id
                         
                         UNION
                         
-                        SELECT p.id as property_id, p.assessed_value, p.location, p.number_of_units, en.network_id
+                        SELECT p.id as property_id, p.assessed_value, p.location, p.number_of_units, p.property_type, en.network_id
                         FROM {SCHEMA}.properties p
                         JOIN {SCHEMA}.entity_networks en ON en.entity_type = 'principal' AND p.principal_id::text = en.entity_id
                     )
@@ -640,13 +685,16 @@ def rebuild_cached_insights(db_conn=None):
                         COUNT(DISTINCT property_id) AS total_properties,
                         SUM(assessed_value) AS total_assessed_value,
                         COUNT(DISTINCT regexp_replace(UPPER(location), '\s*(?:UNIT|APT|#|STE|SUITE|FL|RM|BLDG|BUILDING|DEPT|DEPARTMENT|OFFICE|LOT).*$', '', 'g')) as building_count,
-                        COALESCE(SUM(number_of_units), 0) as unit_count
+                        COALESCE(SUM(CASE WHEN NOT (property_type ILIKE ANY(%s)) THEN number_of_units ELSE 0 END), 0) as unit_count,
+                        COALESCE(SUM(CASE WHEN NOT (property_type ILIKE ANY(%s)) THEN assessed_value ELSE 0 END), 0) as residential_assessed_value
                     FROM property_networks
                     GROUP BY network_id
                     HAVING COUNT(DISTINCT property_id) > 0
-                """)
+
+                """, (EXCLUDE_UNIT, EXCLUDE_RES_VAL))
                 cur.execute("CREATE INDEX idx_tmp_net_stats ON temp_network_stats(id)")
                 log.info("Global stats table created.")
+
                 
                 # --- GLOBAL OPTIMIZATION 2: Temp Table for Town Stats ---
                 town_col = pick_first_existing_column(cur, "properties", ["town","city","municipality","locality", "property_city"])
@@ -656,14 +704,14 @@ def rebuild_cached_insights(db_conn=None):
                     cur.execute(f"""
                         CREATE TEMP TABLE temp_network_town_stats AS
                         WITH property_networks AS (
-                            SELECT p.id as property_id, p.assessed_value, p.location, p.number_of_units, UPPER(p.{town_col}) as town, en.network_id
+                            SELECT p.id as property_id, p.assessed_value, p.location, p.number_of_units, p.property_type, UPPER(p.{town_col}) as town, en.network_id
                             FROM {SCHEMA}.properties p
                             JOIN {SCHEMA}.entity_networks en ON en.entity_type = 'business' AND p.business_id::text = en.entity_id
                             WHERE p.{town_col} IS NOT NULL AND p.{town_col} <> ''
                             
                             UNION
                             
-                            SELECT p.id as property_id, p.assessed_value, p.location, p.number_of_units, UPPER(p.{town_col}) as town, en.network_id
+                            SELECT p.id as property_id, p.assessed_value, p.location, p.number_of_units, p.property_type, UPPER(p.{town_col}) as town, en.network_id
                             FROM {SCHEMA}.properties p
                             JOIN {SCHEMA}.entity_networks en ON en.entity_type = 'principal' AND p.principal_id::text = en.entity_id
                             WHERE p.{town_col} IS NOT NULL AND p.{town_col} <> ''
@@ -674,11 +722,13 @@ def rebuild_cached_insights(db_conn=None):
                             COUNT(DISTINCT property_id) AS total_properties,
                             SUM(assessed_value) AS total_assessed_value,
                             COUNT(DISTINCT regexp_replace(UPPER(location), '\\s*(?:UNIT|APT|#|STE|SUITE|FL|RM|BLDG|BUILDING|DEPT|DEPARTMENT|OFFICE|LOT).*$', '', 'g')) as building_count,
-                            COALESCE(SUM(number_of_units), 0) as unit_count
+                            COALESCE(SUM(CASE WHEN NOT (property_type ILIKE ANY(%s)) THEN number_of_units ELSE 0 END), 0) as unit_count,
+                            COALESCE(SUM(CASE WHEN NOT (property_type ILIKE ANY(%s)) THEN assessed_value ELSE 0 END), 0) as residential_assessed_value
                         FROM property_networks
                         GROUP BY network_id, town
                         HAVING COUNT(DISTINCT property_id) > 0
-                    """)
+
+                    """, (EXCLUDE_UNIT, EXCLUDE_RES_VAL))
                     cur.execute("CREATE INDEX idx_tmp_net_town_stats ON temp_network_town_stats(id, town)")
                     log.info("Town stats table created.")
                 else:
@@ -735,7 +785,7 @@ def rebuild_cached_insights(db_conn=None):
                 top_principals_state = compute_top_principals(cur, town_col, None)
                 top_businesses_state = compute_top_business_networks(cur, town_col, None)
                 
-                merged_state = merge_and_rank(cur, top_principals_state, top_businesses_state, 10)
+                merged_state = merge_and_rank(cur, top_principals_state, top_businesses_state, 1000)
                 insert_ranked_combined(cur, "Statewide", merged_state, staging_table)
 
                 # Keep separated 'Business' list if needed, or maybe drop it? 
@@ -810,7 +860,7 @@ def rebuild_cached_insights(db_conn=None):
                         "entity_name": r['network_name'],
                         "entity_id": r['primary_entity_id'],
                         "entity_type": r['primary_entity_type'],
-                        "value": int(r['property_count'] or 0),
+                        "value": int(r['unit_count'] or 0),
                         "property_count": r['property_count'],
                         "business_count": r['business_count'],
                         "principal_count": r.get('principal_count', 0),
@@ -818,6 +868,7 @@ def rebuild_cached_insights(db_conn=None):
                         "unit_count": r['unit_count'],
                         "total_assessed_value": float(r['total_assessed_value'] or 0),
                         "total_appraised_value": float(r['total_appraised_value'] or 0),
+                        "residential_assessed_value": float(r.get('residential_assessed_value') or 0),
                         "representative_entities": r['representative_entities'],
                         "principals": r.get('principals', []),
                         "controlling_business": r['controlling_business'],
@@ -836,6 +887,22 @@ def rebuild_cached_insights(db_conn=None):
                 """, ('insights', json.dumps(insights_map)))
                 
                 log.info(f"✅ KV Cache updated with {len(insights_map)} groups.")
+
+                # --- DIAGNOSTICS for Phase 7 ---
+                log.info("--- DIAGNOSTICS: Checking for specific networks ---")
+                cur.execute(f"SELECT * FROM {final_table} WHERE network_name ILIKE '%ZVI HOROWITZ%' OR network_name ILIKE '%AHRON RUDICH%'")
+                diag_rows = cur.fetchall()
+                if diag_rows:
+                    for r in diag_rows:
+                        log.info(f"  FOUND: {r['network_name']} (Rank {r['rank']}) - Units: {r['unit_count']}, Bldgs: {r['building_count']}")
+                else:
+                    log.warning("  ❌ ZVI HOROWITZ or AHRON RUDICH not found in cached_insights!")
+                
+                # Check properties for them directly to see if they exist in raw data
+                cur.execute("SELECT count(*) FROM properties WHERE owner ILIKE '%ZVI HOROWITZ%'")
+                zvi_props = cur.fetchone()['count']
+                log.info(f"  RAW DATA: Found {zvi_props} properties with owner 'Zvi Horowitz'")
+
 
         log.info("✅ cached_insights rebuilt in %.2fs", time.time() - t0)
     finally:

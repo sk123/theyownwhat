@@ -107,7 +107,7 @@ MUNICIPAL_DATA_SOURCES = {
     'WOODBURY': {'type': 'PROPERTYRECORDCARDS', 'towncode': '168'},
     'HARTFORD': {'type': 'hartford_script'},
     'STAMFORD': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/stamfordct/'},
-    'NORWALK': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Norwalk'},
+    # 'NORWALK': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Norwalk'},
     # 'GREENWICH': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Greenwich'},
     'HAMDEN': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/hamdenct/'},
     'MERIDEN': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/meridenct/'},
@@ -123,11 +123,13 @@ MUNICIPAL_DATA_SOURCES = {
     'EAST HAMPTON': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'East Hampton'},
     'CROMWELL': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Cromwell'},
     'OLD LYME': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/oldlymect/'},
+    'OLD SAYBROOK': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/oldsaybrookct/'},
     'ESSEX': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/essexct/'},
     'LYME': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/lymect/'},
     'NORWICH': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/norwichct/'},
     # 'GROTON': {'type': 'ct_geodata_csv', 'url': 'https://geodata.ct.gov/api/download/v1/items/82a733423a244c43a9d4bf552954cea9/csv?layers=0', 'town_filter': 'Groton'},
     'SOUTHINGTON': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/southingtonct/'},
     'WALLINGFORD': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/wallingfordct/'},
+    'NEW HAVEN': {'type': 'vision_appraisal', 'url': 'https://gis.vgsi.com/newhavenct/'},
 }
 

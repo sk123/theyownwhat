@@ -1896,6 +1896,30 @@ def process_municipality_with_realtime_updates(conn, municipality_name, municipa
 
     for prop_id, prop_location, prop_url in db_properties:
         all_processed_ids.append(prop_id)
+        
+        # --- NEW LOGIC: Auto-Generate URL for New Haven placeholders ---
+        # Checks if we have a compound ID (e.g. 47360-6323) but no http URL
+        if prop_url and not str(prop_url).strip().lower().startswith('http') and municipality_url:
+             clean_id = str(prop_url).strip()
+             should_gen_url = False
+             pid = None
+             
+             if municipality_name.upper() == 'NEW HAVEN':
+                 # New Haven ID format in DB: 47360-6323 -> PID: 6323
+                 if '-' in clean_id:
+                     parts = clean_id.split('-')
+                     if parts[-1].isdigit():
+                         pid = parts[-1]
+                         should_gen_url = True
+                         
+             if should_gen_url and pid:
+                 base = municipality_url.rstrip('/') + '/'
+                 if 'gis.vgsi.com' in base:
+                      gen_url = f"{base}Parcel.aspx?pid={pid}"
+                      # Update the prop_url variable so it gets added to props_with_urls
+                      prop_url = gen_url
+                      # log(f"  [Auto-Gen URL] {prop_id}: Converted ID {clean_id} -> {prop_url}")
+
         if prop_url and str(prop_url).strip().lower().startswith('http'):
             props_with_urls.append((prop_id, prop_url))
         else:
@@ -2500,7 +2524,7 @@ def main():
                              # This is fine, refresh uses DB snapshots or locks if needed.
                              # Ideally we want to let current jobs finish? No, existing method is atomic swap so safe.
                              log("Starting Refresh...")
-                             run_refresh(depth=4) 
+                             run_refresh(skip_emails=False) 
                              log("Refresh Complete.")
                          except Exception as e:
                              log(f"Refresh failed: {e}")

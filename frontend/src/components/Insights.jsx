@@ -58,7 +58,7 @@ export default function Insights({ data, onSelect }) {
 
     const displayedNetworks = useMemo(() => {
         if (!data || !selectedCity) return [];
-        return data[selectedCity] ? data[selectedCity].sort((a, b) => (b.property_count || b.value || 0) - (a.property_count || a.value || 0)).slice(0, 10) : [];
+        return data[selectedCity] ? data[selectedCity].sort((a, b) => (a.rank || 0) - (b.rank || 0)).slice(0, 10) : [];
     }, [selectedCity, data]);
 
     if (!data || Object.keys(data).length === 0) return (

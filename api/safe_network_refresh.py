@@ -140,6 +140,22 @@ def run_refresh(dry_run=False, skip_linking=False, skip_emails=False):
             else:
                 atomic_swap(conn)
                 logger.info("✅ Refresh cycle complete. Networks updated.")
+                
+                # 5. Flush Cache & Rebuild Insights
+                # We do this AFTER the swap so the new data is live in 'networks', 'entity_networks', etc.
+                logger.info("🔄 Triggering Insights Refresh...")
+                try:
+                    # Flush old cache to be safe (optional, but requested)
+                    with conn.cursor() as cur:
+                        cur.execute("DELETE FROM kv_cache WHERE key = 'insights'")
+                    conn.commit()
+                    
+                    # Rebuild
+                    from generate_insights import rebuild_cached_insights
+                    rebuild_cached_insights(db_conn=conn)
+                    logger.info("✅ Insights & Cache Rebuilt Successfully.")
+                except Exception as e:
+                    logger.error(f"❌ Insights Rebuild Failed: {e}")
             return True
         return False
             
