@@ -18,6 +18,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - SERPAPI_API_KEY=${SERPAPI_API_KEY}
       - TOOLBOX_ENABLED=false
+      - EVICTION_DATA_URL=${EVICTION_DATA_URL}
     command: python -m uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/api/health" ]
@@ -56,6 +57,7 @@ services:
       - DATABASE_URL=postgresql://user:password@ctdata_db:5432/ctdata
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - SERPAPI_API_KEY=${SERPAPI_API_KEY}
+      - EVICTION_DATA_URL=${EVICTION_DATA_URL}
     networks:
       - default
 

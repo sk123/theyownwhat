@@ -20,7 +20,7 @@ from psycopg2.extras import RealDictCursor, execute_batch
 
 from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -61,6 +61,14 @@ def health_check():
     ai_key = os.environ.get("OPENAI_API_KEY", "")
     ai_enabled = bool(ai_key and "REPLACE_WITH_API_KEY" not in ai_key)
     return {"status": "ok", "timestamp": time.time(), "ai_enabled": ai_enabled}
+
+@app.get("/api/features")
+def features():
+    """Feature flags based on environment configuration"""
+    eviction_url = os.environ.get("EVICTION_DATA_URL", "")
+    return {
+        "eviction_tools_enabled": bool(eviction_url),
+    }
 
 from api.feedback import router as feedback_router
 app.include_router(feedback_router)
@@ -173,6 +181,7 @@ def shape_property_row(p: dict, subsidies: List[dict] = None) -> dict:
         "management_company": p.get("management_company"),
         "subsidies": subsidies or [],
         "violation_count": p.get("violation_count", 0),
+        "eviction_count": p.get("eviction_count", 0),
         "details": p,  # keep full row for drill-down
     }
 
@@ -596,6 +605,120 @@ class CodeEnforcementItem(BaseModel):
     date_closed: Optional[date]
     inspection_type: Optional[str]
     record_type: Optional[str]
+
+class EvictionItem(BaseModel):
+    filing_date: Optional[date]
+    status: Optional[str]
+
+class HartfordPlaygroundItem(BaseModel):
+    network_id: int
+    entity_id: str
+    entity_name: str
+    entity_type: str
+    selected_city: Optional[str] = None
+    code_data_available: bool = True
+    network_business_count: int = 0
+    network_principal_count: int = 0
+    property_count: int
+    violation_count: int
+    entity_violation_count: int = 0
+    closed_violation_count: int = 0
+    entity_closed_violation_count: int = 0
+    eviction_count: int
+    entity_eviction_count: int = 0
+    active_violation_count: int
+    entity_active_violation_count: int = 0
+    violations_last_90d: int = 0
+    violations_last_365d: int = 0
+    entity_violations_last_90d: int = 0
+    entity_violations_last_365d: int = 0
+    evictions_last_90d: int = 0
+    evictions_last_365d: int = 0
+    entity_evictions_last_90d: int = 0
+    entity_evictions_last_365d: int = 0
+    evictions_prev_365d: int = 0
+    eviction_surge_flag: bool = False
+    eviction_surge_date: Optional[date]
+    eviction_surge_filings: int = 0
+    eviction_surge_avg_daily: float = 0
+    eviction_surge_multiplier: float = 0
+    attorney_surge_flag: bool = False
+    attorney_surge_name: Optional[str] = None
+    attorney_surge_date: Optional[date]
+    attorney_surge_filings: int = 0
+    attorney_surge_avg_daily: float = 0
+    attorney_surge_multiplier: float = 0
+
+    active_eviction_count: int = 0
+    closed_eviction_count: int = 0
+    entity_active_eviction_count: int = 0
+    entity_closed_eviction_count: int = 0
+    local_eviction_count: int = 0
+    local_evictions_last_90d: int = 0
+    local_evictions_last_365d: int = 0
+    outside_eviction_count: int = 0
+    outside_evictions_last_90d: int = 0
+    outside_evictions_last_365d: int = 0
+    entity_local_eviction_count: int = 0
+    entity_outside_eviction_count: int = 0
+    violation_type_breakdown: Optional[List[Dict[str, Any]]] = []
+    violation_status_breakdown: Optional[List[Dict[str, Any]]] = []
+    eviction_status_breakdown: Optional[List[Dict[str, Any]]] = []
+    violation_businesses: Optional[List[str]] = []
+    last_violation_date: Optional[date]
+    last_eviction_date: Optional[date]
+    principals: List[PrincipalInfo]
+
+
+class MonitorItem(BaseModel):
+    """Flexible monitor item for all dimensions (network, llc, attorney)."""
+    dimension_type: str  # network, llc, attorney
+    dimension_key: str  # network_id, plaintiff_norm, attorney_name
+    dimension_label: str  # display name
+    selected_city: Optional[str] = None
+    code_data_available: bool = False
+    property_count: int = 0
+    business_names: Optional[List[str]] = []
+    principals: Optional[List[PrincipalInfo]] = []
+    # Eviction metrics
+    eviction_count: int = 0
+    evictions_last_365d: int = 0
+    evictions_last_90d: int = 0
+    active_eviction_count: int = 0
+    closed_eviction_count: int = 0
+    local_eviction_count: int = 0
+    outside_eviction_count: int = 0
+    # Disposition counts
+    default_judgment_count: int = 0
+    withdrawal_count: int = 0
+    # Code enforcement (Hartford only)
+    violation_count: int = 0
+    active_violation_count: int = 0
+    closed_violation_count: int = 0
+    violations_last_365d: int = 0
+    # Metadata
+    last_eviction_date: Optional[date] = None
+    last_violation_date: Optional[date] = None
+    network_id: Optional[int] = None
+    network_business_count: int = 0
+    network_principal_count: int = 0
+    earliest_filing_year: Optional[int] = None
+    avg_case_duration_days: Optional[float] = None
+
+
+class BurstDetectorItem(BaseModel):
+    dimension_key: str
+    dimension_label: str
+    dimension_type: str  # city, street, landlord, network, attorney
+    peak_week: Optional[date] = None
+    filings_count: int = 0
+    baseline_avg: float = 0
+    multiplier: float = 0
+    total_filings: int = 0
+    disposition_breakdown: Optional[List[Dict[str, Any]]] = None
+    network_id: Optional[int] = None
+    entity_id: Optional[str] = None
+    entity_type: Optional[str] = None
 
 
 
@@ -1264,8 +1387,57 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
         try:
             with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 network_ids = []
+                network_direct_mode = False
+                cursor.execute(
+                    "SELECT to_regclass('public.property_network_links') IS NOT NULL AS has_pnl"
+                )
+                has_property_network_links = bool((cursor.fetchone() or {}).get("has_pnl"))
+                network_owned_properties_sql = (
+                    """
+                    SELECT DISTINCT property_id AS id
+                    FROM property_network_links
+                    WHERE network_id = ANY(%s)
+                    """
+                    if has_property_network_links
+                    else
+                    """
+                    SELECT DISTINCT p.id
+                    FROM properties p
+                    WHERE EXISTS (
+                        SELECT 1
+                        FROM entity_networks en
+                        WHERE en.network_id = ANY(%s)
+                          AND (
+                              (
+                                  en.entity_type = 'business'
+                                  AND (
+                                      en.entity_id = p.business_id::text
+                                      OR UPPER(COALESCE(en.entity_name, '')) = UPPER(COALESCE(p.owner, ''))
+                                  )
+                              )
+                              OR (
+                                  en.entity_type = 'principal'
+                                  AND (en.entity_id = p.owner_norm OR en.entity_id = p.co_owner_norm)
+                              )
+                          )
+                    )
+                    """
+                )
 
-                if entity_type == "business":
+                if entity_type == "network":
+                    try:
+                        network_id_int = int(str(entity_id))
+                        cursor.execute(
+                            "SELECT 1 FROM entity_networks WHERE network_id = %s LIMIT 1",
+                            (network_id_int,)
+                        )
+                        if cursor.fetchone():
+                            network_ids = [network_id_int]
+                            network_direct_mode = True
+                    except Exception:
+                        network_ids = []
+
+                elif entity_type == "business":
                     cursor.execute(
                         "SELECT network_id FROM entity_networks "
                         "WHERE entity_type = 'business' AND entity_id = %s LIMIT 1",
@@ -1492,23 +1664,20 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                      logger.info(f"Header name set from insights: {header_name}")
                 else:
                      logger.info(f"Header name from networks table: {header_name} (no insight match for network_ids={network_ids})")
+                if (not header_name or header_name in ("Unknown Network", "NULL", "None")) and entity_name:
+                    header_name = entity_name
 
-                yield _yield(json.dumps({
-                    "type": "network_info", 
-                    "data": {
-                        "id": network_ids[0], # Just use first ID as canonical ID for now
-                        "name": header_name,
-                        "business_count": net_row.get("bc") if net_row else 0,
-                        "building_count": insight_row.get("building_count") if insight_row else None,
-                        "unit_count": insight_row.get("unit_count") if insight_row else None
-                    }
-                }))
-                
                 # Businesses
                 cursor.execute(
-                    "SELECT b.* FROM entity_networks en "
-                    "JOIN businesses b ON b.id::text = en.entity_id "
-                    "WHERE en.network_id = ANY(%s) AND en.entity_type = 'business'",
+                    f"""
+                    WITH network_owned_properties AS (
+                        {network_owned_properties_sql}
+                    )
+                    SELECT DISTINCT b.*
+                    FROM network_owned_properties nop
+                    JOIN properties p ON p.id = nop.id
+                    JOIN businesses b ON b.id = p.business_id
+                    """,
                     (network_ids,)
                 )
                 businesses = cursor.fetchall()
@@ -1521,6 +1690,211 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                     (network_ids,)
                 )
                 principals_in_network = cursor.fetchall()
+
+                # Collect normalized landlord/plaintiff identities for eviction linkage
+                plaintiff_norm_candidates: Set[str] = set()
+                for b in businesses:
+                    bname = b.get("name")
+                    if not bname:
+                        continue
+                    plaintiff_norm_candidates.add(normalize_business_name(bname))
+                    plaintiff_norm_candidates.update(get_name_variations(bname, "business"))
+
+                for pr in principals_in_network:
+                    pname = pr.get("principal_name") or pr.get("principal_id")
+                    if not pname:
+                        continue
+                    plaintiff_norm_candidates.add(normalize_person_name(pname))
+                    plaintiff_norm_candidates.add(canonicalize_person_name(pname))
+
+                cursor.execute(
+                    f"""
+                    WITH network_owned_properties AS (
+                        {network_owned_properties_sql}
+                    )
+                    SELECT DISTINCT p.owner_norm AS norm_name
+                    FROM properties p
+                    JOIN network_owned_properties nop ON p.id = nop.id
+                    WHERE p.owner_norm IS NOT NULL AND p.owner_norm <> ''
+                    UNION
+                    SELECT DISTINCT p.co_owner_norm AS norm_name
+                    FROM properties p
+                    JOIN network_owned_properties nop ON p.id = nop.id
+                    WHERE p.co_owner_norm IS NOT NULL AND p.co_owner_norm <> ''
+                    """,
+                    (network_ids,)
+                )
+                for row in cursor.fetchall():
+                    norm_name = row.get("norm_name")
+                    if norm_name:
+                        plaintiff_norm_candidates.add(str(norm_name).strip())
+
+                plaintiff_candidate_blacklist = {
+                    "LLC", "INC", "INCORPORATED", "CORP", "CORPORATION", "COMPANY",
+                    "PROPERTIES", "REALTY", "TRUST", "HOLDINGS", "MANAGEMENT"
+                }
+                plaintiff_norm_list = sorted({
+                    n.strip()
+                    for n in plaintiff_norm_candidates
+                    if n
+                    and len(n.strip()) >= 5
+                    and n.strip() not in plaintiff_candidate_blacklist
+                })
+
+                # Eviction summary for searched network:
+                # linked by either network properties OR normalized plaintiff (landlord) identity.
+                cursor.execute(
+                    f"""
+                    WITH network_owned_properties AS (
+                        {network_owned_properties_sql}
+                    ),
+                    linked_evictions_raw AS (
+                        SELECT
+                            COALESCE(e.case_number, e.id::text) AS eviction_key,
+                            e.filing_date,
+                            e.status,
+                            (e.property_id IN (SELECT id FROM network_owned_properties)) AS matched_property,
+                            (
+                                array_length(%s::text[], 1) IS NOT NULL
+                                AND e.plaintiff_norm = ANY(%s::text[])
+                            ) AS matched_plaintiff
+                        FROM evictions e
+                        WHERE
+                            (e.property_id IN (SELECT id FROM network_owned_properties))
+                            OR (
+                                array_length(%s::text[], 1) IS NOT NULL
+                                AND e.plaintiff_norm = ANY(%s::text[])
+                            )
+                    ),
+                    linked_evictions AS (
+                        SELECT DISTINCT ON (eviction_key)
+                            eviction_key,
+                            filing_date,
+                            status,
+                            matched_property,
+                            matched_plaintiff
+                        FROM linked_evictions_raw
+                        ORDER BY
+                            eviction_key,
+                            matched_property DESC,
+                            matched_plaintiff DESC,
+                            filing_date DESC NULLS LAST
+                    )
+                    SELECT
+                        COUNT(*)::int AS eviction_count,
+                        COUNT(*) FILTER (WHERE filing_date >= CURRENT_DATE - INTERVAL '90 days')::int AS evictions_last_90d,
+                        COUNT(*) FILTER (WHERE filing_date >= CURRENT_DATE - INTERVAL '365 days')::int AS evictions_last_365d,
+                        COUNT(*) FILTER (
+                            WHERE filing_date >= CURRENT_DATE - INTERVAL '730 days'
+                              AND filing_date < CURRENT_DATE - INTERVAL '365 days'
+                        )::int AS evictions_prev_365d,
+                        COUNT(*) FILTER (
+                            WHERE lower(COALESCE(status, '')) ~ '(closed|disposed|dismissed|withdrawn|settled|judgment)'
+                        )::int AS closed_eviction_count,
+                        COUNT(*) FILTER (
+                            WHERE NOT (lower(COALESCE(status, '')) ~ '(closed|disposed|dismissed|withdrawn|settled|judgment)')
+                        )::int AS active_eviction_count,
+                        COUNT(*) FILTER (WHERE matched_property)::int AS property_linked_count,
+                        COUNT(*) FILTER (WHERE matched_plaintiff)::int AS plaintiff_linked_count,
+                        COUNT(*) FILTER (WHERE matched_plaintiff AND NOT matched_property)::int AS plaintiff_only_count,
+                        MAX(filing_date) AS last_eviction_date
+                    FROM linked_evictions
+                    """,
+                    (
+                        network_ids,
+                        plaintiff_norm_list, plaintiff_norm_list,
+                        plaintiff_norm_list, plaintiff_norm_list
+                    )
+                )
+                eviction_summary = cursor.fetchone() or {}
+
+                cursor.execute(
+                    f"""
+                    WITH network_owned_properties AS (
+                        {network_owned_properties_sql}
+                    ),
+                    linked_evictions_raw AS (
+                        SELECT
+                            COALESCE(e.case_number, e.id::text) AS eviction_key,
+                            e.filing_date,
+                            e.status,
+                            (e.property_id IN (SELECT id FROM network_owned_properties)) AS matched_property,
+                            (
+                                array_length(%s::text[], 1) IS NOT NULL
+                                AND e.plaintiff_norm = ANY(%s::text[])
+                            ) AS matched_plaintiff
+                        FROM evictions e
+                        WHERE
+                            (e.property_id IN (SELECT id FROM network_owned_properties))
+                            OR (
+                                array_length(%s::text[], 1) IS NOT NULL
+                                AND e.plaintiff_norm = ANY(%s::text[])
+                            )
+                    ),
+                    linked_evictions AS (
+                        SELECT DISTINCT ON (eviction_key)
+                            eviction_key,
+                            filing_date,
+                            status,
+                            matched_property,
+                            matched_plaintiff
+                        FROM linked_evictions_raw
+                        ORDER BY
+                            eviction_key,
+                            matched_property DESC,
+                            matched_plaintiff DESC,
+                            filing_date DESC NULLS LAST
+                    )
+                    SELECT
+                        CASE
+                            WHEN NULLIF(TRIM(status), '') IS NULL THEN 'Unknown'
+                            WHEN lower(status) ~ '(closed|disposed|dismissed|withdrawn|settled|judgment)' THEN 'Closed/Disposed'
+                            ELSE TRIM(status)
+                        END AS label,
+                        COUNT(*)::int AS count
+                    FROM linked_evictions
+                    GROUP BY label
+                    ORDER BY count DESC, label
+                    LIMIT 3
+                    """,
+                    (
+                        network_ids,
+                        plaintiff_norm_list, plaintiff_norm_list,
+                        plaintiff_norm_list, plaintiff_norm_list
+                    )
+                )
+                eviction_status_rows = cursor.fetchall() or []
+                eviction_summary["status_breakdown"] = [
+                    {"label": r.get("label"), "count": int(r.get("count") or 0)}
+                    for r in eviction_status_rows if r.get("label")
+                ]
+                
+                yield _yield(json.dumps(
+                    {
+                        "type": "network_info",
+                        "data": {
+                            "id": network_ids[0], # Just use first ID as canonical ID for now
+                            "name": header_name,
+                            "business_count": net_row.get("bc") if net_row else 0,
+                            "building_count": insight_row.get("building_count") if insight_row else None,
+                            "unit_count": insight_row.get("unit_count") if insight_row else None,
+                            "eviction_summary": {
+                                "eviction_count": int(eviction_summary.get("eviction_count") or 0),
+                                "evictions_last_90d": int(eviction_summary.get("evictions_last_90d") or 0),
+                                "evictions_last_365d": int(eviction_summary.get("evictions_last_365d") or 0),
+                                "evictions_prev_365d": int(eviction_summary.get("evictions_prev_365d") or 0),
+                                "closed_eviction_count": int(eviction_summary.get("closed_eviction_count") or 0),
+                                "active_eviction_count": int(eviction_summary.get("active_eviction_count") or 0),
+                                "property_linked_count": int(eviction_summary.get("property_linked_count") or 0),
+                                "plaintiff_linked_count": int(eviction_summary.get("plaintiff_linked_count") or 0),
+                                "plaintiff_only_count": int(eviction_summary.get("plaintiff_only_count") or 0),
+                                "last_eviction_date": eviction_summary.get("last_eviction_date"),
+                                "status_breakdown": eviction_summary.get("status_breakdown") or []
+                            }
+                        }
+                    },
+                    default=json_converter,
+                ))
 
                 # --- FIX START: Consolidate Principal Details ---
                 principal_names = {p['principal_name'] for p in principals_in_network if p.get('principal_name')}
@@ -1694,33 +2068,30 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                 if is_large_network:
                     logger.info(f"🚀 Large network detected ({insight_row.get('building_count')} bldgs). Using simplified property query.")
                     cursor.execute(
-                        """
+                        f"""
+                        WITH network_owned_properties AS (
+                            {network_owned_properties_sql}
+                        )
                         SELECT DISTINCT ON (p.location, p.property_city, p.unit)
                             p.*, 0 as violation_count, true as is_in_network
                         FROM properties p
-                        JOIN entity_networks en ON (
-                            (en.entity_type = 'business' AND p.business_id::text = en.entity_id)
-                            OR (en.entity_type = 'principal' AND p.principal_id::text = en.entity_id)
-                        )
-                        WHERE en.network_id = ANY(%s)
+                        JOIN network_owned_properties nop ON p.id = nop.id
                         ORDER BY p.location, p.property_city, p.unit, p.id DESC
                         """,
                         (network_ids,)
                     )
                 else:
-                    cursor.execute(
-                        r"""
-                        WITH network_bases AS (
+                    property_query = r"""
+                        WITH network_owned_properties AS (
+                            __NETWORK_OWNED_PROPERTIES_SQL__
+                        ),
+                        network_bases AS (
                             SELECT DISTINCT 
                                 property_city,
                                 -- Heuristic: Remove trailing unit (Space + 1 Letter OR Space + 1-4 Digits)
                                 REGEXP_REPLACE(location, '\s+([A-Z]|\d{1,4})$', '') as base_loc
                             FROM properties p
-                            JOIN entity_networks en ON (
-                                (en.entity_type = 'business' AND p.business_id::text = en.entity_id)
-                                OR (en.entity_type = 'principal' AND p.principal_id::text = en.entity_id)
-                            )
-                            WHERE en.network_id = ANY(%s)
+                            JOIN network_owned_properties nop ON p.id = nop.id
                         ),
                         property_violations AS (
                             SELECT property_id, COUNT(*)::int as violation_count
@@ -1731,16 +2102,21 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                               AND record_status != 'NaN'
                               AND record_status != 'Closed'
                             GROUP BY property_id
+                        ),
+                        property_evictions AS (
+                            SELECT property_id, COUNT(*)::int as eviction_count
+                            FROM evictions
+                            GROUP BY property_id
                         )
                         SELECT DISTINCT ON (p.location, p.property_city, p.unit) 
                             p.*,
                             COALESCE(v.violation_count, 0) as violation_count,
-                            CASE WHEN en_b.entity_id IS NOT NULL OR en_p.entity_id IS NOT NULL THEN true ELSE false END as is_in_network
+                            COALESCE(e.eviction_count, 0) as eviction_count,
+                            CASE WHEN p.id IN (SELECT id FROM network_owned_properties) THEN true ELSE false END as is_in_network
                         FROM properties p
                         JOIN network_bases nb ON p.property_city = nb.property_city
                         LEFT JOIN property_violations v ON p.id = v.property_id
-                        LEFT JOIN entity_networks en_b ON p.business_id::text = en_b.entity_id AND en_b.entity_type = 'business' AND en_b.network_id = ANY(%s)
-                        LEFT JOIN entity_networks en_p ON p.principal_id::text = en_p.entity_id AND en_p.entity_type = 'principal' AND en_p.network_id = ANY(%s)
+                        LEFT JOIN property_evictions e ON p.id = e.property_id
                         -- Match: Exact Base, OR Base + Space + Unit
                         -- OPTIMIZATION: Use LIKE as primary filter (with %% for wildcard escaping in psycopg2)
                         WHERE (
@@ -1751,8 +2127,10 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                             )
                         )
                         ORDER BY p.location, p.property_city, p.unit, p.id DESC
-                        """,
-                        (network_ids, network_ids, network_ids)
+                        """
+                    cursor.execute(
+                        property_query.replace("__NETWORK_OWNED_PROPERTIES_SQL__", network_owned_properties_sql),
+                        (network_ids,)
                     )
                   
                 # Stream flat properties (Frontend handles grouping)
@@ -1859,7 +2237,9 @@ def get_properties_batch(owner_names: str, conn=Depends(get_db_connection)):
     with conn.cursor(cursor_factory=RealDictCursor) as cursor:
         cursor.execute(
             """
-            SELECT p.*, COALESCE(v.violation_count, 0) as violation_count
+            SELECT p.*, 
+                   COALESCE(v.violation_count, 0) as violation_count,
+                   COALESCE(e.eviction_count, 0) as eviction_count
             FROM properties p
             LEFT JOIN (
                 SELECT property_id, COUNT(*)::int as violation_count
@@ -1871,6 +2251,11 @@ def get_properties_batch(owner_names: str, conn=Depends(get_db_connection)):
                   AND record_status != 'Closed'
                 GROUP BY property_id
             ) v ON p.id = v.property_id
+            LEFT JOIN (
+                SELECT property_id, COUNT(*)::int as eviction_count
+                FROM evictions
+                GROUP BY property_id
+            ) e ON p.id = e.property_id
             WHERE p.owner_norm = ANY(%s) OR p.co_owner_norm = ANY(%s)
             """,
             (norm_set, norm_set)
@@ -2259,7 +2644,7 @@ def _calculate_completeness_matrix(conn):
     query = """
         WITH prop_stats AS (
             SELECT 
-                COALESCE(UPPER(property_city), 'UNKNOWN') as town,
+                COALESCE(TRIM(UPPER(property_city)), 'UNKNOWN') as town,
                 COUNT(*) as total_properties,
                 COUNT(CASE WHEN building_photo IS NOT NULL OR image_url IS NOT NULL THEN 1 END) as with_photos,
                 COUNT(CASE WHEN cama_site_link IS NOT NULL THEN 1 END) as with_cama,
@@ -2268,11 +2653,14 @@ def _calculate_completeness_matrix(conn):
                 COUNT(CASE WHEN year_built IS NOT NULL THEN 1 END) as with_year_built,
                 COUNT(CASE WHEN living_area IS NOT NULL THEN 1 END) as with_living_area
             FROM properties
-            GROUP BY property_city
+            GROUP BY TRIM(UPPER(property_city))
         )
         SELECT 
             ps.*,
-            ds.refresh_status,
+            CASE 
+                WHEN ds.refresh_status = 'running' AND ds.last_refreshed_at < NOW() - INTERVAL '6 hours' THEN 'failure'
+                ELSE ds.refresh_status 
+            END as refresh_status,
             ds.last_refreshed_at,
             ds.details,
             ds.external_last_updated
@@ -2315,14 +2703,24 @@ def _calculate_completeness_matrix(conn):
                 portal_url = None # Default to None if not found
 
             # Determine Source Date Display
-            source_date_display = row['external_last_updated']
+            external_date = row['external_last_updated']
+            source_date_display = external_date
             if town_upper in MUNICIPAL_DATA_SOURCES:
                  freq = MUNICIPAL_DATA_SOURCES[town_upper].get('frequency')
                  if freq:
-                     if source_date_display:
-                         source_date_display = f"{freq} ({row['external_last_updated']})"
+                     # Smart override: High-frequency portals often have stale "last updated" text.
+                     # We use our actual sync date so the UI doesn't look stuck in the past.
+                     if freq in ['Nightly', 'Daily', 'Weekly'] and row.get('last_refreshed_at'):
+                         effective_date = row['last_refreshed_at'].strftime('%Y-%m-%d')
+                         source_date_display = f"{freq} ({effective_date})"
+                     elif external_date:
+                         source_date_display = f"{freq} ({external_date})"
                      else:
                          source_date_display = freq
+            
+            # Fallback: if we still have no source_date but DO have a last_refreshed_at, show it
+            if not source_date_display and row.get('last_refreshed_at'):
+                source_date_display = row['last_refreshed_at'].strftime('%Y-%m-%d')
 
             sources.append({
                 "municipality": row['town'],
@@ -2455,9 +2853,1214 @@ def get_reports(conn=Depends(get_db_connection)):
     
     return reports
 
-# ------------------------------------------------------------
-# AI Report (cached per day)
-# ------------------------------------------------------------
+@app.get("/api/monitor")
+@app.get("/api/hartford/playground")  # Backwards compatibility
+def get_landlord_monitor(
+    city: str = "HARTFORD",
+    dimension: str = "network",
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    sort_by: str = "evictions",
+    conn=Depends(get_db_connection),
+):
+    """
+    Landlord monitor endpoint with municipality filter.
+    Supports dimensions: network (default), llc, attorney.
+    Code-enforcement metrics are meaningful for Hartford only; eviction metrics are statewide.
+    """
+    selected_city = (city or "HARTFORD").strip().upper()
+    is_hartford = selected_city == "HARTFORD"
+
+    # Build date filter clause
+    date_params = []
+    date_clause = ""
+    if date_from:
+        date_clause += " AND e.filing_date >= %s"
+        date_params.append(date_from)
+    if date_to:
+        date_clause += " AND e.filing_date <= %s"
+        date_params.append(date_to)
+
+    # ── LLC dimension ──────────────────────────────────────────
+    if dimension == "llc":
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                query = f"""
+                WITH base AS (
+                    SELECT
+                        e.plaintiff_norm AS dim_key,
+                        e.plaintiff_norm AS dim_label,
+                        e.filing_date,
+                        e.status,
+                        e.disposition_date
+                    FROM evictions e
+                    WHERE e.plaintiff_norm IS NOT NULL
+                      AND TRIM(e.plaintiff_norm) NOT IN ('', '\\N')
+                      AND e.filing_date IS NOT NULL
+                      {date_clause}
+                ),
+                agg AS (
+                    SELECT
+                        dim_key,
+                        dim_label,
+                        COUNT(*)::int AS eviction_count,
+                        COUNT(*) FILTER (WHERE filing_date >= CURRENT_DATE - INTERVAL '365 days')::int AS evictions_last_365d,
+                        COUNT(*) FILTER (WHERE filing_date >= CURRENT_DATE - INTERVAL '90 days')::int AS evictions_last_90d,
+                        COUNT(*) FILTER (
+                            WHERE NOT (lower(COALESCE(status, '')) ~ '(closed|disposed|dismissed|withdrawn|settled|judgment)')
+                        )::int AS active_eviction_count,
+                        COUNT(*) FILTER (
+                            WHERE lower(COALESCE(status, '')) ~ '(closed|disposed|dismissed|withdrawn|settled|judgment)'
+                        )::int AS closed_eviction_count,
+                        MAX(filing_date) AS last_eviction_date,
+                        MIN(EXTRACT(YEAR FROM filing_date))::int AS earliest_filing_year,
+                        ROUND(AVG(disposition_date - filing_date) FILTER (WHERE disposition_date IS NOT NULL AND filing_date IS NOT NULL))::int AS avg_case_duration_days
+                    FROM base
+                    GROUP BY dim_key, dim_label
+                    HAVING COUNT(*) >= 2
+                )
+                SELECT * FROM agg
+                ORDER BY eviction_count DESC
+                LIMIT 100
+                """
+                params = list(date_params)
+                cursor.execute(query, params)
+                rows = cursor.fetchall()
+                return [
+                    MonitorItem(
+                        dimension_type="llc",
+                        dimension_key=r["dim_key"],
+                        dimension_label=r["dim_label"],
+                        selected_city=selected_city,
+                        code_data_available=False,
+                        eviction_count=r["eviction_count"],
+                        evictions_last_365d=r["evictions_last_365d"],
+                        evictions_last_90d=r["evictions_last_90d"],
+                        active_eviction_count=r["active_eviction_count"],
+                        closed_eviction_count=r["closed_eviction_count"],
+                        last_eviction_date=r["last_eviction_date"],
+                        earliest_filing_year=r.get("earliest_filing_year"),
+                        avg_case_duration_days=r.get("avg_case_duration_days"),
+                    )
+                    for r in rows
+                ]
+        except Exception as e:
+            logger.exception("Failed to fetch LLC monitor data")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    # ── Attorney dimension ─────────────────────────────────────
+    if dimension == "attorney":
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                # Determine which attorney column exists
+                cursor.execute("""
+                    SELECT column_name FROM information_schema.columns
+                    WHERE table_name = 'evictions'
+                      AND column_name IN ('plaintiff_attorney_firm', 'plaintiff_attorney_name', 'plaintiff_attorney_norm')
+                """)
+                atty_cols = {row["column_name"] for row in cursor.fetchall()}
+                if "plaintiff_attorney_norm" in atty_cols:
+                    atty_key = "e.plaintiff_attorney_norm"
+                elif "plaintiff_attorney_firm" in atty_cols:
+                    atty_key = "COALESCE(NULLIF(TRIM(e.plaintiff_attorney_firm), ''), NULLIF(TRIM(e.plaintiff_attorney_name), ''))"
+                else:
+                    return []
+
+                query = f"""
+                WITH base AS (
+                    SELECT
+                        {atty_key} AS dim_key,
+                        {atty_key} AS dim_label,
+                        e.filing_date,
+                        e.status,
+                        e.disposition_date
+                    FROM evictions e
+                    WHERE {atty_key} IS NOT NULL
+                      AND TRIM({atty_key}) NOT IN ('', '\\N', 'n/a', 'N/A')
+                      AND e.filing_date IS NOT NULL
+                      {date_clause}
+                ),
+                agg AS (
+                    SELECT
+                        dim_key,
+                        dim_label,
+                        COUNT(*)::int AS eviction_count,
+                        COUNT(*) FILTER (WHERE filing_date >= CURRENT_DATE - INTERVAL '365 days')::int AS evictions_last_365d,
+                        COUNT(*) FILTER (WHERE filing_date >= CURRENT_DATE - INTERVAL '90 days')::int AS evictions_last_90d,
+                        COUNT(*) FILTER (
+                            WHERE NOT (lower(COALESCE(status, '')) ~ '(closed|disposed|dismissed|withdrawn|settled|judgment)')
+                        )::int AS active_eviction_count,
+                        COUNT(*) FILTER (
+                            WHERE lower(COALESCE(status, '')) ~ '(closed|disposed|dismissed|withdrawn|settled|judgment)'
+                        )::int AS closed_eviction_count,
+                        MAX(filing_date) AS last_eviction_date,
+                        MIN(EXTRACT(YEAR FROM filing_date))::int AS earliest_filing_year,
+                        ROUND(AVG(disposition_date - filing_date) FILTER (WHERE disposition_date IS NOT NULL AND filing_date IS NOT NULL))::int AS avg_case_duration_days
+                    FROM base
+                    GROUP BY dim_key, dim_label
+                    HAVING COUNT(*) >= 2
+                )
+                SELECT * FROM agg
+                ORDER BY eviction_count DESC
+                LIMIT 100
+                """
+                params = list(date_params)
+                cursor.execute(query, params)
+                rows = cursor.fetchall()
+                return [
+                    MonitorItem(
+                        dimension_type="attorney",
+                        dimension_key=r["dim_key"],
+                        dimension_label=r["dim_label"],
+                        selected_city=selected_city,
+                        code_data_available=False,
+                        eviction_count=r["eviction_count"],
+                        evictions_last_365d=r["evictions_last_365d"],
+                        evictions_last_90d=r["evictions_last_90d"],
+                        active_eviction_count=r["active_eviction_count"],
+                        closed_eviction_count=r["closed_eviction_count"],
+                        last_eviction_date=r["last_eviction_date"],
+                        earliest_filing_year=r.get("earliest_filing_year"),
+                        avg_case_duration_days=r.get("avg_case_duration_days"),
+                    )
+                    for r in rows
+                ]
+        except Exception as e:
+            logger.exception("Failed to fetch attorney monitor data")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    # ── Network dimension (existing logic) ─────────────────────
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = 'evictions'
+                  AND column_name IN ('plaintiff_attorney_firm', 'plaintiff_attorney_name', 'plaintiff_attorney_norm')
+                """
+            )
+            eviction_columns = {row["column_name"] for row in cursor.fetchall()}
+            has_attorney_fields = bool(eviction_columns)
+            attorney_expr_sql = (
+                """
+                COALESCE(
+                    NULLIF(TRIM(e.plaintiff_attorney_firm), ''),
+                    NULLIF(TRIM(e.plaintiff_attorney_name), ''),
+                    NULLIF(TRIM(e.plaintiff_attorney_norm), '')
+                )
+                """
+                if has_attorney_fields
+                else "NULL::text"
+            )
+
+            query = f"""
+            WITH city_properties AS (
+                SELECT id, owner_norm, co_owner_norm, owner, co_owner, business_id
+                FROM properties
+                WHERE UPPER(property_city) = %s
+            ),
+            city_network_property_links AS (
+                SELECT DISTINCT en.network_id, cp.id AS property_id
+                FROM entity_networks en
+                JOIN city_properties cp
+                  ON en.normalized_name = cp.owner_norm
+                WHERE en.normalized_name IS NOT NULL AND TRIM(en.normalized_name) <> ''
+
+                UNION
+
+                SELECT DISTINCT en.network_id, cp.id AS property_id
+                FROM entity_networks en
+                JOIN city_properties cp
+                  ON en.normalized_name = cp.co_owner_norm
+                WHERE en.normalized_name IS NOT NULL AND TRIM(en.normalized_name) <> ''
+            ),
+            network_props AS (
+                SELECT network_id, COUNT(DISTINCT property_id)::int AS property_count
+                FROM city_network_property_links
+                GROUP BY network_id
+            ),
+            candidate_networks AS (
+                SELECT network_id
+                FROM network_props
+                ORDER BY property_count DESC, network_id
+                LIMIT 100
+            ),
+            network_property_links AS (
+                SELECT cnpl.network_id, cnpl.property_id
+                FROM city_network_property_links cnpl
+                WHERE cnpl.network_id IN (SELECT network_id FROM candidate_networks)
+            ),
+            statewide_network_property_links AS (
+                SELECT DISTINCT
+                    en.network_id,
+                    p.id AS property_id,
+                    UPPER(COALESCE(p.property_city, '')) AS property_city
+                FROM entity_networks en
+                JOIN properties p
+                  ON en.normalized_name = p.owner_norm
+                WHERE en.network_id IN (SELECT network_id FROM candidate_networks)
+                  AND en.normalized_name IS NOT NULL
+                  AND TRIM(en.normalized_name) <> ''
+
+                UNION
+
+                SELECT DISTINCT
+                    en.network_id,
+                    p.id AS property_id,
+                    UPPER(COALESCE(p.property_city, '')) AS property_city
+                FROM entity_networks en
+                JOIN properties p
+                  ON en.normalized_name = p.co_owner_norm
+                WHERE en.network_id IN (SELECT network_id FROM candidate_networks)
+                  AND en.normalized_name IS NOT NULL
+                  AND TRIM(en.normalized_name) <> ''
+            ),
+            network_violations AS (
+                SELECT
+                    cnpl.network_id,
+                    COUNT(ce.id)::int AS violation_count,
+                    COUNT(*) FILTER (
+                        WHERE
+                            ce.date_closed IS NOT NULL
+                            OR lower(COALESCE(ce.record_status, '')) IN (
+                                'closed', 'resolved', 'complied', 'complete', 'completed'
+                            )
+                    )::int AS closed_violation_count,
+                    COUNT(*) FILTER (
+                        WHERE NOT (
+                            ce.date_closed IS NOT NULL
+                            OR lower(COALESCE(ce.record_status, '')) IN (
+                                'closed', 'resolved', 'complied', 'complete', 'completed'
+                            )
+                        )
+                    )::int AS active_violation_count,
+                    COUNT(*) FILTER (WHERE ce.date_opened >= CURRENT_DATE - INTERVAL '90 days')::int AS violations_last_90d,
+                    COUNT(*) FILTER (WHERE ce.date_opened >= CURRENT_DATE - INTERVAL '365 days')::int AS violations_last_365d,
+                    MAX(ce.date_opened) AS last_violation_date
+                FROM network_property_links cnpl
+                JOIN code_enforcement ce ON ce.property_id = cnpl.property_id
+                GROUP BY cnpl.network_id
+            ),
+            violation_types_ranked AS (
+                SELECT
+                    cnpl.network_id,
+                    COALESCE(
+                        NULLIF(TRIM(ce.record_type), ''),
+                        NULLIF(TRIM(ce.inspection_type), ''),
+                        'Unspecified'
+                    ) AS label,
+                    COUNT(*)::int AS count,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY cnpl.network_id
+                        ORDER BY COUNT(*) DESC, COALESCE(NULLIF(TRIM(ce.record_type), ''), NULLIF(TRIM(ce.inspection_type), ''), 'Unspecified')
+                    ) AS rn
+                FROM network_property_links cnpl
+                JOIN code_enforcement ce ON ce.property_id = cnpl.property_id
+                GROUP BY cnpl.network_id, label
+            ),
+            violation_types AS (
+                SELECT
+                    network_id,
+                    COALESCE(
+                        jsonb_agg(jsonb_build_object('label', label, 'count', count) ORDER BY count DESC, label)
+                            FILTER (WHERE rn <= 3),
+                        '[]'::jsonb
+                    ) AS violation_type_breakdown
+                FROM violation_types_ranked
+                GROUP BY network_id
+            ),
+            violation_status_ranked AS (
+                SELECT
+                    cnpl.network_id,
+                    CASE
+                        WHEN ce.date_closed IS NOT NULL
+                          OR lower(COALESCE(ce.record_status, '')) IN ('closed', 'resolved', 'complied', 'complete', 'completed')
+                            THEN 'Closed/Resolved'
+                        WHEN NULLIF(TRIM(ce.record_status), '') IS NULL
+                            THEN 'Unknown'
+                        ELSE TRIM(ce.record_status)
+                    END AS label,
+                    COUNT(*)::int AS count,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY cnpl.network_id
+                        ORDER BY COUNT(*) DESC,
+                            CASE
+                                WHEN ce.date_closed IS NOT NULL
+                                  OR lower(COALESCE(ce.record_status, '')) IN ('closed', 'resolved', 'complied', 'complete', 'completed')
+                                    THEN 'Closed/Resolved'
+                                WHEN NULLIF(TRIM(ce.record_status), '') IS NULL
+                                    THEN 'Unknown'
+                                ELSE TRIM(ce.record_status)
+                            END
+                    ) AS rn
+                FROM network_property_links cnpl
+                JOIN code_enforcement ce ON ce.property_id = cnpl.property_id
+                GROUP BY cnpl.network_id, label
+            ),
+            violation_status AS (
+                SELECT
+                    network_id,
+                    COALESCE(
+                        jsonb_agg(jsonb_build_object('label', label, 'count', count) ORDER BY count DESC, label)
+                            FILTER (WHERE rn <= 3),
+                        '[]'::jsonb
+                    ) AS violation_status_breakdown
+                FROM violation_status_ranked
+                GROUP BY network_id
+            ),
+            network_violation_businesses_raw AS (
+                SELECT DISTINCT
+                    cnpl.network_id,
+                    b.name
+                FROM network_property_links cnpl
+                JOIN code_enforcement ce ON ce.property_id = cnpl.property_id
+                JOIN properties p ON p.id = cnpl.property_id
+                JOIN businesses b ON b.id = p.business_id
+                WHERE b.name IS NOT NULL AND b.name <> ''
+
+                UNION
+
+                SELECT DISTINCT
+                    en.network_id,
+                    en.entity_name AS name
+                FROM entity_networks en
+                JOIN network_violations nv ON nv.network_id = en.network_id
+                WHERE
+                    en.entity_type = 'business'
+                    AND en.entity_name IS NOT NULL
+                    AND en.entity_name <> ''
+            ),
+            network_violation_businesses AS (
+                SELECT
+                    network_id,
+                    to_jsonb(array_agg(name ORDER BY name)) AS violation_businesses
+                FROM network_violation_businesses_raw
+                GROUP BY network_id
+            ),
+            network_eviction_cases_raw AS (
+                SELECT DISTINCT
+                    snpl.network_id,
+                    COALESCE(e.case_number, e.id::text) AS eviction_key,
+                    e.filing_date,
+                    e.status,
+                    {attorney_expr_sql} AS plaintiff_attorney,
+                    CASE WHEN snpl.property_city = %s THEN true ELSE false END AS in_selected_city
+                FROM statewide_network_property_links snpl
+                JOIN evictions e ON e.property_id = snpl.property_id
+            ),
+            network_eviction_cases AS (
+                SELECT DISTINCT ON (network_id, eviction_key)
+                    network_id,
+                    eviction_key,
+                    filing_date,
+                    status,
+                    plaintiff_attorney,
+                    in_selected_city
+                FROM network_eviction_cases_raw
+                ORDER BY network_id, eviction_key, in_selected_city DESC, filing_date DESC NULLS LAST
+            ),
+            network_evictions AS (
+                SELECT
+                    nec.network_id,
+                    COUNT(*)::int AS eviction_count,
+                    COUNT(*) FILTER (
+                        WHERE lower(COALESCE(nec.status, '')) ~ '(closed|disposed|dismissed|withdrawn|settled|judgment)'
+                    )::int AS closed_eviction_count,
+                    COUNT(*) FILTER (
+                        WHERE NOT (lower(COALESCE(nec.status, '')) ~ '(closed|disposed|dismissed|withdrawn|settled|judgment)')
+                    )::int AS active_eviction_count,
+                    COUNT(*) FILTER (WHERE nec.filing_date >= CURRENT_DATE - INTERVAL '90 days')::int AS evictions_last_90d,
+                    COUNT(*) FILTER (WHERE nec.filing_date >= CURRENT_DATE - INTERVAL '365 days')::int AS evictions_last_365d,
+                    COUNT(*) FILTER (
+                        WHERE nec.filing_date >= CURRENT_DATE - INTERVAL '730 days'
+                          AND nec.filing_date < CURRENT_DATE - INTERVAL '365 days'
+                    )::int AS evictions_prev_365d,
+                    COUNT(*) FILTER (WHERE nec.in_selected_city)::int AS local_eviction_count,
+                    COUNT(*) FILTER (WHERE nec.in_selected_city AND nec.filing_date >= CURRENT_DATE - INTERVAL '90 days')::int AS local_evictions_last_90d,
+                    COUNT(*) FILTER (WHERE nec.in_selected_city AND nec.filing_date >= CURRENT_DATE - INTERVAL '365 days')::int AS local_evictions_last_365d,
+                    COUNT(*) FILTER (WHERE NOT nec.in_selected_city)::int AS outside_eviction_count,
+                    COUNT(*) FILTER (WHERE NOT nec.in_selected_city AND nec.filing_date >= CURRENT_DATE - INTERVAL '90 days')::int AS outside_evictions_last_90d,
+                    COUNT(*) FILTER (WHERE NOT nec.in_selected_city AND nec.filing_date >= CURRENT_DATE - INTERVAL '365 days')::int AS outside_evictions_last_365d,
+                    MAX(nec.filing_date) AS last_eviction_date
+                FROM network_eviction_cases nec
+                GROUP BY nec.network_id
+            ),
+            eviction_weekly_counts AS (
+                SELECT
+                    nec.network_id,
+                    DATE_TRUNC('week', nec.filing_date)::date AS filing_week,
+                    COUNT(*)::int AS filings_in_week
+                FROM network_eviction_cases nec
+                WHERE
+                    nec.filing_date IS NOT NULL
+                    AND nec.filing_date >= CURRENT_DATE - INTERVAL '365 days'
+                GROUP BY nec.network_id, DATE_TRUNC('week', nec.filing_date)::date
+            ),
+            eviction_surge AS (
+                SELECT
+                    ewc.network_id,
+                    MAX(ewc.filings_in_week)::int AS eviction_surge_filings,
+                    (
+                        ARRAY_AGG(ewc.filing_week ORDER BY ewc.filings_in_week DESC, ewc.filing_week DESC)
+                    )[1] AS eviction_surge_date,
+                    AVG(ewc.filings_in_week)::float AS eviction_surge_avg_daily
+                FROM eviction_weekly_counts ewc
+                GROUP BY ewc.network_id
+            ),
+            attorney_weekly_counts AS (
+                SELECT
+                    nec.network_id,
+                    nec.plaintiff_attorney,
+                    DATE_TRUNC('week', nec.filing_date)::date AS filing_week,
+                    COUNT(*)::int AS filings_in_week
+                FROM network_eviction_cases nec
+                WHERE
+                    nec.filing_date IS NOT NULL
+                    AND nec.filing_date >= CURRENT_DATE - INTERVAL '365 days'
+                    AND NULLIF(TRIM(COALESCE(nec.plaintiff_attorney, '')), '') IS NOT NULL
+                GROUP BY nec.network_id, nec.plaintiff_attorney, DATE_TRUNC('week', nec.filing_date)::date
+            ),
+            attorney_surge_candidates AS (
+                SELECT
+                    awc.network_id,
+                    awc.plaintiff_attorney AS attorney_surge_name,
+                    MAX(awc.filings_in_week)::int AS attorney_surge_filings,
+                    (
+                        ARRAY_AGG(awc.filing_week ORDER BY awc.filings_in_week DESC, awc.filing_week DESC)
+                    )[1] AS attorney_surge_date,
+                    AVG(awc.filings_in_week)::float AS attorney_surge_avg_daily
+                FROM attorney_weekly_counts awc
+                GROUP BY awc.network_id, awc.plaintiff_attorney
+            ),
+            attorney_surge AS (
+                SELECT
+                    ranked.network_id,
+                    ranked.attorney_surge_name,
+                    ranked.attorney_surge_filings,
+                    ranked.attorney_surge_date,
+                    ranked.attorney_surge_avg_daily
+                FROM (
+                    SELECT
+                        ascx.*,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY ascx.network_id
+                            ORDER BY
+                                ascx.attorney_surge_filings DESC,
+                                ascx.attorney_surge_avg_daily DESC,
+                                ascx.attorney_surge_name
+                        ) AS rn
+                    FROM attorney_surge_candidates ascx
+                ) ranked
+                WHERE ranked.rn = 1
+            ),
+            eviction_status_ranked AS (
+                SELECT
+                    nec.network_id,
+                    CASE
+                        WHEN NULLIF(TRIM(nec.status), '') IS NULL THEN 'Unknown'
+                        WHEN lower(nec.status) ~ '(closed|disposed|dismissed|withdrawn|settled|judgment)' THEN 'Closed/Disposed'
+                        ELSE TRIM(nec.status)
+                    END AS label,
+                    COUNT(*)::int AS count,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY nec.network_id
+                        ORDER BY COUNT(*) DESC,
+                            CASE
+                                WHEN NULLIF(TRIM(nec.status), '') IS NULL THEN 'Unknown'
+                                WHEN lower(nec.status) ~ '(closed|disposed|dismissed|withdrawn|settled|judgment)' THEN 'Closed/Disposed'
+                                ELSE TRIM(nec.status)
+                            END
+                    ) AS rn
+                FROM network_eviction_cases nec
+                GROUP BY nec.network_id, label
+            ),
+            eviction_status AS (
+                SELECT
+                    network_id,
+                    COALESCE(
+                        jsonb_agg(jsonb_build_object('label', label, 'count', count) ORDER BY count DESC, label)
+                            FILTER (WHERE rn <= 3),
+                        '[]'::jsonb
+                    ) AS eviction_status_breakdown
+                FROM eviction_status_ranked
+                GROUP BY network_id
+            ),
+            ranked_entities AS (
+                SELECT
+                    en.network_id,
+                    en.entity_id,
+                    en.entity_name,
+                    en.entity_type,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY en.network_id
+                        ORDER BY en.entity_type = 'principal' DESC, length(en.entity_name) ASC
+                    ) AS rank
+                FROM entity_networks en
+                WHERE en.network_id IN (SELECT network_id FROM candidate_networks)
+            ),
+            representative_entities AS (
+                SELECT network_id, entity_id, entity_name, entity_type
+                FROM ranked_entities
+                WHERE rank = 1
+            ),
+            network_entity_counts AS (
+                SELECT
+                    en.network_id,
+                    COUNT(*) FILTER (WHERE en.entity_type = 'business')::int AS network_business_count,
+                    COUNT(*) FILTER (WHERE en.entity_type = 'principal')::int AS network_principal_count
+                FROM entity_networks en
+                WHERE en.network_id IN (SELECT network_id FROM candidate_networks)
+                GROUP BY en.network_id
+            ),
+            entity_property_links AS (
+                SELECT DISTINCT
+                    re.network_id,
+                    cp.id AS property_id
+                FROM representative_entities re
+                JOIN city_properties cp
+                  ON (
+                    re.entity_type = 'business'
+                    AND (
+                        cp.business_id::text = re.entity_id
+                        OR UPPER(COALESCE(cp.owner, '')) = UPPER(COALESCE(re.entity_name, ''))
+                    )
+                  )
+                  OR (
+                    re.entity_type = 'principal'
+                    AND (
+                        cp.owner_norm = re.entity_id
+                        OR cp.co_owner_norm = re.entity_id
+                        OR UPPER(COALESCE(cp.owner, '')) = UPPER(COALESCE(re.entity_name, ''))
+                        OR UPPER(COALESCE(cp.co_owner, '')) = UPPER(COALESCE(re.entity_name, ''))
+                    )
+                  )
+            ),
+            entity_violations AS (
+                SELECT
+                    epl.network_id,
+                    COUNT(ce.id)::int AS entity_violation_count,
+                    COUNT(*) FILTER (
+                        WHERE
+                            ce.date_closed IS NOT NULL
+                            OR lower(COALESCE(ce.record_status, '')) IN (
+                                'closed', 'resolved', 'complied', 'complete', 'completed'
+                            )
+                    )::int AS entity_closed_violation_count,
+                    COUNT(*) FILTER (
+                        WHERE NOT (
+                            ce.date_closed IS NOT NULL
+                            OR lower(COALESCE(ce.record_status, '')) IN (
+                                'closed', 'resolved', 'complied', 'complete', 'completed'
+                            )
+                        )
+                    )::int AS entity_active_violation_count,
+                    COUNT(*) FILTER (WHERE ce.date_opened >= CURRENT_DATE - INTERVAL '90 days')::int AS entity_violations_last_90d,
+                    COUNT(*) FILTER (WHERE ce.date_opened >= CURRENT_DATE - INTERVAL '365 days')::int AS entity_violations_last_365d
+                FROM entity_property_links epl
+                JOIN code_enforcement ce ON ce.property_id = epl.property_id
+                GROUP BY epl.network_id
+            ),
+            entity_evictions AS (
+                SELECT
+                    epl.network_id,
+                    COUNT(*)::int AS entity_eviction_count,
+                    COUNT(*) FILTER (
+                        WHERE lower(COALESCE(e.status, '')) ~ '(closed|disposed|dismissed|withdrawn|settled|judgment)'
+                    )::int AS entity_closed_eviction_count,
+                    COUNT(*) FILTER (
+                        WHERE NOT (lower(COALESCE(e.status, '')) ~ '(closed|disposed|dismissed|withdrawn|settled|judgment)')
+                    )::int AS entity_active_eviction_count,
+                    COUNT(*) FILTER (WHERE e.filing_date >= CURRENT_DATE - INTERVAL '90 days')::int AS entity_evictions_last_90d,
+                    COUNT(*) FILTER (WHERE e.filing_date >= CURRENT_DATE - INTERVAL '365 days')::int AS entity_evictions_last_365d,
+                    COUNT(*)::int AS entity_local_eviction_count,
+                    0::int AS entity_outside_eviction_count
+                FROM entity_property_links epl
+                JOIN evictions e ON e.property_id = epl.property_id
+                GROUP BY epl.network_id
+            )
+            SELECT
+                re.network_id,
+                re.entity_id,
+                re.entity_name,
+                re.entity_type,
+                %s::text AS selected_city,
+                %s::boolean AS code_data_available,
+                COALESCE(nec.network_business_count, 0) AS network_business_count,
+                COALESCE(nec.network_principal_count, 0) AS network_principal_count,
+                COALESCE(np.property_count, 0) AS property_count,
+                COALESCE(nv.violation_count, 0) AS violation_count,
+                COALESCE(ev.entity_violation_count, 0) AS entity_violation_count,
+                COALESCE(nv.closed_violation_count, 0) AS closed_violation_count,
+                COALESCE(ev.entity_closed_violation_count, 0) AS entity_closed_violation_count,
+                COALESCE(nv.active_violation_count, 0) AS active_violation_count,
+                COALESCE(ev.entity_active_violation_count, 0) AS entity_active_violation_count,
+                COALESCE(nv.violations_last_90d, 0) AS violations_last_90d,
+                COALESCE(nv.violations_last_365d, 0) AS violations_last_365d,
+                COALESCE(ev.entity_violations_last_90d, 0) AS entity_violations_last_90d,
+                COALESCE(ev.entity_violations_last_365d, 0) AS entity_violations_last_365d,
+                COALESCE(ne.eviction_count, 0) AS eviction_count,
+                COALESCE(ee.entity_eviction_count, 0) AS entity_eviction_count,
+                COALESCE(ne.closed_eviction_count, 0) AS closed_eviction_count,
+                COALESCE(ee.entity_closed_eviction_count, 0) AS entity_closed_eviction_count,
+                COALESCE(ne.active_eviction_count, 0) AS active_eviction_count,
+                COALESCE(ee.entity_active_eviction_count, 0) AS entity_active_eviction_count,
+                COALESCE(ne.evictions_last_90d, 0) AS evictions_last_90d,
+                COALESCE(ne.evictions_last_365d, 0) AS evictions_last_365d,
+                COALESCE(ee.entity_evictions_last_90d, 0) AS entity_evictions_last_90d,
+                COALESCE(ee.entity_evictions_last_365d, 0) AS entity_evictions_last_365d,
+                COALESCE(ne.local_eviction_count, 0) AS local_eviction_count,
+                COALESCE(ne.local_evictions_last_90d, 0) AS local_evictions_last_90d,
+                COALESCE(ne.local_evictions_last_365d, 0) AS local_evictions_last_365d,
+                COALESCE(ne.outside_eviction_count, 0) AS outside_eviction_count,
+                COALESCE(ne.outside_evictions_last_90d, 0) AS outside_evictions_last_90d,
+                COALESCE(ne.outside_evictions_last_365d, 0) AS outside_evictions_last_365d,
+                COALESCE(ee.entity_local_eviction_count, 0) AS entity_local_eviction_count,
+                COALESCE(ee.entity_outside_eviction_count, 0) AS entity_outside_eviction_count,
+                COALESCE(ne.evictions_prev_365d, 0) AS evictions_prev_365d,
+                CASE
+                    WHEN
+                        COALESCE(esg.eviction_surge_filings, 0) >= 8
+                        AND COALESCE(esg.eviction_surge_filings, 0) >= GREATEST(3, CEIL(COALESCE(esg.eviction_surge_avg_daily, 0) * 3))
+                    THEN TRUE
+                    ELSE FALSE
+                END AS eviction_surge_flag,
+                esg.eviction_surge_date,
+                COALESCE(esg.eviction_surge_filings, 0) AS eviction_surge_filings,
+                COALESCE(esg.eviction_surge_avg_daily, 0) AS eviction_surge_avg_daily,
+                CASE
+                    WHEN COALESCE(esg.eviction_surge_avg_daily, 0) > 0
+                        THEN ROUND((COALESCE(esg.eviction_surge_filings, 0)::numeric / esg.eviction_surge_avg_daily::numeric), 2)::float
+                    ELSE 0::float
+                END AS eviction_surge_multiplier,
+                CASE
+                    WHEN
+                        COALESCE(asg.attorney_surge_filings, 0) >= 6
+                        AND COALESCE(asg.attorney_surge_filings, 0) >= GREATEST(3, CEIL(COALESCE(asg.attorney_surge_avg_daily, 0) * 2.5))
+                    THEN TRUE
+                    ELSE FALSE
+                END AS attorney_surge_flag,
+                asg.attorney_surge_name,
+                asg.attorney_surge_date,
+                COALESCE(asg.attorney_surge_filings, 0) AS attorney_surge_filings,
+                COALESCE(asg.attorney_surge_avg_daily, 0) AS attorney_surge_avg_daily,
+                CASE
+                    WHEN COALESCE(asg.attorney_surge_avg_daily, 0) > 0
+                        THEN ROUND((COALESCE(asg.attorney_surge_filings, 0)::numeric / asg.attorney_surge_avg_daily::numeric), 2)::float
+                    ELSE 0::float
+                END AS attorney_surge_multiplier,
+                '[]'::jsonb AS violation_type_breakdown,
+                '[]'::jsonb AS violation_status_breakdown,
+                '[]'::jsonb AS eviction_status_breakdown,
+                '[]'::jsonb AS violation_businesses,
+                nv.last_violation_date,
+                ne.last_eviction_date
+            FROM representative_entities re
+            LEFT JOIN network_props np ON re.network_id = np.network_id
+            LEFT JOIN network_entity_counts nec ON re.network_id = nec.network_id
+            LEFT JOIN network_violations nv ON re.network_id = nv.network_id
+            LEFT JOIN entity_violations ev ON re.network_id = ev.network_id
+            LEFT JOIN network_evictions ne ON re.network_id = ne.network_id
+            LEFT JOIN entity_evictions ee ON re.network_id = ee.network_id
+            LEFT JOIN eviction_surge esg ON re.network_id = esg.network_id
+            LEFT JOIN attorney_surge asg ON re.network_id = asg.network_id
+            WHERE ((%s::boolean AND COALESCE(nv.violation_count, 0) > 0) OR COALESCE(ne.eviction_count, 0) > 0)
+            ORDER BY
+                CASE WHEN %s = 'violations' AND %s::boolean
+                    THEN COALESCE(nv.violation_count, 0)
+                    ELSE COALESCE(ne.eviction_count, 0)
+                END DESC,
+                (
+                    CASE WHEN %s::boolean
+                        THEN COALESCE(nv.violations_last_365d, 0) * 2 + COALESCE(nv.active_violation_count, 0)
+                        ELSE 0
+                    END
+                    + COALESCE(ne.local_evictions_last_365d, 0) * 2
+                    + COALESCE(ne.local_eviction_count, 0)
+                    + (COALESCE(ne.outside_evictions_last_365d, 0) / 5.0)
+                ) DESC
+            LIMIT 100
+            """
+            cursor.execute(
+                query,
+                (
+                    selected_city,
+                    selected_city,
+                    selected_city,
+                    is_hartford,
+                    is_hartford,
+                    sort_by,
+                    is_hartford,
+                    is_hartford,
+                ),
+            )
+            rows = cursor.fetchall()
+
+            result = []
+            for row in rows:
+                # Fetch deduplicated principals (case-insensitive)
+                cursor.execute(
+                    """
+                    SELECT MIN(INITCAP(name_c)) as name, MAX(state) as state
+                    FROM principals
+                    WHERE business_id IN (
+                        SELECT entity_id FROM entity_networks WHERE network_id = %s AND entity_type = 'business'
+                    )
+                    GROUP BY UPPER(name_c)
+                    LIMIT 5
+                    """,
+                    (row["network_id"],),
+                )
+                row["principals"] = cursor.fetchall()
+                # Fetch business/LLC names in the network
+                cursor.execute(
+                    """
+                    SELECT DISTINCT entity_name
+                    FROM entity_networks
+                    WHERE network_id = %s AND entity_type = 'business'
+                      AND entity_name IS NOT NULL AND TRIM(entity_name) != ''
+                    ORDER BY entity_name
+                    LIMIT 10
+                    """,
+                    (row["network_id"],),
+                )
+                row["violation_businesses"] = [r["entity_name"] for r in cursor.fetchall()]
+                result.append(row)
+
+            return result
+    except Exception as e:
+        logger.exception("Failed to fetch Hartford playground data")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/monitor/cities", response_model=List[str])
+def get_monitor_cities(conn=Depends(get_db_connection)):
+    """Top municipalities by property count for the city monitor selector."""
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT UPPER(TRIM(property_city)) AS city
+                FROM properties
+                WHERE property_city IS NOT NULL AND TRIM(property_city) <> ''
+                GROUP BY UPPER(TRIM(property_city))
+                ORDER BY COUNT(*) DESC, UPPER(TRIM(property_city))
+                LIMIT 200
+                """
+            )
+            return [r[0] for r in cursor.fetchall() if r and r[0]]
+    except Exception as e:
+        logger.exception("Failed to fetch monitor cities")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/burst-detector", response_model=List[BurstDetectorItem])
+def get_burst_detector(
+    dimension: str = "network",
+    city: Optional[str] = None,
+    time_window: int = 365,
+    min_filings: int = 5,
+    disposition_filter: Optional[str] = None,
+    conn=Depends(get_db_connection),
+):
+    """
+    Configurable eviction surge detector.
+    Detects concentrated filing surges grouped by a chosen dimension.
+    Works directly off the evictions table — no property join required for most dimensions.
+    """
+    valid_dimensions = {"city", "street", "landlord", "network", "attorney"}
+    if dimension not in valid_dimensions:
+        raise HTTPException(status_code=400, detail=f"Invalid dimension. Must be one of: {', '.join(valid_dimensions)}")
+
+    time_window = max(30, min(3650, time_window))
+    min_filings = max(2, min_filings)
+
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            # Check which attorney fields exist
+            cursor.execute("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name = 'evictions'
+                  AND column_name IN ('plaintiff_attorney_firm','plaintiff_attorney_name','plaintiff_attorney_norm')
+            """)
+            eviction_columns = {row["column_name"] for row in cursor.fetchall()}
+            has_attorney = bool(eviction_columns)
+            attorney_expr = (
+                """COALESCE(NULLIF(TRIM(e.plaintiff_attorney_firm),''),NULLIF(TRIM(e.plaintiff_attorney_name),''),NULLIF(TRIM(e.plaintiff_attorney_norm),''))"""
+                if has_attorney else "NULL::text"
+            )
+
+            # Disposition filter — applied as a WHERE clause on the evictions table
+            disposition_clause = ""
+            if disposition_filter == "default_judgment":
+                disposition_clause = "AND (lower(COALESCE(e.status,'')) LIKE '%%default%%judgment%%' OR lower(COALESCE(e.status,'')) LIKE '%%after default%%')"
+            elif disposition_filter == "withdrawal":
+                disposition_clause = "AND lower(COALESCE(e.status,'')) LIKE '%%withdraw%%'"
+
+            # City filter — for non-city dimensions, applied as a WHERE clause on municipality
+            city_clause = ""
+            city_params: list = []
+            if city:
+                city_params = [city.strip().upper()]
+
+            if dimension == "city":
+                # Group by municipality field directly — no property join
+                city_where = ""
+                dim_key_col = "UPPER(COALESCE(NULLIF(TRIM(e.municipality),''), 'UNKNOWN'))"
+                dim_label_col = dim_key_col
+                from_clause = "FROM evictions e"
+                extra_col = "NULL::int AS network_id, NULL::text AS entity_id, NULL::text AS entity_type"
+                network_col_select = ""
+                network_col_group = ""
+                city_filter_sql = ""
+                if city_params:
+                    city_filter_sql = "AND UPPER(TRIM(e.municipality)) = %s"
+
+                query = f"""
+                    WITH base AS (
+                        SELECT
+                            e.filing_date,
+                            e.status,
+                            {dim_key_col} AS dim_key,
+                            {dim_label_col} AS dim_label
+                        FROM evictions e
+                        WHERE e.filing_date IS NOT NULL
+                          AND e.filing_date >= CURRENT_DATE - INTERVAL '{time_window} days'
+                          AND TRIM(COALESCE(e.municipality,'')) != ''
+                          {disposition_clause}
+                          {city_filter_sql}
+                    ),
+                    weekly AS (
+                        SELECT dim_key, dim_label,
+                            DATE_TRUNC('week', filing_date)::date AS wk,
+                            COUNT(*)::int AS cnt,
+                            COUNT(*) FILTER (WHERE lower(COALESCE(status,'')) LIKE '%%after default%%')::int AS dj_cnt,
+                            COUNT(*) FILTER (WHERE lower(COALESCE(status,'')) LIKE '%%withdraw%%')::int AS wd_cnt
+                        FROM base
+                        WHERE dim_key != 'UNKNOWN'
+                        GROUP BY dim_key, dim_label, DATE_TRUNC('week', filing_date)::date
+                    ),
+                    agg AS (
+                        SELECT dim_key, dim_label,
+                            MAX(cnt)::int AS peak_filings,
+                            (ARRAY_AGG(wk ORDER BY cnt DESC, wk DESC))[1] AS peak_week,
+                            AVG(cnt)::float AS baseline_avg,
+                            SUM(cnt)::int AS total_filings,
+                            SUM(dj_cnt)::int AS dj_total,
+                            SUM(wd_cnt)::int AS wd_total
+                        FROM weekly
+                        GROUP BY dim_key, dim_label
+                        HAVING MAX(cnt) >= %s
+                    )
+                    SELECT dim_key, dim_label, {extra_col},
+                        peak_week, peak_filings AS filings_count,
+                        ROUND(baseline_avg::numeric,2)::float AS baseline_avg,
+                        CASE WHEN baseline_avg > 0 THEN ROUND((peak_filings::numeric/baseline_avg::numeric),2)::float ELSE 0 END AS multiplier,
+                        total_filings, dj_total AS total_default_judgments, wd_total AS total_withdrawals
+                    FROM agg
+                    ORDER BY peak_filings DESC, total_filings DESC
+                    LIMIT 100
+                """
+                params = city_params + [min_filings]
+
+            elif dimension == "street":
+                # Use normalized_address / address from evictions directly
+                city_filter_sql = "AND UPPER(TRIM(e.municipality)) = %s" if city_params else ""
+                street_key = "UPPER(TRIM(COALESCE(NULLIF(TRIM(e.normalized_address),''), NULLIF(TRIM(e.address),''), 'UNKNOWN')))"
+                municipality_part = "|| ', ' || UPPER(TRIM(COALESCE(NULLIF(TRIM(e.municipality),''),'CT')))"
+                query = f"""
+                    WITH base AS (
+                        SELECT
+                            e.filing_date,
+                            e.status,
+                            {street_key} AS street_raw,
+                            UPPER(TRIM(COALESCE(NULLIF(TRIM(e.municipality),''),'CT'))) AS city_raw
+                        FROM evictions e
+                        WHERE e.filing_date IS NOT NULL
+                          AND e.filing_date >= CURRENT_DATE - INTERVAL '{time_window} days'
+                          AND TRIM(COALESCE(e.normalized_address, e.address,'')) != ''
+                          {disposition_clause}
+                          {city_filter_sql}
+                    ),
+                    base2 AS (
+                        SELECT filing_date, status,
+                            street_raw || ':' || city_raw AS dim_key,
+                            street_raw || ', ' || city_raw AS dim_label
+                        FROM base WHERE street_raw != 'UNKNOWN'
+                    ),
+                    weekly AS (
+                        SELECT dim_key, dim_label,
+                            DATE_TRUNC('week', filing_date)::date AS wk,
+                            COUNT(*)::int AS cnt,
+                            COUNT(*) FILTER (WHERE lower(COALESCE(status,'')) LIKE '%%after default%%')::int AS dj_cnt,
+                            COUNT(*) FILTER (WHERE lower(COALESCE(status,'')) LIKE '%%withdraw%%')::int AS wd_cnt
+                        FROM base2
+                        GROUP BY dim_key, dim_label, DATE_TRUNC('week', filing_date)::date
+                    ),
+                    agg AS (
+                        SELECT dim_key, dim_label,
+                            MAX(cnt)::int AS peak_filings,
+                            (ARRAY_AGG(wk ORDER BY cnt DESC, wk DESC))[1] AS peak_week,
+                            AVG(cnt)::float AS baseline_avg,
+                            SUM(cnt)::int AS total_filings,
+                            SUM(dj_cnt)::int AS dj_total,
+                            SUM(wd_cnt)::int AS wd_total
+                        FROM weekly
+                        GROUP BY dim_key, dim_label
+                        HAVING MAX(cnt) >= %s
+                    )
+                    SELECT dim_key, dim_label,
+                        NULL::int AS network_id, NULL::text AS entity_id, NULL::text AS entity_type,
+                        peak_week, peak_filings AS filings_count,
+                        ROUND(baseline_avg::numeric,2)::float AS baseline_avg,
+                        CASE WHEN baseline_avg > 0 THEN ROUND((peak_filings::numeric/baseline_avg::numeric),2)::float ELSE 0 END AS multiplier,
+                        total_filings, dj_total AS total_default_judgments, wd_total AS total_withdrawals
+                    FROM agg
+                    ORDER BY peak_filings DESC, total_filings DESC LIMIT 100
+                """
+                params = city_params + [min_filings]
+
+            elif dimension == "landlord":
+                city_filter_sql = "AND UPPER(TRIM(e.municipality)) = %s" if city_params else ""
+                query = f"""
+                    WITH base AS (
+                        SELECT
+                            e.filing_date, e.status,
+                            COALESCE(NULLIF(TRIM(e.plaintiff_norm),''), NULLIF(TRIM(e.plaintiff_name),'')) AS dim_key,
+                            COALESCE(NULLIF(TRIM(e.plaintiff_name),''), NULLIF(TRIM(e.plaintiff_norm),'')) AS dim_label
+                        FROM evictions e
+                        WHERE e.filing_date IS NOT NULL
+                          AND e.filing_date >= CURRENT_DATE - INTERVAL '{time_window} days'
+                          AND (e.plaintiff_norm IS NOT NULL AND TRIM(e.plaintiff_norm) != '')
+                          {disposition_clause}
+                          {city_filter_sql}
+                    ),
+                    weekly AS (
+                        SELECT dim_key, dim_label,
+                            DATE_TRUNC('week', filing_date)::date AS wk,
+                            COUNT(*)::int AS cnt,
+                            COUNT(*) FILTER (WHERE lower(COALESCE(status,'')) LIKE '%%after default%%')::int AS dj_cnt,
+                            COUNT(*) FILTER (WHERE lower(COALESCE(status,'')) LIKE '%%withdraw%%')::int AS wd_cnt
+                        FROM base
+                        GROUP BY dim_key, dim_label, DATE_TRUNC('week', filing_date)::date
+                    ),
+                    agg AS (
+                        SELECT dim_key, dim_label,
+                            MAX(cnt)::int AS peak_filings,
+                            (ARRAY_AGG(wk ORDER BY cnt DESC, wk DESC))[1] AS peak_week,
+                            AVG(cnt)::float AS baseline_avg,
+                            SUM(cnt)::int AS total_filings,
+                            SUM(dj_cnt)::int AS dj_total,
+                            SUM(wd_cnt)::int AS wd_total
+                        FROM weekly
+                        GROUP BY dim_key, dim_label
+                        HAVING MAX(cnt) >= %s
+                    )
+                    SELECT dim_key, dim_label,
+                        NULL::int AS network_id, dim_label AS entity_id, 'owner'::text AS entity_type,
+                        peak_week, peak_filings AS filings_count,
+                        ROUND(baseline_avg::numeric,2)::float AS baseline_avg,
+                        CASE WHEN baseline_avg > 0 THEN ROUND((peak_filings::numeric/baseline_avg::numeric),2)::float ELSE 0 END AS multiplier,
+                        total_filings, dj_total AS total_default_judgments, wd_total AS total_withdrawals
+                    FROM agg
+                    ORDER BY peak_filings DESC, total_filings DESC LIMIT 100
+                """
+                params = city_params + [min_filings]
+
+            elif dimension == "network":
+                # Join plaintiff_norm → entity_networks to group by network_id
+                city_filter_sql = "AND UPPER(TRIM(e.municipality)) = %s" if city_params else ""
+                query = f"""
+                    WITH base AS (
+                        SELECT
+                            e.filing_date, e.status,
+                            en.network_id
+                        FROM evictions e
+                        JOIN entity_networks en
+                          ON TRIM(e.plaintiff_norm) = en.entity_id
+                         AND en.entity_type IN ('business','principal','owner')
+                        WHERE e.filing_date IS NOT NULL
+                          AND e.filing_date >= CURRENT_DATE - INTERVAL '{time_window} days'
+                          AND e.plaintiff_norm IS NOT NULL AND TRIM(e.plaintiff_norm) != ''
+                          {disposition_clause}
+                          {city_filter_sql}
+                    ),
+                    network_labels AS (
+                        SELECT DISTINCT ON (network_id) network_id,
+                            COALESCE(
+                                MIN(entity_name) FILTER (WHERE entity_type = 'principal'),
+                                MIN(entity_name)
+                            ) AS label
+                        FROM entity_networks
+                        GROUP BY network_id
+                    ),
+                    weekly AS (
+                        SELECT b.network_id, nl.label AS dim_label,
+                            b.network_id::text AS dim_key,
+                            DATE_TRUNC('week', b.filing_date)::date AS wk,
+                            COUNT(*)::int AS cnt,
+                            COUNT(*) FILTER (WHERE lower(COALESCE(b.status,'')) LIKE '%%after default%%')::int AS dj_cnt,
+                            COUNT(*) FILTER (WHERE lower(COALESCE(b.status,'')) LIKE '%%withdraw%%')::int AS wd_cnt
+                        FROM base b
+                        JOIN network_labels nl ON nl.network_id = b.network_id
+                        GROUP BY b.network_id, nl.label, DATE_TRUNC('week', b.filing_date)::date
+                    ),
+                    agg AS (
+                        SELECT dim_key, dim_label, network_id,
+                            MAX(cnt)::int AS peak_filings,
+                            (ARRAY_AGG(wk ORDER BY cnt DESC, wk DESC))[1] AS peak_week,
+                            AVG(cnt)::float AS baseline_avg,
+                            SUM(cnt)::int AS total_filings,
+                            SUM(dj_cnt)::int AS dj_total,
+                            SUM(wd_cnt)::int AS wd_total
+                        FROM weekly
+                        GROUP BY dim_key, dim_label, network_id
+                        HAVING MAX(cnt) >= %s
+                    )
+                    SELECT dim_key, dim_label,
+                        network_id::int AS network_id, dim_key AS entity_id, 'network'::text AS entity_type,
+                        peak_week, peak_filings AS filings_count,
+                        ROUND(baseline_avg::numeric,2)::float AS baseline_avg,
+                        CASE WHEN baseline_avg > 0 THEN ROUND((peak_filings::numeric/baseline_avg::numeric),2)::float ELSE 0 END AS multiplier,
+                        total_filings, dj_total AS total_default_judgments, wd_total AS total_withdrawals
+                    FROM agg
+                    ORDER BY peak_filings DESC, total_filings DESC LIMIT 100
+                """
+                params = city_params + [min_filings]
+
+            elif dimension == "attorney":
+                city_filter_sql = "AND UPPER(TRIM(e.municipality)) = %s" if city_params else ""
+                atty_key = f"COALESCE(NULLIF(TRIM({attorney_expr}),''))" if has_attorney else "NULL::text"
+                if not has_attorney:
+                    return []
+                query = f"""
+                    WITH base AS (
+                        SELECT
+                            e.filing_date, e.status,
+                            {atty_key} AS dim_key,
+                            {atty_key} AS dim_label
+                        FROM evictions e
+                        WHERE e.filing_date IS NOT NULL
+                          AND e.filing_date >= CURRENT_DATE - INTERVAL '{time_window} days'
+                          AND {atty_key} IS NOT NULL
+                          AND TRIM({atty_key}) NOT IN ('', '\\N', 'n/a', 'N/A')
+                          {disposition_clause}
+                          {city_filter_sql}
+                    ),
+                    weekly AS (
+                        SELECT dim_key, dim_label,
+                            DATE_TRUNC('week', filing_date)::date AS wk,
+                            COUNT(*)::int AS cnt,
+                            COUNT(*) FILTER (WHERE lower(COALESCE(status,'')) LIKE '%%after default%%')::int AS dj_cnt,
+                            COUNT(*) FILTER (WHERE lower(COALESCE(status,'')) LIKE '%%withdraw%%')::int AS wd_cnt
+                        FROM base
+                        GROUP BY dim_key, dim_label, DATE_TRUNC('week', filing_date)::date
+                    ),
+                    agg AS (
+                        SELECT dim_key, dim_label,
+                            MAX(cnt)::int AS peak_filings,
+                            (ARRAY_AGG(wk ORDER BY cnt DESC, wk DESC))[1] AS peak_week,
+                            AVG(cnt)::float AS baseline_avg,
+                            SUM(cnt)::int AS total_filings,
+                            SUM(dj_cnt)::int AS dj_total,
+                            SUM(wd_cnt)::int AS wd_total
+                        FROM weekly
+                        GROUP BY dim_key, dim_label
+                        HAVING MAX(cnt) >= %s
+                    )
+                    SELECT dim_key, dim_label,
+                        NULL::int AS network_id, NULL::text AS entity_id, NULL::text AS entity_type,
+                        peak_week, peak_filings AS filings_count,
+                        ROUND(baseline_avg::numeric,2)::float AS baseline_avg,
+                        CASE WHEN baseline_avg > 0 THEN ROUND((peak_filings::numeric/baseline_avg::numeric),2)::float ELSE 0 END AS multiplier,
+                        total_filings, dj_total AS total_default_judgments, wd_total AS total_withdrawals
+                    FROM agg
+                    ORDER BY peak_filings DESC, total_filings DESC LIMIT 100
+                """
+                params = city_params + [min_filings]
+            else:
+                raise HTTPException(status_code=400, detail=f"Invalid dimension: {dimension}")
+
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+
+            result = []
+            for row in rows:
+                disp = []
+                if row.get("total_default_judgments", 0) > 0:
+                    disp.append({"label": "Default Judgment", "count": row["total_default_judgments"]})
+                if row.get("total_withdrawals", 0) > 0:
+                    disp.append({"label": "Withdrawal", "count": row["total_withdrawals"]})
+                result.append(BurstDetectorItem(
+                    dimension_key=row["dim_key"],
+                    dimension_label=row["dim_label"] or row["dim_key"],
+                    dimension_type=dimension,
+                    peak_week=row.get("peak_week"),
+                    filings_count=row.get("filings_count", 0),
+                    baseline_avg=row.get("baseline_avg", 0),
+                    multiplier=row.get("multiplier", 0),
+                    total_filings=row.get("total_filings", 0),
+                    disposition_breakdown=disp or None,
+                    network_id=row.get("network_id"),
+                    entity_id=row.get("entity_id"),
+                    entity_type=row.get("entity_type"),
+                ))
+            return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Surge detector query failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/evictions", response_model=List[EvictionItem])
+def get_evictions(property_id: Optional[int] = None, entity_name: Optional[str] = None, conn=Depends(get_db_connection)):
+    """
+    Fetch non-identifying eviction timeline records for a property or entity.
+    Tenant-identifying data (names, case numbers, addresses) is intentionally excluded.
+    """
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            if property_id:
+                cursor.execute(
+                    "SELECT filing_date, status FROM evictions WHERE property_id = %s ORDER BY filing_date DESC",
+                    (property_id,)
+                )
+            elif entity_name:
+                norm_candidates = set()
+                norm_candidates.add(normalize_business_name(entity_name))
+                norm_candidates.add(normalize_person_name(entity_name))
+                norm_candidates.add(canonicalize_person_name(entity_name))
+                norm_candidates.update(get_name_variations(entity_name, 'business'))
+                norm_candidates.update(get_name_variations(entity_name, 'principal'))
+                norm_candidate_blacklist = {
+                    "LLC", "INC", "INCORPORATED", "CORP", "CORPORATION", "COMPANY",
+                    "PROPERTIES", "REALTY", "TRUST", "HOLDINGS", "MANAGEMENT"
+                }
+                norm_candidates = {
+                    c.strip()
+                    for c in norm_candidates
+                    if c and len(c.strip()) >= 5 and c.strip() not in norm_candidate_blacklist
+                }
+
+                if not norm_candidates:
+                    return []
+
+                cursor.execute(
+                    """
+                    SELECT filing_date, status
+                    FROM evictions
+                    WHERE plaintiff_norm = ANY(%s)
+                    ORDER BY filing_date DESC
+                    """,
+                    (list(norm_candidates),)
+                )
+            else:
+                return []
+            return cursor.fetchall()
+    except Exception as e:
+        logger.exception("Failed to fetch evictions")
+        raise HTTPException(status_code=500, detail=str(e))
 def _compute_local_context(conn, entity: str, entity_type: str) -> Dict[str, Any]:
     ctx: Dict[str, Any] = {"entity": entity, "entity_type": entity_type}
     with conn.cursor(cursor_factory=RealDictCursor) as cursor:
@@ -2600,6 +4203,169 @@ def get_ai_report(entity: str, entity_type: str, report_date: Optional[str] = No
 @app.get("/api/healthz")
 def healthz():
     return {"ok": True}
+
+# ------------------------------------------------------------
+# Scraper Status
+# ------------------------------------------------------------
+@app.get("/api/scraper/status")
+def get_scraper_status(conn=Depends(get_db_connection)):
+    """
+    Returns the real-time status of all scrapers (active, recently completed, failed).
+    """
+    with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        cursor.execute("""
+            SELECT 
+                source_name, 
+                source_type, 
+                CASE 
+                    WHEN refresh_status = 'running' AND last_refreshed_at < NOW() - INTERVAL '6 hours' THEN 'failure'
+                    ELSE refresh_status 
+                END as refresh_status, 
+                last_refreshed_at, 
+                details 
+            FROM data_source_status 
+            ORDER BY 
+                CASE WHEN refresh_status = 'running' THEN 0 ELSE 1 END,
+                last_refreshed_at DESC
+        """)
+        rows = cursor.fetchall()
+        
+        active = [r for r in rows if r['refresh_status'] == 'running']
+        recent = [r for r in rows if r['refresh_status'] != 'running'][:25]
+        
+        return {
+            "status": "success",
+            "active_scrapers": active,
+            "recent_jobs": recent,
+            "total_active": len(active)
+        }
+
+@app.get("/scraperstatus", response_class=HTMLResponse)
+def scraper_status_page():
+    """
+    Standalone HTML page to monitor scraper status visually.
+    """
+    html_content = """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Scraper Status</title>
+        <script src="https://cdn.tailwindcss.com"></script>
+        <style>
+            .refresh-spin { animation: spin 1s linear infinite; }
+            @keyframes spin { 100% { transform: rotate(360deg); } }
+        </style>
+    </head>
+    <body class="bg-slate-50 text-slate-800 p-8 font-sans">
+        <div class="max-w-6xl mx-auto flex flex-col gap-6">
+            <div class="flex items-center justify-between border-b border-slate-200 pb-4">
+                <div>
+                    <h1 class="text-2xl font-black text-slate-900">System Scraper Status</h1>
+                    <p class="text-sm text-slate-500">Real-time monitoring of data ingestion pipelines.</p>
+                </div>
+                <div class="flex gap-4 items-center">
+                    <span id="active-count" class="px-3 py-1 bg-indigo-100 text-indigo-700 font-bold rounded-lg text-sm">0 Active</span>
+                </div>
+            </div>
+            
+            <div id="loading" class="text-center py-10 text-slate-400">Loading data...</div>
+            
+            <div id="tables-container" class="hidden flex-col gap-8">
+                <div>
+                    <h2 class="text-lg font-bold mb-3 flex items-center gap-2"><div class="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></div> Active Scrapers</h2>
+                    <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                        <table class="w-full text-left text-sm">
+                            <thead class="bg-slate-50 text-slate-500 text-xs uppercase border-b border-slate-200">
+                                <tr>
+                                    <th class="py-3 px-4">Municipality</th>
+                                    <th class="py-3 px-4">Type</th>
+                                    <th class="py-3 px-4">Status</th>
+                                    <th class="py-3 px-4">Last Activity</th>
+                                    <th class="py-3 px-4">Details</th>
+                                </tr>
+                            </thead>
+                            <tbody id="active-tbody" class="divide-y divide-slate-100"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div>
+                    <h2 class="text-lg font-bold mb-3 flex items-center gap-2">Recent Jobs</h2>
+                    <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                        <table class="w-full text-left text-sm">
+                            <thead class="bg-slate-50 text-slate-500 text-xs uppercase border-b border-slate-200">
+                                <tr>
+                                    <th class="py-3 px-4">Municipality</th>
+                                    <th class="py-3 px-4">Type</th>
+                                    <th class="py-3 px-4">Status</th>
+                                    <th class="py-3 px-4">Last Activity</th>
+                                    <th class="py-3 px-4 text-right">Details</th>
+                                </tr>
+                            </thead>
+                            <tbody id="recent-tbody" class="divide-y divide-slate-100"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <script>
+            function strDate(iso) {
+                if (!iso) return '-';
+                const d = new Date(iso);
+                return d.toLocaleDateString() + ' ' + d.toLocaleTimeString();
+            }
+            
+            function badge(status) {
+                if (status === 'running') return `<span class="px-2 py-0.5 rounded text-xs font-bold bg-blue-50 text-blue-600 border border-blue-100 uppercase tracking-wider">Running</span>`;
+                if (status === 'success') return `<span class="px-2 py-0.5 rounded text-xs font-bold bg-emerald-50 text-emerald-600 border border-emerald-100 uppercase tracking-wider">Success</span>`;
+                return `<span class="px-2 py-0.5 rounded text-xs font-bold bg-rose-50 text-rose-600 border border-rose-100 uppercase tracking-wider">Failed</span>`;
+            }
+
+            function renderRow(job) {
+                return `
+                    <tr class="hover:bg-slate-50">
+                        <td class="py-2 px-4 font-bold text-slate-800">${job.source_name}</td>
+                        <td class="py-2 px-4 text-slate-500 text-xs font-mono">${job.source_type}</td>
+                        <td class="py-2 px-4">${badge(job.refresh_status)}</td>
+                        <td class="py-2 px-4 text-slate-500 text-xs font-mono">${strDate(job.last_refreshed_at)}</td>
+                        <td class="py-2 px-4 text-slate-600 text-xs text-right truncate max-w-[200px]" title="${job.details?.message || ''}">${job.details?.message || job.details || '-'}</td>
+                    </tr>
+                `;
+            }
+
+            async function fetchData() {
+                try {
+                    const res = await fetch('/api/scraper/status');
+                    const data = await res.json();
+                    
+                    document.getElementById('loading').classList.add('hidden');
+                    document.getElementById('tables-container').classList.remove('hidden');
+                    document.getElementById('tables-container').classList.add('flex');
+                    
+                    document.getElementById('active-count').innerText = data.total_active + ' Active';
+                    
+                    const activeHtml = data.active_scrapers.length ? data.active_scrapers.map(renderRow).join('') : '<tr><td colspan="5" class="py-4 text-center text-slate-400 text-sm">No active scrapers</td></tr>';
+                    document.getElementById('active-tbody').innerHTML = activeHtml;
+                    
+                    const recentHtml = data.recent_jobs.length ? data.recent_jobs.map(renderRow).join('') : '<tr><td colspan="5" class="py-4 text-center text-slate-400 text-sm">No recent jobs</td></tr>';
+                    document.getElementById('recent-tbody').innerHTML = recentHtml;
+                } catch (e) {
+                    console.error("Failed to load", e);
+                }
+            }
+
+            fetchData();
+            setInterval(fetchData, 5000);
+        </script>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
+
+
 
 
 # ------------------------------------------------------------
@@ -2806,23 +4572,26 @@ def get_data_freshness(conn=Depends(get_db_connection)):
                 ORDER BY source_type, source_name
             """)
             sources = cursor.fetchall()
-            
-            # Fetch Network Freshness
-            cursor.execute("SELECT MAX(created_at) as val FROM unique_principals")
-            p_date = cursor.fetchone()['val']
-            
+
+            # For backward compatibility with the frontend format, pull specific system DBs
+            cursor.execute("SELECT last_updated FROM data_source_status WHERE source_name = 'PRINCIPALS DB'")
+            p_row = cursor.fetchone()
+            p_date = p_row['last_updated'] if p_row else None
+
+            cursor.execute("SELECT last_updated FROM data_source_status WHERE source_name = 'BUSINESS DB'")
+            b_row = cursor.fetchone()
+            b_date = b_row['last_updated'] if b_row else None
+
+            # Fallback for older code using networks build time
             cursor.execute("SELECT MAX(created_at) as val FROM networks")
             n_date = cursor.fetchone()['val']
-            
-            # For businesses, we don't have a direct 'updated_at', so we use property updates as proxy
-            # or just rely on network build time. Let's use network build time for now as 'Business Network'
-            
+
             return {
                  "sources": sources,
                  "system_freshness": {
-                     "principals_last_updated": p_date,
-                     "networks_last_built": n_date,
-                     # "businesses_last_updated": n_date # same as networks usually
+                     "principals_last_updated": p_date or n_date,
+                     "businesses_last_updated": b_date or n_date,
+                     "networks_last_built": n_date
                  }
             }
     except Exception as e:

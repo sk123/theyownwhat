@@ -12,7 +12,9 @@ import ToolboxDashboard from './components/ToolboxDashboard';
 import StatCard from './components/StatCard';
 import BackgroundGrid from './components/BackgroundGrid';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Sparkles, Loader2, Search, ArrowRight, Building2, TrendingUp, Users } from 'lucide-react';
+import { Sparkles, Loader2, Search, ArrowRight, Building2, TrendingUp, Users, ShieldAlert } from 'lucide-react';
+import HartfordMisconductExplorer from './components/HartfordPlayground';
+const BurstDetector = React.lazy(() => import('./components/BurstDetector'));
 
 const PropertyDetailsModal = React.lazy(() => import('./components/PropertyDetailsModal'));
 const EntityDetailsModal = React.lazy(() => import('./components/EntityDetailsModal'));
@@ -23,7 +25,7 @@ const FeedbackModal = React.lazy(() => import('./components/FeedbackModal'));
 
 // NOTE: This is a simplified App.jsx. In a real scenario we'd use React Router.
 function App() {
-  const [view, setView] = useState('home'); // home | dashboard | toolbox
+  const [view, setView] = useState('home'); // home | dashboard | toolbox | hartford
   const [loading, setLoading] = useState(false);
   const [insights, setInsights] = useState(null);
   const [searchResults, setSearchResults] = useState(null);
@@ -62,6 +64,7 @@ function App() {
   };
   const [aiEnabled, setAiEnabled] = useState(false);
   const [toolboxEnabled, setToolboxEnabled] = useState(false);
+  const [evictionToolsEnabled, setEvictionToolsEnabled] = useState(false);
 
   const [loadingInsights, setLoadingInsights] = useState(true);
   const [streamingStatus, setStreamingStatus] = useState({
@@ -83,6 +86,14 @@ function App() {
       })
       .catch(err => console.warn("Health check failed", err));
 
+    api.get('/features')
+      .then(data => {
+        if (data && data.eviction_tools_enabled !== undefined) {
+          setEvictionToolsEnabled(data.eviction_tools_enabled);
+        }
+      })
+      .catch(err => console.warn("Features check failed", err));
+
     setLoadingInsights(true);
     api.get('/insights')
       .then(data => {
@@ -91,6 +102,15 @@ function App() {
       })
       .catch(err => console.error("Failed to load insights", err))
       .finally(() => setLoadingInsights(false));
+
+    // Listen for Hartford Playground trigger from Insights
+    const handleOpenPlayground = () => setView('hartford');
+    window.addEventListener('open-playground', handleOpenPlayground);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('open-playground', handleOpenPlayground);
+    };
   }, []);
 
   // Search Handler
@@ -131,6 +151,7 @@ function App() {
           if (chunk.data.name) newData.networkName = chunk.data.name;
           if (chunk.data.building_count) newData.building_count = chunk.data.building_count;
           if (chunk.data.unit_count) newData.unit_count = chunk.data.unit_count;
+          if (chunk.data.eviction_summary) newData.evictionSummary = chunk.data.eviction_summary;
         } else if (chunk.type === 'entities') {
           if (chunk.data.entities) {
             setStreamingStatus(prev => ({
@@ -393,6 +414,7 @@ function App() {
         toolboxEnabled={toolboxEnabled}
         onShowFreshness={() => setShowFreshness(true)}
         onReportIssue={() => setShowFeedback(true)}
+        onHartfordPlayground={null}
       />
 
       {/* Maintenance Overlay */}
@@ -410,7 +432,7 @@ function App() {
               </div>
               <div>
                 <h3 className="font-bold text-lg">System Maintenance in Progress</h3>
-                <p className="text-sm text-amber-700">We're performing updates and improvements to enhance your experience. <strong>Expected return: Monday, February 10th.</strong> Thank you for your patience.</p>
+                <p className="text-sm text-amber-700">We're performing updates and improvements to enhance your experience. Thank you for your patience.</p>
               </div>
             </div>
           </motion.div>
@@ -501,6 +523,44 @@ function App() {
                         </p>
                       </div>
                     </div>
+
+                    {/* Tools Bar */}
+                    {evictionToolsEnabled && (
+                      <div className="mt-8 mb-2">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl mx-auto">
+                          <button
+                            onClick={() => setView('hartford')}
+                            className="group relative bg-white rounded-2xl border border-slate-200 p-5 shadow-sm hover:shadow-xl hover:border-red-300 hover:-translate-y-0.5 transition-all text-left overflow-hidden"
+                          >
+                            <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-br from-red-500/5 to-transparent rounded-bl-full"></div>
+                            <div className="flex items-center gap-3 mb-2">
+                              <div className="p-2 bg-red-50 rounded-xl text-red-600 group-hover:bg-red-600 group-hover:text-white transition-all">
+                                <ShieldAlert size={20} />
+                              </div>
+                              <h3 className="font-black text-slate-900 group-hover:text-red-600 transition-colors">Landlord Rap Sheets</h3>
+                            </div>
+                            <p className="text-xs text-slate-500 font-medium leading-relaxed">
+                              Code enforcement violations and eviction histories for top landlord networks by city.
+                            </p>
+                          </button>
+                          <button
+                            onClick={() => setView('burst')}
+                            className="group relative bg-white rounded-2xl border border-slate-200 p-5 shadow-sm hover:shadow-xl hover:border-amber-300 hover:-translate-y-0.5 transition-all text-left overflow-hidden"
+                          >
+                            <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-br from-amber-500/5 to-transparent rounded-bl-full"></div>
+                            <div className="flex items-center gap-3 mb-2">
+                              <div className="p-2 bg-amber-50 rounded-xl text-amber-600 group-hover:bg-amber-600 group-hover:text-white transition-all">
+                                <TrendingUp size={20} />
+                              </div>
+                              <h3 className="font-black text-slate-900 group-hover:text-amber-600 transition-colors">Surge Detector</h3>
+                            </div>
+                            <p className="text-xs text-slate-500 font-medium leading-relaxed">
+                              Detect concentrated eviction filing surges across cities, landlords, networks, and attorneys.
+                            </p>
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   {/* Results or Insights */}
@@ -726,6 +786,32 @@ function App() {
               className="h-full w-full"
             >
               <ToolboxDashboard onBack={() => setView('home')} />
+            </motion.div>
+          )}
+
+          {view === 'burst' && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="h-full w-full"
+            >
+              <React.Suspense fallback={
+                <div className="flex items-center justify-center h-full">
+                  <Loader2 className="w-8 h-8 animate-spin text-slate-400" />
+                </div>
+              }>
+                <BurstDetector onSelectEntity={(id, type, name) => loadNetwork(id, type, name)} />
+              </React.Suspense>
+            </motion.div>
+          )}
+
+          {view === 'hartford' && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="h-full w-full"
+            >
+              <HartfordMisconductExplorer onSelectEntity={(id, type, name) => loadNetwork(id, type, name)} />
             </motion.div>
           )}
         </AnimatePresence>

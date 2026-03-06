@@ -8,6 +8,7 @@ import sys
 import time
 import schedule
 import logging
+import subprocess
 from datetime import datetime
 
 # Add parent directory to path
@@ -53,7 +54,6 @@ def run_nightly_update():
         logger.info("✓ System Data Refresh finished")
 
         # Run update_data.py as a subprocess for better isolation
-        import subprocess
         
         cmd = [
             sys.executable, 
@@ -69,7 +69,17 @@ def run_nightly_update():
         enforcement_cmd = [sys.executable, "updater/ingest_hartford_enforcement.py"]
         subprocess.run(enforcement_cmd, check=False)
         
-        logger.info("✓ Parallel town update process finished")
+        # 3. Refresh eviction data from CT Fair Housing pipeline
+        eviction_url = os.environ.get("EVICTION_DATA_URL", "")
+        if eviction_url:
+            logger.info("Starting nightly eviction data refresh...")
+            eviction_cmd = [sys.executable, "scripts/ingest_evictions.py"]
+            subprocess.run(eviction_cmd, check=False)
+            logger.info("✓ Eviction data refresh finished")
+        else:
+            logger.info("⏭ EVICTION_DATA_URL not set — skipping eviction refresh")
+        
+        logger.info("✓ Nightly update process finished")
 
     except Exception as e:
         logger.error(f"✘ Nightly update failed: {e}")
@@ -90,7 +100,7 @@ def run_weekly_full_scan():
     try:
         logger.info(f"Running full scan for {town} (week {week_number} rotation)")
         from updater.update_data import main as vision_main
-        sys.argv = ['update_data.py', town, '--force']
+        sys.argv = ['update_data.py', '-m', town, '--force']
         vision_main()
         logger.info(f"✓ Full scan of {town} completed")
     except Exception as e:
