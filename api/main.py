@@ -8,7 +8,7 @@ import threading
 import requests
 import hashlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from urllib.parse import urlparse
 from typing import Any, Dict, List, Optional, Set, Tuple
 from collections import defaultdict
@@ -121,14 +121,14 @@ def _extract_street_address(address: str) -> str:
     """
     if not address:
         return ""
-    
-    # Check for unit keywords. 
-    # Use \b (word bound) or (?=\d) (followed by digit) to avoid partial matches 
+
+    # Check for unit keywords.
+    # Use \b (word bound) or (?=\d) (followed by digit) to avoid partial matches
     # on street names (e.g. 'FL' matching 'FLORENCE').
     # regex matches: space + (keyword) + (boundary/digit) + space? + (alphanumeric/dash) until end
-    
+
     pattern = r'(?:,|\s+)\s*(?:(?:UNIT|APT|APARTMENT|SUITE|STE|FL|FLOOR|RM|ROOM)(?:\b|(?=\d))|#)\s*[\w\d-]+$'
-    
+
     clean = re.sub(pattern, '', address, flags=re.IGNORECASE).strip()
     return clean
 
@@ -142,19 +142,19 @@ def is_likely_street_address(addr: str) -> bool:
     addr = addr.strip()
     if not addr[0].isdigit():
         return False
-    
+
     parts = addr.split()
     if len(parts) < 2:
         return False
-        
+
     return True
 
 
 def get_property_subsidies(cursor, property_id: int) -> List[Dict[str, Any]]:
     """Fetch subsidies for a specific property."""
     cursor.execute("""
-        SELECT program_name, subsidy_type, units_subsidized, expiry_date, source_url 
-        FROM property_subsidies 
+        SELECT program_name, subsidy_type, units_subsidized, expiry_date, source_url
+        FROM property_subsidies
         WHERE property_id = %s
     """, (property_id,))
     return [dict(row) for row in cursor.fetchall()]
@@ -237,38 +237,38 @@ def group_properties_into_complexes(properties: List[dict]) -> List[dict]:
     Group properties by street address into complexes.
     - Main row shows street address with count of units
     - Sub-rows show individual units with their owners
-    
+
     Uses the 'location' and 'property_city' fields to group properties.
     """
     from collections import defaultdict
-    
+
     # Group by (location, city) tuple
     complexes_map = defaultdict(list)
-    
+
     for prop in properties:
         # Use normalized_address if available AND valid, otherwise location + city
         raw_norm = (prop.get("normalized_address") or "").strip()
         if raw_norm and not is_likely_street_address(raw_norm):
             raw_norm = ""
-            
+
         location = (prop.get("location") or "").strip()
         city = (prop.get("property_city") or "").strip()
-        
+
         # Priority to normalized address, but fall back to raw location
         # CRITICAL CHANGE: Always strip unit numbers for grouping purposes
         raw_grouping_str = raw_norm
         if not raw_grouping_str:
              if is_likely_street_address(location):
                  raw_grouping_str = location
-        
+
         if not raw_grouping_str:
             continue
-            
+
         base_address = _extract_street_address(raw_grouping_str)
         grouping_key = (base_address, city)
-        
+
         complexes_map[grouping_key].append(prop)
-    
+
     # Fetch management info for all grouping keys in one go if possible
     # For now, we'll do individual lookups or a batch lookup if we have the keys
     group_keys = list(complexes_map.keys())
@@ -283,7 +283,7 @@ def group_properties_into_complexes(properties: List[dict]) -> List[dict]:
                 for addr, city in group_keys:
                     placeholders.append("(%s, %s)")
                     params.extend([addr, city])
-                
+
                 if placeholders:
                     query = f"SELECT street_address, city, management_name, official_url, phone FROM complex_management WHERE (street_address, city) IN ({', '.join(placeholders)})"
                     cur.execute(query, params)
@@ -294,7 +294,7 @@ def group_properties_into_complexes(properties: List[dict]) -> List[dict]:
 
     # Build result with complexes
     result = []
-    
+
     # Pre-fetch subsidies for all properties in this batch
     all_property_ids = [p['id'] for units in complexes_map.values() for p in units]
     subsidies_map = defaultdict(list)
@@ -313,20 +313,20 @@ def group_properties_into_complexes(properties: List[dict]) -> List[dict]:
 
     for (street_address, city), units in sorted(complexes_map.items()):
         mgt = mgt_info.get((street_address, city))
-        
+
         # Aggregate complex level info from first unit (NHPD data usually consistent for complex)
         complex_name = next((u.get('complex_name') for u in units if u.get('complex_name')), None)
         management_co = next((u.get('management_company') for u in units if u.get('management_company')), None)
-        
+
         if len(units) > 1:
             # This is a complex - create parent row with children
             total_assessed = sum(
                 (p.get("assessed_value") or 0) for p in units
             )
-            
+
             display_addr = street_address
             complex_lat, complex_lon = sanitize_property_coordinates(units[0])
-            
+
             # Aggregate subsidies for the complex
             complex_subsidies = []
             seen_subsidy_keys = set()
@@ -336,7 +336,7 @@ def group_properties_into_complexes(properties: List[dict]) -> List[dict]:
                     if key not in seen_subsidy_keys:
                         complex_subsidies.append(s)
                         seen_subsidy_keys.add(key)
-            
+
             complex_row = {
                 "id": f"complex_{hash((street_address, city))}",
                 "address": display_addr,
@@ -345,7 +345,7 @@ def group_properties_into_complexes(properties: List[dict]) -> List[dict]:
                 "assessed_value": f"${int(total_assessed):,}" if total_assessed else None,
                 "unit_count": sum(u.get("number_of_units") or 1 for u in units),
                 "is_complex": True,
-                "units": [u for u in units], 
+                "units": [u for u in units],
                 "latitude": complex_lat,
                 "longitude": complex_lon,
                 "normalized_address": display_addr,
@@ -372,7 +372,7 @@ def group_properties_into_complexes(properties: List[dict]) -> List[dict]:
                     "phone": mgt['phone']
                 }
             result.append(res)
-    
+
     return result
 
 
@@ -551,7 +551,7 @@ def startup_event():
         conn.commit()
         # backfill_owner_norm_columns(conn) # Commented out to prevent startup block
         logger.info("✅ Startup DB bootstrap completed.")
-        
+
         # logger.info("Triggering initial insights cache refresh in the background...")
         # thread = threading.Thread(target=_update_insights_cache_sync, daemon=True)
         # thread.start()
@@ -818,13 +818,13 @@ def batch_geocode_properties(req: BatchGeocodeRequest, conn=Depends(get_db_conne
     """
     if not req.property_ids:
         return []
-        
+
     logger.info(f"Batch geocoding request for {len(req.property_ids)} properties.")
     results = []
-    
+
     # 1. Fetch address info for these IDs if they don't have coords
     to_process = []
-    
+
     with conn.cursor(cursor_factory=RealDictCursor) as cursor:
         try:
             cursor.execute("""
@@ -832,12 +832,12 @@ def batch_geocode_properties(req: BatchGeocodeRequest, conn=Depends(get_db_conne
                 FROM properties
                 WHERE id = ANY(%s::bigint[])
             """, (req.property_ids,))
-            
+
             rows = cursor.fetchall()
         except Exception as e:
             logger.error(f"Database error in batch_geocode_properties: {e}")
             raise HTTPException(status_code=500, detail="Database query failed during batch geocoding")
-        
+
         for r in rows:
             # If already has coords, return them
             existing_lat, existing_lon = sanitize_property_coordinates(r)
@@ -855,7 +855,7 @@ def batch_geocode_properties(req: BatchGeocodeRequest, conn=Depends(get_db_conne
                 address_full = f"{row['location']}, {row['property_city'] or ''}, {DEFAULT_STATE} {row['property_zip'] or ''}".strip()
                 future = executor.submit(geocode_census, address_full)
                 future_to_id[future] = (row['id'], address_full)
-            
+
             # Collect results
             updates = []
             for future in as_completed(future_to_id):
@@ -919,7 +919,7 @@ def get_ai_analysis(entity_name: str, entity_type: str):
         }
         resp = requests.get("https://serpapi.com/search", params=params)
         data = resp.json()
-        
+
         # Fallback to web search if no news
         if "error" in data or not data.get("news_results"):
              params.pop("tbm")
@@ -927,7 +927,7 @@ def get_ai_analysis(entity_name: str, entity_type: str):
              data = resp.json()
 
         results = data.get("news_results", []) or data.get("organic_results", [])
-        
+
         snippets = []
         sources = []
         for r in results[:5]:
@@ -944,7 +944,7 @@ def get_ai_analysis(entity_name: str, entity_type: str):
         # Summarize with Gemini
         summary_text = "Found recent mentions."
         risk_level = "Unknown"
-        
+
         if genai and GEMINI_KEY:
             try:
                 system_prompt = (
@@ -953,7 +953,7 @@ def get_ai_analysis(entity_name: str, entity_type: str):
                     "Classify risk as Low, Moderate, or High only from source-backed evidence; otherwise say risk is Unknown."
                 )
                 user_msg = f"Entity: {entity_name}\nSnippets:\n" + "\n".join(snippets)
-                
+
                 model = genai.GenerativeModel('gemini-3.5-flash', system_instruction=system_prompt)
                 resp = model.generate_content(
                     user_msg,
@@ -1001,7 +1001,7 @@ def autocomplete(q: str, type: str, state: Optional[str] = None, conn=Depends(ge
 
     limit = 15
     results = []
-    
+
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cursor:
             # Prepare search patterns
@@ -1029,14 +1029,14 @@ def autocomplete(q: str, type: str, state: Optional[str] = None, conn=Depends(ge
                     biz_where += " AND business_state = 'NY'"
                 elif state == "CT":
                     biz_where += " AND (business_state != 'NY' OR business_state IS NULL)"
-                
+
                 remaining = limit - len(results)
                 if remaining > 0 and normalized_query:
                     max_fetch = limit if type == "business" else min(6, remaining)
                     cursor.execute(
                         f"""
                         SELECT b.id, b.name, b.business_address, b.business_city, b.business_state
-                        FROM businesses b 
+                        FROM businesses b
                         WHERE {biz_where}
                         ORDER BY CASE WHEN name_norm LIKE %s THEN 0 ELSE 1 END, b.name
                         LIMIT %s
@@ -1055,7 +1055,7 @@ def autocomplete(q: str, type: str, state: Optional[str] = None, conn=Depends(ge
                             address = ""
                         ctx = location or address or "Business Entity"
                         results.append({
-                            "label": r["name"], "value": r["name"], "id": str(r["id"]), 
+                            "label": r["name"], "value": r["name"], "id": str(r["id"]),
                             "type": "Business", "context": ctx,
                             "rank": 1 if r["name"].lower().startswith(q) else 2
                         })
@@ -1072,7 +1072,7 @@ def autocomplete(q: str, type: str, state: Optional[str] = None, conn=Depends(ge
                     elif state == "CT":
                         where_clauses_owner += " AND (source != 'NYS_OPEN_DATA' OR source IS NULL)"
                         where_clauses_co += " AND (source != 'NYS_OPEN_DATA' OR source IS NULL)"
-                    
+
                     max_fetch = limit * 2 if type == "owner" else min(8, remaining * 2)
                     cursor.execute(
                         f"""
@@ -1106,8 +1106,8 @@ def autocomplete(q: str, type: str, state: Optional[str] = None, conn=Depends(ge
                         seen_owner_norms.add(r["normalized_name"])
                         ctx = f"Owner of {r['example_addr']}"
                         results.append({
-                            "label": r["name"], "value": r["name"], "type": "Property Owner", 
-                            "context": ctx, 
+                            "label": r["name"], "value": r["name"], "type": "Property Owner",
+                            "context": ctx,
                             "rank": 1 if r["name"].lower().startswith(q) else 2
                         })
                         max_limit = limit if type == "owner" else min(6, remaining)
@@ -1123,7 +1123,7 @@ def autocomplete(q: str, type: str, state: Optional[str] = None, conn=Depends(ge
                         addr_where += " AND source = 'NYS_OPEN_DATA'"
                     elif state == "CT":
                         addr_where += " AND (source != 'NYS_OPEN_DATA' OR source IS NULL)"
-                    
+
                     max_fetch = limit if type == "address" else min(4, remaining)
                     cursor.execute(
                         f"""
@@ -1139,7 +1139,7 @@ def autocomplete(q: str, type: str, state: Optional[str] = None, conn=Depends(ge
                         label = f"{r['location']}, {r['property_city']}, {state or DEFAULT_STATE}"
                         ctx = f"Owned by {r['owner']}" if r['owner'] else r['property_city']
                         results.append({
-                            "label": label, "value": r["location"], "type": "Address", 
+                            "label": label, "value": r["location"], "type": "Address",
                             "context": ctx, "owner": r["owner"], "business_id": r["business_id"],
                             "rank": 1 if r["location"].lower().startswith(q) else 2
                         })
@@ -1153,13 +1153,13 @@ def autocomplete(q: str, type: str, state: Optional[str] = None, conn=Depends(ge
                         where_clauses += " AND EXISTS (SELECT 1 FROM businesses b_state WHERE b_state.id = p.business_id AND b_state.business_state = 'NY')"
                     elif state == "CT":
                         where_clauses += " AND EXISTS (SELECT 1 FROM businesses b_state WHERE b_state.id = p.business_id AND (b_state.business_state != 'NY' OR b_state.business_state IS NULL))"
-                    
+
                     max_fetch = limit if type == "principal" else min(4, remaining)
                     cursor.execute(
                         f"""
-                        SELECT DISTINCT ON (name_c_norm) 
+                        SELECT DISTINCT ON (name_c_norm)
                                 name_c AS name, name_c_norm
-                        FROM principals p 
+                        FROM principals p
                         WHERE {where_clauses}
                         LIMIT %s
                         """,
@@ -1167,8 +1167,8 @@ def autocomplete(q: str, type: str, state: Optional[str] = None, conn=Depends(ge
                     )
                     for r in cursor.fetchall():
                         results.append({
-                            "label": r["name"], "value": r["name"], "type": "Business Principal", 
-                            "context": "Business Principal", 
+                            "label": r["name"], "value": r["name"], "type": "Business Principal",
+                            "context": "Business Principal",
                             "rank": 1 if r["name"].lower().startswith(q) or any(r["name"].lower().startswith(word) for word in terms) else 2
                         })
 
@@ -1238,11 +1238,11 @@ def search_entities(type: str, term: str, state: Optional[str] = None, conn=Depe
                         biz_where += " AND business_state = 'NY'"
                     elif state == "CT":
                         biz_where += " AND (business_state != 'NY' OR business_state IS NULL)"
-                    
+
                     cursor.execute(
                         f"""
                         SELECT b.id, b.name, b.business_address, b.business_city, b.business_state
-                        FROM businesses b 
+                        FROM businesses b
                         WHERE {biz_where}
                         ORDER BY CASE WHEN name_norm LIKE %s THEN 0 ELSE 1 END, b.name
                         LIMIT 20
@@ -1341,7 +1341,7 @@ def search_entities(type: str, term: str, state: Optional[str] = None, conn=Depe
                     addr_where += " AND source = 'NYS_OPEN_DATA'"
                 elif state == "CT":
                     addr_where += " AND (source != 'NYS_OPEN_DATA' OR source IS NULL)"
-                
+
                 cursor.execute(
                     f"SELECT DISTINCT ON (location) location, property_city, owner FROM properties WHERE {addr_where} LIMIT %s",
                     [f"%{word}%" for word in terms] + [min(15, 50 - len(results))]
@@ -1349,7 +1349,7 @@ def search_entities(type: str, term: str, state: Optional[str] = None, conn=Depe
                 for r in cursor.fetchall():
                     ctx = f"Owned by {r['owner']}" if r['owner'] else f"{r.get('property_city', '')}, {state or DEFAULT_STATE}"
                     results.append(SearchResult(
-                        id=r["location"], name=r["location"], 
+                        id=r["location"], name=r["location"],
                         type="address", context=ctx
                     ))
 
@@ -1366,7 +1366,7 @@ def search_entities(type: str, term: str, state: Optional[str] = None, conn=Depe
                 if n.startswith(query): return 1
                 if query in n: return 2
                 return 3
-            
+
             results.sort(key=rank_res)
             return results[:50]
 
@@ -1388,24 +1388,24 @@ def resolve_principal_network_ids(cursor, entity_id: str, entity_name: Optional[
     """
     if not entity_id:
         return []
-    
+
     entity_id_str = str(entity_id).strip()
     entity_name_str = str(entity_name).strip() if entity_name else ""
-    
+
     names_to_check = set()
     pids_to_check = set()
-    
+
     if entity_id_str.isdigit():
         pids_to_check.add(int(entity_id_str))
     else:
         names_to_check.add(entity_id_str)
-        
+
     if entity_name_str:
         if entity_name_str.isdigit():
             pids_to_check.add(int(entity_name_str))
         else:
             names_to_check.add(entity_name_str)
-            
+
     # Generate all variations of names (normalized, canonicalized, uppercase)
     all_norms = set()
     for name in names_to_check:
@@ -1415,7 +1415,7 @@ def resolve_principal_network_ids(cursor, entity_id: str, entity_name: Optional[
         if canon: all_norms.add(canon)
         all_norms.add(name.upper())
         all_norms.add(name)
-        
+
     # Look up unique_principals by candidate names to find their numeric principal_ids
     if all_norms:
         cursor.execute(
@@ -1424,7 +1424,7 @@ def resolve_principal_network_ids(cursor, entity_id: str, entity_name: Optional[
         )
         for r in cursor.fetchall():
             pids_to_check.add(r['principal_id'])
-            
+
     # Look up principals table (original table) by principal_id if numeric, to get their name_c/name_c_norm
     original_names = set()
     for pid in pids_to_check:
@@ -1432,14 +1432,14 @@ def resolve_principal_network_ids(cursor, entity_id: str, entity_name: Optional[
         for r in cursor.fetchall():
             if r['name_c']: original_names.add(r['name_c'])
             if r['name_c_norm']: original_names.add(r['name_c_norm'])
-            
+
     for name in original_names:
         norm = normalize_person_name(name)
         canon = canonicalize_person_name(name)
         if norm: all_norms.add(norm)
         if canon: all_norms.add(canon)
         all_norms.add(name.upper())
-        
+
     # Re-run unique_principals lookup if we found new name variations
     if original_names:
         cursor.execute(
@@ -1452,10 +1452,10 @@ def resolve_principal_network_ids(cursor, entity_id: str, entity_name: Optional[
     # Search entity_networks using both IDs and name variations
     search_ids = list({str(pid) for pid in pids_to_check} | {entity_id_str} | ({entity_name_str} if entity_name_str else set()))
     search_names = list(all_norms)
-    
+
     if not search_ids and not search_names:
         return []
-        
+
     cursor.execute(
         "SELECT DISTINCT network_id FROM entity_networks "
         "WHERE entity_type = 'principal' AND (entity_id = ANY(%s) OR normalized_name = ANY(%s) OR entity_name = ANY(%s))",
@@ -1524,10 +1524,10 @@ def get_network_step(step: NetworkStep, conn=Depends(get_db_connection)):
                     ([pname_norm, pname_canon, step.entity_id], [pname_norm, pname_canon, step.entity_id])
                 )
                 pids = [str(r['principal_id']) for r in cursor.fetchall()]
-                
+
                 p_key = f"principal_{pname_norm}"
                 new_entities[p_key] = Entity(id=pname_norm, name=step.entity_id, type="principal", details={})
-                
+
                 search_pids = pids + [pname_norm, step.entity_id]
                 cursor.execute(
                     "SELECT * FROM properties WHERE principal_id = ANY(%s) OR owner_norm = ANY(%s) OR co_owner_norm = ANY(%s)",
@@ -1716,7 +1716,7 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                     building_count = net_row.get("building_count") or 0
                     unit_count = net_row.get("unit_count") or 0
                     member_names = net_row.get("member_names") or []
-                    
+
                     # Parse connection signals
                     conn_sigs = {}
                     if net_row.get("connection_signals"):
@@ -1735,7 +1735,7 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                     violations_open_sum = 0
                     last_violation_date = None
                     last_eviction_date = None
-                    
+
                     if bbl_list:
                         cursor.execute(
                             f"""
@@ -1751,11 +1751,11 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                             violation_count = int(p.get("violations_total") or 0)
                             open_violation_count = int(p.get("violations_open") or 0)
                             eviction_count = int(p.get("evictions_total") or 0)
-                            
+
                             eviction_count_total += eviction_count
                             violations_total_sum += violation_count
                             violations_open_sum += open_violation_count
-                            
+
                             if p.get("last_violation_date"):
                                 if not last_violation_date or p["last_violation_date"] > last_violation_date:
                                     last_violation_date = p["last_violation_date"]
@@ -1799,7 +1799,7 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                         "last_eviction_date": last_eviction_date.isoformat() if last_eviction_date and hasattr(last_eviction_date, "isoformat") else str(last_eviction_date) if last_eviction_date else None,
                         "status_breakdown": []
                     }
-                    
+
                     code_summary = {
                         "source_available": True,
                         "source_label": f"{selected_city.title()} Open Data",
@@ -1833,7 +1833,7 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                     businesses = []
                     principals = []
                     links = []
-                    
+
                     for name in member_names:
                         upper = name.upper()
                         is_biz = any(tok in upper for tok in ["LLC", "INC", "CORP", "LTD", "CO", "REALTY", "HOLDINGS", "GROUP", "MANAGEMENT", "ASSOCIATES", "PARTNERS", "TRUST", "PROPERTIES", "PROPERTY", "REAL ESTATE"])
@@ -1854,7 +1854,7 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                                 formatted_name = f"{words[1].title()} {words[0].title()} {words[2].title()}"
                             else:
                                 formatted_name = " ".join([w.title() for w in words])
-                                
+
                             principals.append({
                                 "id": ent_id,
                                 "name": formatted_name,
@@ -1862,7 +1862,7 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                                 "principal_id": ent_id,
                                 "details": {"connections": []}
                             })
-                            
+
                     # Build complete bipartite links between principals and businesses
                     for p in principals:
                         for b in businesses:
@@ -1975,7 +1975,7 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                         prop = cursor.fetchone()
                         if prop and prop["principal_id"]:
                             network_ids = resolve_principal_network_ids(cursor, str(prop["principal_id"]))
-                        
+
                         # If still nothing and the owner has a direct business association
                         if not network_ids:
                             cursor.execute(
@@ -1987,7 +1987,7 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                                 cursor.execute("SELECT network_id FROM entity_networks WHERE entity_type='business' AND entity_id=%s", (str(bprop["business_id"]),))
                                 row = cursor.fetchone()
                                 if row: network_ids = [row["network_id"]]
-                        
+
                         # NOTE: If no network found at all, we fall through to the isolated view below
                         # which shows only this owner's own properties. This is CORRECT for simple homeowners.
 
@@ -2005,7 +2005,7 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                              cursor.execute("SELECT network_id FROM entity_networks WHERE entity_type='business' AND entity_id=%s", (str(prop["business_id"]),))
                              row = cursor.fetchone()
                              if row: network_ids = [row["network_id"]]
-                         
+
                          if not network_ids and prop["principal_id"]:
                              # Only pivot via principal_id if it actually matches the OWNER's name,
                              # not a co-owner (which would load a completely unrelated network)
@@ -2015,7 +2015,7 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                              )
                              if cursor.fetchone():
                                  network_ids = resolve_principal_network_ids(cursor, str(prop["principal_id"]))
-                                  
+
                          if not network_ids and prop["owner_norm"]:
                              network_ids = resolve_principal_network_ids(cursor, prop["owner_norm"], prop["owner"])
 
@@ -2059,7 +2059,7 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                                 if row:
                                     network_ids = [row["network_id"]]
                                     logger.info(f"✅ Resolved via cached_insights controlling_business: {biz_name} → network_ids={network_ids}")
-                    
+
                     if not network_ids:
                         logger.warning(f"⚠️ No network found for principal: entity_id={entity_id}, entity_name={entity_name}")
 
@@ -2131,10 +2131,10 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                 # Get network stats from networks table
                 cursor.execute("SELECT SUM(business_count) as bc, MIN(primary_name) as bn FROM networks WHERE id = ANY(%s)", (network_ids,))
                 net_row = cursor.fetchone()
-                
+
                 header_name = net_row.get("bn") if net_row else "Unknown Network"
                 insight_row = {}
-                
+
                 # Lookup insight by network_id (most reliable) to get human name and stats
                 for nid in network_ids:
                     cursor.execute(
@@ -2145,7 +2145,7 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                     insight_row = cursor.fetchone() or {}
                     if insight_row:
                         break
-                
+
                 # Override header with human principal name from insights
                 if insight_row and insight_row.get('primary_entity_name') and insight_row['primary_entity_name'] not in ('NULL', 'None', ''):
                      header_name = insight_row['primary_entity_name']
@@ -2422,7 +2422,7 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                     {"label": r.get("label"), "count": int(r.get("count") or 0)}
                     for r in code_status_rows if r.get("label")
                 ]
-                
+
                 # Store the network info metadata dictionary to yield later after connection signals are calculated
                 network_info_data = {
                     "id": network_ids[0], # Just use first ID as canonical ID for now
@@ -2467,12 +2467,12 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                         (list(principal_names),)
                     )
                     all_principal_records = cursor.fetchall()
-                    
+
                     for record in all_principal_records:
                         name_c = record.get('name_c')
                         if not name_c:
                             continue
-                        
+
                         if name_c not in merged_principals:
                             merged_principals[name_c] = record
                         else:
@@ -2481,7 +2481,7 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                                 if merged_principals[name_c].get(key) is None and value is not None:
                                     merged_principals[name_c][key] = value
                 # --- FIX END ---
-                
+
                 entities_dict: Dict[str, Dict[str, Any]] = {}
                 links = {"business_to_principal": [], "principal_to_business": []}
 
@@ -2578,10 +2578,10 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
 
                 # --- NEW: Shared Address Links for Visualization ---
                 # We want to show the user that these businesses are linked because they share an address.
-                # We can reuse the same normalization logic or just check exact string match 
-                # (since discover_networks.py already grouped them by norm address).
+                # This is display-only; the guarded network builder does not use shared addresses
+                # as graph edges because that can over-broaden ownership networks.
                 from .shared_utils import normalize_mailing_address
-                
+
                 # Group businesses by normalized address locally for this network
                 addr_groups = defaultdict(list)
                 for b in businesses:
@@ -2597,7 +2597,7 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                         # Link them in a chain or all-to-all? Chain is cleaner for graph.
                         for i in range(len(b_keys) - 1):
                             links["shared_address"].append({
-                                "source": b_keys[i], 
+                                "source": b_keys[i],
                                 "target": b_keys[i+1],
                                 "label": "Shared Address"
                             })
@@ -2646,6 +2646,167 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                     "addresses": shared_addresses
                 }
 
+                # --- TRANSACTION SUMMARY: Recent acquisitions, dispositions, and intra-network transfers ---
+                try:
+                    def _transaction_name_keys(name: Any) -> Set[str]:
+                        if not name:
+                            return set()
+                        raw = str(name).strip()
+                        if not raw:
+                            return set()
+
+                        keys = {raw.upper()}
+                        keys.add(normalize_business_name(raw))
+                        keys.add(canonicalize_business_name(raw))
+                        keys.add(normalize_person_name(raw))
+                        keys.add(canonicalize_person_name(raw))
+
+                        for variant in get_name_variations(raw, "business"):
+                            keys.add(variant)
+                        for variant in get_name_variations(raw, "principal"):
+                            keys.add(variant)
+
+                        return {key for key in keys if key}
+
+                    # Collect all normalized names in this network (buyers/sellers to match against)
+                    network_entity_names = set()
+                    network_match_names = set()
+                    for b in businesses:
+                        if b.get("name"):
+                            network_entity_names.add(str(b["name"]).strip().upper())
+                            network_match_names.update(_transaction_name_keys(b["name"]))
+                        if b.get("normalized_name"):
+                            network_match_names.update(_transaction_name_keys(b["normalized_name"]))
+                    for pr in principals_in_network:
+                        pname = pr.get("principal_name") or pr.get("principal_id", "")
+                        if pname:
+                            network_entity_names.add(str(pname).strip().upper())
+                            network_match_names.update(_transaction_name_keys(pname))
+                        if pr.get("normalized_name"):
+                            network_match_names.update(_transaction_name_keys(pr["normalized_name"]))
+
+                    if network_match_names:
+                        entity_names_list = sorted(network_match_names)
+
+                        # Get recent transactions where this network is buyer or seller
+                        cursor.execute("""
+                            SELECT
+                                pt.transaction_date,
+                                pt.transaction_amount,
+                                pt.buyer_name,
+                                pt.seller_name,
+                                pt.buyer_raw,
+                                pt.seller_raw,
+                                pt.transaction_type,
+                                pt.location,
+                                pt.property_city,
+                                pt.source
+                            FROM property_transactions pt
+                            WHERE (pt.buyer_name = ANY(%s) OR pt.seller_name = ANY(%s)
+                                   OR UPPER(pt.buyer_raw) = ANY(%s) OR UPPER(pt.seller_raw) = ANY(%s))
+                              AND pt.transaction_date IS NOT NULL
+                              AND pt.transaction_date > '2000-01-01'
+                              AND pt.transaction_date <= CURRENT_DATE + INTERVAL '1 year'
+                            ORDER BY pt.transaction_date DESC
+                            LIMIT 200
+                        """, (entity_names_list, entity_names_list, entity_names_list, entity_names_list))
+
+                        all_txns = cursor.fetchall() or []
+
+                        # Classify transactions
+                        acquisitions = []
+                        dispositions = []
+                        reshuffles = []
+                        recent_transactions = []
+
+                        now = datetime.now()
+                        one_year_ago = now - timedelta(days=365)
+                        three_years_ago = now - timedelta(days=365*3)
+
+                        for txn in all_txns:
+                            buyer = txn.get("buyer_name") or ""
+                            seller = txn.get("seller_name") or ""
+                            buyer_keys = _transaction_name_keys(buyer) | _transaction_name_keys(txn.get("buyer_raw"))
+                            seller_keys = _transaction_name_keys(seller) | _transaction_name_keys(txn.get("seller_raw"))
+                            buyer_in_network = bool(buyer_keys & network_match_names)
+                            seller_in_network = bool(seller_keys & network_match_names)
+
+                            txn_date = txn.get("transaction_date")
+                            txn_amount = float(txn.get("transaction_amount") or 0)
+
+                            if buyer_in_network and seller_in_network:
+                                direction = "reshuffle"
+                                transaction_scope = "intra_network"
+                                reshuffles.append(txn)
+                            elif buyer_in_network:
+                                direction = "acquired"
+                                transaction_scope = "inter_network"
+                                acquisitions.append(txn)
+                            elif seller_in_network:
+                                direction = "disposed"
+                                transaction_scope = "inter_network"
+                                dispositions.append(txn)
+                            else:
+                                direction = "unknown"
+                                transaction_scope = "unknown"
+
+                            if len(recent_transactions) < 10:
+                                recent_transactions.append({
+                                    "date": txn_date.isoformat() if hasattr(txn_date, 'isoformat') else str(txn_date),
+                                    "amount": txn_amount,
+                                    "location": txn.get("location"),
+                                    "city": txn.get("property_city"),
+                                    "direction": direction,
+                                    "buyer": txn.get("buyer_raw"),
+                                    "seller": txn.get("seller_raw"),
+                                    "buyer_name": txn.get("buyer_name") or txn.get("buyer_raw"),
+                                    "seller_name": txn.get("seller_name") or txn.get("seller_raw"),
+                                    "buyer_in_network": buyer_in_network,
+                                    "seller_in_network": seller_in_network,
+                                    "scope": transaction_scope,
+                                    "scope_label": "Intra-network" if transaction_scope == "intra_network" else "Inter-network" if transaction_scope == "inter_network" else "Unclassified",
+                                    "scope_note": (
+                                        "Buyer and seller both match this ownership network."
+                                        if transaction_scope == "intra_network"
+                                        else "Only one side matches this ownership network."
+                                        if transaction_scope == "inter_network"
+                                        else "Insufficient buyer/seller match data to classify."
+                                    ),
+                                    "type": txn.get("transaction_type")
+                                })
+
+                        # Compute aggregate stats
+                        acq_last_year = [t for t in acquisitions if t.get("transaction_date") and t["transaction_date"] >= one_year_ago.date()]
+                        disp_last_year = [t for t in dispositions if t.get("transaction_date") and t["transaction_date"] >= one_year_ago.date()]
+                        acq_last_3y = [t for t in acquisitions if t.get("transaction_date") and t["transaction_date"] >= three_years_ago.date()]
+                        disp_last_3y = [t for t in dispositions if t.get("transaction_date") and t["transaction_date"] >= three_years_ago.date()]
+
+                        acq_volume_1y = sum(float(t.get("transaction_amount") or 0) for t in acq_last_year)
+                        disp_volume_1y = sum(float(t.get("transaction_amount") or 0) for t in disp_last_year)
+
+                        network_info_data["transaction_summary"] = {
+                            "total_acquisitions": len(acquisitions),
+                            "total_dispositions": len(dispositions),
+                            "total_reshuffles": len(reshuffles),
+                            "acquisitions_last_12m": len(acq_last_year),
+                            "dispositions_last_12m": len(disp_last_year),
+                            "acquisitions_last_3y": len(acq_last_3y),
+                            "dispositions_last_3y": len(disp_last_3y),
+                            "acquisition_volume_12m": acq_volume_1y,
+                            "disposition_volume_12m": disp_volume_1y,
+                            "net_acquisitions_12m": len(acq_last_year) - len(disp_last_year),
+                            "recent_transactions": recent_transactions,
+                            "scope_legend": {
+                                "intra_network": "Buyer and seller both match the loaded ownership network; likely internal paperwork or LLC-to-LLC reshuffling.",
+                                "inter_network": "Exactly one side matches the loaded ownership network; treated as acquisition or disposition.",
+                                "unknown": "Buyer/seller names were not sufficient to classify against the loaded network."
+                            },
+                            "has_seller_data": any(t.get("seller_name") for t in all_txns)
+                        }
+                except Exception as e:
+                    logger.warning(f"Transaction summary failed for network: {e}")
+                    network_info_data["transaction_summary"] = None
+
                 # Yield the complete network_info payload
                 yield _yield(json.dumps(
                     {
@@ -2672,13 +2833,13 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                 # 2. owner_norm/co_owner_norm = principal_id (person owns it)
                 # 3. owner = business_name (business owns it, simple string match)
                 # We normalize the business names for better matching if possible, but exact match is a safe start.
-                
+
                 # Match by explicit link in entity_networks (Source of Truth)
                 # This ensures we get exactly the properties counted in the insights card.
                 # Stream flat properties (Frontend handles grouping)
                 # DEDUPLICATION FIX: Use DISTINCT ON to return only one row per physical address
                 # NEIGHBOR FETCH: Find "Base Addresses" and fetch ALL units, flagging ownership.
-                
+
                 neighbor_fetch_limit = 80
                 is_large_network = (
                     network_property_count > neighbor_fetch_limit
@@ -2738,7 +2899,7 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                             SELECT unnest(%s::int[]) AS id
                         ),
                         network_bases AS (
-                            SELECT DISTINCT 
+                            SELECT DISTINCT
                                 property_city,
                                 -- Heuristic: Remove trailing unit (Space + 1 Letter OR Space + 1-4 Digits)
                                 REGEXP_REPLACE(location, '\s+([A-Z]|\d{1,4})$', '') as base_loc
@@ -2799,7 +2960,7 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                         property_query,
                         (network_property_ids,)
                     )
-                  
+
                 # Stream flat properties (Frontend handles grouping)
                 # First, fetch ALL properties to get their subsidies in one go
                 all_raw_rows = cursor.fetchall()
@@ -2904,14 +3065,14 @@ def get_properties_batch(owner_names: str, conn=Depends(get_db_connection)):
     with conn.cursor(cursor_factory=RealDictCursor) as cursor:
         cursor.execute(
             """
-            SELECT p.*, 
+            SELECT p.*,
                    COALESCE(v.violation_count, 0) as violation_count,
                    COALESCE(e.eviction_count, 0) as eviction_count
             FROM properties p
             LEFT JOIN (
                 SELECT property_id, COUNT(*)::int as violation_count
                 FROM code_enforcement
-                WHERE record_status NOT ILIKE 'Closed%%' 
+                WHERE record_status NOT ILIKE 'Closed%%'
                   AND record_status NOT ILIKE 'Entered in error%%'
                   AND record_status IS NOT NULL
                   AND record_status != 'NaN'
@@ -2947,12 +3108,12 @@ def get_properties_batch(owner_names: str, conn=Depends(get_db_connection)):
 def get_property_enforcement(id: int, conn=Depends(get_db_connection)):
     with conn.cursor(cursor_factory=RealDictCursor) as cursor:
         cursor.execute("""
-            SELECT 
-                case_number, 
-                record_name, 
-                record_status, 
-                date_opened, 
-                date_closed, 
+            SELECT
+                case_number,
+                record_name,
+                record_status,
+                date_opened,
+                date_closed,
                 inspection_type,
                 record_type
             FROM code_enforcement
@@ -2992,17 +3153,17 @@ def _calculate_and_cache_insights(cursor, town_col: Optional[str], town_filter: 
             FROM properties p
             JOIN entity_networks en ON p.business_id::text = en.entity_id AND en.entity_type = 'business'
             WHERE p.business_id IS NOT NULL {town_filter_clause}
-            
+
             UNION ALL
-            
+
             -- Direct link to principal via property.principal_id
             SELECT p.id, en.network_id, en.entity_id, en.entity_type, en.entity_name, p.assessed_value, p.appraised_value, p.location, p.number_of_units
             FROM properties p
             JOIN entity_networks en ON p.principal_id = en.entity_id AND en.entity_type = 'principal'
             WHERE p.principal_id IS NOT NULL {town_filter_clause}
-            
+
             UNION ALL
-            
+
             -- Direct link to principal via property.owner_norm / co_owner_norm
             SELECT p.id, en.network_id, en.entity_id, en.entity_type, en.entity_name, p.assessed_value, p.appraised_value, p.location, p.number_of_units
             FROM properties p
@@ -3024,7 +3185,7 @@ def _calculate_and_cache_insights(cursor, town_col: Optional[str], town_filter: 
             -- Pre-aggregate active violations per property
             SELECT property_id, COUNT(*) as violation_count
             FROM code_enforcement
-            WHERE record_status NOT ILIKE 'Closed%%' 
+            WHERE record_status NOT ILIKE 'Closed%%'
               AND record_status NOT ILIKE 'Entered in error%%'
               AND record_status IS NOT NULL
               AND record_status != 'NaN'
@@ -3041,7 +3202,7 @@ def _calculate_and_cache_insights(cursor, town_col: Optional[str], town_filter: 
         ),
         network_stats AS (
             -- Total stats for each network
-            SELECT 
+            SELECT
                 dpl.network_id,
                 COUNT(*) as total_property_count,
                 SUM(dpl.assessed_value) as total_assessed_value,
@@ -3056,7 +3217,7 @@ def _calculate_and_cache_insights(cursor, town_col: Optional[str], town_filter: 
         ),
         entity_stats AS (
             -- Stats for each entity within its network
-            SELECT 
+            SELECT
                 network_id,
                 entity_id,
                 entity_type,
@@ -3067,7 +3228,7 @@ def _calculate_and_cache_insights(cursor, town_col: Optional[str], town_filter: 
         ),
         ranked_entities AS (
             -- Pick the best entity to represent each network
-            SELECT 
+            SELECT
                 es.*,
                 ns.total_property_count,
                 ns.total_assessed_value,
@@ -3076,20 +3237,20 @@ def _calculate_and_cache_insights(cursor, town_col: Optional[str], town_filter: 
                 ns.unit_count,
                 ns.violation_count,
                 ROW_NUMBER() OVER (
-                    PARTITION BY es.network_id 
-                    ORDER BY 
-                        CASE 
+                    PARTITION BY es.network_id
+                    ORDER BY
+                        CASE
                             WHEN es.entity_name = 'MENACHEM GUREVITCH' THEN 0
                             WHEN es.entity_name = 'YEHUDA GUREVITCH' THEN 1
-                            WHEN es.entity_type = 'principal' THEN 2 
-                            ELSE 3 
+                            WHEN es.entity_type = 'principal' THEN 2
+                            ELSE 3
                         END,
-                        CASE 
-                            WHEN es.entity_name ILIKE '%% LLC' THEN 2 
-                            WHEN es.entity_name ILIKE '%% INC%%' THEN 2 
-                            WHEN es.entity_name ILIKE '%% CORP%%' THEN 2 
-                            WHEN es.entity_name ILIKE '%% LTD%%' THEN 2 
-                            ELSE 0 
+                        CASE
+                            WHEN es.entity_name ILIKE '%% LLC' THEN 2
+                            WHEN es.entity_name ILIKE '%% INC%%' THEN 2
+                            WHEN es.entity_name ILIKE '%% CORP%%' THEN 2
+                            WHEN es.entity_name ILIKE '%% LTD%%' THEN 2
+                            ELSE 0
                         END,
                         es.entity_property_count DESC
                 ) as rank
@@ -3106,7 +3267,7 @@ def _calculate_and_cache_insights(cursor, town_col: Optional[str], town_filter: 
              WHERE entity_type = 'business'
              ORDER BY network_id, entity_property_count DESC
         )
-        SELECT 
+        SELECT
             re.entity_id,
             re.entity_name,
             re.entity_type,
@@ -3129,39 +3290,39 @@ def _calculate_and_cache_insights(cursor, town_col: Optional[str], town_filter: 
     cursor.execute(query, params)
     # Using RealDictCursor, so we get dicts
     raw_networks = cursor.fetchall()
-    
+
     # Graceful Merge / Deduplication
     merged_networks = []
     seen_keys = {} # Map unique_key -> index in merged_networks
-    
+
     for net in raw_networks:
         # Create a unique key based on controlling business or entity ID
         c_id = net.get('controlling_business_id')
         unique_key = c_id if c_id else f"ent_{net['entity_id']}"
-        
+
         # Make a mutable copy
         network = dict(net)
-        
+
         if unique_key in seen_keys:
             # Merge into existing
             existing_idx = seen_keys[unique_key]
             existing_net = merged_networks[existing_idx]
-            
+
             # Merge logic:
-            
+
             # 1. Prioritize Human Principal for the Main Title
             # If existing is a business but incoming is a principal (human), swap to human.
             if existing_net['entity_type'] == 'business' and network['entity_type'] == 'principal':
                 existing_net['entity_name'] = network['entity_name']
                 existing_net['entity_type'] = 'principal'
                 existing_net['entity_id'] = network['entity_id']
-            
+
             # If both are principals, append names if distinct (joint title)
             elif existing_net['entity_type'] == 'principal' and network['entity_type'] == 'principal':
                  if network['entity_name'] not in existing_net['entity_name']:
                      if len(existing_net['entity_name']) < 60: # Avoid overly long titles
                         existing_net['entity_name'] += f" & {network['entity_name']}"
-            
+
             # If incoming has a controlling business name and existing doesn't, take it
             if not existing_net.get('controlling_business_name') and network.get('controlling_business_name'):
                 existing_net['controlling_business_name'] = network['controlling_business_name']
@@ -3175,19 +3336,19 @@ def _calculate_and_cache_insights(cursor, town_col: Optional[str], town_filter: 
                 existing_net['building_count'] = network.get('building_count', 0)
                 existing_net['unit_count'] = network.get('unit_count', 0)
                 existing_net['violation_count'] = network.get('violation_count', 0)
-            
+
             # Always max out business count
             existing_net['business_count'] = max(existing_net.get('business_count', 0), network.get('business_count', 0))
-            
+
             continue
-        
+
         seen_keys[unique_key] = len(merged_networks)
         merged_networks.append(network)
-    
+
     # 2. Enrich the Final Top 10
     final_networks = merged_networks[:10]
     result = []
-    
+
     for network in final_networks:
         # Top Principals
         cursor.execute("""
@@ -3542,17 +3703,17 @@ def get_insights(conn=Depends(get_db_connection)):
                 ORDER BY title, rank
             """)
             rows = cursor.fetchall()
-            
+
             if not rows:
                 return {}
-            
+
             # Group by title (city/statewide)
             result = {}
             for row in rows:
                 title = row['title']
                 if title not in result:
                     result[title] = []
-                
+
                 result[title].append({
                     'rank': row['rank'],
                     'network_id': row.get('network_id'),
@@ -3576,7 +3737,7 @@ def get_insights(conn=Depends(get_db_connection)):
                     'principals': row['principals'] or [],
                     'representative_entities': row['representative_entities']
                 })
-            
+
             return result
     except Exception:
         logger.exception("Could not fetch insights from cache.")
@@ -3754,7 +3915,7 @@ def _calculate_completeness_matrix(conn):
     Calculates the data completeness matrix for all municipalities.
     """
     logger.info("Calculating Data Completeness Matrix...")
-    
+
     with conn.cursor(cursor_factory=RealDictCursor) as cursor:
         # Check active cities
         active_cities = []
@@ -3771,7 +3932,7 @@ def _calculate_completeness_matrix(conn):
         union_subqueries = []
         for city in active_cities:
             union_subqueries.append(f"""
-                SELECT 
+                SELECT
                     '{city.upper()}' as town,
                     COUNT(*) as total_properties,
                     0 as with_photos,
@@ -3789,7 +3950,7 @@ def _calculate_completeness_matrix(conn):
 
         query = f"""
             WITH prop_stats AS (
-                SELECT 
+                SELECT
                     COALESCE(TRIM(UPPER(property_city)), 'UNKNOWN') as town,
                     COUNT(*) as total_properties,
                     COUNT(CASE WHEN building_photo IS NOT NULL OR image_url IS NOT NULL THEN 1 END) as with_photos,
@@ -3803,11 +3964,11 @@ def _calculate_completeness_matrix(conn):
                 GROUP BY TRIM(UPPER(property_city))
                 {union_sql}
             )
-            SELECT 
+            SELECT
                 ps.*,
-                CASE 
+                CASE
                     WHEN ds.refresh_status = 'running' AND ds.last_refreshed_at < NOW() - INTERVAL '6 hours' THEN 'failure'
-                    ELSE ds.refresh_status 
+                    ELSE ds.refresh_status
                 END as refresh_status,
                 ds.last_refreshed_at,
                 ds.details,
@@ -3884,13 +4045,13 @@ def _calculate_completeness_matrix(conn):
                 "message": details.get("message") or details.get("eviction_note") or details.get("join_note"),
                 "sources": details.get("sources") if isinstance(details.get("sources"), list) else []
             })
-        
+
         # Format for frontend
         sources = []
         for row in prop_rows:
             town_upper = row['town'].strip().upper()
             portal_url = None
-            
+
             # Determine Portal URL
             if town_upper in MUNICIPAL_DATA_SOURCES:
                 cfg = MUNICIPAL_DATA_SOURCES[town_upper]
@@ -3900,7 +4061,7 @@ def _calculate_completeness_matrix(conn):
                      portal_url = f"https://{cfg['domain']}"
                 elif 'url' in cfg:
                      portal_url = cfg['url']
-            
+
             # Default fallback for Vision
             if not portal_url:
                 portal_url = None
@@ -3918,7 +4079,7 @@ def _calculate_completeness_matrix(conn):
                          source_date_display = f"{freq} ({external_date})"
                      else:
                          source_date_display = freq
-            
+
             # Fallback: if we still have no source_date but DO have a last_refreshed_at, show it
             if not source_date_display and row.get('last_refreshed_at'):
                 source_date_display = row['last_refreshed_at'].strftime('%Y-%m-%d')
@@ -3957,7 +4118,7 @@ def _calculate_completeness_matrix(conn):
                 "municipality": row['town'],
                 "status": row['refresh_status'] or 'unknown',
                 "last_updated": row['last_refreshed_at'],
-                "source_date": source_date_display, 
+                "source_date": source_date_display,
                 "total_properties": row['total_properties'],
                 "portal_url": portal_url,
                 "state": state,
@@ -3977,7 +4138,7 @@ def _calculate_completeness_matrix(conn):
                     "details": round((row['with_year_built'] / row['total_properties']) * 100, 1) if row['total_properties'] else 0
                 }
             })
-        
+
         # Return composite object (frontend must handle)
         return {
             "sources": sources,
@@ -3994,21 +4155,21 @@ def get_completeness_report(conn=Depends(get_db_connection)):
         with conn.cursor(cursor_factory=RealDictCursor) as cursor:
             cursor.execute("SELECT value, created_at FROM kv_cache WHERE key = 'completeness_matrix'")
             row = cursor.fetchone()
-            
+
             # Cache for 1 hour
             if row and row['value']:
                  # Ensure created_at is aware if not already (psycopg2 usually returns aware)
                  created_at = row['created_at']
                  if created_at.tzinfo is None:
                      created_at = created_at.replace(tzinfo=timezone.utc)
-                 
+
                  age = datetime.now(timezone.utc) - created_at
                  if age.total_seconds() < 3600:
                      return row['value']
-        
+
         # Calculate fresh if cache miss or stale
         data = _calculate_completeness_matrix(conn)
-        
+
         # Update cache
         with conn.cursor() as cursor:
              cursor.execute("""
@@ -4016,7 +4177,7 @@ def get_completeness_report(conn=Depends(get_db_connection)):
                 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, created_at = NOW()
             """, ('completeness_matrix', json.dumps(data, default=json_converter)))
              conn.commit()
-             
+
         return data
 
     except Exception as e:
@@ -4077,14 +4238,14 @@ def get_reports(conn=Depends(get_db_connection)):
             title="Top Owners by Assessed Value",
             data=[ReportItem(key=r["key"], value=f"${int(r['value'] or 0):,}") for r in rows]
         ))
-    
+
     # 3. Top Networks (Custom Logic) - Prioritize Human Names
     # Note: Logic moved upstream or we query here?
     # For now, let's just ensure we return consistent structure.
     # The user wants "Menachem Gurevitch" (Principal) as header if linked.
     # But this function `_get_top_networks` currently returns OWNERS.
     # We need a separate `top_networks` endpoint or check `get_network_graph`.
-    
+
     return reports
 
 NON_CT_MONITOR_CITIES = {
@@ -4234,7 +4395,7 @@ def get_landlord_monitor(
                                 conn_sigs = row["connection_signals"]
                         except Exception:
                             pass
-                    
+
                     people = conn_sigs.get("people", [])
                     formatted_principals = []
                     for p in people:
@@ -4248,7 +4409,7 @@ def get_landlord_monitor(
                         else:
                             formatted_name = " ".join([w.title() for w in words])
                         formatted_principals.append({"name": formatted_name, "state": selected_city})
-                    
+
                     row["principals"] = formatted_principals
                     row["business_names"] = row["violation_businesses"]
                 return rows
@@ -5040,20 +5201,20 @@ def get_monitor_city_stats(
     conn=Depends(get_db_connection),
 ):
     selected_city = (city or "HARTFORD").strip().upper()
-    
+
     # Build date filter clause
     date_clause = ""
     date_params = []
     if date_from:
         date_clause = " AND filing_date >= %s"
         date_params.append(date_from)
-        
+
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cursor:
             if selected_city in NON_CT_MONITOR_CITIES:
                 db_prefix = NON_CT_MONITOR_CITIES[selected_city]["db_prefix"]
                 cursor.execute(f"""
-                    SELECT 
+                    SELECT
                         COALESCE(SUM(violations_total), 0)::int AS total_violations,
                         COALESCE(SUM(violations_open), 0)::int AS open_violations,
                         COALESCE(SUM(evictions_total), 0)::int AS total_evictions
@@ -5075,16 +5236,16 @@ def get_monitor_city_stats(
                 else:
                     eviction_query = f"SELECT COUNT(*)::int FROM evictions WHERE UPPER(municipality) = %s AND filing_date IS NOT NULL{date_clause}"
                     eviction_params = [selected_city] + date_params
-                
+
                 cursor.execute(eviction_query, eviction_params)
                 total_evictions = cursor.fetchone()["count"]
-                
+
                 total_violations = 0
                 open_violations = 0
                 is_hartford = selected_city == "HARTFORD"
                 if is_hartford:
                     cursor.execute("""
-                        SELECT 
+                        SELECT
                             COUNT(*)::int AS total_violations,
                             COUNT(*) FILTER (
                                 WHERE NOT (
@@ -5099,7 +5260,7 @@ def get_monitor_city_stats(
                     v_row = cursor.fetchone()
                     total_violations = v_row["total_violations"]
                     open_violations = v_row["open_violations"]
-                
+
                 return {
                     "total_evictions": total_evictions,
                     "total_violations": total_violations,
@@ -5787,28 +5948,28 @@ def _compute_local_context(conn, entity: str, entity_type: str) -> Dict[str, Any
         "network_principals": [],
         "is_network_level": False
     }
-    
+
     with conn.cursor(cursor_factory=RealDictCursor) as cursor:
         matched_property_ids: List[int] = []
         # Step 1: Find network_id robustly using name normalization variations
         network_id = None
         from api.shared_utils import normalize_person_name, normalize_business_name, canonicalize_person_name
-        
+
         search_names = [entity, entity.strip().upper()]
         norm_p = normalize_person_name(entity)
         norm_b = normalize_business_name(entity)
         canon_p = canonicalize_person_name(entity)
-        
+
         for name in [norm_p, norm_b, canon_p]:
             if name and name not in search_names:
                 search_names.append(name)
-                
+
         search_names = [n for n in search_names if n and len(n) > 1]
-        
+
         if search_names:
             cursor.execute("""
-                SELECT network_id FROM entity_networks 
-                WHERE entity_id = ANY(%s) 
+                SELECT network_id FROM entity_networks
+                WHERE entity_id = ANY(%s)
                    OR UPPER(entity_name) = ANY(%s)
                 LIMIT 1
             """, (search_names, [n.upper() for n in search_names]))
@@ -5819,7 +5980,7 @@ def _compute_local_context(conn, entity: str, entity_type: str) -> Dict[str, Any
         if network_id is not None:
             ctx["network_id"] = network_id
             ctx["is_network_level"] = True
-            
+
             # 1. Fetch properties in this network
             cursor.execute("""
                 WITH matched AS (
@@ -5864,13 +6025,13 @@ def _compute_local_context(conn, entity: str, entity_type: str) -> Dict[str, Any
 
             # 3. Businesses & Principals list
             cursor.execute("""
-                SELECT DISTINCT entity_name FROM entity_networks 
+                SELECT DISTINCT entity_name FROM entity_networks
                 WHERE network_id = %s AND entity_type = 'business'
             """, (network_id,))
             ctx["network_businesses"] = [r["entity_name"] for r in cursor.fetchall() if r.get("entity_name")]
 
             cursor.execute("""
-                SELECT DISTINCT entity_name FROM entity_networks 
+                SELECT DISTINCT entity_name FROM entity_networks
                 WHERE network_id = %s AND entity_type = 'principal'
             """, (network_id,))
             ctx["network_principals"] = [r["entity_name"] for r in cursor.fetchall() if r.get("entity_name")]
@@ -5881,7 +6042,7 @@ def _compute_local_context(conn, entity: str, entity_type: str) -> Dict[str, Any
                 WHERE network_id = %s
             """, (network_id,))
             network_members = cursor.fetchall()
-            
+
             norm_candidates = set()
             for m in network_members:
                 name = m.get("entity_name")
@@ -5907,7 +6068,7 @@ def _compute_local_context(conn, entity: str, entity_type: str) -> Dict[str, Any
 
             if norm_candidates:
                 cursor.execute("""
-                    SELECT 
+                    SELECT
                         COUNT(*)::int AS cnt,
                         COUNT(*) FILTER (WHERE lower(COALESCE(status,'')) NOT LIKE '%%withdraw%%' AND lower(COALESCE(status,'')) NOT LIKE '%%closed%%' AND lower(COALESCE(status,'')) NOT LIKE '%%disposed%%')::int AS active_cnt
                     FROM evictions
@@ -5993,7 +6154,7 @@ def _compute_local_context(conn, entity: str, entity_type: str) -> Dict[str, Any
 
             if norm_candidates:
                 cursor.execute("""
-                    SELECT 
+                    SELECT
                         COUNT(*)::int AS cnt,
                         COUNT(*) FILTER (WHERE lower(COALESCE(status,'')) NOT LIKE '%%withdraw%%' AND lower(COALESCE(status,'')) NOT LIKE '%%closed%%' AND lower(COALESCE(status,'')) NOT LIKE '%%disposed%%')::int AS active_cnt
                     FROM evictions
@@ -6524,12 +6685,12 @@ def _cached_ai_report_is_usable(row: Dict[str, Any], entity: Optional[str]) -> b
 def _search_network_entities(context: Dict[str, Any]) -> Tuple[str, List[Dict[str, str]]]:
     if not SERPAPI_API_KEY:
         return "", []
-        
+
     entity = (context.get('entity') or "").strip()
     if not entity:
         return "", []
     targets = _report_research_targets(context)
-    
+
     snippets_by_type: Dict[str, List[str]] = defaultdict(list)
     labels_by_type = {
         "web": "Web and public-record search",
@@ -6538,7 +6699,7 @@ def _search_network_entities(context: Dict[str, Any]) -> Tuple[str, List[Dict[st
     }
     all_sources = []
     seen_links = set()
-    
+
     for target in targets:
         target_name = target["name"]
         search_specs = [
@@ -6579,7 +6740,7 @@ def _search_network_entities(context: Dict[str, Any]) -> Tuple[str, List[Dict[st
                    "api_key": SERPAPI_API_KEY,
                    "hl": "en",
                    "gl": "us",
-                   "num": 3 
+                   "num": 3
                 }
                 if spec.get("tbm"):
                     params["tbm"] = spec["tbm"]
@@ -6622,7 +6783,7 @@ def _search_network_entities(context: Dict[str, Any]) -> Tuple[str, List[Dict[st
                             })
             except Exception as e:
                 logger.error(f"Search failed for query '{q}': {e}")
-            
+
     sections = []
     for source_type in ["web", "news", "case_law"]:
         snippets = snippets_by_type.get(source_type) or []
@@ -6636,18 +6797,18 @@ def _draft_ai_report_text(context: Dict[str, Any], length: Optional[str] = 'comp
     title = f"AI report — {context.get('entity')}"
     entity = context.get('entity')
     entity_type = context.get('entity_type')
-    
+
     # Run public web search
     search_data, sources = _search_network_entities(context)
-    
+
     # Store only exact-entity matched sources in context so they get persisted.
     context["web_sources"] = sources
-    
+
     body_fallback = _source_backed_ai_report_text(context)
-    
+
     if not (genai and GEMINI_KEY):
         return (title, body_fallback)
-        
+
     length_instruction = ""
     max_tokens = 1000
     if length == "concise":
@@ -6751,7 +6912,7 @@ def _draft_ai_report_text(context: Dict[str, Any], length: Optional[str] = 'comp
         "### 6. Investigative Leads & Verification Checklist\n"
         "Suggest 4-6 specific leads for reporters, tenant organizers, researchers, or legal-aid lawyers. Make them concrete: parcels, cities, court-source checks, code-enforcement logs, deeds, beneficial ownership, attorney patterns, or rental-license records."
     )
-    
+
     try:
         model = genai.GenerativeModel('gemini-3.5-flash', system_instruction="You are a meticulous investigative analyst.")
         resp = model.generate_content(
@@ -6921,25 +7082,25 @@ def get_scraper_status(conn=Depends(get_db_connection)):
     """
     with conn.cursor(cursor_factory=RealDictCursor) as cursor:
         cursor.execute("""
-            SELECT 
-                source_name, 
-                source_type, 
-                CASE 
+            SELECT
+                source_name,
+                source_type,
+                CASE
                     WHEN refresh_status = 'running' AND last_refreshed_at < NOW() - INTERVAL '6 hours' THEN 'failure'
-                    ELSE refresh_status 
-                END as refresh_status, 
-                last_refreshed_at, 
-                details 
-            FROM data_source_status 
-            ORDER BY 
+                    ELSE refresh_status
+                END as refresh_status,
+                last_refreshed_at,
+                details
+            FROM data_source_status
+            ORDER BY
                 CASE WHEN refresh_status = 'running' THEN 0 ELSE 1 END,
                 last_refreshed_at DESC
         """)
         rows = cursor.fetchall()
-        
+
         active = [r for r in rows if r['refresh_status'] == 'running']
         recent = [r for r in rows if r['refresh_status'] != 'running'][:25]
-        
+
         return {
             "status": "success",
             "active_scrapers": active,
@@ -6976,9 +7137,9 @@ def scraper_status_page():
                     <span id="active-count" class="px-3 py-1 bg-indigo-100 text-indigo-700 font-bold rounded-lg text-sm">0 Active</span>
                 </div>
             </div>
-            
+
             <div id="loading" class="text-center py-10 text-slate-400">Loading data...</div>
-            
+
             <div id="tables-container" class="hidden flex-col gap-8">
                 <div>
                     <h2 class="text-lg font-bold mb-3 flex items-center gap-2"><div class="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></div> Active Scrapers</h2>
@@ -7024,7 +7185,7 @@ def scraper_status_page():
                 const d = new Date(iso);
                 return d.toLocaleDateString() + ' ' + d.toLocaleTimeString();
             }
-            
+
             function badge(status) {
                 if (status === 'running') return `<span class="px-2 py-0.5 rounded text-xs font-bold bg-blue-50 text-blue-600 border border-blue-100 uppercase tracking-wider">Running</span>`;
                 if (status === 'success') return `<span class="px-2 py-0.5 rounded text-xs font-bold bg-emerald-50 text-emerald-600 border border-emerald-100 uppercase tracking-wider">Success</span>`;
@@ -7047,16 +7208,16 @@ def scraper_status_page():
                 try {
                     const res = await fetch('/api/scraper/status');
                     const data = await res.json();
-                    
+
                     document.getElementById('loading').classList.add('hidden');
                     document.getElementById('tables-container').classList.remove('hidden');
                     document.getElementById('tables-container').classList.add('flex');
-                    
+
                     document.getElementById('active-count').innerText = data.total_active + ' Active';
-                    
+
                     const activeHtml = data.active_scrapers.length ? data.active_scrapers.map(renderRow).join('') : '<tr><td colspan="5" class="py-4 text-center text-slate-400 text-sm">No active scrapers</td></tr>';
                     document.getElementById('active-tbody').innerHTML = activeHtml;
-                    
+
                     const recentHtml = data.recent_jobs.length ? data.recent_jobs.map(renderRow).join('') : '<tr><td colspan="5" class="py-4 text-center text-slate-400 text-sm">No recent jobs</td></tr>';
                     document.getElementById('recent-tbody').innerHTML = recentHtml;
                 } catch (e) {
@@ -7095,15 +7256,15 @@ def create_network_digest(req: NetworkDigestRequest, conn=Depends(get_db_connect
     # Include stats in hash so if data changes (e.g. value updates), we regenerate
     sorted_ents = sorted(req.entities, key=lambda x: (x.type, x.name))
     # v2: Updated to invalidate old cached errors/v0.28 format
-    CACHE_VERSION = "v3_20260117" 
+    CACHE_VERSION = "v3_20260117"
     blob = json.dumps([
         {"n": e.name, "t": e.type, "c": e.property_count, "v": e.total_value} for e in sorted_ents
     ] + [{"_v": CACHE_VERSION}], sort_keys=True)
     digest_hash = hashlib.md5(blob.encode("utf-8")).hexdigest()
     digest_id = f"DIGEST_{digest_hash}"
-    
+
     today = date.today()
-    
+
     with conn.cursor(cursor_factory=RealDictCursor) as cursor:
         if not req.force:
             cursor.execute("""
@@ -7121,13 +7282,13 @@ def create_network_digest(req: NetworkDigestRequest, conn=Depends(get_db_connect
         def fetch_entity_context(ent: DigestItem):
             if not SERPAPI_API_KEY:
                 return {"context": f"Entity: {ent.name} ({ent.type}) - SerpAPI not configured.", "sources": []}
-            
+
             query = f"{ent.name} Connecticut real estate"
             if ent.type == 'business':
                 query += " business LLC"
             else:
                 query += " landlord property owner"
-            
+
             try:
                 url = "https://serpapi.com/search"
                 params = {
@@ -7135,11 +7296,11 @@ def create_network_digest(req: NetworkDigestRequest, conn=Depends(get_db_connect
                    "api_key": SERPAPI_API_KEY,
                    "hl": "en",
                    "gl": "us",
-                   "num": 3 
+                   "num": 3
                 }
                 resp = requests.get(url, params=params, timeout=10)
                 data = resp.json()
-                
+
                 snippets = []
                 sources = []
                 if "organic_results" in data:
@@ -7151,7 +7312,7 @@ def create_network_digest(req: NetworkDigestRequest, conn=Depends(get_db_connect
                              snippets.append(f"- {title}: {snip} (Source: {link})")
                          if link:
                              sources.append({"title": title, "url": link})
-                
+
                 if snippets:
                     return {
                         "context": f"Entity: {ent.name} ({ent.type})\n" + "\n".join(snippets),
@@ -7177,15 +7338,15 @@ def create_network_digest(req: NetworkDigestRequest, conn=Depends(get_db_connect
                         seen_links.add(s["url"])
 
         full_text_context = "\n\n".join(combined_context)
-        
+
         # Calculate aggregate stats for the prompt
         total_props = sum(e.property_count for e in req.entities)
         total_val = sum(e.total_value for e in req.entities)
-        
+
         # 3. Summarize with Gemini
         final_summary = "Analysis Unavailable."
         title = f"AI Digest - Network of {len(req.entities)} Entities"
-        
+
         if genai and GEMINI_KEY:
             prompt = (
                 f"You are an investigative analyst. You are analyzing a property network consisting of {len(req.entities)} related entities (principals and businesses). "
@@ -7224,7 +7385,7 @@ def create_network_digest(req: NetworkDigestRequest, conn=Depends(get_db_connect
             DO UPDATE SET title=EXCLUDED.title, content=EXCLUDED.content, sources=EXCLUDED.sources
             RETURNING *
         """, (digest_id, today, title, final_summary, json.dumps(all_sources)))
-        
+
         row = cursor.fetchone()
         conn.commit()
         return row
@@ -7259,7 +7420,7 @@ def update_property_geocode(property_id: int, lat: float, lon: float, conn=Depen
 @app.get("/api/freshness")
 def get_data_freshness(conn=Depends(get_db_connection)):
     """
-    Returns the last refresh status and external 'Last Updated' dates 
+    Returns the last refresh status and external 'Last Updated' dates
     for all configured data sources.
     """
     try:

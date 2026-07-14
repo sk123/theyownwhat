@@ -29,6 +29,8 @@ logger = logging.getLogger(__name__)
 # --- Configuration ---
 DATABASE_URL = os.environ.get("DATABASE_URL")
 MAX_DEPTH = 4 # Increased to 4 per user request
+PUBLIC_EMAIL_MAX_BUSINESSES = int(os.environ.get("PUBLIC_EMAIL_MAX_BUSINESSES", "25"))
+CUSTOM_EMAIL_DOMAIN_MAX_BUSINESSES = int(os.environ.get("CUSTOM_EMAIL_DOMAIN_MAX_BUSINESSES", "75"))
 
 # Placeholder/Generic names to skip during linking to prevent bad merges
 SKIP_NAMES = {
@@ -368,6 +370,7 @@ def build_graph(conn, skip_emails=False):
 
         cur.execute("SELECT id, name, business_email_address FROM businesses WHERE business_email_address IS NOT NULL")
         email_map = defaultdict(list)
+        email_key_types = {}
         for row in cur:
             # --- FILTER: Must be an owning business ---
             if row['id'] not in owning_business_ids:
@@ -382,16 +385,36 @@ def build_graph(conn, skip_emails=False):
                     continue
 
             key = get_email_match_key(row['business_email_address'], email_rules)
-            if key: email_map[key].append(row['id']) # Store string ID directly
+            if key:
+                email_map[key].append(row['id']) # Store string ID directly
+                try:
+                    _, domain = row['business_email_address'].lower().strip().split('@', 1)
+                except ValueError:
+                    domain = ""
+                email_key_types[key] = "public_email" if email_rules.get(domain) == "public" else "custom_domain"
 
-        for biz_ids in email_map.values():
-            if len(biz_ids) > 1: # No upper cap on email group size
+        skipped_email_keys = 0
+        for key, biz_ids in email_map.items():
+            if len(biz_ids) > 1:
+                key_type = email_key_types.get(key, "custom_domain")
+                max_group_size = PUBLIC_EMAIL_MAX_BUSINESSES if key_type == "public_email" else CUSTOM_EMAIL_DOMAIN_MAX_BUSINESSES
+                if len(biz_ids) > max_group_size:
+                    skipped_email_keys += 1
+                    logger.info(
+                        "    Skipping high-frequency email key %s (%s businesses, cap %s)",
+                        key,
+                        len(biz_ids),
+                        max_group_size,
+                    )
+                    continue
                 # Convert all to ints first
                 int_ids = [get_id(('business', bid)) for bid in biz_ids]
                 for i in range(len(int_ids)):
                     for j in range(i+1, len(int_ids)):
                         u, v = int_ids[i], int_ids[j]
                         graph[u].add(v); graph[v].add(u)
+        if skipped_email_keys:
+            logger.info("  - Skipped %s high-frequency email key(s) as likely service/agent bridges.", skipped_email_keys)
 
         # C. Shared Mailing Addresses
         # DISABLED per user request (2026-02-09) to prevent meganetworks.

@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Users, Info, Sparkles, X, Loader2, Gavel, FileText, Settings, Edit3, Save, CheckCircle, Calendar, GitMerge, ArrowLeft, Building2, ExternalLink, ShieldAlert, BarChart3, ClipboardList, Database, Home, Newspaper } from 'lucide-react';
+import { Users, Info, Sparkles, X, Loader2, Gavel, FileText, Settings, Edit3, Save, CheckCircle, Calendar, GitMerge, ArrowLeft, Building2, ExternalLink, ShieldAlert, BarChart3, ClipboardList, Database, Home, Newspaper, ArrowUpRight, ArrowDownRight, Repeat2, TrendingUp } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -235,7 +235,7 @@ const InvestigativeReportView = ({ content }) => {
     );
 };
 
-export default function NetworkProfileCard({ networkData, stats, networkName, initialEntityName, onBack, onExport }) {
+export default function NetworkProfileCard({ networkData, stats, networkName, initialEntityName, onBack, onExport, featureNav = null }) {
     const [showReport, setShowReport] = useState(false);
     const [reportLoading, setReportLoading] = useState(false);
     const [reportContent, setReportContent] = useState(null);
@@ -388,22 +388,32 @@ export default function NetworkProfileCard({ networkData, stats, networkName, in
 
     const activeBusinesses = networkData.businesses.filter(b => !b.status || b.status.toUpperCase() === 'ACTIVE');
 
-    // Determine Manager Name
-    let managerName = networkName || 'Unknown Entity';
+    // Determine Header Name — prefer key principal(s) over LLC names
+    let managerName = 'Unknown Entity';
+    let networkLabel = null; // The LLC/business name shown as subtitle
     let isHuman = false;
 
-    if (!networkName) {
-        if (humanPrincipals.length > 0) {
+    // Always try to surface the top human principal(s) as the header
+    if (humanPrincipals.length > 0) {
+        // Show top 1-2 principals
+        if (humanPrincipals.length >= 2) {
+            managerName = `${humanPrincipals[0].name} & ${humanPrincipals[1].name}`;
+        } else {
             managerName = humanPrincipals[0].name;
-            isHuman = true;
-        } else if (entityPrincipals.length > 0) {
-            managerName = entityPrincipals[0].name;
-        } else if (networkData.businesses.length > 0) {
-            managerName = networkData.businesses[0].name;
         }
-    } else {
-        // If we have networkName, check if it's one of our human principals to set isHuman
-        isHuman = humanPrincipals.some(p => p.name === networkName);
+        isHuman = true;
+        // Use the API-provided network name or first business as subtitle
+        if (networkName && !humanPrincipals.some(p => p.name === networkName)) {
+            networkLabel = networkName;
+        } else if (activeBusinesses.length > 0) {
+            networkLabel = activeBusinesses[0].name;
+        }
+    } else if (networkName) {
+        managerName = networkName;
+    } else if (entityPrincipals.length > 0) {
+        managerName = entityPrincipals[0].name;
+    } else if (networkData.businesses.length > 0) {
+        managerName = networkData.businesses[0].name;
     }
 
     // Safely handle missing stats object
@@ -498,7 +508,7 @@ export default function NetworkProfileCard({ networkData, stats, networkName, in
     propertyAcquisitions.sort((a, b) => b.date - a.date);
 
     // Compute stats
-    const now = new Date("2026-05-29T10:02:48-04:00");
+    const now = new Date();
     const oneYearAgo = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
     const threeYearsAgo = new Date(now.getTime() - 3 * 365 * 24 * 60 * 60 * 1000);
     const fiveYearsAgo = new Date(now.getTime() - 5 * 365 * 24 * 60 * 60 * 1000);
@@ -536,6 +546,11 @@ export default function NetworkProfileCard({ networkData, stats, networkName, in
                                 </span>
                             )}
                         </div>
+                        {networkLabel && (
+                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider truncate mt-0.5" title={networkLabel}>
+                                {networkLabel}
+                            </p>
+                        )}
                     </div>
                 </div>
 
@@ -581,41 +596,40 @@ export default function NetworkProfileCard({ networkData, stats, networkName, in
                 </div>
             </section>
 
-            {/* Grid Container for Portfolio Overview, Eviction, Connection Signals, and Property Acquisitions */}
+            {featureNav}
+
+            {/* Stats Grid: Portfolio+Activity | Evictions | Code Enforcement */}
             {(() => {
                 const sigs = networkData.connection_signals || {};
                 const allPeople = sigs.people || [];
                 const allCorps = sigs.corps || [];
                 const allAddresses = sigs.addresses || [];
-                
-                const hasSignals = allPeople.length > 0 || allCorps.length > 0 || allAddresses.length > 0;
-                const hasAcquisitions = propertyAcquisitions.length > 0;
-                
-                let colsCount = 2; // Portfolio Size + Eviction Filings
-                if (hasCodeSummary) colsCount++;
-                if (hasSignals) colsCount++;
-                if (hasAcquisitions) colsCount++;
 
-                const gridCols = {
-                    2: "grid-cols-1 md:grid-cols-2",
-                    3: "grid-cols-1 md:grid-cols-3",
-                    4: "grid-cols-1 md:grid-cols-2 lg:grid-cols-4",
-                    5: "grid-cols-1 md:grid-cols-2 xl:grid-cols-5"
-                }[colsCount] || "grid-cols-1 md:grid-cols-2 lg:grid-cols-4";
+                const hasSignals = allPeople.length > 0 || allCorps.length > 0 || allAddresses.length > 0;
+                const txSummary = networkData.transactionSummary;
+
+                const topCols = hasCodeSummary ? "grid-cols-1 md:grid-cols-3" : "grid-cols-1 md:grid-cols-2";
 
                 const displayedPeople = expandedSigs.people ? allPeople : allPeople.slice(0, 5);
                 const hasMorePeople = allPeople.length > 5;
-
                 const displayedCorps = expandedSigs.corps ? allCorps : allCorps.slice(0, 5);
                 const hasMoreCorps = allCorps.length > 5;
-
                 const displayedAddresses = expandedSigs.addresses ? allAddresses : allAddresses.slice(0, 5);
                 const hasMoreAddresses = allAddresses.length > 5;
 
+                const formatAmount = (amt) => {
+                    if (!amt || amt <= 0) return null;
+                    if (amt >= 1000000) return `$${(amt / 1000000).toFixed(1)}M`;
+                    if (amt >= 1000) return `$${Math.round(amt / 1000)}K`;
+                    return `$${Math.round(amt).toLocaleString()}`;
+                };
+
                 return (
-                    <div className={`grid ${gridCols} gap-3 mt-2 items-start`}>
-                        {/* Card 1: Portfolio Size */}
-                        <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm flex flex-col justify-between self-start">
+                    <>
+                    {/* Row 1: Main stats */}
+                    <div className={`grid ${topCols} gap-2 mt-2 items-start`}>
+                        {/* Card 1: Portfolio & Transaction Activity (merged) */}
+                        <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-sm flex flex-col self-start">
                             <div>
                                 <div className="flex items-center gap-2 mb-2">
                                     <div className="p-1.5 rounded-lg bg-blue-50 text-blue-600">
@@ -623,35 +637,158 @@ export default function NetworkProfileCard({ networkData, stats, networkName, in
                                     </div>
                                     <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Portfolio Size</span>
                                 </div>
-                                
-                                <div className="grid grid-cols-2 gap-4 mt-3">
-                                    <div className="flex flex-col">
+
+                                <div className="grid grid-cols-3 gap-2">
+                                    <div className="rounded-lg border border-slate-100 bg-slate-50/70 px-2 py-1.5">
                                         <span className="text-[10px] font-bold text-slate-400 uppercase leading-none mb-1">Buildings</span>
-                                        <span className="text-2xl font-black text-slate-800 leading-none">{complexesCount}</span>
+                                        <span className="block text-xl font-black text-slate-800 leading-none mt-1">{complexesCount.toLocaleString()}</span>
                                     </div>
-                                    <div className="flex flex-col">
+                                    <div className="rounded-lg border border-slate-100 bg-slate-50/70 px-2 py-1.5">
                                         <span className="text-[10px] font-bold text-slate-400 uppercase leading-none mb-1">Units</span>
-                                        <span className="text-2xl font-black text-slate-800 leading-none">{unitsCount}</span>
+                                        <span className="block text-xl font-black text-slate-800 leading-none mt-1">{unitsCount.toLocaleString()}</span>
+                                    </div>
+                                    <div className="rounded-lg border border-blue-100 bg-blue-50/70 px-2 py-1.5">
+                                        <span className="text-[10px] font-bold text-blue-400 uppercase leading-none mb-1">Value</span>
+                                        <span className="block text-lg font-black text-blue-600 leading-none mt-1">
+                                            {safeStats.totalValue >= 1000000000
+                                                ? `$${(safeStats.totalValue / 1000000000).toFixed(2)}B`
+                                                : `$${(safeStats.totalValue / 1000000).toFixed(1)}M`}
+                                        </span>
                                     </div>
                                 </div>
-                                
-                                <div className="mt-4 pt-3 border-t border-slate-100 flex flex-col">
-                                    <span className="text-[10px] font-bold text-slate-400 uppercase leading-none mb-1">Estimated Valuation</span>
-                                    <span className="text-xl font-black text-blue-600 leading-none mt-1">
-                                        {safeStats.totalValue >= 1000000000
-                                            ? `$${(safeStats.totalValue / 1000000000).toFixed(2)}B`
-                                            : `$${(safeStats.totalValue / 1000000).toFixed(1)}M`}
-                                    </span>
-                                </div>
+
+                                {/* Transaction Activity subsection */}
+                                {txSummary && (txSummary.acquisitions_last_12m > 0 || txSummary.dispositions_last_12m > 0) && (() => {
+                                    const netFlow = txSummary.net_acquisitions_12m;
+                                    const recentTxns = txSummary.recent_transactions || [];
+                                    return (
+                                        <div className="mt-2 pt-2 border-t border-slate-100">
+                                            <div className="flex items-center gap-1.5 mb-2">
+                                                <TrendingUp size={11} className="text-amber-500" />
+                                                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">12-Month Activity</span>
+                                            </div>
+                                            <div className="grid grid-cols-3 gap-2 mb-2">
+                                                <div className="rounded-lg bg-emerald-50 border border-emerald-100 px-2 py-1 text-center">
+                                                    <div className="text-base font-black text-emerald-700 leading-none">{txSummary.acquisitions_last_12m}</div>
+                                                    <div className="text-[8px] font-bold text-emerald-600 uppercase mt-0.5">Acquired</div>
+                                                </div>
+                                                <div className="rounded-lg bg-rose-50 border border-rose-100 px-2 py-1 text-center">
+                                                    <div className="text-base font-black text-rose-700 leading-none">{txSummary.dispositions_last_12m}</div>
+                                                    <div className="text-[8px] font-bold text-rose-500 uppercase mt-0.5">Disposed</div>
+                                                </div>
+                                                <div className={`rounded-lg border px-2 py-1 text-center ${
+                                                    netFlow > 0 ? 'bg-emerald-50/50 border-emerald-100' : netFlow < 0 ? 'bg-rose-50/50 border-rose-100' : 'bg-slate-50 border-slate-100'
+                                                }`}>
+                                                    <div className={`text-base font-black leading-none ${
+                                                        netFlow > 0 ? 'text-emerald-700' : netFlow < 0 ? 'text-rose-700' : 'text-slate-600'
+                                                    }`}>{netFlow > 0 ? '+' : ''}{netFlow}</div>
+                                                    <div className="text-[8px] font-bold text-slate-400 uppercase mt-0.5">Net</div>
+                                                </div>
+                                            </div>
+                                            {txSummary.acquisition_volume_12m > 0 && (
+                                                <div className="flex items-center justify-between text-[10px] text-slate-500 mb-1">
+                                                    <span>Volume In:</span>
+                                                    <span className="font-bold text-emerald-700">{formatAmount(txSummary.acquisition_volume_12m)}</span>
+                                                </div>
+                                            )}
+
+                                            {/* Recent transactions timeline */}
+                                            {recentTxns.length > 0 && (
+                                                <div className="mt-2 pt-2 border-t border-slate-100">
+                                                    <div className="flex items-center justify-between gap-2 mb-1.5">
+                                                        <div className="text-[8px] font-bold uppercase tracking-wider text-slate-400">Recent Transactions</div>
+                                                        <div className="text-[8px] font-semibold text-slate-400 truncate" title="Intra-network means buyer and seller both match this loaded ownership network. Inter-network means only one side matches.">
+                                                            Intra = internal paper transfer
+                                                        </div>
+                                                    </div>
+                                                    <div className="space-y-1 max-h-[74px] overflow-y-auto pr-1">
+                                                        {recentTxns.slice(0, 3).map((txn, i) => {
+                                                            const isAcq = txn.direction === 'acquired';
+                                                            const isDisp = txn.direction === 'disposed';
+                                                            const isIntra = txn.scope === 'intra_network' || txn.direction === 'reshuffle';
+                                                            const isInter = txn.scope === 'inter_network' || isAcq || isDisp;
+                                                            const dateStr = txn.date ? new Date(txn.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '—';
+                                                            const entityName = isAcq ? txn.buyer_name : isDisp ? txn.seller_name : (txn.buyer_name || txn.seller_name);
+                                                            const scopeLabel = txn.scope_label || (isIntra ? 'Intra-network' : isInter ? 'Inter-network' : 'Unclassified');
+                                                            const scopeNote = txn.scope_note || (isIntra ? 'Buyer and seller both match this ownership network.' : isInter ? 'Only one side matches this ownership network.' : 'Insufficient buyer/seller match data to classify.');
+
+                                                            return (
+                                                                <div key={i} className="flex items-start gap-1.5 text-[9px] leading-tight">
+                                                                    <span className={`w-[14px] h-[14px] rounded-full flex items-center justify-center shrink-0 mt-0.5 ${
+                                                                        isAcq ? 'bg-emerald-100 text-emerald-600' :
+                                                                        isDisp ? 'bg-rose-100 text-rose-600' :
+                                                                        'bg-amber-100 text-amber-700'
+                                                                    }`}>
+                                                                        {isAcq ? <ArrowUpRight size={8} /> : isDisp ? <ArrowDownRight size={8} /> : <Repeat2 size={8} />}
+                                                                    </span>
+                                                                    <div className="flex-1 min-w-0">
+                                                                        <div className="flex items-center gap-1.5 min-w-0">
+                                                                            <span className="text-slate-400 font-medium shrink-0">{dateStr}</span>
+                                                                            <span className="text-slate-700 font-bold truncate" title={`${txn.location}${txn.city ? ', ' + txn.city : ''}`}>
+                                                                                {txn.location}{txn.city ? `, ${txn.city}` : ''}
+                                                                            </span>
+                                                                            {txn.amount > 0 && (
+                                                                                <span className="text-slate-400 font-bold shrink-0">{formatAmount(txn.amount)}</span>
+                                                                            )}
+                                                                        </div>
+                                                                        <div className="mt-0.5 flex items-center gap-1.5 min-w-0">
+                                                                            <span
+                                                                                className={`shrink-0 rounded border px-1 py-px text-[7px] font-black uppercase tracking-wide ${
+                                                                                    isIntra
+                                                                                        ? 'border-amber-200 bg-amber-50 text-amber-700'
+                                                                                        : isInter
+                                                                                        ? 'border-sky-200 bg-sky-50 text-sky-700'
+                                                                                        : 'border-slate-200 bg-slate-50 text-slate-500'
+                                                                                }`}
+                                                                                title={scopeNote}
+                                                                            >
+                                                                                {scopeLabel}
+                                                                            </span>
+                                                                            <span className="text-[8px] text-slate-400 truncate" title={isIntra ? `${txn.seller_name || 'Seller'} -> ${txn.buyer_name || 'Buyer'}` : entityName || scopeNote}>
+                                                                                {isIntra ? (
+                                                                                    <>paper transfer: {txn.seller_name || 'seller'} to {txn.buyer_name || 'buyer'}</>
+                                                                                ) : entityName ? (
+                                                                                    <>{isAcq ? 'Buyer' : 'Seller'}: {entityName}</>
+                                                                                ) : (
+                                                                                    scopeNote
+                                                                                )}
+                                                                            </span>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    );
+                                })()}
+
+                                {/* Fallback: client-side acquisition stats when no API transaction data */}
+                                {!txSummary && propertyAcquisitions.length > 0 && (
+                                    <div className="mt-4 pt-3 border-t border-slate-100">
+                                        <div className="flex items-center gap-1.5 mb-2">
+                                            <TrendingUp size={11} className="text-amber-500" />
+                                            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Tracked Acquisitions</span>
+                                        </div>
+                                        <div className="flex items-baseline gap-2">
+                                            <span className="text-lg font-black text-slate-800 leading-none">{propertyAcquisitions.length}</span>
+                                            <span className="text-[10px] text-slate-400 font-bold">total</span>
+                                            <span className="text-[10px] text-slate-400">·</span>
+                                            <span className="text-[10px] text-slate-500 font-bold">{acquiredLastYear} last 12mo</span>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
-                            
-                            <div className="text-[9px] text-slate-400 mt-4 pt-2 border-t border-slate-100 italic font-medium leading-normal">
+
+                            <div className="text-[9px] text-slate-400 mt-2 pt-2 border-t border-slate-100 italic font-medium leading-normal">
                                 Based on municipal assessment data.
                             </div>
                         </div>
 
                         {/* Card 2: Eviction Filings */}
-                        <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm flex flex-col justify-between self-start">
+                        <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-sm flex flex-col justify-between self-start">
                             <div>
                                 <div className="flex items-center gap-2 mb-2">
                                     <div className="p-1.5 rounded-lg bg-indigo-50 text-indigo-600">
@@ -660,15 +797,15 @@ export default function NetworkProfileCard({ networkData, stats, networkName, in
                                     <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Eviction Filings</span>
                                     <span className="text-[8px] font-bold bg-indigo-100 text-indigo-600 px-1.5 py-0.5 rounded-full uppercase tracking-wider">Beta</span>
                                 </div>
-                                
-                                <div className="flex items-baseline gap-2 mb-3">
-                                    <span className="text-3xl font-black text-slate-900 leading-none">
+
+                                <div className="flex items-baseline gap-2 mb-2">
+                                    <span className="text-2xl font-black text-slate-900 leading-none">
                                         {(evictionSummary.eviction_count || 0).toLocaleString()}
                                     </span>
                                     <span className="text-xs font-bold text-slate-400 uppercase">Total since 2017</span>
                                 </div>
 
-                                <div className="space-y-2">
+                                <div className="space-y-1.5">
                                     <div className="flex items-center justify-between text-xs border-b border-slate-100 pb-1.5">
                                         <span className="text-slate-500 font-medium">Last 12 Months:</span>
                                         <span className="font-bold text-slate-800">{evictionsLast12m.toLocaleString()} filings</span>
@@ -706,15 +843,15 @@ export default function NetworkProfileCard({ networkData, stats, networkName, in
                             </div>
 
                             {lastEvictionDate && (
-                                <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-4 pt-2 border-t border-slate-100">
+                                <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-2 pt-2 border-t border-slate-100">
                                     Last filing: {lastEvictionDate}
                                 </div>
                             )}
                         </div>
 
-                        {/* Card 3: Hartford Code Enforcement */}
+                        {/* Card 3: Code Enforcement */}
                         {hasCodeSummary && (
-                            <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm flex flex-col justify-between self-start">
+                            <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-sm flex flex-col justify-between self-start">
                                 <div>
                                     <div className="flex items-center gap-2 mb-2">
                                         <div className="p-1.5 rounded-lg bg-red-50 text-red-600">
@@ -723,14 +860,14 @@ export default function NetworkProfileCard({ networkData, stats, networkName, in
                                         <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Hartford Code</span>
                                     </div>
 
-                                    <div className="flex items-baseline gap-2 mb-3">
-                                        <span className="text-3xl font-black text-slate-900 leading-none">
+                                    <div className="flex items-baseline gap-2 mb-2">
+                                        <span className="text-2xl font-black text-slate-900 leading-none">
                                             {(codeSummary.total_records || 0).toLocaleString()}
                                         </span>
                                         <span className="text-xs font-bold text-slate-400 uppercase">Records</span>
                                     </div>
 
-                                    <div className="space-y-2">
+                                    <div className="space-y-1.5">
                                         <div className="flex items-center justify-between text-xs border-b border-slate-100 pb-1.5">
                                             <span className="text-slate-500 font-medium">Not marked closed:</span>
                                             <span className="font-bold text-red-700 bg-red-50 border border-red-100 px-1.5 py-0.5 rounded-md text-[10px]">
@@ -759,149 +896,89 @@ export default function NetworkProfileCard({ networkData, stats, networkName, in
                                     </div>
                                 </div>
 
-                                <div className="text-[9px] text-slate-400 mt-4 pt-2 border-t border-slate-100 italic font-medium leading-normal">
+                                <div className="text-[9px] text-slate-400 mt-2 pt-2 border-t border-slate-100 italic font-medium leading-normal">
                                     {lastCodeDate ? `Last opened: ${lastCodeDate}. ` : ''}
                                     Official Hartford records matched by parcel ID.
                                 </div>
                             </div>
                         )}
+                    </div>
 
-                        {/* Card 3: Why is this a network? */}
-                        {hasSignals && (
-                            <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm flex flex-col justify-between self-start">
-                                <div>
-                                    <div className="flex items-center gap-2 mb-2">
-                                        <div className="p-1.5 rounded-lg bg-violet-50 text-violet-600">
-                                            <GitMerge size={14} />
-                                        </div>
-                                        <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Why is this a network?</span>
-                                    </div>
-                                    
-                                    <p className="text-[10.5px] text-slate-500 mb-3 font-medium leading-relaxed">
-                                        Linked due to sharing one or more of the following connections:
-                                    </p>
-
-                                    <div className="space-y-3 max-h-[220px] overflow-y-auto pr-1">
-                                        {allPeople.length > 0 && (
-                                            <div>
-                                                <div className="text-[9px] font-bold uppercase tracking-wider text-violet-500 mb-1 flex items-center justify-between">
-                                                    <span>Shared People ({allPeople.length})</span>
-                                                    {hasMorePeople && (
-                                                        <button 
-                                                            onClick={() => setExpandedSigs(prev => ({ ...prev, people: !prev.people }))}
-                                                            className="text-[9px] font-black text-violet-600 hover:text-violet-850 transition-colors uppercase tracking-widest focus:outline-none"
-                                                        >
-                                                            {expandedSigs.people ? 'Show Less' : `+${allPeople.length - 5} More`}
-                                                        </button>
-                                                    )}
-                                                </div>
-                                                <div className="flex flex-wrap gap-1">
-                                                    {displayedPeople.map(p => (
-                                                        <span key={p} className="text-[9.5px] font-medium px-2 py-0.5 rounded-full bg-violet-50 text-violet-800 border border-violet-100">{p}</span>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        )}
-                                        {allCorps.length > 0 && (
-                                            <div>
-                                                <div className="text-[9px] font-bold uppercase tracking-wider text-indigo-500 mb-1 flex items-center justify-between">
-                                                    <span>Shared Corporations ({allCorps.length})</span>
-                                                    {hasMoreCorps && (
-                                                        <button 
-                                                            onClick={() => setExpandedSigs(prev => ({ ...prev, corps: !prev.corps }))}
-                                                            className="text-[9px] font-black text-indigo-600 hover:text-indigo-850 transition-colors uppercase tracking-widest focus:outline-none"
-                                                        >
-                                                            {expandedSigs.corps ? 'Show Less' : `+${allCorps.length - 5} More`}
-                                                        </button>
-                                                    )}
-                                                </div>
-                                                <div className="flex flex-wrap gap-1">
-                                                    {displayedCorps.map(c => (
-                                                        <span key={c} className="text-[9.5px] font-medium px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-800 border border-indigo-100">{c}</span>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        )}
-                                        {allAddresses.length > 0 && (
-                                            <div>
-                                                <div className="text-[9px] font-bold uppercase tracking-wider text-emerald-500 mb-1 flex items-center justify-between">
-                                                    <span>Shared Addresses ({allAddresses.length})</span>
-                                                    {hasMoreAddresses && (
-                                                        <button 
-                                                            onClick={() => setExpandedSigs(prev => ({ ...prev, addresses: !prev.addresses }))}
-                                                            className="text-[9px] font-black text-emerald-600 hover:text-emerald-850 transition-colors uppercase tracking-widest focus:outline-none"
-                                                        >
-                                                            {expandedSigs.addresses ? 'Show Less' : `+${allAddresses.length - 5} More`}
-                                                        </button>
-                                                    )}
-                                                </div>
-                                                <div className="flex flex-col gap-1">
-                                                    {displayedAddresses.map(a => (
-                                                        <span key={a} className="text-[9.5px] font-medium px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-100 truncate max-w-full" title={a}>{a}</span>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        )}
-                                    </div>
+                    {/* Row 2: Connection Signals (full-width horizontal banner) */}
+                    {hasSignals && (
+                        <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm mt-3">
+                            <div className="flex items-center gap-2 mb-2">
+                                <div className="p-1.5 rounded-lg bg-violet-50 text-violet-600">
+                                    <GitMerge size={14} />
                                 </div>
-
-                                <p className="text-[9px] text-slate-400 mt-4 pt-2 border-t border-slate-100 italic font-medium leading-normal">
-                                    Derived from registration filings and structure links.
-                                </p>
+                                <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Why is this a network?</span>
+                                <span className="text-[10px] text-slate-400 font-medium ml-1 hidden md:inline">Linked due to sharing one or more of the following connections:</span>
                             </div>
-                        )}
-
-                        {/* Card 4: Property Acquisitions */}
-                        {hasAcquisitions && (
-                            <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm flex flex-col justify-between self-start">
-                                <div>
-                                    <div className="flex items-center gap-2 mb-2">
-                                        <div className="p-1.5 rounded-lg bg-emerald-50 text-emerald-600">
-                                            <Calendar size={14} />
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                {allPeople.length > 0 && (
+                                    <div>
+                                        <div className="text-[9px] font-bold uppercase tracking-wider text-violet-500 mb-1.5 flex items-center justify-between">
+                                            <span>Shared People ({allPeople.length})</span>
+                                            {hasMorePeople && (
+                                                <button
+                                                    onClick={() => setExpandedSigs(prev => ({ ...prev, people: !prev.people }))}
+                                                    className="text-[9px] font-black text-violet-600 hover:text-violet-800 transition-colors uppercase tracking-widest focus:outline-none"
+                                                >
+                                                    {expandedSigs.people ? 'Show Less' : `+${allPeople.length - 5} More`}
+                                                </button>
+                                            )}
                                         </div>
-                                        <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Property Acquisitions</span>
-                                        <span className="text-[8px] font-bold bg-emerald-100 text-emerald-600 px-1.5 py-0.5 rounded-full uppercase tracking-wider">New</span>
+                                        <div className="flex flex-wrap gap-1">
+                                            {displayedPeople.map(p => (
+                                                <span key={p} className="text-[9.5px] font-medium px-2 py-0.5 rounded-full bg-violet-50 text-violet-800 border border-violet-100">{p}</span>
+                                            ))}
+                                        </div>
                                     </div>
-                                    
-                                    <div className="flex items-baseline gap-2 mb-3">
-                                        <span className="text-3xl font-black text-slate-900 leading-none">
-                                            {propertyAcquisitions.length}
-                                        </span>
-                                        <span className="text-xs font-bold text-slate-400 uppercase">Total tracked</span>
+                                )}
+                                {allCorps.length > 0 && (
+                                    <div>
+                                        <div className="text-[9px] font-bold uppercase tracking-wider text-indigo-500 mb-1.5 flex items-center justify-between">
+                                            <span>Shared Corporations ({allCorps.length})</span>
+                                            {hasMoreCorps && (
+                                                <button
+                                                    onClick={() => setExpandedSigs(prev => ({ ...prev, corps: !prev.corps }))}
+                                                    className="text-[9px] font-black text-indigo-600 hover:text-indigo-800 transition-colors uppercase tracking-widest focus:outline-none"
+                                                >
+                                                    {expandedSigs.corps ? 'Show Less' : `+${allCorps.length - 5} More`}
+                                                </button>
+                                            )}
+                                        </div>
+                                        <div className="flex flex-wrap gap-1">
+                                            {displayedCorps.map(c => (
+                                                <span key={c} className="text-[9.5px] font-medium px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-800 border border-indigo-100">{c}</span>
+                                            ))}
+                                        </div>
                                     </div>
-
-                                    <div className="space-y-2">
-                                        <div className="flex items-center justify-between text-xs border-b border-slate-100 pb-1.5">
-                                            <span className="text-slate-500 font-medium">Last 12 Months:</span>
-                                            <span className="font-bold text-slate-800">{acquiredLastYear} {acquiredLastYear === 1 ? 'property' : 'properties'}</span>
+                                )}
+                                {allAddresses.length > 0 && (
+                                    <div>
+                                        <div className="text-[9px] font-bold uppercase tracking-wider text-emerald-500 mb-1.5 flex items-center justify-between">
+                                            <span>Shared Addresses ({allAddresses.length})</span>
+                                            {hasMoreAddresses && (
+                                                <button
+                                                    onClick={() => setExpandedSigs(prev => ({ ...prev, addresses: !prev.addresses }))}
+                                                    className="text-[9px] font-black text-emerald-600 hover:text-emerald-800 transition-colors uppercase tracking-widest focus:outline-none"
+                                                >
+                                                    {expandedSigs.addresses ? 'Show Less' : `+${allAddresses.length - 5} More`}
+                                                </button>
+                                            )}
                                         </div>
-                                        <div className="flex items-center justify-between text-xs border-b border-slate-100 pb-1.5">
-                                            <span className="text-slate-500 font-medium">Last 3 Years:</span>
-                                            <span className="font-bold text-slate-800">{acquiredLast3Years}</span>
+                                        <div className="flex flex-wrap gap-1">
+                                            {displayedAddresses.map(a => (
+                                                <span key={a} className="text-[9.5px] font-medium px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-100 truncate max-w-full" title={a}>{a}</span>
+                                            ))}
                                         </div>
-                                        <div className="flex items-center justify-between text-xs border-b border-slate-100 pb-1.5">
-                                            <span className="text-slate-500 font-medium">Last 5 Years:</span>
-                                            <span className="font-bold text-slate-800">{acquiredLast5Years}</span>
-                                        </div>
-                                        {propertyAcquisitions.filter(a => a.amount > 0).length > 0 && (
-                                            <div className="flex items-center justify-between text-xs border-b border-slate-100 pb-1.5">
-                                                <span className="text-slate-500 font-medium">Total Volume:</span>
-                                                <span className="font-bold text-emerald-700 bg-emerald-50 border border-emerald-100 px-1.5 py-0.5 rounded-md text-[10px]">
-                                                    ${Math.round(propertyAcquisitions.reduce((acc, a) => acc + a.amount, 0)).toLocaleString()}
-                                                </span>
-                                            </div>
-                                        )}
-                                    </div>
-                                </div>
-
-                                {mostRecentAcquisition && (
-                                    <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-4 pt-2 border-t border-slate-100">
-                                        Most recent: {mostRecentAcquisition.toLocaleDateString(undefined, { month: 'short', year: 'numeric' })}
                                     </div>
                                 )}
                             </div>
-                        )}
-                    </div>
+                        </div>
+                    )}
+                    </>
                 );
             })()}
 

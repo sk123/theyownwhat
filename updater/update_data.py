@@ -27,6 +27,7 @@ try:
 except ImportError:
     print("Warning: Could not import safe_network_refresh. Network rebuilding will be skipped.")
     run_refresh = None
+from shared_utils import normalize_business_name
 
 # Suppress only the single InsecureRequestWarning from urllib3 needed for this script
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -38,6 +39,7 @@ CONNECTICUT_DATABASE_URL = f"{VISION_BASE_URL}/connecticut-online-database/"
 MAX_WORKERS = 20  # Increased workers for faster scraping
 DEFAULT_MUNI_WORKERS = 8 # Process more municipalities in parallel
 SOURCE_ONLY = os.environ.get("THEYOWNWHAT_SOURCE_ONLY", "").lower() == "true"
+PROPERTY_TRANSACTIONS_SCHEMA_READY = False
 
 # --- Municipality-specific data sources ---
 # --- Municipality-specific data sources ---
@@ -71,7 +73,7 @@ def get_db_connection():
     """Establishes a connection to the PostgreSQL database with retries."""
     if not DATABASE_URL:
         raise Exception("DATABASE_URL environment variable is not set")
-    
+
     retries = 5
     while retries > 0:
         try:
@@ -84,14 +86,66 @@ def get_db_connection():
             time.sleep(3)
     raise Exception("Could not connect to the database after multiple retries.")
 
+
+def ensure_property_transactions_schema(conn):
+    """Create the transaction audit table used by scrape-delta logging."""
+    global PROPERTY_TRANSACTIONS_SCHEMA_READY
+    if PROPERTY_TRANSACTIONS_SCHEMA_READY:
+        return
+
+    with conn.cursor() as cursor:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS property_transactions (
+                id SERIAL PRIMARY KEY,
+                property_id INTEGER,
+                transaction_date DATE,
+                transaction_amount NUMERIC,
+                buyer_name TEXT,
+                seller_name TEXT,
+                buyer_raw TEXT,
+                seller_raw TEXT,
+                transaction_type TEXT,
+                source TEXT,
+                detected_at TIMESTAMPTZ DEFAULT now(),
+                location TEXT,
+                property_city TEXT
+            )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_property_transactions_buyer_name
+                ON property_transactions(buyer_name)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_property_transactions_seller_name
+                ON property_transactions(seller_name)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_property_transactions_buyer_raw_upper
+                ON property_transactions(UPPER(buyer_raw))
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_property_transactions_seller_raw_upper
+                ON property_transactions(UPPER(seller_raw))
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_property_transactions_date
+                ON property_transactions(transaction_date DESC)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_property_transactions_property_id
+                ON property_transactions(property_id)
+        """)
+    conn.commit()
+    PROPERTY_TRANSACTIONS_SCHEMA_READY = True
+
 # --- Resumability Functions ---
 def mark_property_processed_today(conn, property_id):
     """Marks a property as processed today to enable resumability."""
     today = date.today()
     query = """
-        INSERT INTO property_processing_log (property_id, last_processed_date) 
-        VALUES (%s, %s) 
-        ON CONFLICT (property_id) 
+        INSERT INTO property_processing_log (property_id, last_processed_date)
+        VALUES (%s, %s)
+        ON CONFLICT (property_id)
         DO UPDATE SET last_processed_date = EXCLUDED.last_processed_date
     """
     try:
@@ -112,7 +166,7 @@ def create_processing_log_table(conn):
             property_id INTEGER PRIMARY KEY,
             last_processed_date DATE NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS idx_processing_log_date 
+        CREATE INDEX IF NOT EXISTS idx_processing_log_date
         ON property_processing_log(last_processed_date);
     """
     with conn.cursor() as cursor:
@@ -130,7 +184,7 @@ def check_headers(url):
         if response.status_code == 405:
             response = requests.get(url, stream=True, timeout=10)
             response.close()
-            
+
         last_modified = response.headers.get('Last-Modified')
         if last_modified:
             from email.utils import parsedate_to_datetime
@@ -149,7 +203,7 @@ def is_stale_high_frequency(municipality_name, config, conn):
     freq = config.get('frequency', '')
     if freq not in ['Nightly', 'Weekly', 'Daily']:
         return False
-        
+
     with conn.cursor() as cursor:
         cursor.execute("SELECT last_refreshed_at, refresh_status FROM data_source_status WHERE source_name = %s", (municipality_name,))
         row = cursor.fetchone()
@@ -164,7 +218,7 @@ def is_stale_high_frequency(municipality_name, config, conn):
         # If no record exists, it definitely hasn't been scraped in 7 days
         elif not row:
             return True
-            
+
     return False
 
 def should_scrape(municipality_name, config, conn):
@@ -178,11 +232,11 @@ def should_scrape(municipality_name, config, conn):
         remote_dt = check_headers(url)
         if not remote_dt:
             return True # Can't determine, safer to scrape
-            
+
         if is_stale_high_frequency(municipality_name, config, conn):
             log(f"FORCING SCRAPE {municipality_name}: High-frequency source hasn't been scraped in >= 7 days.")
             return True
-            
+
         # Check our last successful refresh
         with conn.cursor() as cursor:
             cursor.execute("SELECT external_last_updated FROM data_source_status WHERE source_name = %s", (municipality_name,))
@@ -196,7 +250,7 @@ def should_scrape(municipality_name, config, conn):
                 if remote_date <= local_date:
                     log(f"Skipping {municipality_name}: Remote ({remote_dt}) <= Local ({local_dt})")
                     return False
-                    
+
         # Update the 'external_last_updated' field in status table?
         # No, we only update that AFTER a successful scrape?
         # Or we update it now to say "we saw this date"?
@@ -208,7 +262,7 @@ def get_current_owner_properties_by_municipality(conn):
     """Gets municipalities ordered by count of 'Current Owner' properties."""
     query = """
         SELECT property_city, COUNT(*) as current_owner_count
-        FROM properties 
+        FROM properties
         WHERE owner = 'Current Owner'
         GROUP BY property_city
         ORDER BY current_owner_count DESC
@@ -226,29 +280,29 @@ def get_unprocessed_current_owner_properties(conn, municipality_name, force_proc
     If force_process is True, it gets ALL 'Current Owner' properties.
     """
     placeholder_names = (
-        'CURRENT OWNER', 'UNKNOWN OWNER', 'OCCUPANT', 'OWNER', 
+        'CURRENT OWNER', 'UNKNOWN OWNER', 'OCCUPANT', 'OWNER',
         'UNKNOWN', 'CT', 'CONNECTICUT', 'THE', 'INC', 'LLC', 'CORP',
         'USA', 'UNITED STATES', 'NO NAME', 'N/A', 'NA', 'NONE',
         'NO INFORMATION PROVIDED', 'NOT PROVIDED', 'VACANT', 'NULL',
         'NOT AVAILABLE', '[UNKNOWN]', 'CURRENT COMPANY OWNER', 'CURRENT COMPANY-OWNER',
         'SV', 'SURVIVORSHIP', 'JT', 'TIC', 'TC', 'ET AL', 'LII', 'ETAL'
     )
-    
+
     base_query = """
-        SELECT p.id, p.location, p.cama_site_link 
+        SELECT p.id, p.location, p.cama_site_link
         FROM properties p
         LEFT JOIN property_processing_log ppl ON p.id = ppl.property_id
-        WHERE UPPER(p.property_city) = %s 
+        WHERE UPPER(p.property_city) = %s
         AND (p.owner IS NULL OR UPPER(TRIM(p.owner)) IN %s)
     """
-    
+
     params = [municipality_name.upper(), placeholder_names]
     query_parts = [base_query]
-    
+
     if not force_process:
         query_parts.append("AND (ppl.last_processed_date IS NULL OR ppl.last_processed_date < %s)")
         params.append(date.today())
-        
+
     query_parts.append("ORDER BY p.id")
     final_query = "\n".join(query_parts)
 
@@ -265,19 +319,19 @@ def get_unprocessed_properties(conn, municipality_name, force_process=False):
     If force_process is True, gets ALL properties for the municipality.
     """
     base_query = """
-        SELECT p.id, p.location, p.cama_site_link 
+        SELECT p.id, p.location, p.cama_site_link
         FROM properties p
         LEFT JOIN property_processing_log ppl ON p.id = ppl.property_id
         WHERE UPPER(p.property_city) = %s
     """
-    
+
     params = [municipality_name.upper()]
     query_parts = [base_query]
 
     if not force_process:
         query_parts.append("AND (ppl.last_processed_date IS NULL OR ppl.last_processed_date < %s)")
         params.append(date.today())
-        
+
     query_parts.append("ORDER BY p.id")
     final_query = "\n".join(query_parts)
 
@@ -296,12 +350,12 @@ def download_arcgis_csv(url, municipality_name):
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         response = requests.get(url, headers=headers, timeout=120)  # Longer timeout for large files
         response.raise_for_status()
-        
+
         # Read CSV into pandas DataFrame
         df = pd.read_csv(StringIO(response.text), low_memory=False)
         log(f"Successfully downloaded {len(df)} records for {municipality_name}")
         return df
-        
+
     except Exception as e:
         log(f"Error downloading ArcGIS CSV for {municipality_name}: {e}")
         return None
@@ -310,14 +364,14 @@ def normalize_address_for_matching(address):
     """Normalizes an address for consistent matching."""
     if not address:
         return ""
-    
+
     # Convert to uppercase and normalize whitespace
     normalized = ' '.join(str(address).upper().strip().split())
-    
+
     # Common address normalizations for better matching
     normalizations = {
         ' STREET': ' ST',
-        ' AVENUE': ' AVE', 
+        ' AVENUE': ' AVE',
         ' ROAD': ' RD',
         ' DRIVE': ' DR',
         ' LANE': ' LN',
@@ -326,10 +380,10 @@ def normalize_address_for_matching(address):
         ' BOULEVARD': ' BLVD',
         ' CIRCLE': ' CIR'
     }
-    
+
     for old, new in normalizations.items():
         normalized = normalized.replace(old, new)
-    
+
     return normalized
 
 def is_placeholder_address(addr):
@@ -345,9 +399,9 @@ def is_placeholder_address(addr):
 def process_arcgis_data(df, column_mapping, municipality_name):
     """Processes ArcGIS DataFrame and returns a dictionary mapping addresses to A LIST OF property data dicts."""
     log(f"Processing {len(df)} ArcGIS records for {municipality_name}...")
-    
+
     processed_data = {}
-    
+
     for _, row in df.iterrows():
         try:
             # Build the address from available components
@@ -356,19 +410,19 @@ def process_arcgis_data(df, column_mapping, municipality_name):
                 address_parts.append(str(int(row['StreetNumberFrom'])))
             if pd.notna(row.get('StreetName')):
                 address_parts.append(str(row['StreetName']))
-            
+
             if not address_parts:
                 continue
-                
+
             full_address = ' '.join(address_parts)
             normalized_address = normalize_address_for_matching(full_address)
-            
+
             if not normalized_address:
                 continue
-            
+
             # Map the data using the column mapping
             property_data = {}
-            
+
             # Set the location directly from the constructed full address
             if full_address.strip():
                 property_data['location'] = full_address.strip()
@@ -376,7 +430,7 @@ def process_arcgis_data(df, column_mapping, municipality_name):
             for source_col, target_col in column_mapping.items():
                 if source_col in row.index and pd.notna(row[source_col]):
                     value = row[source_col]
-                    
+
                     # Handle different data types
                     if target_col in ['sale_amount', 'assessed_value', 'appraised_value', 'living_area', 'acres', 'number_of_units']:
                         try:
@@ -413,7 +467,7 @@ def process_arcgis_data(df, column_mapping, municipality_name):
                             property_data[target_col] = value.strip()
                         elif pd.notna(value):
                             property_data[target_col] = str(value).strip()
-            
+
             # --- Auto-Calculate missing values ---
             if 'appraised_value' in property_data and property_data['appraised_value'] > 0:
                 if 'assessed_value' not in property_data or not property_data['assessed_value']:
@@ -434,43 +488,43 @@ def process_arcgis_data(df, column_mapping, municipality_name):
                 if normalized_address not in processed_data:
                     processed_data[normalized_address] = []
                 processed_data[normalized_address].append(property_data)
-                
+
         except Exception as e:
             log(f"Error processing row: {e}")
             continue
-    
+
     log(f"Successfully processed address records for {municipality_name}")
     return processed_data
 
 def process_municipality_with_arcgis(conn, municipality_name, data_source_config, current_owner_only=False, force_process=False):
     """Process a municipality using ArcGIS CSV data."""
     log(f"--- Processing municipality: {municipality_name} via ArcGIS CSV (Force={force_process}) ---")
-    
+
     # Get properties to update from database
     if current_owner_only:
         db_properties = get_unprocessed_current_owner_properties(conn, municipality_name, force_process)
     else:
         db_properties = get_unprocessed_properties(conn, municipality_name, force_process)
-    
+
     if not db_properties:
         log(f"No properties to process for {municipality_name}.")
         return 0
-    
+
     # Download and process ArcGIS data
     df = download_arcgis_csv(data_source_config['url'], municipality_name)
     if df is None:
         log(f"Failed to download data for {municipality_name}. Skipping.")
         return 0
-    
+
     processed_arcgis_data = process_arcgis_data(df, data_source_config['column_mapping'], municipality_name)
     if not processed_arcgis_data:
         log(f"No processable data found for {municipality_name}.")
         return 0
-    
+
     # Group DB properties by normalized address for batch matching
     db_props_by_address = {}
     all_property_ids = []
-    
+
     for prop_id, prop_location, _ in db_properties:
         all_property_ids.append(prop_id)
         if prop_location:
@@ -480,10 +534,10 @@ def process_municipality_with_arcgis(conn, municipality_name, data_source_config
             db_props_by_address[norm_addr].append(prop_id)
 
     log(f"Matching {len(db_properties)} DB properties (grouped by {len(db_props_by_address)} addresses) against ArcGIS records...")
-    
+
     updated_count = 0
     processed_count = 0
-    
+
     for norm_addr, prop_ids in db_props_by_address.items():
         # SKIP PLACEHOLDERS: Do not attempt matching if the address is a known placeholder
         if is_placeholder_address(norm_addr):
@@ -493,40 +547,40 @@ def process_municipality_with_arcgis(conn, municipality_name, data_source_config
             continue
 
         matched_data_list = []
-        
+
         # Direct match
         if norm_addr in processed_arcgis_data:
             matched_data_list = processed_arcgis_data[norm_addr]
-        
+
         # If we have matches, distribute them to the properties at this address
         if matched_data_list:
             # We zip them: 1st DB prop gets 1st CSV record, etc.
             # This handles condos (many units at same address) by assigning one unique record to each,
             # assuming the count roughly matches. If DB has more, some won't get updated? No, zip stops at shortest.
             # If CSV has more, some CSV records are unused (missing from DB).
-            
+
             # TODO: Improve matching by using secondary keys if available (e.g. Unit # if already in DB? No, it's missing)
             # For now, blind distribution is better than overwriting all with the SAME record.
-            
+
             for prop_id, vision_data in zip(prop_ids, matched_data_list):
                  if update_property_in_db(conn, prop_id, vision_data):
                     updated_count += 1
-        
+
         # Mark all as processed even if not matched
         for prop_id in prop_ids:
             mark_property_processed_today(conn, prop_id)
-        
+
         processed_count += len(prop_ids)
         if processed_count % 100 == 0:
             log(f"  -> Progress: {processed_count}/{len(db_properties)}, updated {updated_count} so far...")
-    
+
         mark_property_processed_today(conn, prop_id)
-    
+
     log(f"Finished {municipality_name}. Updated {updated_count} of {len(db_properties)} properties.")
-    
+
     # --- AUTOMATIC FRESHNESS UPDATE ---
     update_freshness_status(conn, municipality_name, 'arcgis', 'Success', details=f"Scraped {updated_count} properties.")
-    
+
     return updated_count
 
 # --- NEW: CT Geodata CSV Handler ---
@@ -535,7 +589,7 @@ def download_ct_geodata_csv(url):
     with GEODATA_LOCK:
         if url in GEODATA_CACHE:
             return GEODATA_CACHE[url]
-        
+
         log(f"Loading CT Geodata CSV from source...")
         try:
             # Check for local cache first (pre-downloaded for speed/stability)
@@ -549,7 +603,7 @@ def download_ct_geodata_csv(url):
                 response = requests.get(url, headers=headers, timeout=300)
                 response.raise_for_status()
                 df = pd.read_csv(StringIO(response.content.decode('utf-8-sig')), low_memory=False)
-            
+
             GEODATA_CACHE[url] = df
             log(f"Successfully loaded {len(df)} records into cache.")
             return df
@@ -560,29 +614,29 @@ def download_ct_geodata_csv(url):
 def process_municipality_with_ct_geodata(conn, municipality_name, config, current_owner_only=False, force_process=False):
     """Process municipality using CT Geodata CSV."""
     log(f"--- Processing {municipality_name} via CT Geodata CSV ---")
-    
+
     # 1. Get properties
     if current_owner_only:
         db_properties = get_unprocessed_current_owner_properties(conn, municipality_name, force_process)
     else:
         db_properties = get_unprocessed_properties(conn, municipality_name, force_process)
-    
+
     if not db_properties:
         log(f"No properties to process for {municipality_name}.")
         return 0
-    
+
     # 2. Get CSV
     df_all = download_ct_geodata_csv(config['url'])
     if df_all is None: return 0
-    
+
     # 3. Filter for this town
     town_filter = config.get('town_filter', municipality_name)
     df = df_all[df_all['Town Name'].str.upper() == town_filter.upper()].copy()
     log(f"Found {len(df)} records for {town_filter}")
-    
+
     # 4. Map columns
     # OBJECTID,Town Name,Location,CAMA_Link,Parcel_ID,Parcel Type,Unit_Type,Link,Collection_year,Editor,Editor Comment,Edit_Date,Link_From_CAMA,Location_CAMA,Property_City,Property_Zip,Owner,Co_Owner,Mailing_Address,Mailing_City,Mailing_State,Mailing_Zip,Assessed_Total,Assessed_Land,Assessed_Building,Pre_Yr_Assessed_Total,Appraised_Land,Appraised_Building,Appraised_Outbuilding,Valuation_Year,Land_Acres,Zone,State_Use,State_Use_Description,EYB,AYB,Model,Condition,Living_Area,Effective_Area,Total_Rooms,Number_of_Bedroom,Number_of_Baths,Number_of_Half_Baths,Sale_Price,Sale_Date,Prior_Sale_Date,Prior_Book_Page,Prior_Sale_Price,Occupancy,FIPS Code,CouncilsOfGovernments,Shape__Area,Shape__Length
-    
+
     mapping = {
         'Owner': 'owner',
         'Co_Owner': 'co_owner',
@@ -603,10 +657,10 @@ def process_municipality_with_ct_geodata(conn, municipality_name, config, curren
         'Unit_Type': 'unit',
         'Occupancy': 'number_of_units'
     }
-    
+
     # Pre-calculate appraised_value
     df['appraised_value'] = df[['Appraised_Land', 'Appraised_Building', 'Appraised_Outbuilding']].sum(axis=1)
-    
+
     # Custom process data logic
     processed_data = {}
     for _, row in df.iterrows():
@@ -615,10 +669,10 @@ def process_municipality_with_ct_geodata(conn, municipality_name, config, curren
             unit_type = str(row.get('Unit_Type', '')).upper()
             if 'CNDASC' in unit_type or 'CONDO ASC' in unit_type:
                 continue
-            
+
             loc1 = str(row.get('Location', '')).strip()
             loc2 = str(row.get('Location_CAMA', '')).strip()
-            
+
             # Heuristic: Pick the one that looks more like a full address (New Haven fix)
             # If both are just "93" or numeric, try to recover from Mailing Address or Owner Name
             if loc1.isdigit() and len(loc1) < 4:
@@ -679,22 +733,22 @@ def process_municipality_with_ct_geodata(conn, municipality_name, config, curren
                 processed_data[norm_addr] = []
             processed_data[norm_addr].append(p_data)
         except: continue
-        
+
     # 5. Update DB
     updated_count = 0
     processed_count = 0
-    
+
     # Tracker for multi-unit matches at same address
     addr_match_index = {} # norm_addr -> next_index_in_matches_list
 
     for prop_id, prop_location, _ in db_properties:
         processed_count += 1
-        if not prop_location: 
+        if not prop_location:
             mark_property_processed_today(conn, prop_id)
             continue
-            
+
         norm_addr = normalize_address_for_matching(prop_location)
-        
+
         # SKIP PLACEHOLDERS: Do not attempt matching if the address is a known placeholder
         # to prevent "smearing" one record across thousands of generic records.
         if is_placeholder_address(norm_addr):
@@ -706,16 +760,16 @@ def process_municipality_with_ct_geodata(conn, municipality_name, config, curren
             # Use index tracking to avoid reusing the same CSV record for multiple DB records (unless intended)
             idx = addr_match_index.get(norm_addr, 0)
             if idx < len(matches):
-                v_data = matches[idx] 
+                v_data = matches[idx]
                 if update_property_in_db(conn, prop_id, v_data):
                     updated_count += 1
                 addr_match_index[norm_addr] = idx + 1
-            
+
         mark_property_processed_today(conn, prop_id)
-        
+
         if processed_count % 100 == 0:
             log(f"    -> Progress for {municipality_name}: {processed_count}/{len(db_properties)}, updated {updated_count}...")
-        
+
     log(f"Finished {municipality_name}. Updated {updated_count}.")
 
     # --- NEW: Hartford Enrichment Trigger ---
@@ -733,7 +787,7 @@ def process_municipality_with_ct_geodata(conn, municipality_name, config, curren
     for addr, rows in processed_data.items():
         if len(rows) > 30: # Heuristic: More than 30 units matching one address record is suspicious
             potential_collapses.append(f"{addr} ({len(rows)} records)")
-    
+
     if potential_collapses:
         log(f"  [WARNING] Unit Collapse potential detected for {municipality_name} in source data:")
         for pc in potential_collapses[:5]: # Show top 5
@@ -751,7 +805,7 @@ def parse_mapxpress_html(html_content):
     from bs4 import BeautifulSoup
     soup = BeautifulSoup(html_content, 'lxml')
     data = {}
-    
+
     # 1. Image Extraction (Robust)
     # Looking for: <img ... src='/AGS_MAP/bldgphotos/06351680-01.jpg'>
     # Usually in a table cell. Code above looks for just containing 'bldgphotos'
@@ -764,11 +818,11 @@ def parse_mapxpress_html(html_content):
             # Here we return the path, scrape_mapxpress_property should handle full URL construction if needed
             # or we can try to guess. But better to return path and let scraper handle.
             data['building_photo'] = src
-    
+
     # 2. Detail Extraction (Generic Table Parsing)
     # The HTML uses simple tables with keys in one TD and values in the next.
     # No classes or IDs are reliable.
-    
+
     # Normalize keys helper
     def clean_key(t):
         return t.replace(':', '').strip().lower()
@@ -780,29 +834,29 @@ def parse_mapxpress_html(html_content):
             # Look for 2 or more cells where first is key, second is value
             # Note: The HTML shows <td colspan="2">Key</td> <td colspan="3">Value</td> sometimes.
             # But essentially it's sequences of cells.
-            
+
             # Simple iteration through cells to find key->value pairs
             # Sometimes a row has multiple pairs: Key | Value | Key | Value
-            
+
             i = 0
             while i < len(cells) - 1:
                 key_cell = cells[i]
                 val_cell = cells[i+1]
-                
+
                 key_text = key_cell.get_text(strip=True)
                 val_text = val_cell.get_text(strip=True)
-                
+
                 k = clean_key(key_text)
-                
+
                 if not k:
                     i += 1
                     continue
-                    
+
                 # Map keys
                 if 'year built' in k:
                     data['year_built'] = val_text
                     # Stop after consuming this pair
-                    i += 2 
+                    i += 2
                     continue
                 elif 'living area' in k or 'gross living area' in k or 'building gross' in k:
                      # Prioritize specific living area if multiple match
@@ -843,7 +897,7 @@ def parse_mapxpress_html(html_content):
                          data['assessed_value'] = cells[i+2].get_text(strip=True) # 3rd cell
                          i += 3
                          continue
-                
+
                 # Advance if not matched
                 i += 1
 
@@ -856,27 +910,27 @@ def scrape_mapxpress_property(session, base_url_template, row):
     """Worker function to scrape a single property."""
     import time
     import random
-    
+
     prop_id, location, account_num, serial_num, current_link = row
     unique_id = account_num if account_num else serial_num
-    
+
     # Fallback: Use cama_site_link if it looks like an ID (common in Bridgeport import)
     if not unique_id and current_link and not current_link.startswith('http'):
         unique_id = current_link
-    
+
     if not unique_id:
         return prop_id, None, None
-        
+
     target_url = base_url_template.format(unique_id)
-    
+
     try:
         # Reduced sleep time for parallel execution (random jitter 0.1s - 0.5s)
         time.sleep(random.uniform(0.1, 0.5))
-        
+
         resp = session.get(target_url, timeout=15)
         if resp.status_code == 200:
             scraped_data = parse_mapxpress_html(resp.text)
-            
+
             # Resolve relative photo URL if found
             if 'building_photo' in scraped_data:
                 photo_path = scraped_data['building_photo']
@@ -892,7 +946,7 @@ def scrape_mapxpress_property(session, base_url_template, row):
             return prop_id, scraped_data, None
         else:
             return prop_id, None, f"Status {resp.status_code}"
-            
+
     except Exception as e:
         return prop_id, None, str(e)
 
@@ -902,7 +956,7 @@ def discover_mapxpress_properties(conn, municipality_name, domain, id_param='UNI
     log(f"Starting discovery for {municipality_name}...", municipality=municipality_name)
     base_url = f"https://{domain}"
     search_url = f"{base_url}/PAGES/search.asp"
-    
+
     session = get_session()
     session.verify = False
     session.headers.update({
@@ -910,7 +964,7 @@ def discover_mapxpress_properties(conn, municipality_name, domain, id_param='UNI
         'Referer': search_url,
         'Origin': base_url
     })
-    
+
     # Initialize session
     try:
         session.get(search_url, timeout=10)
@@ -938,10 +992,10 @@ def discover_mapxpress_properties(conn, municipality_name, domain, id_param='UNI
         log(f"  No streets found in portal.asp. Using letter-based discovery.", municipality=municipality_name)
         # Iteration keys: A-Z and 0-9
         search_keys = [chr(i) for i in range(65, 91)] + [str(i) for i in range(10)]
-    
+
     discovered_count = 0
     new_count = 0
-    
+
     for key in search_keys:
         try:
             # log(f"  Searching '{key}'...", municipality=municipality_name)
@@ -960,15 +1014,15 @@ def discover_mapxpress_properties(conn, municipality_name, domain, id_param='UNI
                     'mbl': '',
                     'go.x': 1, 'go.y': 1
                 }
-            
+
             resp = session.post(search_url, data=post_data, timeout=20)
-            
+
             if resp.status_code != 200:
                 continue
-                
+
             soup = BeautifulSoup(resp.content, 'html.parser')
             links = soup.find_all('a', href=lambda h: h and 'detail.asp' in h)
-            
+
             for link in links:
                 href = link.get('href', '')
                 # Extract ID
@@ -990,116 +1044,116 @@ def discover_mapxpress_properties(conn, municipality_name, domain, id_param='UNI
                                         raw_address = lines[-2]
                                     else:
                                         raw_address = lines[-1]
-                        
+
                     if not raw_address or "Parcel Details" in raw_address:
                         continue
-                        
+
                     # Insert if missing
                     with conn.cursor() as cursor:
                         full_link = f"{base_url}/PAGES/detail.asp?{id_param}={unique_id}"
-                        
+
                         cursor.execute("""
                             INSERT INTO properties (property_city, location, account_number, cama_site_link, source)
                             VALUES (%s, %s, %s, %s, 'MAPXPRESS_DISCOVERY')
-                            ON CONFLICT (property_city, location) 
-                            DO UPDATE SET 
+                            ON CONFLICT (property_city, location)
+                            DO UPDATE SET
                                 account_number = EXCLUDED.account_number,
                                 cama_site_link = EXCLUDED.cama_site_link,
                                 source = CASE WHEN properties.source = 'ct_geodata_csv' THEN 'MAPXPRESS_DISCOVERY' ELSE properties.source END
                             RETURNING id
                         """, (municipality_name.title(), raw_address, unique_id, full_link))
-                        
+
                         if cursor.fetchone():
                             new_count += 1
-                    
+
                     discovered_count += 1
-                    
+
         except Exception as e:
             log(f"  Discovery Error on key {key}: {e}", municipality=municipality_name)
-            
+
     log(f"Discovery Complete: Found {discovered_count} total, Inserted {new_count} new properties.", municipality=municipality_name)
     conn.commit()
 
 
 def process_municipality_with_mapxpress(conn, municipality_name, data_source_config, current_owner_only=False, force_process=False):
     """Process a municipality scraping MapXpress (Parallel)."""
-    
+
     log(f"--- Processing municipality: {municipality_name} via MapXpress (Force={force_process}) ---", municipality=municipality_name)
-    
+
     # 0. Run Discovery Phase
     domain = data_source_config['domain']
     if domain.endswith('/'): domain = domain[:-1]
     id_param = data_source_config.get('id_param', 'UNIQUE_ID')
-    
+
     if not current_owner_only:
         discover_mapxpress_properties(conn, municipality_name, domain, id_param)
 
     query = """
-        SELECT p.id, p.location, p.account_number, p.serial_number, p.cama_site_link 
+        SELECT p.id, p.location, p.account_number, p.serial_number, p.cama_site_link
         FROM properties p
         LEFT JOIN property_processing_log ppl ON p.id = ppl.property_id
-        WHERE p.property_city ILIKE %s 
+        WHERE p.property_city ILIKE %s
         AND (
-            (p.account_number IS NOT NULL AND p.account_number != '') 
+            (p.account_number IS NOT NULL AND p.account_number != '')
             OR (p.cama_site_link IS NOT NULL AND p.cama_site_link != '')
         )
     """
-    
+
     if not force_process:
         query += " AND (ppl.last_processed_date IS NULL OR ppl.last_processed_date < CURRENT_DATE)"
-    
+
     if current_owner_only:
         query += " AND p.owner ILIKE '%%Current Owner%%'"
-        
-    query += " ORDER BY p.location" 
-    
+
+    query += " ORDER BY p.location"
+
     with conn.cursor() as cursor:
         cursor.execute(query, (municipality_name,))
         properties = cursor.fetchall()
-        
+
     if not properties:
         log(f"No properties found with account_number for {municipality_name}.", municipality=municipality_name)
         return 0
-        
+
     log(f"Found {len(properties)} properties to scrape for {municipality_name}. Starting parallel scrape (10 threads)...", municipality=municipality_name)
-    
+
     base_url_template = f"https://{domain}/PAGES/detail.asp?{id_param}={{}}"
 
     updated_count = 0
     processed_count = 0
-    
+
     session = get_session()
     session.headers.update({
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
     })
-    
+
     # Parallel Processing using ThreadPoolExecutor
     # We use threads for I/O (scraping), but update DB in the main thread to ensure safety.
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
         # Submit all tasks
         future_to_prop = {
-            executor.submit(scrape_mapxpress_property, session, base_url_template, row): row 
+            executor.submit(scrape_mapxpress_property, session, base_url_template, row): row
             for row in properties
         }
-        
+
         for future in concurrent.futures.as_completed(future_to_prop):
             prop_id, scraped_data, error_msg = future.result()
-            
+
             if scraped_data:
                 if update_property_in_db(conn, prop_id, scraped_data, municipality_name=municipality_name):
                     updated_count += 1
             elif error_msg:
                 # Log error but don't spam if common
-                if "Status 404" not in error_msg: 
+                if "Status 404" not in error_msg:
                      pass # log(f"Scrape error for {prop_id}: {error_msg}")
-            
+
             # Always mark processed
             mark_property_processed_today(conn, prop_id)
-            
+
             processed_count += 1
             if processed_count % 50 == 0:
                 log(f"  -> Scraped {processed_count}/{len(properties)}, updated {updated_count}...", municipality=municipality_name)
-            
+
     log(f"Finished {municipality_name}. Scraped {processed_count}, Updated {updated_count}.", municipality=municipality_name)
     return updated_count
 
@@ -1110,7 +1164,7 @@ def parse_propertyrecordcards_html(html_content):
     from bs4 import BeautifulSoup
     soup = BeautifulSoup(html_content, 'lxml')
     data = {}
-    
+
     # Helper to clean currency/number strings
     def clean_number(val):
         if not val: return None
@@ -1148,7 +1202,7 @@ def parse_propertyrecordcards_html(html_content):
         'Beds/Units:': 'number_of_units', # Waterbury specific
         'GLA:': 'living_area' # Waterbury specific
     }
-    
+
     tables = soup.find_all('table')
     for table in tables:
         cells = table.find_all('td')
@@ -1157,10 +1211,10 @@ def parse_propertyrecordcards_html(html_content):
             if text in key_map and i + 1 < len(cells):
                 val = cells[i+1].get_text(strip=True)
                 db_field = key_map[text]
-                
+
                 # Check if we already found it (prioritize first match?)
                 if db_field in data: continue
-                
+
                 try:
                     if db_field == 'living_area':
                          clean_val = clean_number(val)
@@ -1170,26 +1224,26 @@ def parse_propertyrecordcards_html(html_content):
                     else:
                         data[db_field] = val
                 except: pass
-                
+
     # 3. Parse Photos
     # Look for image with 'Photo' in ID or src
     photo_img = soup.find('img', id=re.compile(r'Photo|MainImage|imgPhoto', re.I))
     if not photo_img:
         photo_img = soup.find('img', src=re.compile(r'/Photos/|/bldgphotos/|/images/prop', re.I))
-    
+
     if photo_img and photo_img.get('src'):
         data['building_photo'] = photo_img.get('src')
-                
+
     return data
 
 def scrape_propertyrecordcards_property(session, base_url_template, row, towncode=None):
     """Worker function to scrape a single PropertyRecordCards property."""
     import time
     import random
-    
+
     prop_id, location, account_num, serial_num, current_link = row
     unique_id = account_num if account_num else (serial_num if serial_num else current_link)
-    
+
     # Waterbury (151) ID Fix: 80070-0273-0020-0006 -> 027300200006
     if towncode == '151' and unique_id:
         tmp_id = str(unique_id).strip()
@@ -1197,18 +1251,18 @@ def scrape_propertyrecordcards_property(session, base_url_template, row, towncod
              tmp_id = tmp_id.replace('80070-', '')
         tmp_id = tmp_id.replace('-', '')
         unique_id = tmp_id
-        
+
     if not unique_id:
         return prop_id, None, None # Cannot scrape w/o ID
-        
+
     target_url = base_url_template.format(unique_id)
-    
+
     try:
         # Respectful jitter
         time.sleep(random.uniform(0.1, 0.5))
-        
+
         resp = session.get(target_url, timeout=20)
-        
+
         # Check for soft errors or redirect to search page (invalid ID)
         if "SearchMaster.aspx" in resp.url and "propertyresults.aspx" not in resp.url:
              return prop_id, None, "Redirected to Search (Invalid ID?)"
@@ -1232,7 +1286,7 @@ def scrape_propertyrecordcards_property(session, base_url_template, row, towncod
                 return prop_id, None, "No data parsed"
         else:
             return prop_id, None, f"Status {resp.status_code}"
-            
+
     except Exception as e:
         return prop_id, None, str(e)
 
@@ -1242,13 +1296,13 @@ def discover_propertyrecordcards_properties(conn, municipality_name, towncode, p
     log(f"Starting discovery for {municipality_name} (PRC)...", municipality=municipality_name)
     base_url = f"https://www.propertyrecordcards.com{path_prefix}"
     search_url = f"{base_url}/SearchMaster.aspx?towncode={towncode}"
-    
+
     session = get_session()
     session.headers.update({
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
         'Referer': f"https://www.propertyrecordcards.com{path_prefix}/Search.aspx"
     })
-    
+
     # 1. Initialize session and get ViewState
     try:
         resp = session.get(search_url, timeout=15)
@@ -1262,10 +1316,10 @@ def discover_propertyrecordcards_properties(conn, municipality_name, towncode, p
 
     # Iteration keys: A-Z
     search_keys = [chr(i) for i in range(65, 91)]
-    
+
     discovered_count = 0
     new_count = 0
-    
+
     for key in search_keys:
         try:
             # log(f"  Searching '{key}'...", municipality=municipality_name)
@@ -1278,17 +1332,17 @@ def discover_propertyrecordcards_properties(conn, municipality_name, towncode, p
                 'ctl00$MainContent$tbPropertySearchName': key,
                 'ctl00$MainContent$btnPropertySearch': 'Search'
             }
-            
+
             resp = session.post(search_url, data=payload, timeout=20)
-            
+
             if resp.status_code != 200:
                 continue
-                
+
             soup = BeautifulSoup(resp.content, 'html.parser')
             # Look for property links in the results table
             # Link Format: propertyresults.aspx?towncode=...&uniqueid=...
             links = soup.find_all('a', href=re.compile(r'propertyresults\.aspx\?.*uniqueid=', re.I))
-            
+
             for link in links:
                 href = link.get('href', '')
                 match = re.search(r'uniqueid=([^&]+)', href, re.I)
@@ -1296,7 +1350,7 @@ def discover_propertyrecordcards_properties(conn, municipality_name, towncode, p
                     unique_id = match.group(1)
                     # The link text is usually the address
                     raw_address = link.text.strip()
-                    
+
                     if not raw_address or "View" in raw_address:
                         # Try to find address in the same row
                         row = link.find_parent('tr')
@@ -1307,114 +1361,114 @@ def discover_propertyrecordcards_properties(conn, municipality_name, towncode, p
 
                     if not raw_address:
                         continue
-                        
+
                     with conn.cursor() as cursor:
                         full_link = f"https://www.propertyrecordcards.com{path_prefix}/propertyresults.aspx?towncode={towncode}&uniqueid={unique_id}"
-                        
+
                         cursor.execute("""
                             INSERT INTO properties (property_city, location, account_number, cama_site_link, source)
                             VALUES (%s, %s, %s, %s, 'PRC_DISCOVERY')
-                            ON CONFLICT (property_city, location) 
-                            DO UPDATE SET 
+                            ON CONFLICT (property_city, location)
+                            DO UPDATE SET
                                 account_number = COALESCE(properties.account_number, EXCLUDED.account_number),
                                 cama_site_link = COALESCE(properties.cama_site_link, EXCLUDED.cama_site_link)
                             RETURNING id
                         """, (municipality_name.title(), raw_address, unique_id, full_link))
-                        
+
                         if cursor.fetchone():
                             new_count += 1
-                    
+
                     discovered_count += 1
-            
+
             # Commit per letter to save progress
             conn.commit()
-                    
+
         except Exception as e:
             log(f"  Discovery Error on key {key}: {e}", municipality=municipality_name)
-            
+
     log(f"Discovery Complete: Found {discovered_count} total, Updated/Inserted {new_count} properties.", municipality=municipality_name)
 
 def process_municipality_with_propertyrecordcards(conn, municipality_name, data_source_config, current_owner_only=False, force_process=False):
     """Process a municipality using PropertyRecordCards (Parallel)."""
-    
+
     log(f"--- Processing municipality: {municipality_name} via PropertyRecordCards (Force={force_process}) ---", municipality=municipality_name)
-    
+
     # 0. Run Discovery Phase
     towncode = data_source_config['towncode']
     path_prefix = data_source_config.get('path_prefix', '')
-    
+
     if not current_owner_only:
         discover_propertyrecordcards_properties(conn, municipality_name, towncode, path_prefix)
 
     # 1. Get Properties (same logic as MapXpress)
     # 1. Get Properties (same logic as MapXpress)
     query = """
-        SELECT p.id, p.location, p.account_number, p.serial_number, p.cama_site_link 
+        SELECT p.id, p.location, p.account_number, p.serial_number, p.cama_site_link
         FROM properties p
         LEFT JOIN property_processing_log ppl ON p.id = ppl.property_id
-        WHERE p.property_city ILIKE %s 
+        WHERE p.property_city ILIKE %s
         AND ((p.account_number IS NOT NULL AND p.account_number != '') OR (p.cama_site_link IS NOT NULL AND p.cama_site_link != ''))
     """
     if not force_process:
         query += " AND (ppl.last_processed_date IS NULL OR ppl.last_processed_date < CURRENT_DATE)"
     if current_owner_only:
         query += " AND p.owner ILIKE '%%Current Owner%%'"
-    query += " ORDER BY p.location" 
-    
+    query += " ORDER BY p.location"
+
     with conn.cursor() as cursor:
         cursor.execute(query, (municipality_name,))
         properties = cursor.fetchall()
-        
+
     if not properties:
         log(f"No properties found with account_number for {municipality_name}.", municipality=municipality_name)
         return 0
-        
+
     log(f"Found {len(properties)} properties to scrape for {municipality_name}. Starting parallel scrape (10 threads)...", municipality=municipality_name)
-    
+
     # 2. Construct URL Template
     towncode = data_source_config['towncode']
     path_prefix = data_source_config.get('path_prefix', '') # e.g. /Sherman or empty
     # URL Format: https://www.propertyrecordcards.com/Sherman/propertyresults.aspx?towncode=127&uniqueid=...
     # OR Standard: https://www.propertyrecordcards.com/propertyresults.aspx?towncode=002&uniqueid=...
-    
+
     base_url_template = f"https://www.propertyrecordcards.com{path_prefix}/propertyresults.aspx?towncode={towncode}&uniqueid={{}}"
 
     updated_count = 0
     processed_count = 0
-    
+
     session = get_session()
     session.headers.update({
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
     })
-    
+
     # 3. Parallel Execution
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
         future_to_prop = {
-            executor.submit(scrape_propertyrecordcards_property, session, base_url_template, row, towncode): row 
+            executor.submit(scrape_propertyrecordcards_property, session, base_url_template, row, towncode): row
             for row in properties
         }
-        
+
         for future in concurrent.futures.as_completed(future_to_prop):
             prop_id, scraped_data, error_msg = future.result()
-            
+
             if scraped_data:
                 if update_property_in_db(conn, prop_id, scraped_data, municipality_name=municipality_name):
                     updated_count += 1
             elif error_msg:
                 # log(f"Scrape error for {prop_id}: {error_msg}")
                 pass
-            
+
             # Resolve relative photo URL
             # PropertyRecordCards photos are often relative to the site root or current page
             # But the scraper currently gets whatever is in src.
             # We'll handle normalization in update_property_in_db or here.
-            
+
             mark_property_processed_today(conn, prop_id)
             processed_count += 1
-            
+
             if processed_count % 50 == 0:
                 log(f"  -> Scraped {processed_count}/{len(properties)}, updated {updated_count}...", municipality=municipality_name)
-            
+
     log(f"Finished {municipality_name}. Scraped {processed_count}, Updated {updated_count}.", municipality=municipality_name)
     return updated_count
 
@@ -1422,13 +1476,13 @@ def process_municipality_with_propertyrecordcards(conn, municipality_name, data_
 def get_vision_municipalities():
     """Scrapes the VGSI website to get a list of municipalities with their last updated date and URL."""
     log(f"Scraping {CONNECTICUT_DATABASE_URL} for municipalities...")
-    
+
     try:
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         response = requests.get(CONNECTICUT_DATABASE_URL, verify=False, timeout=15, headers=headers)
         response.raise_for_status()
         soup = BeautifulSoup(response.content, 'html.parser')
-        
+
         municipalities = {}
         table = soup.find('table')
         if not table:
@@ -1441,7 +1495,7 @@ def get_vision_municipalities():
                 municipality_name = cols[0].text.strip()
                 last_updated_str = cols[2].text.strip()
                 link = cols[0].find('a')
-                
+
                 cleaned_name = municipality_name.upper().replace(', CT', '').strip()
 
                 if cleaned_name and last_updated_str and link:
@@ -1458,7 +1512,7 @@ def get_vision_municipalities():
                             base_url = '/'.join(full_url.split('/')[:-1]) + '/'
                         else:
                             base_url = f"{VISION_BASE_URL}/{'/'.join(full_url.split('/')[:-1]).lstrip('/')}/"
-                        
+
                         municipalities[cleaned_name] = {
                             "last_updated": last_updated_date,
                             "url": base_url,
@@ -1478,14 +1532,14 @@ def normalize_address(address):
     """Normalizes an address for consistent matching."""
     if not address:
         return ""
-    
+
     # Convert to uppercase and normalize whitespace
     normalized = ' '.join(address.upper().strip().split())
-    
+
     # Common address normalizations for better matching
     normalizations = {
         ' STREET': ' ST',
-        ' AVENUE': ' AVE', 
+        ' AVENUE': ' AVE',
         ' ROAD': ' RD',
         ' DRIVE': ' DR',
         ' LANE': ' LN',
@@ -1494,10 +1548,10 @@ def normalize_address(address):
         ' BOULEVARD': ' BLVD',
         ' CIRCLE': ' CIR'
     }
-    
+
     for old, new in normalizations.items():
         normalized = normalized.replace(old, new)
-    
+
     return normalized
 
 def scrape_individual_property_page(prop_page_url, session, referer, municipality=None):
@@ -1520,7 +1574,7 @@ def scrape_individual_property_page(prop_page_url, session, referer, municipalit
         return None
 
     data = {}
-    
+
     # Vision Appraisal specific selectors (primary strategy)
     selectors = {
         'owner': ['span[id*="lblGenOwner"]', 'span[id*="lblOwner"]'],
@@ -1533,13 +1587,13 @@ def scrape_individual_property_page(prop_page_url, session, referer, municipalit
         'location': ['*[id="MainContent_lblLocation"]', '*[id*="lblLocation"]', '*[id*="lblGenLocation"]'],
         'property_type': ['span[id*="lblUseCode"]', 'span[id*="lblGenUseCode"]']
     }
-    
+
     # Add a specific check for "Occupancy" and "Style" in the attributes table
     for label in ['Occupancy', 'Style']:
         label_td = soup.find('td', string=re.compile(f'^{label}$', re.IGNORECASE))
         if not label_td:
              label_td = soup.find(lambda tag: tag.name == 'td' and label.lower() in tag.text.lower().strip())
-        
+
         if label_td:
             val_td = label_td.find_next_sibling('td')
             if val_td:
@@ -1551,13 +1605,13 @@ def scrape_individual_property_page(prop_page_url, session, referer, municipalit
                         pass
                 elif label == 'Style':
                     data['property_type'] = val_text
-    
+
     for field, field_selectors in selectors.items():
         for selector in field_selectors:
             element = soup.select_one(selector)
             if not element:
                 continue
-            
+
             if field == 'building_photo':
                 img_src = element.get('src')
                 if img_src:
@@ -1581,7 +1635,7 @@ def scrape_individual_property_page(prop_page_url, session, referer, municipalit
                         pass
                 if field in data:
                     break
-    
+
     # Fallback strategy: Generic table/dl search
     if len(data) < 2:
         fallback_keywords = {
@@ -1601,7 +1655,7 @@ def scrape_individual_property_page(prop_page_url, session, referer, municipalit
             keyword_element = soup.find(['td', 'dt'], string=re.compile(f'^{re.escape(keyword)}', re.IGNORECASE))
             if not keyword_element:
                  keyword_element = soup.find(['td', 'dt'], string=re.compile(f'{re.escape(keyword)}', re.IGNORECASE))
-                 
+
             if keyword_element:
                 next_element = keyword_element.find_next_sibling(['td', 'dd'])
                 if next_element and next_element.text.strip():
@@ -1619,7 +1673,7 @@ def scrape_individual_property_page(prop_page_url, session, referer, municipalit
                             data[field] = datetime.strptime(text, '%m/%d/%Y').date()
                         except ValueError:
                             pass
-    
+
     if 'location' in data and 'unit' not in data:
         loc = data['location'].strip()
         match = re.search(r'(?:,|,\s*|\s+)(?:UNIT|#|APT|STE|SUITE|#UD|FL|FLOOR|RM|ROOM)\.?\s*([A-Z0-9-]+)$', loc, re.IGNORECASE)
@@ -1643,7 +1697,7 @@ def scrape_individual_property_page(prop_page_url, session, referer, municipalit
     if 'owner' not in data or not data['owner']:
         if municipality: log(f"[Scraper] Failed: No Owner for {prop_page_url}", municipality=municipality)
         return None
-        
+
     if 'building_photo' in data and municipality:
          log(f"[Scraper] Found photo for {prop_page_url}", municipality=municipality)
 
@@ -1653,7 +1707,7 @@ def scrape_individual_property_page(prop_page_url, session, referer, municipalit
 def scrape_street_properties(street_link, municipality_url, referer, session=None, municipality_name=None):
     """Scrapes all properties on a single street page."""
     street_props = {}
-    
+
     # Random jitter to avoid strict pattern detection
     # Use smaller jitter if we are sharing a session to keep things fast but safe
     time.sleep(random.uniform(0.1, 0.5) if session else random.uniform(0.5, 1.5))
@@ -1669,10 +1723,10 @@ def scrape_street_properties(street_link, municipality_url, referer, session=Non
 
         response.raise_for_status()
         soup = BeautifulSoup(response.content, 'html.parser')
-        
+
         # FIX: Use regex for case-insensitive and robust link finding
         prop_links = soup.find_all("a", href=re.compile(r'\.aspx\?(pid|acct|uniqueid)=', re.I))
-        
+
         if len(prop_links) == 0:
              log(f"Street {street_link} found 0 property links. Status: {response.status_code}. Len: {len(response.text)}. Resolved URL: {response.url}", municipality=municipality_name)
 
@@ -1685,39 +1739,39 @@ def scrape_street_properties(street_link, municipality_url, referer, session=Non
             href = prop_link.get('href')
             if not href or not address:
                 continue
-            
+
             # Filter out malformed links or template artifacts
             if re.search(r'(pid|acct)=\s*$', href, re.I) or '<%' in href:
                 continue
-            
+
             prop_page_url = urljoin(municipality_url, href)
             # Use provided session for individual property scraping too
             prop_details = scrape_individual_property_page(prop_page_url, session, street_link, municipality=municipality_name)
-            
+
             if prop_details:
                 # Add the specific parcel URL to the data dict so it can be saved in the DB
                 prop_details['cama_site_link'] = prop_page_url
                 street_props[address] = prop_details
             else:
                 log(f"Failed to scrape details for {prop_page_url}", municipality=municipality_name)
-                    
+
     except Exception as e:
         log(f"Error scraping street {street_link}: {e}", municipality=municipality_name)
-        
+
     return street_props
 
 def scrape_all_properties_by_address(municipality_url, municipality_name):
     """Orchestrates the scraping of all properties for a municipality."""
     all_props_data = {}
     street_list_base_url = f"{municipality_url}Streets.aspx"
-    
+
     with get_session() as main_session:
         main_session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
-        
+
         # Initialize session by visiting homepage first (fixes Berlin redirect issue)
         try:
              main_session.get(municipality_url, verify=False, timeout=20)
-        except Exception: 
+        except Exception:
              pass # Ignore init errors, try direct link anyway
 
         try:
@@ -1725,13 +1779,13 @@ def scrape_all_properties_by_address(municipality_url, municipality_name):
             response = main_session.get(street_list_base_url, verify=False, timeout=20)
             response.raise_for_status()
             soup = BeautifulSoup(response.content, 'html.parser')
-            
+
             # More robust selector: any link containing Streets.aspx?Letter=
             letter_links = { urljoin(municipality_url, a['href']) for a in soup.find_all('a', href=re.compile(r'Streets\.aspx\?Letter=', re.I)) }
             if not letter_links:
                  # Fallback: maybe just Letter=
                  letter_links = { urljoin(municipality_url, a['href']) for a in soup.find_all('a', href=re.compile(r'Letter=', re.I)) }
-            
+
             if not letter_links:
                 log(f"  -> No A-Z letter links found for {municipality_name}.")
                 return {}
@@ -1743,7 +1797,7 @@ def scrape_all_properties_by_address(municipality_url, municipality_name):
 
         # --- OPTIMIZATION: Discover ALL streets for ALL letters in parallel ---
         all_street_links = []
-        
+
         def get_streets_for_letter(letter_link):
             """Helper to fetch street links for a single letter."""
             local_streets = []
@@ -1756,7 +1810,7 @@ def scrape_all_properties_by_address(municipality_url, municipality_name):
                     s.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
                     resp = s.get(letter_link, verify=False, timeout=20, headers={'Referer': street_list_base_url})
                     l_soup = BeautifulSoup(resp.content, 'html.parser')
-                    
+
                     # More robust selector: any link containing Streets.aspx?Name=
                     # CRITICAL FIX: Strip trailing spaces from href which cause 0 results in VGSI
                     links = [ urljoin(municipality_url, a['href'].strip()) for a in l_soup.find_all('a', href=re.compile(r'Streets\.aspx\?Name=', re.I)) ]
@@ -1779,24 +1833,24 @@ def scrape_all_properties_by_address(municipality_url, municipality_name):
         log(f"  -> Total streets discovered: {len(all_street_links)}. Starting massive parallel scrape...")
 
         # --- PROCESS ALL STREETS ---
-        # Shuffle slightly to reduce contention on specific letter pages if that matters? 
+        # Shuffle slightly to reduce contention on specific letter pages if that matters?
         # Probability low. Just submit all.
-        
+
         chunk_size = 500
         total_processed = 0
-        
+
         # We can submit ALL, but for huge lists, maybe chunking helps avoid memory spikes?
         # 1000 streets is fine.
-        
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             # We pass the specific letter link as referer for each street AND use the main_session
             future_to_street = {executor.submit(scrape_street_properties, s_link, municipality_url, referer, main_session, municipality_name): s_link for s_link, referer in all_street_links}
-            
+
             for i, future in enumerate(concurrent.futures.as_completed(future_to_street)):
                 street_data = future.result()
                 if street_data:
                     all_props_data.update(street_data)
-                
+
                 if (i + 1) % 50 == 0:
                     log(f"  -> [Progress] Scraped {i + 1}/{len(all_street_links)} streets...", municipality=municipality_name)
 
@@ -1819,65 +1873,78 @@ def update_property_in_db(conn, property_db_id, vision_data, restricted_mode=Fal
     Updates a property record in the database with new information.
     restricted_mode (bool): If True, only update fields that are currently empty or 'Current Owner'.
                             Exceptions: 'cama_site_link', 'building_photo', 'unit', 'unit_cut' are always updated.
+
+    Also detects ownership transitions and logs them to property_transactions
+    for historical tracking of acquisitions and dispositions.
     """
-    if not vision_data or not any(v is not None for v in vision_data.values()): 
+    if not vision_data or not any(v is not None for v in vision_data.values()):
         return False
 
-    # Fetch current state if in restricted mode
+    # --- ALWAYS fetch current state for transaction detection ---
+    # We need owner, sale_date, sale_amount, location, property_city to detect ownership changes
     current_state = {}
-    if restricted_mode:
-        try:
-            with conn.cursor() as cursor:
-                # Fetch only the columns we might want to update (plus owner for the 'Current Owner' check)
-                # We can construct the SELECT dynamically based on vision_data keys
+    transaction_detection_fields = ['owner', 'owner_norm', 'sale_date', 'sale_amount', 'location', 'property_city']
+
+    try:
+        with conn.cursor() as cursor:
+            if restricted_mode:
                 cols_to_fetch = [k for k in vision_data.keys() if k in ['owner', 'sale_amount', 'sale_date', 'assessed_value', 'appraised_value', 'year_built', 'living_area', 'property_type', 'acres', 'zone', 'location', 'number_of_units']]
-                # Always fetch account_number to check if property was enriched
                 if 'account_number' not in cols_to_fetch:
                     cols_to_fetch.append('account_number')
+                # Merge in transaction detection fields
+                for f in transaction_detection_fields:
+                    if f not in cols_to_fetch:
+                        cols_to_fetch.append(f)
+            else:
+                # Even in non-restricted mode, fetch fields needed for transaction detection
+                cols_to_fetch = list(set(
+                    [k for k in vision_data.keys() if k in ['owner', 'sale_amount', 'sale_date', 'location', 'property_city']]
+                    + transaction_detection_fields
+                ))
 
-                select_sql = sql.SQL("SELECT {} FROM properties WHERE id = %s").format(
-                    sql.SQL(", ").join(map(sql.Identifier, cols_to_fetch))
-                )
-                cursor.execute(select_sql, (property_db_id,))
-                row = cursor.fetchone()
-                if row:
-                    current_state = dict(zip(cols_to_fetch, row))
-                else:
-                    return False # ID not found?
-        except psycopg2.Error as e:
-            log(f"DB fetch error for property ID {property_db_id}: {e}", municipality=municipality_name)
-            return False
+            select_sql = sql.SQL("SELECT {} FROM properties WHERE id = %s").format(
+                sql.SQL(", ").join(map(sql.Identifier, cols_to_fetch))
+            )
+            cursor.execute(select_sql, (property_db_id,))
+            row = cursor.fetchone()
+            if row:
+                current_state = dict(zip(cols_to_fetch, row))
+            else:
+                return False  # ID not found
+    except psycopg2.Error as e:
+        log(f"DB fetch error for property ID {property_db_id}: {e}", municipality=municipality_name)
+        return False
 
     update_fields = []
     values = []
-    
+
     # Fields that ARE NEVER allowed to be overwritten by the scraper if they already have data
     # unless the new data is substantially "better" (not handled automatically here)
     PROTECTED_FIELDS = {
-        'latitude', 'longitude', 'normalized_address', 
+        'latitude', 'longitude', 'normalized_address',
         'unit', 'unit_cut', 'owner', 'co_owner', 'location', 'account_number'
     }
 
     for key, new_value in vision_data.items():
         if new_value is None or str(new_value).strip() == '':
             continue
-            
+
         should_update = True
         current_val = current_state.get(key)
-        
+
         # 1. Placeholder logic: Always update if current is placeholder
         placeholder_names = {
-            'CURRENT OWNER', 'UNKNOWN OWNER', 'OCCUPANT', 'OWNER', 
+            'CURRENT OWNER', 'UNKNOWN OWNER', 'OCCUPANT', 'OWNER',
             'UNKNOWN', 'CT', 'CONNECTICUT', 'THE', 'INC', 'LLC', 'CORP',
             'USA', 'UNITED STATES', 'NO NAME', 'N/A', 'NA', 'NONE',
             'NO INFORMATION PROVIDED', 'NOT PROVIDED', 'VACANT', 'NULL',
             'NOT AVAILABLE', '[UNKNOWN]', 'CURRENT COMPANY OWNER', 'CURRENT COMPANY-OWNER',
             'SV', 'SURVIVORSHIP', 'JT', 'TIC', 'TC', 'ET AL', 'LII', 'ETAL'
         }
-        
+
         is_placeholder = (
             current_val is None or
-            str(current_val).strip() == '' or 
+            str(current_val).strip() == '' or
             str(current_val).strip().upper() in placeholder_names or
             (key == 'location' and str(current_val).strip().replace(' ', '').isdigit() and len(str(current_val).strip()) < 6)
         )
@@ -1894,7 +1961,7 @@ def update_property_in_db(conn, property_db_id, vision_data, restricted_mode=Fal
             # Generally, we NEVER overwrite valid data with scraper data to prevent destructive updates
             elif key not in ['cama_site_link', 'building_photo']: # Only these are safe to continually overwrite
                 should_update = False
-        
+
         if should_update:
             log(f"Updating field {key} (old: {current_val}) -> (new: {new_value})", municipality=municipality_name)
             update_fields.append(sql.SQL("{} = %s").format(sql.Identifier(key)))
@@ -1902,18 +1969,91 @@ def update_property_in_db(conn, property_db_id, vision_data, restricted_mode=Fal
         else:
             # print(f"DEBUG DB: Skipping field {key} because should_update is False", flush=True)
             pass
-    
+
     if not update_fields:
         print(f"DEBUG DB: No fields to update for property {property_db_id}", flush=True)
         return False
+
+    # --- TRANSACTION DETECTION: Log ownership transitions before committing ---
+    try:
+        new_owner = vision_data.get('owner')
+        new_sale_date = vision_data.get('sale_date')
+        new_sale_amount = vision_data.get('sale_amount')
+        current_owner = current_state.get('owner')
+        current_owner_norm = current_state.get('owner_norm')
+        current_sale_date = current_state.get('sale_date')
+
+        # Detect a real ownership transition:
+        # 1. Owner is changing (new owner != current owner)
+        # 2. Neither is a placeholder
+        # 3. Sale date is present on the incoming data
+        owner_is_changing = (
+            new_owner and current_owner and
+            str(new_owner).strip().upper() not in placeholder_names and
+            str(current_owner).strip().upper() not in placeholder_names and
+            str(new_owner).strip().upper() != str(current_owner).strip().upper()
+        )
+
+        sale_date_is_changing = (
+            new_sale_date and
+            str(new_sale_date) != str(current_sale_date)
+        )
+
+        if owner_is_changing or (sale_date_is_changing and new_sale_date):
+            # Clean sale amount
+            clean_amount = None
+            amt = new_sale_amount or vision_data.get('sale_price')
+            if amt:
+                try:
+                    clean_amount = float(str(amt).replace('$', '').replace(',', ''))
+                except (ValueError, TypeError):
+                    pass
+
+            # Determine transaction type
+            tx_type = 'sale'
+            if clean_amount is None or clean_amount <= 0:
+                tx_type = 'nominal'
+            elif clean_amount <= 1000:
+                tx_type = 'nominal'
+
+            ensure_property_transactions_schema(conn)
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    INSERT INTO property_transactions
+                    (property_id, transaction_date, transaction_amount,
+                     buyer_name, buyer_raw, seller_name, seller_raw,
+                     transaction_type, source, location, property_city)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    property_db_id,
+                    new_sale_date,
+                    clean_amount,
+                    normalize_business_name(new_owner) if new_owner else None,
+                    str(new_owner).strip() if new_owner else None,          # buyer_raw
+                    current_owner_norm,                                      # seller_name (already normalized)
+                    str(current_owner).strip() if current_owner else None,   # seller_raw
+                    tx_type,
+                    'scrape_delta',
+                    current_state.get('location'),
+                    current_state.get('property_city')
+                ))
+
+            log(f"TRANSACTION DETECTED: Property {property_db_id} "
+                f"({current_state.get('location')}, {current_state.get('property_city')}) "
+                f"SOLD by '{current_owner}' to '{new_owner}' "
+                f"on {new_sale_date} for ${clean_amount or 'N/A'}",
+                municipality=municipality_name)
+    except Exception as e:
+        # Never let transaction logging break the actual update
+        log(f"Warning: Transaction logging failed for property {property_db_id}: {e}", municipality=municipality_name)
 
     # Use psycopg2.sql to safely format identifiers and structure
     query_sql = sql.SQL("UPDATE properties SET {} WHERE id = %s").format(
         sql.SQL(", ").join(update_fields)
     )
-    
+
     values.append(property_db_id)
-    
+
     try:
         with conn.cursor() as cursor:
             cursor.execute(query_sql, values)
@@ -1929,9 +2069,9 @@ def find_match_for_property(prop_address, scraped_properties_dict):
     """Helper function to find a scraped property matching a DB address."""
     if not prop_address:
         return None
-    
+
     normalized_db_address = normalize_address(prop_address)
-    
+
     # Strategy 1: Direct match on normalized address
     if normalized_db_address in scraped_properties_dict:
         return scraped_properties_dict[normalized_db_address]
@@ -1941,7 +2081,7 @@ def find_match_for_property(prop_address, scraped_properties_dict):
             # Check if DB address is in scraped address or vice-versa
             if normalized_db_address in scraped_addr or scraped_addr in normalized_db_address:
                 return vision_data
-                
+
     return None
 
 def process_municipality_with_realtime_updates(conn, municipality_name, municipality_url, last_updated_date=None, current_owner_only=False, force_process=False):
@@ -1949,7 +2089,7 @@ def process_municipality_with_realtime_updates(conn, municipality_name, municipa
     Process a municipality with real-time database updates, resumability, and direct URL optimization.
     """
     log(f"--- Processing municipality: {municipality_name} (Force={force_process}) ---")
-    
+
     # Determine Restricted Mode based on last_updated_date
     restricted_mode = False
     if last_updated_date and last_updated_date.year < 2026:
@@ -1958,13 +2098,13 @@ def process_municipality_with_realtime_updates(conn, municipality_name, municipa
         restricted_mode = True
     else:
         log(f"  -> Data Source Last Updated: {last_updated_date.strftime('%Y-%m-%d') if last_updated_date else 'Unknown'}. Normal update mode.")
-    
+
     # Get properties to update from database
     if current_owner_only:
         db_properties = get_unprocessed_current_owner_properties(conn, municipality_name, force_process)
     else:
         db_properties = get_unprocessed_properties(conn, municipality_name, force_process)
-        
+
     if not db_properties:
         log(f"No properties to process for {municipality_name}.")
         return 0
@@ -1977,14 +2117,14 @@ def process_municipality_with_realtime_updates(conn, municipality_name, municipa
     resolved_properties = []
     for prop_id, prop_location, prop_url in db_properties:
         all_processed_ids.append(prop_id)
-        
+
         # --- NEW LOGIC: Auto-Generate URL for New Haven placeholders ---
         # Checks if we have a compound ID (e.g. 47360-6323) but no http URL
         if prop_url and not str(prop_url).strip().lower().startswith('http') and municipality_url:
              clean_id = str(prop_url).strip()
              should_gen_url = False
              pid = None
-             
+
              if municipality_name.upper() == 'NEW HAVEN':
                  # New Haven ID format in DB: 47360-6323 -> PID: 6323
                  if '-' in clean_id:
@@ -1992,7 +2132,7 @@ def process_municipality_with_realtime_updates(conn, municipality_name, municipa
                      if parts[-1].isdigit():
                          pid = parts[-1]
                          should_gen_url = True
-                         
+
              if should_gen_url and pid:
                  base = municipality_url.rstrip('/') + '/'
                  if 'gis.vgsi.com' in base:
@@ -2019,11 +2159,11 @@ def process_municipality_with_realtime_updates(conn, municipality_name, municipa
                 continue
             else:
                 log(f"  [Duplicate Guard] {prop_id}: Link '{clean_url}' is shared by {url_counts.get(clean_url.lower())} properties in this batch. Routing to Slow Path.")
-        
+
         props_without_urls.append((prop_id, prop_location))
 
     log(f"Total to process: {len(all_processed_ids)}. Direct URL Mode: {len(props_with_urls)}. Full Scrape Mode: {len(props_without_urls)}.")
-    
+
     total_updated_count = 0
 
     # --- GROUP 1: Process properties we already have URLs for (FAST PATH) ---
@@ -2040,7 +2180,7 @@ def process_municipality_with_realtime_updates(conn, municipality_name, municipa
                     executor.submit(scrape_individual_property_page, prop_url, session, referer_url, municipality_name): prop_id
                     for prop_id, prop_url in props_with_urls
                 }
-                
+
                 for future in concurrent.futures.as_completed(future_to_id):
                     prop_id = future_to_id[future]
                     vision_data = future.result()
@@ -2049,7 +2189,7 @@ def process_municipality_with_realtime_updates(conn, municipality_name, municipa
                         vision_data['cama_site_link'] = prop_url
                         if update_property_in_db(conn, prop_id, vision_data, restricted_mode=restricted_mode, municipality_name=municipality_name):
                             group1_updated_count += 1
-                    
+
                     group1_processed_count += 1 # <--- INCREMENT COUNTER
                     # --- NEW LOGGING LINE ---
                     if group1_processed_count % 100 == 0:
@@ -2057,17 +2197,17 @@ def process_municipality_with_realtime_updates(conn, municipality_name, municipa
                         update_freshness_status(conn, municipality_name, 'vision_appraisal', 'running', details=f"Fast Path: {group1_processed_count}/{len(props_with_urls)} processed")
 
 
-        
+
         log(f"  -> FAST PATH complete. Updated {group1_updated_count} properties.")
         total_updated_count += group1_updated_count
 
     # --- GROUP 2: Process properties we need to find via full scrape (SLOW PATH / POPULATION PATH) ---
     if props_without_urls:
         log(f"  -> Starting SLOW PATH: Full street scrape required for {len(props_without_urls)} properties...")
-        
+
         # This scrape function now returns data dicts that include 'cama_site_link'
         scraped_properties = scrape_all_properties_by_address(municipality_url, municipality_name)
-        
+
         if not scraped_properties:
             log(f"  -> Full scrape returned no data. Skipping {len(props_without_urls)} properties for {municipality_name}.")
         else:
@@ -2075,11 +2215,11 @@ def process_municipality_with_realtime_updates(conn, municipality_name, municipa
             group2_updated_count = 0
             processed_in_group = 0
             matched_addresses = set()  # Track which scraped properties we've matched
-            
+
             # First pass: Try address-based matching for properties with locations
             for prop_db_id, prop_address in props_without_urls:
                 vision_data = find_match_for_property(prop_address, scraped_properties)
-                
+
                 if vision_data:
                     # This update will save owner, sales, AND the new 'cama_site_link'
                     if update_property_in_db(conn, prop_db_id, vision_data, restricted_mode=restricted_mode, municipality_name=municipality_name):
@@ -2089,7 +2229,7 @@ def process_municipality_with_realtime_updates(conn, municipality_name, municipa
                             if data == vision_data:
                                 matched_addresses.add(addr)
                                 break
-                
+
                 processed_in_group += 1
                 if processed_in_group % 100 == 0:
                     log(f"    -> Matched {processed_in_group}/{len(props_without_urls)}, updated {group2_updated_count} so far...")
@@ -2097,11 +2237,11 @@ def process_municipality_with_realtime_updates(conn, municipality_name, municipa
 
 
 
-            unmatched_db_props = [(pid, addr) for pid, addr in props_without_urls 
+            unmatched_db_props = [(pid, addr) for pid, addr in props_without_urls
                                   if is_placeholder_address(addr)]
-            unmatched_scraped = {addr: data for addr, data in scraped_properties.items() 
+            unmatched_scraped = {addr: data for addr, data in scraped_properties.items()
                                 if addr not in matched_addresses}
-            
+
             if unmatched_db_props and unmatched_scraped:
                 log(f"  -> Populating {len(unmatched_db_props)} empty-location properties from {len(unmatched_scraped)} unmatched scraped records...")
                 scraped_items = list(unmatched_scraped.items())
@@ -2110,7 +2250,7 @@ def process_municipality_with_realtime_updates(conn, municipality_name, municipa
                         addr, vision_data = scraped_items[i]
                         # Add the address to the vision_data so it gets saved to location field
                         vision_data['location'] = addr
-                        # In limited mode, we STILL want to populate empty records, so restricted_mode is fine 
+                        # In limited mode, we STILL want to populate empty records, so restricted_mode is fine
                         # because update_property_in_db allows updates if current val is empty.
                         if update_property_in_db(conn, prop_db_id, vision_data, restricted_mode=restricted_mode):
                             group2_updated_count += 1
@@ -2125,10 +2265,10 @@ def process_municipality_with_realtime_updates(conn, municipality_name, municipa
         mark_property_processed_today(conn, prop_id)
 
     log(f"Finished {municipality_name}. Total Updated: {total_updated_count} of {len(all_processed_ids)} properties.")
-    
+
     # --- AUTOMATIC FRESHNESS UPDATE ---
     update_freshness_status(conn, municipality_name, 'vision_appraisal', 'Success', details=f"Scraped {total_updated_count} properties via regular/direct URL scraping.")
-    
+
     return total_updated_count
 
 
@@ -2155,22 +2295,22 @@ def update_freshness_status(conn, source_name, source_type, status, details=None
             )
 
             cursor.execute(f"""
-                INSERT INTO data_source_status 
+                INSERT INTO data_source_status
                 (source_name, source_type, last_refreshed_at, refresh_status, details, external_last_updated)
                 VALUES (%s, %s, NOW(), %s, %s, %s)
-                ON CONFLICT (source_name) 
-                DO UPDATE SET 
+                ON CONFLICT (source_name)
+                DO UPDATE SET
                     source_type = EXCLUDED.source_type,
                     last_refreshed_at = EXCLUDED.last_refreshed_at,
                     refresh_status = EXCLUDED.refresh_status,
                     details = EXCLUDED.details,
                     {external_update_clause};
             """, (source_name, source_type, status, details, external_date))
-            
+
             # --- NEW: Invalidate Completeness Matrix Cache ---
             # ensures the frontend "Completeness Matrix" reflects this update immediately
             cursor.execute("DELETE FROM kv_cache WHERE key = 'completeness_matrix'")
-            
+
             conn.commit()
     except Exception as e:
         log(f"Error updating freshness status for {source_name}: {e}")
@@ -2179,13 +2319,13 @@ def update_freshness_status(conn, source_name, source_type, status, details=None
 def process_municipality_with_windsor_api(conn, municipality_name, config, current_owner_only=False, force_process=False):
     log(f"--- Processing {municipality_name} via Windsor API ---")
     base_api_url = "https://windsorct.com/sf/win/v1/propertycard/address/get"
-    
+
     # 1. Fetch properties from DB to get addresses
     # Windsor API requires Street Number and Street Name.
     # We rely on our DB (seeded from statewide CSV) to provide the list of targets.
     log(f"Fetching properties for {municipality_name} to enrich...")
     properties_to_scan = []
-    
+
     with conn.cursor() as cur:
         # If current_owner_only, filter. Else get all.
         if current_owner_only:
@@ -2194,29 +2334,29 @@ def process_municipality_with_windsor_api(conn, municipality_name, config, curre
              cur.execute("SELECT id, location FROM properties WHERE property_city ILIKE %s AND owner like 'Current Owner%'", (municipality_name,))
         else:
              cur.execute("SELECT id, location FROM properties WHERE property_city ILIKE %s", (municipality_name,))
-        
+
         properties_to_scan = cur.fetchall()
-        
+
     log(f"Found {len(properties_to_scan)} properties to scan.")
-    
+
     session = requests.Session()
     session.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     })
-    
+
     updated_count = 0
-    
+
     def process_prop_row(row):
         prop_id, location = row
         if not location: return False
-        
+
         # Parse Address
         # "275 BROAD ST" -> num="275", name="BROAD"
         match = re.search(r"^(\d+(?:-\d+)?)\s+(.*)$", location.strip())
         if not match:
              # Try simple split if regex fails (e.g. no number?)
              return False
-             
+
         st_num = match.group(1)
         st_name = match.group(2)
         # Clean street name (remove suffixes like ST, AVE might be needed? User query check implies just "broad" works for "BROAD ST"?)
@@ -2225,34 +2365,34 @@ def process_municipality_with_windsor_api(conn, municipality_name, config, curre
         # The API likely does partial match or requires cleaner name.
         # "BROAD ST" -> "BROAD"
         st_name_cleaned = re.sub(r"\s+(?:ST|AVE|RD|LN|DR|CT|CIR|PL|BLVD|HWY|TPKE)$", "", st_name, flags=re.IGNORECASE).strip()
-        
+
         try:
              # Rate limiting - simple sleep
-             time.sleep(0.5) 
-             
+             time.sleep(0.5)
+
              resp = session.get(base_api_url, params={"st_num": st_num, "st_name": st_name_cleaned}, timeout=20)
              if resp.status_code != 200:
                  return False
-                 
+
              data = resp.json()
              # Validate response - sometimes returns empty or error object
              if not data or not data.get('propertyLocation'):
                  return False
-                 
+
              # Map fields
              # Response:
              # "ownerName": "...", "ownerName2": "..."
              # "currentAppraised": 123456
              # "saleDate": { ... timestamp ... }
              # "propertyImage": "PropertyImages/1785.jpg"
-             
+
              owner = data.get('ownerName', '').strip()
              if data.get('ownerName2'):
                  owner += f" & {data.get('ownerName2').strip()}"
-             
+
              appraised = data.get('currentAppraised')
              assessed = data.get('currentAssessed')
-             
+
              sale_date = None
              if data.get('saleDate') and data['saleDate'].get('timestamp'):
                   try:
@@ -2262,9 +2402,9 @@ def process_municipality_with_windsor_api(conn, municipality_name, config, curre
                       if ts > 0:
                            sale_date = datetime.fromtimestamp(ts).date()
                   except: pass
-                  
+
              sale_price = data.get('salePrice')
-             
+
              img_path = data.get('propertyImage')
              photo_url = None
              if img_path:
@@ -2273,7 +2413,7 @@ def process_municipality_with_windsor_api(conn, municipality_name, config, curre
                   # Logic: extract basename ("1785.jpg") and append to new base.
                   filename = os.path.basename(img_path)
                   photo_url = f"https://info.townofwindsorct.com/images/{filename}"
-                  
+
              # Update DB
              scraped_data = {
                  'owner': owner,
@@ -2284,13 +2424,13 @@ def process_municipality_with_windsor_api(conn, municipality_name, config, curre
                  'building_photo': photo_url,
                  'cama_site_link': None, # No direct link available? Or maybe we can construct one to a frontend?
                  # User said "disable the clicking for any muni you couldn't find...".
-                 # But if we have data, we might want a link. 
+                 # But if we have data, we might want a link.
                  # There doesn't seem to be a public URL for a card in the API response.
                  # Leaving cama_site_link None (or previous value) is fine.
              }
-             
+
              return update_property_in_db(conn, prop_id, scraped_data, municipality_name=municipality_name)
-             
+
         except Exception as e:
              # log(f"Error processing {location}: {e}")
              return False
@@ -2298,11 +2438,11 @@ def process_municipality_with_windsor_api(conn, municipality_name, config, curre
     # Parallel execution with workers
     # User warned about slowness. 4 workers with 0.5s sleep each = ~8 req/s total. Maybe ok.
     # Be careful.
-    
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         results = list(executor.map(process_prop_row, properties_to_scan))
         updated_count = sum(1 for r in results if r)
-        
+
     log(f"Windsor Update Complete. Updated {updated_count} properties.")
     return updated_count
 
@@ -2319,33 +2459,33 @@ def scrape_mapgeo_property(session, base_url, unique_id, layout_id):
             'layoutId': layout_id,
             'layoutType': 'itemDetails'
         }
-        
+
         headers = {
             'Referer': base_url + '/',
             'Origin': base_url,
             'X-Requested-With': 'XMLHttpRequest',
              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
         }
-        
+
         resp = session.get(detail_url, params=params, headers=headers, timeout=10)
         if resp.status_code == 404:
             return None
         resp.raise_for_status()
-        
+
         data = resp.json()
         properties = data.get('data', {})
-        
+
         owner_name = properties.get('ownerName')
         if not owner_name and properties.get('owners'):
             owner_name = properties['owners'][0]
-            
+
         mailing_address = properties.get('mailingAddress')
         if not mailing_address:
              mailing_address = f"{properties.get('mailingAddress1', '')} {properties.get('mailingAddress2', '')}".strip()
 
         sale_date = properties.get('lastSaleDate') or properties.get('saleDate')
         sale_price = properties.get('lastSalePrice') or properties.get('salePrice')
-        
+
         assessed_value = properties.get('assessedValue') or properties.get('totalAssessedValue')
         appraised_value = properties.get('appraisedValue') or properties.get('totalAppraisedValue')
         year_built = properties.get('yearBuilt')
@@ -2373,9 +2513,9 @@ def process_municipality_with_mapgeo(conn, municipality_name, data_source_config
         base_url = domain
     else:
         base_url = f"https://{domain}"
-        
+
     layout_id = data_source_config.get('layout_id', '6032ef5b-8331-4abb-aa9d-e1a114b21443')
-    
+
     log(f"Starting MapGeo processing for {municipality_name} at {base_url}")
 
     # 1. Discovery Phase
@@ -2386,15 +2526,15 @@ def process_municipality_with_mapgeo(conn, municipality_name, data_source_config
         'Origin': base_url,
         'X-Requested-With': 'XMLHttpRequest'
     })
-    
+
     if not current_owner_only:
         log("Discovering properties...")
         all_properties = []
         search_url = f"{base_url}/api/datasets/properties/search?format=json"
-        
+
         # Iterate A-Z0-9 to ensure coverage
         chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-        
+
         payload = {
             "attributes": ["displayName", "ownerName", "id", "rowId"],
             "query": { "displayName": "", "id": "", "ownerName": "" },
@@ -2413,26 +2553,26 @@ def process_municipality_with_mapgeo(conn, municipality_name, data_source_config
                     all_properties.extend(items)
                 else:
                     log(f"Discovery failed for '{char}': {resp.status_code}")
-                    
+
             # Deduplicate
             unique_props = {p.get('id'): p for p in all_properties if p.get('id')}
             log(f"Total unique properties discovered: {len(unique_props)}")
-            
+
             # Upsert
             with conn.cursor() as cur:
                 for pid, prop in unique_props.items():
                     owner = prop.get('ownerName')
                     address = prop.get('displayName')
-                    
+
                     cur.execute("""
                         INSERT INTO properties (property_city, location, account_number, source, owner)
                         VALUES (%s, %s, %s, 'MAPGEO', %s)
-                        ON CONFLICT (property_city, location) 
+                        ON CONFLICT (property_city, location)
                         DO UPDATE SET account_number = EXCLUDED.account_number, source = 'MAPGEO'
                         RETURNING id
                     """, (municipality_name.title(), address, pid, owner))
             conn.commit()
-            
+
         except Exception as e:
             log(f"Discovery Error: {e}")
             conn.rollback()
@@ -2441,13 +2581,13 @@ def process_municipality_with_mapgeo(conn, municipality_name, data_source_config
     with conn.cursor() as cur:
         if force_process:
             query = """
-                SELECT id, location, account_number 
-                FROM properties 
+                SELECT id, location, account_number
+                FROM properties
                 WHERE property_city = %s AND source = 'MAPGEO' AND account_number IS NOT NULL
             """
         elif current_owner_only:
              query = """
-                SELECT p.id, p.location, p.account_number 
+                SELECT p.id, p.location, p.account_number
                 FROM properties p
                 LEFT JOIN property_processing_log ppl ON p.id = ppl.property_id
                 WHERE p.property_city = %s AND p.source = 'MAPGEO' AND p.account_number IS NOT NULL
@@ -2455,7 +2595,7 @@ def process_municipality_with_mapgeo(conn, municipality_name, data_source_config
             """
         else:
              query = """
-                SELECT p.id, p.location, p.account_number 
+                SELECT p.id, p.location, p.account_number
                 FROM properties p
                 LEFT JOIN property_processing_log ppl ON p.id = ppl.property_id
                 WHERE p.property_city = %s AND p.source = 'MAPGEO' AND p.account_number IS NOT NULL
@@ -2463,48 +2603,36 @@ def process_municipality_with_mapgeo(conn, municipality_name, data_source_config
             """
         cur.execute(query, (municipality_name.title(),))
         properties_to_scrape = cur.fetchall()
-        
+
     log(f"Found {len(properties_to_scrape)} properties to scrape detail for.")
 
     updated_count = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=DEFAULT_MUNI_WORKERS) as executor:
         future_to_prop = {
-            executor.submit(scrape_mapgeo_property, session, base_url, prop[2], layout_id): prop 
+            executor.submit(scrape_mapgeo_property, session, base_url, prop[2], layout_id): prop
             for prop in properties_to_scrape
         }
-        
+
         for future in concurrent.futures.as_completed(future_to_prop):
             prop = future_to_prop[future]
             db_id, address, unique_id = prop
             try:
                 data = future.result()
                 if data:
-                    with conn.cursor() as cur:
-                        cur.execute("""
-                            UPDATE properties 
-                            SET owner = %s,
-                                mailing_address = %s,
-                                sale_date = %s,
-                                sale_amount = %s,
-                                assessed_value = %s,
-                                appraised_value = %s,
-                                year_built = %s
-                            WHERE id = %s
-                        """, (
-                            data['owner'], data['mailing_address'], 
-                            data['sale_date'], 
-                            str(data['sale_price']).replace('$','').replace(',','') if data['sale_price'] else None,
-                            str(data['assessed_value']).replace('$','').replace(',','') if data['assessed_value'] else None,
-                            str(data['appraised_value']).replace('$','').replace(',','') if data['appraised_value'] else None,
-                            data['year_built'],
-                            db_id
-                        ))
-                    conn.commit()
-                    updated_count += 1
+                    scraped_data = {
+                        'owner': data['owner'],
+                        'mailing_address': data['mailing_address'],
+                        'sale_date': data['sale_date'],
+                        'sale_amount': str(data['sale_price']).replace('$','').replace(',','') if data['sale_price'] else None,
+                        'assessed_value': str(data['assessed_value']).replace('$','').replace(',','') if data['assessed_value'] else None,
+                        'appraised_value': str(data['appraised_value']).replace('$','').replace(',','') if data['appraised_value'] else None,
+                        'year_built': data['year_built'],
+                    }
+                    if update_property_in_db(conn, db_id, scraped_data, municipality_name=municipality_name):
+                        updated_count += 1
             except Exception as e:
                 log(f"Error updating property {address}: {e}")
-                conn.rollback()
-                
+
     return updated_count
 
 def process_municipality_with_tighe_bond(conn, municipality_name, data_source_config, current_owner_only=False, force_process=False):
@@ -2515,25 +2643,25 @@ def process_municipality_with_tighe_bond(conn, municipality_name, data_source_co
     if not find_url:
         log(f"Missing 'arcgis_find_url' for {municipality_name}")
         return 0
-        
+
     log(f"Starting Tighe & Bond processing for {municipality_name}")
-    
+
     # 1. Discovery (ArcGIS)
     session = requests.Session()
     params = {
         'searchText': '%',
         'contains': 'true',
         'searchFields': 'ParcelPolygon.Parcel_ID,CAMA.Owner,ParcelPolygon.StreetAddr',
-        'layers': '0', 
+        'layers': '0',
         'returnGeometry': 'false',
         'f': 'pjson'
     }
-    
+
     if not current_owner_only:
         discovered_props = {}
         # Try both wildcard and A-Z to maximize results
         search_terms = ['%'] + list("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
-        
+
         log("Discovering properties via ArcGIS...")
         try:
             for term in search_terms:
@@ -2557,32 +2685,32 @@ def process_municipality_with_tighe_bond(conn, municipality_name, data_source_co
                     log(f"Discovery error {term}: {e}")
         except Exception as e:
             log(f"Discovery Loop Error: {e}")
-                
+
         log(f"Total unique properties discovered: {len(discovered_props)}")
-        
+
         # Upsert
         with conn.cursor() as cur:
             for acct, data in discovered_props.items():
                 cur.execute("""
                     INSERT INTO properties (property_city, location, account_number, source, owner)
                     VALUES (%s, %s, %s, 'TIGHE_BOND', %s)
-                    ON CONFLICT (property_city, location) 
+                    ON CONFLICT (property_city, location)
                     DO UPDATE SET account_number = EXCLUDED.account_number, source = 'TIGHE_BOND'
                     RETURNING id
                 """, (municipality_name.title(), data['address'], acct, data['owner']))
         conn.commit()
-    
+
     # 2. Process (Scrape PropertyRecordCards)
     with conn.cursor() as cur:
         if force_process:
              query = """
-                SELECT id, location, account_number 
-                FROM properties 
+                SELECT id, location, account_number
+                FROM properties
                 WHERE property_city = %s AND source = 'TIGHE_BOND' AND account_number IS NOT NULL
             """
         elif current_owner_only:
              query = """
-                SELECT p.id, p.location, p.account_number 
+                SELECT p.id, p.location, p.account_number
                 FROM properties p
                 LEFT JOIN property_processing_log ppl ON p.id = ppl.property_id
                 WHERE p.property_city = %s AND p.source = 'TIGHE_BOND' AND p.account_number IS NOT NULL
@@ -2590,7 +2718,7 @@ def process_municipality_with_tighe_bond(conn, municipality_name, data_source_co
             """
         else:
              query = """
-                SELECT p.id, p.location, p.account_number 
+                SELECT p.id, p.location, p.account_number
                 FROM properties p
                 LEFT JOIN property_processing_log ppl ON p.id = ppl.property_id
                 WHERE p.property_city = %s AND p.source = 'TIGHE_BOND' AND p.account_number IS NOT NULL
@@ -2598,27 +2726,27 @@ def process_municipality_with_tighe_bond(conn, municipality_name, data_source_co
             """
         cur.execute(query, (municipality_name.title(),))
         properties_to_scrape = cur.fetchall()
-        
+
     log(f"Found {len(properties_to_scrape)} properties to scrape detail for.")
-    
+
     updated_count = 0
     # PropertyRecordCards Base URL
     prc_base_url = "https://www.propertyrecordcards.com/PropertyResults.aspx?towncode={}&uniqueid={{}}"
-    town_code = data_source_config.get('town_code', '42') 
+    town_code = data_source_config.get('town_code', '42')
     formatted_base_url = prc_base_url.format(town_code)
-    
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=DEFAULT_MUNI_WORKERS) as executor:
         future_to_prop = {
             executor.submit(
-                scrape_propertyrecordcards_property, 
-                session, 
-                formatted_base_url, 
-                (prop[0], prop[1], prop[2], None, None), 
+                scrape_propertyrecordcards_property,
+                session,
+                formatted_base_url,
+                (prop[0], prop[1], prop[2], None, None),
                 town_code
             ): prop
             for prop in properties_to_scrape
         }
-        
+
         for future in concurrent.futures.as_completed(future_to_prop):
             prop = future_to_prop[future]
             db_id, address, acct = prop
@@ -2632,12 +2760,12 @@ def process_municipality_with_tighe_bond(conn, municipality_name, data_source_co
                         scraped_data['assessed_value'] = str(scraped_data['assessed_value']).replace('$','').replace(',','')
                     if scraped_data.get('appraised_value'):
                         scraped_data['appraised_value'] = str(scraped_data['appraised_value']).replace('$','').replace(',','')
-                        
+
                     if update_property_in_db(conn, db_id, scraped_data, municipality_name=municipality_name):
                         updated_count += 1
                 elif error_msg:
                     pass
-                    
+
                 mark_property_processed_today(conn, db_id)
             except Exception as e:
                 log(f"Error updating property {address}: {e}")
@@ -2646,7 +2774,7 @@ def process_municipality_with_tighe_bond(conn, municipality_name, data_source_co
 
 def process_municipality_task(city_name, city_data, current_owner_only, force_process):
     """
-    Worker task for processing a single municipality. 
+    Worker task for processing a single municipality.
     This function creates its OWN database connection to ensure thread safety.
     """
     log(f"WORKER_START: Starting job for {city_name}")
@@ -2660,14 +2788,14 @@ def process_municipality_task(city_name, city_data, current_owner_only, force_pr
     try:
         # Each thread MUST create its own connection
         conn = get_db_connection()
-        
+
         # 1. Mark as RUNNING
         update_freshness_status(conn, city_name, source_type, 'running', details="Starting update...")
 
         # Check if this municipality has a custom data source configuration
         if city_name in MUNICIPAL_DATA_SOURCES:
             log(f"Using custom data source for {city_name}: {MUNICIPAL_DATA_SOURCES[city_name]['type']}")
-            
+
             if MUNICIPAL_DATA_SOURCES[city_name]['type'] == 'arcgis_csv':
                 updated_count = process_municipality_with_arcgis(
                     conn, city_name, MUNICIPAL_DATA_SOURCES[city_name], current_owner_only, force_process
@@ -2761,9 +2889,9 @@ def process_municipality_task(city_name, city_data, current_owner_only, force_pr
             updated_count = process_municipality_with_realtime_updates(
                 conn, city_name, city_data['url'], last_updated_date=new_date, current_owner_only=current_owner_only, force_process=force_process
             )
-        
+
         log(f"WORKER_DONE: Finished job for {city_name}. Updated {updated_count} properties.")
-        
+
         # Mark success with the source's own update date, when one was actually provided.
         source_date = city_data.get('last_updated')
         update_freshness_status(
@@ -2775,19 +2903,19 @@ def process_municipality_task(city_name, city_data, current_owner_only, force_pr
             external_date=source_date,
             preserve_external_date=source_date is not None,
         )
-        
+
         return updated_count
-    
+
     except Exception as e:
         log(f"!!! WORKER_ERROR: Critical error processing {city_name}: {e}")
         log(f"Traceback for {city_name}: {traceback.format_exc()}")
-        
+
         # 3. Mark as FAILURE
         if conn:
             update_freshness_status(conn, city_name, source_type, 'failure', details=str(e)[:255])
-            
+
         return 0  # Return 0 updates on failure for this town
-    
+
     finally:
         if conn:
             conn.close()
@@ -2798,7 +2926,7 @@ def process_municipality_task(city_name, city_data, current_owner_only, force_pr
 def main():
     """Main function to run the update process."""
     parser = argparse.ArgumentParser(description='Update property data from Vision Appraisal websites and other municipal data sources')
-    parser.add_argument('--municipalities', '-m', nargs='*', 
+    parser.add_argument('--municipalities', '-m', nargs='*',
                        help='Specific municipalities to process (e.g., "ANDOVER BERLIN HARTFORD")')
     parser.add_argument('--year-filter', '-y', type=int, default=2024,
                        help='Only process municipalities updated since this year (inclusive - e.g., 2024 means 2024 and later)')
@@ -2809,26 +2937,26 @@ def main():
     parser.add_argument('--force', '-f', action='store_true',
                        help='Force reprocessing of all properties, ignoring the last processed date')
     args = parser.parse_args()
-    
+
     log(f"Starting data update process...")
     log(f"Settings: Parallel Municipalities={args.parallel_munis}, Force Reprocess={args.force}, Source Only={SOURCE_ONLY}")
-    
+
     conn = None # Main connection for initial setup ONLY
     total_updated = 0
     municipalities_to_check = {}
-    
+
     try:
         # --- 1. SETUP PHASE: Use a single connection to build the job list ---
         conn = get_db_connection()
-        
+
         # Create processing log table once at the start
         create_processing_log_table(conn)
-        
+
         # Get Vision Appraisal municipalities
         all_municipalities_from_vision = get_vision_municipalities()
         if not all_municipalities_from_vision:
             log("No municipalities found on Vision site.")
-        
+
         # Add custom data source municipalities to the list
         for muni_name, config in MUNICIPAL_DATA_SOURCES.items():
             if muni_name not in all_municipalities_from_vision:
@@ -2846,29 +2974,29 @@ def main():
         if args.current_owner_only:
             # Special mode: Process only "Current Owner" properties
             log("MODE: Processing only properties with owner='Current Owner'")
-            
+
             # Query DB for list of towns sorted by "Current Owner" count
             current_owner_municipalities = get_current_owner_properties_by_municipality(conn)
-            
+
             # Filter by specified municipalities if provided
             if args.municipalities:
                 target_munis = {m.upper() for m in args.municipalities}
                 current_owner_municipalities = [
-                    (city, count) for city, count in current_owner_municipalities 
+                    (city, count) for city, count in current_owner_municipalities
                     if city and city.upper() in target_munis
                 ]
-            
+
             if not current_owner_municipalities:
                 log("No matching municipalities found with 'Current Owner' properties.")
                 return
-            
+
             log("Found municipalities with 'Current Owner' properties:")
             for city, count in current_owner_municipalities:
                 log(f"  - {city}: {count} properties")
             log("")
-            
+
             log("")
-            
+
             # Match this list against the available municipality list to get URLs/configs
             for city, count in current_owner_municipalities:
                 city_upper = city.upper() if city else ""
@@ -2877,7 +3005,7 @@ def main():
                     municipalities_to_check[city_upper]['current_owner_count'] = count
                 else:
                     log(f"Warning: '{city}' (from DB) not found in available municipality list.")
-            
+
         else:
             # Normal mode: Filter by year and/or specific municipalities
             if args.municipalities:
@@ -2891,11 +3019,11 @@ def main():
             else:
                 # Process municipalities updated since specified year (inclusive)
                 log(f"MODE: Processing all municipalities updated in {args.year_filter} or later.")
-                municipalities_to_check = { 
-                    name: data for name, data in all_municipalities_from_vision.items() 
+                municipalities_to_check = {
+                    name: data for name, data in all_municipalities_from_vision.items()
                     if data.get('last_updated') and data['last_updated'].year >= args.year_filter
                 }
-                
+
                 # --- AUTO-PRIORITIZATION ---
                 # Fetch missing data stats to prioritize incomplete towns
                 try:
@@ -2903,11 +3031,11 @@ def main():
                     with conn.cursor() as cur:
                         # Prioritize by count of 'Current Owner' (missing owner) + missing photos
                         cur.execute("""
-                            SELECT 
-                                UPPER(property_city) as city, 
+                            SELECT
+                                UPPER(property_city) as city,
                                 COUNT(CASE WHEN owner LIKE 'Current Owner%' THEN 1 END) as missing_owners,
                                 COUNT(CASE WHEN building_photo IS NULL THEN 1 END) as missing_photos
-                            FROM properties 
+                            FROM properties
                             GROUP BY property_city
                         """)
                         rows = cur.fetchall()
@@ -2920,16 +3048,16 @@ def main():
                 except Exception as e:
                     log(f"Prioritization query failed: {e}. Falling back to alphabetical.")
 
-        
+
         if not municipalities_to_check:
             log(f"No municipalities match your criteria. Try --year-filter with earlier year or specify --municipalities.")
             return
 
         log(f"--- Job Queue: {len(municipalities_to_check)} municipalities to process ---")
-        
+
         # Build the final list of items to process
         municipality_list = list(municipalities_to_check.items())
-        
+
         if args.current_owner_only:
             # Sort by current owner count (descending)
             municipality_list.sort(key=lambda x: x[1].get('current_owner_count', 0), reverse=True)
@@ -2940,7 +3068,7 @@ def main():
             # Sort by Calculated Priority Score (Descending) -> Worst Data First
             # Default score is 0 if not calculated
             municipality_list.sort(key=lambda x: x[1].get('priority_score', 0), reverse=True)
-            
+
             for name, data in municipality_list:
                 data_type = data.get('type', 'vision_appraisal')
                 score = data.get('priority_score', 0)
@@ -2953,7 +3081,7 @@ def main():
         # --- 2. CLOSE SETUP CONNECTION ---
         # We are done with the main connection. The workers will make their own.
         conn.close()
-        conn = None 
+        conn = None
         log("Setup complete. Closed main DB connection. Starting worker pool.")
 
         # --- 3. EXECUTION PHASE: Process the queue in parallel ---
@@ -2984,12 +3112,12 @@ def main():
                     log(f"🔄 [PERIODIC] 3 municipalities completed. Triggering Network Refresh...")
                     if run_refresh:
                          try:
-                             # Run refresh synchronously in the main thread (pauses new job submissions effectively, 
+                             # Run refresh synchronously in the main thread (pauses new job submissions effectively,
                              # since we are in the consumption loop, but workers might still be running if parallel > 1.
                              # This is fine, refresh uses DB snapshots or locks if needed.
                              # Ideally we want to let current jobs finish? No, existing method is atomic swap so safe.
                              log("Starting Refresh...")
-                             run_refresh(skip_emails=False) 
+                             run_refresh(skip_emails=False)
                              log("Refresh Complete.")
                          except Exception as e:
                              log(f"Refresh failed: {e}")
@@ -3018,7 +3146,7 @@ def process_municipality_with_avon_static(conn, municipality_name, base_url, cur
     Starting point: http://assessor.avonct.gov/prop_addr.html
     """
     log(f"--- Processing municipality: {municipality_name} via Static HTML (Force={force_process}) ---")
-    
+
     # 1. Get Street Index
     try:
         # Direct to the full street listing
@@ -3027,7 +3155,7 @@ def process_municipality_with_avon_static(conn, municipality_name, base_url, cur
         if resp.status_code != 200:
             log(f"Failed to fetch index: {index_url}")
             return 0
-        
+
         soup = BeautifulSoup(resp.content, 'html.parser')
         street_links = set()
         for a in soup.find_all('a', href=True):
@@ -3037,19 +3165,19 @@ def process_municipality_with_avon_static(conn, municipality_name, base_url, cur
                 full_url = requests.compat.urljoin(index_url, clean_href)
                 full_url = full_url.split('#')[0]
                 street_links.add(full_url)
-        
+
         log(f"Found {len(street_links)} street index pages.")
-        
+
         updated_count = 0
-        
+
         # 2. Process each street index page
         with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
             future_to_url = {executor.submit(process_avon_street_page, url): url for url in street_links}
-            
+
             for future in concurrent.futures.as_completed(future_to_url):
                 page_url = future_to_url[future]
                 try:
-                    props = future.result() 
+                    props = future.result()
                     for prop_url, address_text in props:
                         if process_avon_property(conn, prop_url, address_text, municipality_name):
                             updated_count += 1
@@ -3058,7 +3186,7 @@ def process_municipality_with_avon_static(conn, municipality_name, base_url, cur
 
                 except Exception as exc:
                     log(f"Error processing {page_url}: {exc}")
-                    
+
         return updated_count
 
     except Exception as e:
@@ -3071,7 +3199,7 @@ def process_avon_street_page(url):
         resp = requests.get(url, timeout=10)
         if resp.status_code != 200:
             return []
-        
+
         soup = BeautifulSoup(resp.content, 'html.parser')
         properties = []
         for a in soup.find_all('a', href=True):
@@ -3090,18 +3218,18 @@ def process_avon_property(conn, url, address_text, municipality_name):
         resp = requests.get(url, timeout=10)
         if resp.status_code != 200:
             return False
-            
+
         content = resp.text
-        
+
         owner_match = re.search(r"Owner name:\s*(.*?)\s*\|", content)
         owner = owner_match.group(1).strip() if owner_match else None
-        
+
         co_owner_match = re.search(r"Second name:\s*(.*?)\s*\|", content)
         co_owner = co_owner_match.group(1).strip() if co_owner_match else None
-        
+
         addr_match = re.search(r"Address:\s*(.*?)\s*\|", content)
         location = addr_match.group(1).strip() if addr_match else address_text
-        
+
         sale_date_match = re.search(r"Sale date:\s*(.*?)\s*\|", content)
         sale_date = None
         if sale_date_match:
@@ -3109,7 +3237,7 @@ def process_avon_property(conn, url, address_text, municipality_name):
                 sale_date = datetime.strptime(sale_date_match.group(1).strip(), "%d-%b-%Y").date()
             except:
                 pass
-                
+
         sale_price_match = re.search(r"Sale price:\s*(.*?)\s*\|", content)
         sale_price = None
         if sale_price_match:
@@ -3120,7 +3248,7 @@ def process_avon_property(conn, url, address_text, municipality_name):
 
         prop_id_match = re.search(r"\/a(\d+)\.html", url)
         prop_id = prop_id_match.group(1) if prop_id_match else None
-        
+
         if not location:
             return False
 
@@ -3132,9 +3260,9 @@ def process_avon_property(conn, url, address_text, municipality_name):
             'sale_amount': sale_price,
             'cama_site_link': url,
             'property_city': municipality_name.upper(),
-            'account_number': prop_id 
+            'account_number': prop_id
         }
-        
+
         db_id = get_or_create_property_id(conn, municipality_name, location)
         return update_property_in_db(conn, db_id, scraped_data, municipality_name=municipality_name)
 
@@ -3156,14 +3284,14 @@ def process_municipality_with_actdatascout(conn, municipality_name, config, curr
     log(f"--- Processing {municipality_name} via ActDataScout ---")
     base_url = config['url']
     county_id = config.get('county_id') # e.g. 9103 for Norwalk
-    
+
     session = requests.Session()
     session.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "*/*",
         "Referer": base_url
     })
-    
+
     # 1. Init Session & Get Token
     try:
         resp = session.get(base_url, timeout=15)
@@ -3173,33 +3301,33 @@ def process_municipality_with_actdatascout(conn, municipality_name, config, curr
     except Exception as e:
         log(f"Failed to init ActDataScout session: {e}")
         return 0
-        
+
     search_url = "https://www.actdatascout.com/RealProperty/Search"
-    
+
     # 2. Recursive Search
     # We iterate 2-letter prefixes AA..ZZ and numbers 0..9
     # If a query hits 100 limit, we should drill down (not implemented fully complexity, hopefully 2-char is enough)
     # The subagent said "MAIN" (4 chars) returned 658 results but only showed 100.
     # So we MUST drill down further than 2 chars for common streets.
     # Logic: Search prefix. If count == 100, recurse (append A..Z). If count < 100, process.
-    
+
     # Queue of prefixes to process
     # Start with explicit letters A-Z, 0-9
     import string
     queue = list(string.ascii_uppercase) + list(string.digits)
-    
+
     updated_count = 0
     processed_urls = set()
-    
+
     while queue:
         prefix = queue.pop(0)
         # Optimization: Don't go too deep indiscriminately
-        if len(prefix) > 4: 
+        if len(prefix) > 4:
              log(f"Prefix {prefix} too deep, skipping expansion but scraping what we have.")
              # scrape anyway
-        
+
         log(f"Searching prefix: {prefix}")
-        
+
         payload = {
             "__RequestVerificationToken": token,
             "CountyId": county_id,
@@ -3210,33 +3338,33 @@ def process_municipality_with_actdatascout(conn, municipality_name, config, curr
             "StreetNameMatchType": "false", # Starts With?
             "SearchType": "address"
         }
-        
+
         try:
             # We must expect JSON or HTML? Subagent said XHR.
             # Usually returns partial HTML View.
             p_resp = session.post(search_url, data=payload, headers={"X-Requested-With": "XMLHttpRequest"})
-            
+
             if p_resp.status_code != 200:
                 log(f"Search failed for {prefix}: {p_resp.status_code}")
                 # Sometimes "A" fails. Retrying with longer prefix might work.
                 if len(prefix) == 1:
                      queue.extend([prefix + c for c in string.ascii_uppercase])
                 continue
-                
+
             # Count results
             # The HTML usually contains a table or list.
             # "Displaying 1 - 100 of 658"
             res_soup = BeautifulSoup(p_resp.content, 'html.parser')
-            
+
             # Check for limit message
             # There might be a pager, or just a limit information.
             # If we see "Displaying ... of X", and X > 100, we must recurse.
             # Or if row count == 100.
-            
+
             rows = res_soup.find_all('tr', attrs={'data-id': True}) # Assuming generic data grid
             # Update: ActDataScout results look like cards or table logic.
             # Using generic href extraction to find Parcel Links.
-            
+
             parcel_links = set()
             for a in res_soup.find_all('a', href=True):
                 href = a['href']
@@ -3244,10 +3372,10 @@ def process_municipality_with_actdatascout(conn, municipality_name, config, curr
                     full = requests.compat.urljoin(base_url, href)
                     if full not in processed_urls:
                         parcel_links.add(full)
-                        
+
             count = len(parcel_links)
             # log(f"Prefix {prefix} found {count} parcels.")
-            
+
             # Determine if we hit a limit.
             # ActDataScout creates a "Search Results" headers?
             # If count >= 100, we probably missed some.
@@ -3258,7 +3386,7 @@ def process_municipality_with_actdatascout(conn, municipality_name, config, curr
                 # Also numbers if mixed? "1st", "2nd".
                 # For simplicity, just letters.
                 queue.extend(new_prefixes)
-                
+
                 # Should we scrape these 100 anyway? Yes, to be safe.
                 # But better to scrape the drilled down ones to avoid duplicates?
                 # Actually, ActDataScout might not return "next page".
@@ -3266,10 +3394,10 @@ def process_municipality_with_actdatascout(conn, municipality_name, config, curr
                 # Wait, if I search "A" and get 1-100 of 1000.
                 # If I search "AA" I get 1-50 of 50.
                 # I should just recurse and NOT scrape the truncated list?
-                # Or scrape it to be safe. 
+                # Or scrape it to be safe.
                 # Scrape it.
                 pass
-            
+
             # Scrape found links
             for link in parcel_links:
                 if link in processed_urls: continue
@@ -3277,67 +3405,67 @@ def process_municipality_with_actdatascout(conn, municipality_name, config, curr
                 # We can process in parallel or serial. Serial for polite rate.
                 if process_actdatascout_property(conn, session, link, municipality_name, config):
                     updated_count += 1
-                    
+
                 if updated_count % 20 == 0:
                     update_freshness_status(conn, municipality_name, 'actdatascout', 'running', details=f"Scraped {updated_count} properties (Prefix: {prefix})")
 
-            
+
         except Exception as e:
             log(f"Error searching {prefix}: {e}")
-            
+
     return updated_count
 
 def process_actdatascout_property(conn, session, url, municipality_name, config):
     try:
         resp = session.get(url, timeout=10)
         if resp.status_code != 200: return False
-        
+
         soup = BeautifulSoup(resp.content, 'html.parser')
-        
+
         # Parse logic
         # Owner Name
         # Looking for generic structure or labels.
         # "Owner Information"
         # owner = ...
-        
+
         # ActDataScout Structure (Generalized):
         # <div class="col-md-4">...<strong>Owner Name</strong>...<br>SMITH JOHN...
-        
+
         text = soup.get_text(" ", strip=True)
-        
+
         owner = None
         location = None
         sale_date = None
         sale_price = None
-        
+
         # Regex extraction for robustness against layout changes
         # "Owner Name: SMITH JOHN"
         # "Physical Address: 123 MAIN ST"
-        
+
         # Owner
-        # Specific ID often used: #OwnerName ? 
+        # Specific ID often used: #OwnerName ?
         # Inspecting source from previous steps would help, but I'll guess standard labels.
         # "Primary Owner:"
         own_match = re.search(r"Primary Owner[:\s]+(.*?)(?:\s\s|$)", text, re.IGNORECASE)
         if own_match: owner = own_match.group(1).strip()
-        
+
         # Location
         # "Physical Address:" or "Situs Address"
         loc_match = re.search(r"Physical Address[:\s]+(.*?)(?:\s\s|$)", text, re.IGNORECASE)
         if loc_match: location = loc_match.group(1).strip()
-        
+
         # Sales
         # "Deed Date:" or "Sale Date"
         sdate_match = re.search(r"Sale Date[:\s]+(\d+/\d+/\d+)", text, re.IGNORECASE)
-        if sdate_match: 
+        if sdate_match:
             try: sale_date = datetime.strptime(sdate_match.group(1), "%m/%d/%Y").date()
             except: pass
-            
+
         sprice_match = re.search(r"Sale Price[:\s]+\$([\d,]+)", text, re.IGNORECASE)
         if sprice_match:
              try: sale_price = float(sprice_match.group(1).replace(',', ''))
              except: pass
-             
+
         # ID extraction from URL or page
         # /Parcel/12345
         prop_id = url.split('/')[-1]
@@ -3358,14 +3486,14 @@ def process_actdatascout_property(conn, session, url, municipality_name, config)
             'property_city': municipality_name.upper(),
             'account_number': prop_id
         }
-        
+
         # DB ID lookup
         db_id = get_or_create_property_id(conn, municipality_name, location) # Reusing helper from Avon (needs to be global or passed)
         # Wait, get_or_create_property_id is defined at bottom.
         # It's fine
-        
+
         return update_property_in_db(conn, db_id, scraped_data, municipality_name=municipality_name)
-        
+
     except Exception as e:
         # log(f"Error parsing prop {url}: {e}")
         return False

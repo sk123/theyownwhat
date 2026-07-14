@@ -12,7 +12,7 @@ import ToolboxDashboard from './components/ToolboxDashboard';
 import StatCard from './components/StatCard';
 import BackgroundGrid from './components/BackgroundGrid';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Sparkles, Loader2, Search, ArrowRight, Building2, TrendingUp, Users, ShieldAlert, ChevronRight } from 'lucide-react';
+import { Sparkles, Loader2, Search, ArrowRight, Building2, TrendingUp, Users, ShieldAlert, ChevronRight, List } from 'lucide-react';
 import LandlordMonitor from './components/LandlordMonitor';
 import CityExplorer from './components/CityExplorer';
 import DatasetLanding from './components/DatasetLanding';
@@ -128,6 +128,45 @@ function updatePageSeo(config) {
   setMetaAttribute('meta[name="twitter:title"]', 'content', seo.title);
   setMetaAttribute('meta[name="twitter:description"]', 'content', seo.description);
   setMetaAttribute('link[rel="canonical"]', 'href', canonicalUrl);
+}
+
+function NetworkJumpBar({ propertyCount, businessCount, principalCount, activeTarget, onJump }) {
+  const items = [
+    { id: 'properties', label: 'Properties', count: propertyCount, icon: Building2 },
+    { id: 'businesses', label: 'Businesses', count: businessCount, icon: List },
+    { id: 'principals', label: 'Principals', count: principalCount, icon: Users },
+  ];
+
+  return (
+    <div className="sticky top-0 z-30 rounded-xl border border-slate-200 bg-white/95 shadow-sm backdrop-blur">
+      <div className="flex items-center gap-1 overflow-x-auto px-2 py-1.5">
+        <span className="hidden shrink-0 px-2 text-[9px] font-black uppercase tracking-wider text-slate-400 sm:inline">
+          Jump to
+        </span>
+        {items.map(({ id, label, count, icon: Icon }) => {
+          const isActive = activeTarget === id;
+          return (
+            <button
+              key={id}
+              type="button"
+              onClick={() => onJump(id)}
+              className={`flex shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[10px] font-black uppercase tracking-wider transition-colors ${
+                isActive
+                  ? 'border-blue-200 bg-blue-50 text-blue-700'
+                  : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+              }`}
+            >
+              <Icon size={13} />
+              <span>{label}</span>
+              <span className={`rounded-md px-1.5 py-px text-[9px] ${isActive ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-500'}`}>
+                {(count || 0).toLocaleString()}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 // NOTE: This is a simplified App.jsx. In a real scenario we'd use React Router.
@@ -300,6 +339,7 @@ function App() {
           if (chunk.data.eviction_summary) newData.evictionSummary = chunk.data.eviction_summary;
           if (chunk.data.code_enforcement_summary) newData.codeEnforcementSummary = chunk.data.code_enforcement_summary;
           if (chunk.data.connection_signals) newData.connection_signals = chunk.data.connection_signals;
+          if (chunk.data.transaction_summary) newData.transactionSummary = chunk.data.transaction_summary;
         } else if (chunk.type === 'entities') {
           if (chunk.data.entities) {
             setStreamingStatus(prev => ({
@@ -657,6 +697,23 @@ function App() {
     }
   }, [allCities, selectedCity]);
 
+  const handleNetworkJump = (target) => {
+    handleTabChange(target);
+
+    window.requestAnimationFrame(() => {
+      const isMobile = window.matchMedia('(max-width: 1023px)').matches;
+      const elementId = isMobile
+        ? 'mobile-network-panels'
+        : target === 'properties'
+          ? 'properties-panel'
+          : 'entities-panel';
+      document.getElementById(elementId)?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start'
+      });
+    });
+  };
+
   const [selectedProperty, setSelectedProperty] = useState(null);
   const [selectedDetailEntity, setSelectedDetailEntity] = useState(null);
 
@@ -718,7 +775,7 @@ function App() {
               </div>
               <div>
                 <h3 className="font-bold text-lg">System Maintenance in Progress</h3>
-                <p className="text-sm text-amber-700">We're performing updates and improvements to enhance your experience. Thank you for your patience.</p>
+                <p className="text-sm text-amber-700">Updates and improvements are being applied. Some data may be temporarily unavailable.</p>
               </div>
             </div>
           </motion.div>
@@ -894,12 +951,12 @@ function App() {
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
-                className="flex flex-col h-full w-full max-w-[1920px] mx-auto px-4 py-3 gap-3 overflow-y-auto bg-slate-50/50 backdrop-blur-sm"
+                className="flex flex-col h-full w-full max-w-[1920px] mx-auto px-3 md:px-4 py-2 gap-2 overflow-y-auto bg-slate-50/50 backdrop-blur-sm"
               >
 
 
                  {/* Compact Dashboard Header Strip */}
-                 <div className="flex flex-col gap-3 shrink-0">
+                 <div className="flex flex-col gap-2 shrink-0">
                    <NetworkProfileCard 
                      networkData={scopedNetworkData}
                      stats={scopedStats}
@@ -917,6 +974,15 @@ function App() {
                        document.body.appendChild(link);
                        link.click();
                      }}
+                     featureNav={
+                       <NetworkJumpBar
+                         propertyCount={filteredProperties.length}
+                         businessCount={networkData.businesses.length}
+                         principalCount={networkData.principals.length}
+                         activeTarget={activeMobileTab}
+                         onJump={handleNetworkJump}
+                       />
+                     }
                    />
                  </div>
 
@@ -927,7 +993,7 @@ function App() {
 
 
                 {/* --- MOBILE TAB LAYOUT (lg:hidden) --- */}
-                <div className="flex flex-col lg:hidden relative border border-slate-200 rounded-xl bg-white shadow-sm mt-2">
+                <div id="mobile-network-panels" className="flex flex-col lg:hidden relative border border-slate-200 rounded-xl bg-white shadow-sm mt-1 scroll-mt-2">
 
                   {/* Sticky Tab Header */}
                   <div className="flex items-center border-b border-gray-100 bg-white/95 backdrop-blur-md sticky top-0 z-30 shadow-sm">
@@ -1023,12 +1089,9 @@ function App() {
                 </div>
 
                 {/* --- DESKTOP GRID LAYOUT (hidden lg:grid) --- */}
-                <div className="hidden lg:grid grid-cols-12 gap-4 flex-1 min-h-0 overflow-auto">
+                <div className="hidden lg:grid grid-cols-12 gap-3 flex-1 min-h-[360px] overflow-auto">
                   {/* Left: Network List */}
-                  <div className="col-span-4 h-full bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
-                    <div className="p-4 border-b border-slate-100 bg-slate-50/50">
-
-                    </div>
+                  <div id="entities-panel" className="col-span-4 h-full bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col scroll-mt-2">
                     <div className="flex-1 overflow-hidden">
                       <NetworkView
                         networkData={networkData}
@@ -1041,8 +1104,8 @@ function App() {
                   </div>
 
                   {/* Right: Property Table */}
-                  <div className="col-span-8 flex-1 overflow-auto flex flex-col min-h-0">
-                    <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center shrink-0">
+                  <div id="properties-panel" className="col-span-8 flex-1 overflow-auto flex flex-col min-h-0 scroll-mt-2">
+                    <div className="px-3 py-2 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center shrink-0">
 
                       <div className="text-xs font-bold text-slate-400">
                         {filteredProperties.length} {jurisdictionConfig.localLabel} Assets

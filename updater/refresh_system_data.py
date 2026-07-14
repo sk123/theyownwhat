@@ -110,18 +110,17 @@ def refresh_system_data():
         else:
             update_status(config["name"], "failure", "Download failed")
 
-    # 3. Trigger Network Discovery
-    logger.info("Starting Network Discovery...")
+    # 3. Trigger guarded Network Discovery
+    logger.info("Starting guarded Network Discovery...")
     try:
         sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'api'))
-        from discover_networks import main as build_network_graph
-        original_argv = sys.argv
-        sys.argv = ['discover_networks.py']
-        build_network_graph()
-        sys.argv = original_argv
-        logger.info("Network Discovery Complete")
+        from safe_network_refresh import run_refresh
+        if run_refresh():
+            logger.info("Guarded Network Discovery Complete")
+        else:
+            logger.error("Guarded Network Discovery failed validation")
     except Exception as e:
-        logger.error(f"Network Discovery failed: {e}")
+        logger.error(f"Guarded Network Discovery failed: {e}")
 
     # 4. NYC HPD Refresh (opt-in via NYC_HPD_ENABLED=true)
     if os.environ.get("NYC_HPD_ENABLED", "").lower() == "true":

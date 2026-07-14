@@ -140,10 +140,11 @@ def main():
         # 4. Re-generate networks
         print("Step 4: Re-generating networks and refreshing insights...")
         if not args.dry_run:
-            # We must use --force to link any newly imported properties that are currently orphaned
-            run_script("api/discover_networks.py", ["--force"])
+            # Use the guarded shadow-table refresh path so scheduled rebuilds
+            # follow the same anti-meganet rules as production maintenance.
+            run_script("api/safe_network_refresh.py")
         else:
-            print("Dry-run: Skipping network re-generation (would run api/discover_networks.py --force)")
+            print("Dry-run: Skipping network re-generation (would run api/safe_network_refresh.py)")
             
         print(f"--- Nightly Sync Worker Completed at {datetime.now()} ---")
     except Exception as e:
