@@ -2,13 +2,26 @@ server {
     listen 80;
     server_name localhost;
 
+    # Intercept upstream errors and serve maintenance page
+    error_page 502 503 504 /maintenance.html;
+    location = /maintenance.html {
+        root /usr/share/nginx/html;
+        internal;
+    }
+
     location / {
+        if (-f /app_root/maintenance.lock) {
+            return 503;
+        }
         root /usr/share/nginx/html;
         index index.html index.htm;
         try_files $uri $uri/ /index.html;
     }
 
     location /api/ {
+        if (-f /app_root/maintenance.lock) {
+            return 503;
+        }
         proxy_pass http://api_dev:8000;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;

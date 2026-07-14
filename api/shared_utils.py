@@ -53,6 +53,14 @@ def normalize_person_name(name: str) -> str:
     if not name: return ''
     normalized = name.upper().strip()
     
+    # Swap commas: "LAST, FIRST MIDDLE" -> "FIRST MIDDLE LAST"
+    if ',' in normalized:
+        parts_comma = normalized.split(',', 1)
+        if len(parts_comma) == 2:
+            last = parts_comma[0].strip()
+            first_mid = parts_comma[1].strip()
+            normalized = f"{first_mid} {last}"
+
     # 0. Pre-strip noise and handle joint names
     # If name is "KAZEROUNIAN KAZEM &", remove the trailing &
     normalized = re.sub(r'[&/]\s*$', '', normalized).strip()
@@ -89,18 +97,6 @@ def normalize_person_name(name: str) -> str:
         for typo, correction in e_typos.items():
             normalized = re.sub(rf"\b{typo}\b", correction, normalized)
 
-    # 2. Generalizable Cleaning
-    # Remove middle initials: "MENACHEM M GUREVITCH" -> "MENACHEM GUREVITCH"
-    parts = normalized.split()
-    if len(parts) > 2:
-        new_parts = []
-        for i, part in enumerate(parts):
-            clean_part = re.sub(r"\.", "", part)
-            if len(clean_part) == 1 and 0 < i < len(parts) - 1:
-                continue
-            new_parts.append(part)
-        normalized = " ".join(new_parts)
-
     # Standard punctuation and whitespace cleanup
     normalized = re.sub(r"[,.'`\"]", '', normalized)
     normalized = re.sub(r"\s+", ' ', normalized).strip()
@@ -108,8 +104,41 @@ def normalize_person_name(name: str) -> str:
     # Remove standard suffixes
     for pattern in PERSON_SUFFIX_PATTERNS:
         normalized = pattern.sub('', normalized)
+
+    # Remove standalone initials after suffix cleanup. This covers both
+    # FIRST M LAST and assessor-style LAST FIRST M owner names.
+    parts = normalized.split()
+    if len(parts) > 2:
+        non_initial_parts = [part for part in parts if len(part) > 1]
+        if len(non_initial_parts) >= 2:
+            normalized = " ".join(non_initial_parts)
         
     return normalized.strip()
+
+
+BUSINESS_ENTITY_TERMS = {
+    'APARTMENT', 'APARTMENTS', 'ASSOC', 'ASSOCIATES', 'ASSOCIATION',
+    'CO', 'COMPANY', 'CORP', 'CORPORATION', 'DEVELOPMENT', 'ENTERPRISE',
+    'ENTERPRISES', 'ESTATE', 'GROUP', 'HOLDING', 'HOLDINGS', 'INC',
+    'INCORPORATED', 'INVESTMENT', 'INVESTMENTS', 'LLC', 'LLP', 'LP', 'LTD',
+    'MANAGEMENT', 'PARTNER', 'PARTNERS', 'PARTNERSHIP', 'PROPERTIES',
+    'PROPERTY', 'REALTY', 'REAL', 'SERVICES', 'TRUST', 'VENTURES'
+}
+
+
+def looks_like_business_name(name: str) -> bool:
+    """Return true when an owner string should keep business-style normalization."""
+    if not name:
+        return False
+    cleaned = normalize_business_name(name)
+    return any(part in BUSINESS_ENTITY_TERMS for part in cleaned.split())
+
+
+def normalize_owner_name(name: str) -> str:
+    """Normalize property owner/co-owner names for mixed business/person matching."""
+    if not name:
+        return ''
+    return normalize_business_name(name) if looks_like_business_name(name) else normalize_person_name(name)
 
 def canonicalize_person_name(name: str) -> str:
     """

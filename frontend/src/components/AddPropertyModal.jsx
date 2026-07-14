@@ -59,10 +59,9 @@ export default function AddPropertyModal({ group, onClose, onAdded }) {
         { id: 'business', label: 'Business', icon: Briefcase },
         { id: 'owner', label: 'Owner', icon: User },
     ];
-
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col h-[600px] font-sans">
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/60 backdrop-blur-sm p-4 flex justify-center items-start md:items-center" onClick={onClose}>
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg flex flex-col my-auto h-auto max-h-none md:h-[600px] font-sans" onClick={e => e.stopPropagation()}>
 
                 {/* Header / Tabs */}
                 <div className="bg-slate-50 border-b border-slate-100 p-2 flex gap-1">

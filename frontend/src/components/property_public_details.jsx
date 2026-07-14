@@ -15,7 +15,7 @@ export function DetailItem({ icon: Icon, label, value }) {
     );
 }
 
-export default function PropertyPublicDetails({ property, networkData = {}, onViewEntity }) {
+export default function PropertyPublicDetails({ property, networkData = {}, onViewEntity, hideImage = false }) {
     if (!property) return null;
 
     const isComplex = property.isComplex || property.is_complex; // Handle different casing from different endpoints
@@ -80,7 +80,7 @@ export default function PropertyPublicDetails({ property, networkData = {}, onVi
     return (
         <div className="space-y-6">
             {/* Image Section */}
-            {imageUrl && (
+            {!hideImage && imageUrl && (
                 <div className="w-full h-48 bg-gray-100 rounded-xl overflow-hidden border border-gray-200 relative group">
                     <img
                         src={imageUrl}

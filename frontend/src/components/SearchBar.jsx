@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Search, MapPin, Briefcase, User, ArrowRight } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-export default function SearchBar({ onSearch, onSelect, isLoading }) {
+export default function SearchBar({ onSearch, onSelect, isLoading, activeState }) {
     const [term, setTerm] = useState('');
     const [suggestions, setSuggestions] = useState([]);
     const [showSuggestions, setShowSuggestions] = useState(false);
@@ -23,7 +23,7 @@ export default function SearchBar({ onSearch, onSelect, isLoading }) {
             setLoading(true);
             try {
                 // Use the internal DB autocomplete endpoint with type=all
-                const res = await fetch(`/api/autocomplete?q=${encodeURIComponent(term)}&type=all`, { signal });
+                const res = await fetch(`/api/autocomplete?q=${encodeURIComponent(term)}&type=all&state=${activeState}`, { signal });
                 if (res.ok) {
                     const data = await res.json();
                     setSuggestions(data);
@@ -45,7 +45,7 @@ export default function SearchBar({ onSearch, onSelect, isLoading }) {
             clearTimeout(timeoutId);
             controller.abort();
         };
-    }, [term]);
+    }, [term, activeState]);
 
     // Handle clicks outside to close suggestions
     useEffect(() => {
@@ -94,7 +94,7 @@ export default function SearchBar({ onSearch, onSelect, isLoading }) {
                             onChange={(e) => { setTerm(e.target.value); setShowSuggestions(true); }}
                             onFocus={() => setShowSuggestions(true)}
                             onKeyDown={handleKeyDown}
-                            placeholder="Search by business, owner, or address..."
+                            placeholder={activeState === 'CT' ? "Search by business, owner, or address..." : "Search by business, owner, or address in NY (WIP)..."}
                             className="w-full pl-12 pr-4 py-4 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-medium text-slate-900 placeholder:text-slate-400 text-lg shadow-inner"
                             autoFocus
                             aria-label="Search by business, owner, or address"

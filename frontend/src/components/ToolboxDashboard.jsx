@@ -429,7 +429,9 @@ function StatBanner({ properties, complexes, unassignedCount }) {
                 <div className="flex flex-col items-end">
                     <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Value</span>
                     <span className="text-xl font-black text-emerald-600">
-                        ${(totalVal / 1000000).toFixed(1)}M
+                        {totalVal >= 1000000000
+                            ? `$${(totalVal / 1000000000).toFixed(2)} Billion`
+                            : `$${(totalVal / 1000000).toFixed(1)}M`}
                     </span>
                 </div>
             </div>

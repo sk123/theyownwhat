@@ -95,11 +95,12 @@ def sync_ct_geodata_dates(conn):
                     # Parse rfc1123 date: Wed, 21 Oct 2015 07:28:00 GMT
                     external_date = datetime.strptime(last_mod, "%a, %d %b %Y %H:%M:%S %Z").date()
                 else:
-                    external_date = datetime.now().date() # Fallback
+                    external_date = None
                 checked_urls[url] = external_date
             except Exception as e:
                 print(f"Error checking {url}: {e}")
-                external_date = datetime.now().date()
+                external_date = None
+                checked_urls[url] = external_date
         
         update_status(conn, muni, "ARCGIS", external_date, {"url": url})
 
@@ -115,19 +116,17 @@ def sync_other_source_dates(conn):
     for muni, cfg in muni_configs.items():
         stype = cfg.get('type')
         if stype in other_types:
-            # We record today's date in details to show we checked it, 
-            # but external_date is None because we can't reliably detect it.
+            # No reliable external date is published for these sources.
             update_status(conn, muni, stype, None, {"config": cfg, "note": "External date not detectable; using stale-check logic."})
             count += 1
     print(f"Updated {count} MapXpress/PRC sources.")
 
 def sync_business_dates(conn):
     print("Syncing Business Registry dates...")
-    # These are expected nightly, so we'll just record today's date if they are available
-    # For now, we'll mark them as "Daily" updates
-    today = datetime.now().date()
-    update_status(conn, "BUSINESSES", "BUSINESS_REGISTRY", today)
-    update_status(conn, "PRINCIPALS", "BUSINESS_REGISTRY", today)
+    # The Socrata downloads record last_refreshed_at when they run; no source
+    # external date is available here, so keep external_last_updated unknown.
+    update_status(conn, "BUSINESSES", "BUSINESS_REGISTRY", None, {"note": "External date not provided by this sync."})
+    update_status(conn, "PRINCIPALS", "BUSINESS_REGISTRY", None, {"note": "External date not provided by this sync."})
 
 def main():
     conn = get_db_connection()

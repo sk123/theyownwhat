@@ -38,7 +38,9 @@ def get_db_connection():
         return None
 
 
-from api.geocoding_utils import geocode_census, geocode_nominatim
+from api.geocoding_utils import geocode_census, geocode_nominatim, is_geocode_match_credible, is_valid_coordinate
+
+GEOCODE_FAILED_MARKER = "GEOCODE_FAILED"
 
 def process_property(prop):
     if stop_signal: return None
@@ -53,21 +55,43 @@ def process_property(prop):
         except:
             clean_zip = str(zip_code).strip()
             
-    full_address = f"{location}, {city or ''}, CT {clean_zip}".strip()
+    DEFAULT_STATE = os.environ.get("DEFAULT_STATE", "CT")
+    full_address = f"{location}, {city or ''}, {DEFAULT_STATE} {clean_zip}".strip()
+
+    def usable(candidate_lat, candidate_lon, candidate_norm, input_address):
+        return (
+            is_valid_coordinate(candidate_lat, candidate_lon, "CT")
+            and is_geocode_match_credible(input_address, candidate_norm)
+        )
     
     # Try Census First
     lat, lon, norm = geocode_census(full_address)
+    if lat and lon and not usable(lat, lon, norm, full_address):
+        logger.info(f"Rejected Census match for property {prop_id}; trying Nominatim. matched={norm!r}; input={full_address!r}")
+        lat, lon, norm = None, None, None
     
     # Fallback to Nominatim
     if not lat:
         lat, lon, norm = geocode_nominatim(full_address)
+        if lat and lon and not usable(lat, lon, norm, full_address):
+            logger.info(f"Rejected Nominatim match for property {prop_id}; trying without ZIP. matched={norm!r}; input={full_address!r}")
+            lat, lon, norm = None, None, None
     
     # Second Fallback: Nominatim without zip (sometimes zip is wrong/imprecise)
     if not lat and clean_zip:
-        addr_no_zip = f"{location}, {city or ''}, CT".strip()
+        addr_no_zip = f"{location}, {city or ''}, {DEFAULT_STATE}".strip()
         lat, lon, norm = geocode_nominatim(addr_no_zip)
+        if lat and lon and not usable(lat, lon, norm, addr_no_zip):
+            logger.info(f"Rejected no-ZIP Nominatim match for property {prop_id}. matched={norm!r}; input={addr_no_zip!r}")
+            lat, lon, norm = None, None, None
         
-    return (prop_id, lat, lon, norm)
+    if usable(lat, lon, norm, full_address):
+        return (prop_id, lat, lon, norm)
+
+    if lat or lon:
+        logger.warning(f"Rejected geocode for property {prop_id}: {lat}, {lon}; matched={norm!r}; input={full_address!r}")
+
+    return (prop_id, None, None, None)
 
 
 def main():
@@ -90,11 +114,14 @@ def main():
                 cur.execute(f"""
                     SELECT id, location, property_city, property_zip 
                     FROM properties 
-                    WHERE latitude IS NULL AND location IS NOT NULL AND location != ''
+                    WHERE (latitude IS NULL OR longitude IS NULL)
+                    AND COALESCE(normalized_address, '') <> %s
+                    AND (source IS NULL OR source != 'NYS_OPEN_DATA')
+                    AND location IS NOT NULL AND location != ''
                     ORDER BY id DESC
                     LIMIT {BATCH_SIZE}
                     FOR UPDATE SKIP LOCKED
-                """)
+                """, (GEOCODE_FAILED_MARKER,))
                 rows = cur.fetchall()
                 
                 if not rows:
@@ -119,7 +146,7 @@ def main():
                 # Batch Update
                 success_count = 0
                 for pid, lat, lon, norm_addr in results:
-                    if lat and lon:
+                    if is_valid_coordinate(lat, lon, "CT"):
                         cur.execute("""
                             UPDATE properties 
                             SET latitude = %s, longitude = %s, normalized_address = %s
@@ -127,12 +154,12 @@ def main():
                         """, (lat, lon, norm_addr, pid))
                         success_count += 1
                     else:
-                        # Fail marker
+                        # Audit marker only. Coordinates stay NULL so map code never sees fake points.
                         cur.execute("""
                             UPDATE properties 
-                            SET latitude = 0, longitude = 0 
+                            SET latitude = NULL, longitude = NULL, normalized_address = %s
                             WHERE id = %s
-                        """, (pid,))
+                        """, (GEOCODE_FAILED_MARKER, pid))
                 
                 conn.commit()
                 logger.info(f"Batch Complete: {success_count}/{len(rows)} resolved.")

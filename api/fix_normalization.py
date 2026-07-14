@@ -1,30 +1,10 @@
 import os
-import re
 import psycopg2
 from psycopg2.extras import execute_batch
 
+from api.shared_utils import normalize_owner_name, normalize_person_name
+
 DB_URL = os.getenv("DATABASE_URL", "postgresql://user:password@localhost:5432/ctdata")
-
-def clean_name(x):
-    if not x: return None
-    n = x.strip().upper()
-    n = re.sub(r'[^A-Z0-9 ]', '', n)
-    n = re.sub(r'\s+', ' ', n).strip()
-    
-    # Typos
-    n = n.replace('GUREVITOH', 'GUREVITCH')
-    n = n.replace('MANACHEM', 'MENACHEM')
-    n = n.replace('MENACHERM', 'MENACHEM')
-    n = n.replace('MENAHEM', 'MENACHEM')
-    n = n.replace('GURAVITCH', 'GUREVITCH')
-
-    # Middle Check
-    parts = n.split()
-    if len(parts) >= 3:
-         if len(parts[0]) > 1 and len(parts[-1]) > 1:
-             mid = [p for p in parts[1:-1] if len(p) > 1]
-             n = " ".join([parts[0]] + mid + [parts[-1]])
-    return n
 
 def run():
     print("Connecting...")
@@ -40,7 +20,7 @@ def run():
     
     for r in rows:
         pid, raw, current_norm = r
-        new_norm = clean_name(raw)
+        new_norm = normalize_person_name(raw)
         if new_norm != current_norm:
             updates.append((new_norm, pid))
             
@@ -60,7 +40,7 @@ def run():
     
     for r in rows:
         pid, raw, current_norm = r
-        new_norm = clean_name(raw)
+        new_norm = normalize_owner_name(raw)
         if new_norm != current_norm:
             updates.append((new_norm, pid))
             
@@ -80,7 +60,7 @@ def run():
     
     for r in rows:
         pid, raw, current_norm = r
-        new_norm = clean_name(raw)
+        new_norm = normalize_owner_name(raw)
         if new_norm != current_norm:
             updates.append((new_norm, pid))
             

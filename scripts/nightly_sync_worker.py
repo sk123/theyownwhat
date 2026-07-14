@@ -1,11 +1,28 @@
 
 import os
+import sys
 import subprocess
 import psycopg2
 from datetime import datetime, timedelta
 import time
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
+SOURCE_ONLY_ENV_VAR = "THEYOWNWHAT_SOURCE_ONLY"
+SUPPORTED_PROPERTY_SOURCE_TYPES = {
+    "VISION",
+    "VISION_APPRAISAL",
+    "ARCGIS",
+    "ARCGIS_CSV",
+    "CT_GEODATA_CSV",
+    "MAPXPRESS",
+    "MAPGEO",
+    "PROPERTYRECORDCARDS",
+    "TIGHE_BOND",
+    "AVON_STATIC",
+    "HARTFORD_SCRIPT",
+    "HARTFORD_ENRICHMENT",
+    "WINDSOR_API",
+}
 
 def get_db_connection():
     return psycopg2.connect(DATABASE_URL)
@@ -15,25 +32,37 @@ def run_script(script_path, args=None):
     if args:
         cmd.extend(args)
     print(f"Running: {' '.join(cmd)}")
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    env = os.environ.copy()
+    env[SOURCE_ONLY_ENV_VAR] = "true"
+    result = subprocess.run(cmd, capture_output=True, text=True, env=env)
     if result.returncode != 0:
         print(f"Error running {script_path}: {result.stderr}")
     else:
         print(f"Success: {result.stdout}")
     return result.returncode == 0
 
+def get_configured_municipality_names():
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+    try:
+        from api.municipal_config import MUNICIPAL_DATA_SOURCES
+        return {name.upper() for name in MUNICIPAL_DATA_SOURCES.keys()}
+    except Exception as exc:
+        print(f"Could not load municipal source config; only indexed Vision sources will be eligible: {exc}")
+        return set()
+
 def get_outdated_sources(conn):
     """
     Returns a list of municipalities that need updating.
     Criteria:
-    - VISION: external_last_updated > last_refreshed_at (or haven't been refreshed in 30 days)
-    - ARCGIS: external_last_updated > last_refreshed_at
-    - MAPXPRESS/PRC: last_refreshed_at > 30 days ago
+    - Only source-backed municipal property feeds are eligible.
+    - Dated sources refresh when external_last_updated > last_refreshed_at.
+    - Undated sources refresh when last_refreshed_at is more than 30 days old.
     """
     query = """
     SELECT source_name, source_type, external_last_updated, last_refreshed_at 
     FROM data_source_status
-    WHERE source_type != 'BUSINESS_REGISTRY'
     """
     with conn.cursor() as cur:
         cur.execute(query)
@@ -41,8 +70,16 @@ def get_outdated_sources(conn):
     
     outdated = []
     now = datetime.now().astimezone()
+    configured_municipalities = get_configured_municipality_names()
     
     for name, stype, ext_date, last_ref in rows:
+        name_upper = (name or "").upper()
+        source_type = (stype or "").upper()
+        if source_type not in SUPPORTED_PROPERTY_SOURCE_TYPES:
+            continue
+        if source_type not in {"VISION", "VISION_APPRAISAL"} and name_upper not in configured_municipalities:
+            continue
+
         if last_ref is None:
             outdated.append(name)
             continue

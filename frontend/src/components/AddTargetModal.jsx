@@ -17,8 +17,8 @@ export default function AddTargetModal({ isOpen, onClose, onAdd }) {
     };
 
     return (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in duration-200 font-sans">
+        <div className="fixed inset-0 z-[100] overflow-y-auto bg-slate-900/50 backdrop-blur-sm p-4 flex justify-center items-start md:items-center" onClick={onClose}>
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md my-auto h-auto max-h-none overflow-visible animate-in fade-in zoom-in duration-200 font-sans" onClick={e => e.stopPropagation()}>
                 <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-white text-slate-800">
                     <h3 className="font-black text-slate-700 text-lg flex items-center gap-2">
                         <Layers className="text-blue-600" size={20} />

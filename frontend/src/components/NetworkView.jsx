@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { Layers, ChevronDown, ChevronRight, User, Users, Building, ArrowRight, MapPin, Info } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { getAddressBadgeInfo, getEntityAddressState } from '../utils/jurisdiction';
 
-export default function NetworkView({ networkData, onSelectEntity, selectedEntityId, onViewDetails, mobileSection = 'all', autoHeight = false }) {
+export default function NetworkView({ networkData, onSelectEntity, selectedEntityId, onViewDetails, mobileSection = 'all', autoHeight = false, activeState = 'CT' }) {
     const [activeTab, setActiveTab] = useState('human');
     const [showInactive, setShowInactive] = useState(false);
 
@@ -104,6 +105,15 @@ export default function NetworkView({ networkData, onSelectEntity, selectedEntit
     const showPrincipals = mobileSection === 'all' || mobileSection === 'principals';
     const showBusinesses = mobileSection === 'all' || mobileSection === 'businesses';
 
+    const renderAddressBadge = (entity) => {
+        const info = getAddressBadgeInfo(getEntityAddressState(entity), activeState);
+        return (
+            <span className={`text-[9px] px-1.5 py-px rounded border font-black uppercase tracking-wider shrink-0 ${info.className}`}>
+                {info.label}
+            </span>
+        );
+    };
+
     return (
         <div className={`bg-white rounded-xl border border-gray-200 shadow-sm flex flex-col ${autoHeight ? '' : 'h-full overflow-hidden'}`}>
             <div className={`p-4 border-b border-gray-100 flex items-center justify-between bg-gray-50/50 flex-shrink-0 ${mobileSection !== 'all' ? 'hidden lg:flex' : ''}`}>
@@ -156,12 +166,6 @@ export default function NetworkView({ networkData, onSelectEntity, selectedEntit
                         <div className={`${autoHeight ? '' : 'overflow-y-auto flex-1 min-h-0'} p-1.5 space-y-1.5`}>
                             {(activeTab === 'human' ? humanPrincipals : entityPrincipals).map((p, i) => {
                                 const count = getCount(p);
-                                let state = null;
-                                // Try to infer state from address
-                                if (p.details?.address || p.details?.principal_address) {
-                                    const match = (p.details.address || p.details.principal_address).match(/\b(CT|NY|NJ|MA|RI)\b/);
-                                    if (match) state = match[1];
-                                }
 
                                 return (
                                     <div
@@ -177,11 +181,7 @@ export default function NetworkView({ networkData, onSelectEntity, selectedEntit
                                                 <div className={`font-bold text-xs flex items-center gap-2 ${selectedEntityId === p.id ? 'text-blue-700' : 'text-gray-800'}`}>
                                                     {activeTab === 'human' ? <User className="w-3 h-3 text-blue-500" /> : <Building className="w-3 h-3 text-purple-500" />}
                                                     <span>{p.name}</span>
-                                                    {state && (
-                                                        <span className={`text-[9px] px-1 rounded font-bold ${state === 'CT' ? 'bg-blue-100 text-blue-700' : 'bg-orange-100 text-orange-700'}`}>
-                                                            {state}
-                                                        </span>
-                                                    )}
+                                                    {renderAddressBadge(p)}
                                                 </div>
                                                 <div className="mt-1 flex items-center gap-2">
                                                     <span className="text-[9px] font-medium text-white bg-blue-400 px-1.5 py-px rounded-full">
@@ -235,10 +235,11 @@ export default function NetworkView({ networkData, onSelectEntity, selectedEntit
                                     <div className="flex justify-between items-start">
                                         <div className="flex-1 min-w-0 pr-2">
                                             <div className={`font-bold text-xs ${selectedEntityId === b.id ? 'text-blue-700' : 'text-gray-800'}`}>{b.name}</div>
-                                            <div className="flex gap-2 mt-1">
+                                            <div className="flex gap-2 mt-1 flex-wrap">
                                                 <span className="text-[9px] font-bold bg-green-50 text-green-600 px-1.5 py-px rounded-full border border-green-100">
                                                     ACTIVE
                                                 </span>
+                                                {renderAddressBadge(b)}
                                                 {b.details?.business_address && (
                                                     <span className="text-[9px] font-medium text-gray-400 flex items-center gap-1 truncate">
                                                         <MapPin className="w-2.5 h-2.5" />
@@ -291,10 +292,11 @@ export default function NetworkView({ networkData, onSelectEntity, selectedEntit
                                                                 }`}
                                                         >
                                                             <div className="font-bold text-sm text-gray-700">{b.name}</div>
-                                                            <div className="flex gap-2 mt-1">
+                                                            <div className="flex gap-2 mt-1 flex-wrap">
                                                                 <span className="text-[10px] font-bold bg-gray-200 text-gray-600 px-2 py-0.5 rounded-full">
                                                                     {b.status}
                                                                 </span>
+                                                                {renderAddressBadge(b)}
                                                             </div>
                                                         </div>
                                                     ))}

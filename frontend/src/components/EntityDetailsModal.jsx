@@ -28,14 +28,14 @@ export default function EntityDetailsModal({ entity, type, networkData, onNaviga
 
     return (
         <AnimatePresence>
-            <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+            <div className="fixed inset-0 z-[60] p-4 flex justify-center items-center">
                 {/* Backdrop */}
                 <motion.div
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
                     onClick={onClose}
-                    className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+                    className="fixed inset-0 bg-black/60 backdrop-blur-sm"
                 />
 
                 {/* Modal */}
@@ -43,7 +43,7 @@ export default function EntityDetailsModal({ entity, type, networkData, onNaviga
                     initial={{ opacity: 0, scale: 0.95, y: 20 }}
                     animate={{ opacity: 1, scale: 1, y: 0 }}
                     exit={{ opacity: 0, scale: 0.95, y: 20 }}
-                    className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col"
+                    className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl flex flex-col max-h-[90vh] overflow-hidden"
                 >
                     {/* Header */}
                     <div className="p-6 border-b border-gray-100 flex items-start justify-between bg-gray-50/50 shrink-0">
@@ -144,7 +144,17 @@ export default function EntityDetailsModal({ entity, type, networkData, onNaviga
 
                                             // Filter actual entities
                                             const targetList = isPrincipal ? networkData.businesses : networkData.principals;
-                                            const relatedEntities = targetList?.filter(item => relatedIds.has(String(item.id))) || [];
+                                            const relatedEntities = targetList?.filter(item => {
+                                                const sId = String(item.id);
+                                                if (relatedIds.has(sId)) return true;
+
+                                                // Fallback: If it's a principal, check for name-based match (canonical)
+                                                if (!isPrincipal && item.name) {
+                                                    const canon = item.name.toUpperCase().trim().replace(/[`"'.]/g, '').replace(/\s+/g, ' ').split(' ').sort().join(' ');
+                                                    if (relatedIds.has(canon)) return true;
+                                                }
+                                                return false;
+                                            }) || [];
 
                                             if (relatedEntities.length === 0) {
                                                 return <div className="text-gray-400 italic">No related records found.</div>;

@@ -1,6 +1,8 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { ArrowUpDown, Map, List, Grid3X3, X, Check, Building2, MapPin, ChevronRight, ChevronDown, LayoutGrid, Sparkles, Download, Share2, ExternalLink, Copy, AlertCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { getAddressBadgeInfo, getJurisdictionConfig, getPropertyState } from '../utils/jurisdiction';
+import { getPropertySubsidyRecords, hasPropertySubsidy } from '../utils/subsidies';
 
 // Helper Components
 function SortHeader({ label, sortKey, currentSort, onSort }) {
@@ -58,15 +60,105 @@ export default function PropertyTable({
     onSelectCity,
     onClearEntity,
     highlightedEntityId,
-    onAiDigest
+    onAiDigest,
+    activeState = 'CT',
+    jurisdictionConfig,
+    includeNonLocalProperties = false,
+    onIncludeNonLocalPropertiesChange,
+    localPropertyCount = 0,
+    nonLocalPropertyCount = 0
 }) {
     // Default Sort: Unit Count (Desc) -> City (Asc)
     const [sortConfig, setSortConfig] = useState({ key: 'unit_count', direction: 'desc' });
     const [filter, setFilter] = useState('');
+    const [subsidyFilter, setSubsidyFilter] = useState(false);
+    const [evictionFilter, setEvictionFilter] = useState(false);
     const [selectedIds, setSelectedIds] = useState(new Set());
+    const [displayLimit, setDisplayLimit] = useState(150);
 
-    // Remove subsidized filter logic for top networks/front page
-    // If you need to show subsidized filter elsewhere, move this logic to a subcomponent or context-specific view.
+    const localConfig = jurisdictionConfig || getJurisdictionConfig(activeState);
+
+    const getItemState = (item) => {
+        const rows = item?.isComplex ? (item.subProperties || []) : [item];
+        const states = new Set(rows.map(getPropertyState).filter(Boolean));
+        if (states.size === 1) return Array.from(states)[0];
+        if (states.size > 1) return 'MIXED';
+        return null;
+    };
+
+    useEffect(() => {
+        setDisplayLimit(150);
+    }, [properties, filter, subsidyFilter, evictionFilter, includeNonLocalProperties]);
+
+    const isNonLocalProperty = (p) => {
+        const state = getItemState(p);
+        if (!state || state === 'MIXED') return false;
+        const localState = activeState === 'NY' ? 'NY' : activeState === 'DC' ? 'DC' : activeState === 'BALTIMORE' ? 'MD' : activeState === 'BOSTON' ? 'MA' : activeState === 'DETROIT' ? 'MI' : 'CT';
+        return state !== localState;
+    };
+
+    const renderJurisdictionBadge = (item, compact = false) => {
+        const state = getItemState(item);
+        if (state === 'MIXED') {
+            return (
+                <span className={`${compact ? 'text-[8px] px-1 py-px' : 'text-[9px] px-1.5 py-0.5'} shrink-0 rounded border bg-amber-50 text-amber-700 border-amber-100 font-black uppercase tracking-wider`}>
+                    Mixed states
+                </span>
+            );
+        }
+        const info = getAddressBadgeInfo(state, activeState);
+        const label = state ? info.label.replace('address', 'property') : 'State unknown';
+        return (
+            <span className={`${compact ? 'text-[8px] px-1 py-px' : 'text-[9px] px-1.5 py-0.5'} shrink-0 rounded border font-black uppercase tracking-wider ${info.className}`}>
+                {label}
+            </span>
+        );
+    };
+
+    const stateForAddress = (item) => {
+        const state = getItemState(item);
+        if (state && state !== 'MIXED') return state;
+        return localConfig.key === 'BALTIMORE' ? 'MD' : localConfig.key === 'BOSTON' ? 'MA' : localConfig.key === 'DETROIT' ? 'MI' : localConfig.key === 'NY' ? 'NY' : localConfig.key === 'DC' ? 'DC' : 'CT';
+    };
+
+    const getItemEvictionCount = (item) => {
+        const rows = item?.isComplex ? (item.subProperties || []) : [item];
+        return rows.reduce((acc, row) => acc + (parseInt(row?.eviction_count || 0, 10) || 0), 0);
+    };
+
+    const renderSubsidyBadges = (item, compact = false) => {
+        const records = getPropertySubsidyRecords(item);
+        if (records.length === 0) return null;
+
+        const visible = records.slice(0, compact ? 1 : 2);
+        const remaining = records.length - visible.length;
+        const pillClass = compact
+            ? 'text-[9px] px-2 py-0.5 rounded-md'
+            : 'text-[9px] px-1.5 py-0.5 rounded';
+
+        return (
+            <>
+                {visible.map(record => (
+                    <span
+                        key={record.key}
+                        title={record.title}
+                        className={`${pillClass} bg-amber-50 text-amber-700 font-bold uppercase border border-amber-100 flex items-center gap-1 max-w-[220px]`}
+                    >
+                        <span className="text-[8px]">$</span>
+                        <span className="truncate">{record.label}</span>
+                    </span>
+                ))}
+                {remaining > 0 && (
+                    <span
+                        title={records.map(record => record.title).join('\n')}
+                        className={`${pillClass} bg-amber-100 text-amber-800 font-black uppercase border border-amber-200`}
+                    >
+                        +{remaining} subsidy records
+                    </span>
+                )}
+            </>
+        );
+    };
 
     // Default to 'grid' (City View) on large screens, unless only one municipality
     const actualCities = cities.filter(c => c !== 'All');
@@ -257,6 +349,7 @@ export default function PropertyTable({
                 let totalAppraised = 0;
                 let totalUnits = 0;
                 let totalViolations = 0;
+                let totalEvictions = 0;
 
                 g.units.sort((a, b) => {
                     const uA = a.derivedUnit || '';
@@ -271,6 +364,7 @@ export default function PropertyTable({
                     totalAppraised += appraised;
                     totalUnits += parseInt(u.number_of_units || u.unit_count || 1);
                     totalViolations += parseInt(u.violation_count || 0);
+                    totalEvictions += parseInt(u.eviction_count || 0);
                 });
 
                 const ownerList = Array.from(g.owners);
@@ -294,7 +388,8 @@ export default function PropertyTable({
                     subProperties: g.units,
                     representativeId: g.units[0].id,
                     representativePhoto, // Added for complex thumbnail
-                    violation_count: totalViolations
+                    violation_count: totalViolations,
+                    eviction_count: totalEvictions
                 });
             } else {
                 const p = g.units[0];
@@ -314,6 +409,9 @@ export default function PropertyTable({
     // 2. Filter Grouped List
     const filteredProperties = useMemo(() => {
         return groupedProperties.filter(p => {
+            if (subsidyFilter && !hasPropertySubsidy(p)) return false;
+            if (evictionFilter && getItemEvictionCount(p) <= 0) return false;
+
             const search = filter.toLowerCase();
             const matchesSearch = (
                 (p.address || '').toLowerCase().includes(search) ||
@@ -323,7 +421,17 @@ export default function PropertyTable({
 
             return matchesSearch;
         });
-    }, [groupedProperties, filter]);
+    }, [groupedProperties, filter, subsidyFilter, evictionFilter]);
+
+    const subsidyAssetCount = useMemo(
+        () => groupedProperties.filter(hasPropertySubsidy).length,
+        [groupedProperties]
+    );
+
+    const evictionAssetCount = useMemo(
+        () => groupedProperties.filter(p => getItemEvictionCount(p) > 0).length,
+        [groupedProperties]
+    );
 
     // 3. Sort Filtered List
     const sortedProperties = useMemo(() => {
@@ -478,10 +586,12 @@ export default function PropertyTable({
         document.body.removeChild(link);
     };
 
-    const renderRows = (list) => (
-        list.map((p, i) => {
+     const renderRows = (list) => (
+        list.slice(0, displayLimit).map((p, i) => {
             const selected = isItemSelected(p);
             const isExpanded = p.isComplex && expandedComplexIds.has(p.id);
+            const mapState = stateForAddress(p);
+            const isNonLocal = isNonLocalProperty(p);
             return (
                 <React.Fragment key={p.id || i}>
                     <tr
@@ -497,8 +607,12 @@ export default function PropertyTable({
                                 }
                             }
                         }}
-                        className={`transition-colors group cursor-pointer border-b border-gray-50 
-                            ${p.isComplex ? 'bg-indigo-50/30 hover:bg-indigo-50/60' : 'hover:bg-gray-50'}
+                        className={`transition-colors group cursor-pointer border-b border-gray-50 border-l-2
+                            ${isNonLocal
+                                ? 'bg-amber-50/10 hover:bg-amber-50/20 border-l-amber-400'
+                                : p.isComplex
+                                    ? 'bg-indigo-50/30 hover:bg-indigo-50/60 border-l-transparent'
+                                    : 'hover:bg-gray-50 border-l-transparent'}
                             ${selected && isMultiSelectActive ? 'bg-blue-50/80 hover:bg-blue-100' : ''}
                         `}
                     >
@@ -566,15 +680,22 @@ export default function PropertyTable({
                                                     {p.address}
                                                 </span>
                                                 <div className="flex items-center gap-2 mt-1">
+                                                    {renderJurisdictionBadge(p)}
                                                     <span className="text-[10px] bg-blue-50 text-blue-600 font-bold px-1.5 py-0.5 rounded uppercase tracking-tighter shrink-0">
                                                         {p.unit_count} Units
                                                     </span>
                                                     {p.violation_count > 0 && (
-                                                        <span className="text-[10px] bg-red-100 text-red-700 font-bold px-1.5 py-0.5 rounded uppercase flex items-center gap-1 shrink-0" title="Active Code Violations (Hartford Only)">
+                                                        <span className="text-[10px] bg-red-100 text-red-700 font-bold px-1.5 py-0.5 rounded uppercase flex items-center gap-1 shrink-0" title="Active Code Cases & Complaints (Hartford Only)">
                                                             <AlertCircle size={10} />
-                                                            {p.violation_count} Violations
+                                                            {p.violation_count} Cases/Complaints
                                                         </span>
                                                     )}
+                                                    {getItemEvictionCount(p) > 0 && (
+                                                        <span className="text-[10px] bg-rose-100 text-rose-700 font-bold px-1.5 py-0.5 rounded uppercase flex items-center gap-1 shrink-0" title="CT Judicial eviction filings matched to this building">
+                                                            {getItemEvictionCount(p)} Evictions
+                                                        </span>
+                                                    )}
+                                                    {renderSubsidyBadges(p)}
                                                     {p.management_info?.url && (
                                                         <a
                                                             href={p.management_info.url}
@@ -613,9 +734,21 @@ export default function PropertyTable({
                                                 </span>
 
                                                 <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                                                    {renderJurisdictionBadge(p)}
                                                     {p.unit_count > 1 && (
                                                         <span className="text-[9px] bg-blue-50 text-blue-600 font-bold px-1.5 py-0.5 rounded uppercase border border-blue-100">
                                                             {p.unit_count} Units
+                                                        </span>
+                                                    )}
+                                                    {p.violation_count > 0 && (
+                                                        <span className="text-[9px] bg-red-50 text-red-700 font-bold px-1.5 py-0.5 rounded uppercase border border-red-100 flex items-center gap-1" title="Active Hartford code cases & complaints">
+                                                            <AlertCircle size={9} />
+                                                            {p.violation_count} Cases/Complaints
+                                                        </span>
+                                                    )}
+                                                    {getItemEvictionCount(p) > 0 && (
+                                                        <span className="text-[9px] bg-rose-50 text-rose-700 font-bold px-1.5 py-0.5 rounded uppercase border border-rose-100 flex items-center gap-1" title="CT Judicial eviction filings matched to this property">
+                                                            {getItemEvictionCount(p)} Evictions
                                                         </span>
                                                     )}
 
@@ -638,59 +771,7 @@ export default function PropertyTable({
                                                             {p.property_type}
                                                         </span>
                                                     )}
-                                                    {p.subsidies && p.subsidies.length > 0 && (() => {
-                                                        const programTypes = p.subsidies.map(s => (s.program_type || '').toLowerCase());
-                                                        const programNames = p.subsidies.map(s => (s.program_name || '').toLowerCase());
-                                                        const subsidyKeywords = [
-                                                            'public housing',
-                                                            'project-based',
-                                                            'project based',
-                                                            'pbv',
-                                                            'section 8',
-                                                            'ct sh moderate rental',
-                                                            'mod rehab',
-                                                            'mod. rehab',
-                                                            'mod. rental',
-                                                            'mod rental',
-                                                            'hud',
-                                                            'lihtc',
-                                                            'tax credit',
-                                                            'rental assistance',
-                                                            'rental subsidy',
-                                                            'subsidized',
-                                                            '811',
-                                                            '202',
-                                                            '236',
-                                                            '221(d)(3)',
-                                                            '221d3',
-                                                            'section 236',
-                                                            'section 202',
-                                                            'section 221',
-                                                            'section 811',
-                                                        ];
-                                                        const restrictiveKeywords = [
-                                                            'restrictive covenant',
-                                                            'deed restriction',
-                                                            'affordability covenant',
-                                                        ];
-                                                        const hasSubsidy = programTypes.concat(programNames).some(type =>
-                                                            subsidyKeywords.some(keyword => type.includes(keyword))
-                                                        );
-                                                        const allRestrictive = programTypes.concat(programNames).every(type =>
-                                                            restrictiveKeywords.some(keyword => type.includes(keyword))
-                                                        );
-                                                        let label = 'Preservation';
-                                                        if (hasSubsidy) {
-                                                            label = 'Subsidized';
-                                                        } else if (allRestrictive) {
-                                                            label = 'Restricted Covenant';
-                                                        }
-                                                        return (
-                                                            <span className="text-[9px] bg-amber-50 text-amber-600 font-bold px-1.5 py-0.5 rounded uppercase border border-amber-100 flex items-center gap-1">
-                                                                <span className="text-[8px]">$</span> {label}
-                                                            </span>
-                                                        );
-                                                    })()}
+                                                    {renderSubsidyBadges(p)}
                                                 </div>
                                             </div>
                                         )}
@@ -700,7 +781,7 @@ export default function PropertyTable({
                                             <button
                                                 onClick={(e) => {
                                                     e.stopPropagation();
-                                                    const addr = `${p.address}${!p.isComplex && p.derivedUnit ? ' #' + p.derivedUnit : ''}, ${p.city} CT`;
+                                                    const addr = `${p.address}${!p.isComplex && p.derivedUnit ? ' #' + p.derivedUnit : ''}, ${p.city} ${mapState}`;
                                                     navigator.clipboard.writeText(addr);
                                                     const el = e.currentTarget;
                                                     const original = el.innerHTML;
@@ -715,7 +796,7 @@ export default function PropertyTable({
                                             <button
                                                 onClick={(e) => {
                                                     e.stopPropagation();
-                                                    const addr = `${p.address}${!p.isComplex && p.derivedUnit ? ' #' + p.derivedUnit : ''}, ${p.city} CT`;
+                                                    const addr = `${p.address}${!p.isComplex && p.derivedUnit ? ' #' + p.derivedUnit : ''}, ${p.city} ${mapState}`;
                                                     navigator.clipboard.writeText(addr);
                                                     const el = e.currentTarget;
                                                     const original = el.innerHTML;
@@ -753,7 +834,7 @@ export default function PropertyTable({
                             viewMode === 'list' && !isMultiSelectActive && (
                                 <td className="p-2">
                                     <a
-                                        href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${p.address}, ${p.city} CT`)}`}
+                                        href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${p.address}, ${p.city} ${mapState}`)}`}
                                         target="_blank"
                                         rel="noreferrer"
                                         className="inline-flex items-center justify-center w-6 h-6 rounded bg-gray-50 text-gray-400 hover:bg-blue-100 hover:text-blue-600 transition-colors"
@@ -774,6 +855,7 @@ export default function PropertyTable({
 
                             const renderSubRow = (sub) => {
                                 const isThirdParty = sub.is_in_network === false;
+                                const subState = stateForAddress(sub);
                                 return (
                                     <motion.tr
                                         key={sub.id}
@@ -819,6 +901,7 @@ export default function PropertyTable({
                                                             <span className="text-[8px] bg-gray-200 text-gray-500 px-1 py-0.5 rounded font-bold uppercase tracking-tighter shrink-0">Not in Network</span>
                                                         )}
                                                     </span>
+                                                    {subState && subState !== mapState && renderJurisdictionBadge(sub, true)}
                                                 </div>
                                                 <div className="flex items-center gap-4">
                                                     <span className={`text-xs font-mono font-bold whitespace-nowrap ${isThirdParty ? 'text-gray-400' : 'text-gray-700'}`}>
@@ -973,10 +1056,84 @@ export default function PropertyTable({
                     )}
                 </div>
 
-                {/* Subsidized filter toggle removed for top networks/front page */}
+                {nonLocalPropertyCount > 0 && (
+                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-white/10 border border-white/15 px-3 py-2">
+                        <label
+                            className="flex items-center gap-2 text-xs font-bold text-white cursor-pointer select-none"
+                            onClick={(e) => e.stopPropagation()}
+                        >
+                            <input
+                                type="checkbox"
+                                checked={includeNonLocalProperties}
+                                onChange={(e) => onIncludeNonLocalPropertiesChange?.(e.target.checked)}
+                                className="h-4 w-4 rounded border-white/40 text-blue-600 focus:ring-white/40"
+                            />
+                            <span>{localConfig.includeLabel}</span>
+                        </label>
+                        <span className="text-[10px] font-bold text-white/70 uppercase tracking-wider">
+                            {includeNonLocalProperties
+                                ? `Showing ${localPropertyCount + nonLocalPropertyCount} network properties`
+                                : `Showing ${localPropertyCount} ${localConfig.localLabel}; ${nonLocalPropertyCount} ${localConfig.outsideLabel} hidden`}
+                        </span>
+                    </div>
+                )}
+
+                {(subsidyAssetCount > 0 || evictionAssetCount > 0) && (
+                    <div className="flex flex-wrap items-center gap-2">
+                        {subsidyAssetCount > 0 && (
+                            <button
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSubsidyFilter(v => !v);
+                                }}
+                                className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-black transition-colors ${
+                                    subsidyFilter
+                                        ? 'bg-amber-100 text-amber-800 border-amber-200'
+                                        : 'bg-white/10 text-white border-white/20 hover:bg-white/20'
+                                }`}
+                            >
+                                <span className="text-[11px]">$</span>
+                                Has subsidy records
+                                <span className={`rounded px-1.5 py-0.5 text-[10px] ${subsidyFilter ? 'bg-white/70 text-amber-800' : 'bg-white/15 text-white'}`}>
+                                    {subsidyAssetCount}
+                                </span>
+                            </button>
+                        )}
+                        {evictionAssetCount > 0 && (
+                            <button
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    setEvictionFilter(v => !v);
+                                }}
+                                className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-black transition-colors ${
+                                    evictionFilter
+                                        ? 'bg-rose-100 text-rose-800 border-rose-200'
+                                        : 'bg-white/10 text-white border-white/20 hover:bg-white/20'
+                                }`}
+                            >
+                                Has eviction filings
+                                <span className={`rounded px-1.5 py-0.5 text-[10px] ${evictionFilter ? 'bg-white/70 text-rose-800' : 'bg-white/15 text-white'}`}>
+                                    {evictionAssetCount}
+                                </span>
+                            </button>
+                        )}
+                        {(subsidyFilter || evictionFilter) && (
+                            <button
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSubsidyFilter(false);
+                                    setEvictionFilter(false);
+                                }}
+                                className="inline-flex items-center gap-1 rounded-lg bg-white/10 px-2.5 py-1.5 text-xs font-bold text-white hover:bg-white/20"
+                            >
+                                <X size={12} />
+                                Clear source filters
+                            </button>
+                        )}
+                    </div>
+                )}
             </div>
 
-            {/* Subsidy type filter removed for top networks/front page */}
             <AnimatePresence>
                 {isMultiSelectActive && (
                     <motion.div
@@ -1019,31 +1176,216 @@ export default function PropertyTable({
             {/* Content Area */}
             <div className={`flex-1 flex flex-col min-h-0 bg-white relative ${autoHeight ? '' : 'h-full overflow-auto'}`}>
                 {viewMode === 'list' && (
-                    <div className={`w-full ${autoHeight ? 'overflow-visible' : 'flex-1 overflow-auto bg-white min-h-0'}`}>
-                        <table className="w-full text-left border-collapse">
-                            <thead className="bg-gray-50 sticky top-0 z-20 shadow-sm border-b border-gray-100">
-                                <tr>
-                                    {isMultiSelectActive && (
-                                        <th className="p-2 w-10 text-center cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => handleSelectAll()}>
-                                            <input
-                                                type="checkbox"
-                                                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
-                                                checked={selectedIds.size > 0 && selectedIds.size === properties.length}
-                                                onChange={(e) => { e.stopPropagation(); handleSelectAll(); }}
-                                            />
-                                        </th>
-                                    )}
-                                    <SortHeader label="Address" sortKey="address" currentSort={sortConfig} onSort={handleSort} />
-                                    <SortHeader label="City" sortKey="city" currentSort={sortConfig} onSort={handleSort} />
-                                    <SortHeader label="Owner" sortKey="owner" currentSort={sortConfig} onSort={handleSort} />
-                                    <SortHeader label="Assessed" sortKey="assessed_value" currentSort={sortConfig} onSort={handleSort} />
-                                    {!isMultiSelectActive && <th className="p-2 w-10"></th>}
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-gray-100">
-                                {renderRows(sortedProperties)}
-                            </tbody>
-                        </table>
+                    <div className={`w-full bg-slate-50 md:bg-white ${autoHeight ? 'overflow-visible' : 'flex-1 overflow-auto min-h-0'}`}>
+                        {/* Desktop Table View */}
+                        <div className="hidden md:block">
+                            <table className="w-full text-left border-collapse">
+                                <thead className="bg-gray-50 sticky top-0 z-20 shadow-sm border-b border-gray-100">
+                                    <tr>
+                                        {isMultiSelectActive && (
+                                            <th className="p-2 w-10 text-center cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => handleSelectAll()}>
+                                                <input
+                                                    type="checkbox"
+                                                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                                                    checked={selectedIds.size > 0 && selectedIds.size === properties.length}
+                                                    onChange={(e) => { e.stopPropagation(); handleSelectAll(); }}
+                                                />
+                                            </th>
+                                        )}
+                                        <SortHeader label="Address" sortKey="address" currentSort={sortConfig} onSort={handleSort} />
+                                        <SortHeader label="City" sortKey="city" currentSort={sortConfig} onSort={handleSort} />
+                                        <SortHeader label="Owner" sortKey="owner" currentSort={sortConfig} onSort={handleSort} />
+                                        <SortHeader label="Assessed" sortKey="assessed_value" currentSort={sortConfig} onSort={handleSort} />
+                                        {!isMultiSelectActive && <th className="p-2 w-10"></th>}
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-100">
+                                    {renderRows(sortedProperties)}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        {/* Mobile 'Tap-First' Card View */}
+                        <div className="md:hidden flex flex-col gap-3 p-3 pb-safe-offset-4">
+                            <AnimatePresence>
+                                {sortedProperties.slice(0, displayLimit).map((p, i) => {
+                                    const selected = isItemSelected(p);
+                                    const expanded = p.isComplex && expandedComplexIds.has(p.id);
+                                    const isNonLocal = isNonLocalProperty(p);
+
+                                    return (
+                                        <motion.div
+                                            layout
+                                            initial={{ opacity: 0, y: 10 }}
+                                            animate={{ opacity: 1, y: 0 }}
+                                            exit={{ opacity: 0, scale: 0.95 }}
+                                            key={p.id || i}
+                                            onClick={(e) => {
+                                                if (e.target.tagName === "INPUT" || e.target.closest("a") || e.target.closest("button")) return;
+                                                if (isMultiSelectActive) {
+                                                    toggleSelection(e, p);
+                                                } else {
+                                                    if (p.isComplex) {
+                                                        toggleComplexExpansion(e, p.id);
+                                                    } else {
+                                                        onSelectProperty(p);
+                                                    }
+                                                }
+                                            }}
+                                            className={`relative bg-white rounded-2xl p-4 shadow-sm border border-l-4 transition-all overflow-hidden ${
+                                                selected && isMultiSelectActive
+                                                    ? 'border-blue-400 ring-2 ring-blue-500/20 bg-blue-50/10'
+                                                    : isNonLocal
+                                                        ? 'border-slate-200/60 border-l-amber-400 bg-amber-50/5 active:bg-amber-50/10'
+                                                        : 'border-slate-200/60 border-l-transparent active:bg-slate-50'
+                                                }`}
+                                        >
+                                            {/* Selection Checkbox Ring */}
+                                            {isMultiSelectActive && (
+                                                <div className="absolute top-4 right-4 z-10">
+                                                    <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors ${selected ? 'bg-blue-600 border-blue-600' : 'border-slate-300 bg-white'}`}>
+                                                        {selected && <Check size={14} className="text-white" />}
+                                                    </div>
+                                                </div>
+                                            )}
+
+                                            <div className="flex gap-4">
+                                                {/* Left Thumbnail */}
+                                                {(p.representativePhoto || p.details?.building_photo || p.image_url) ? (
+                                                    <div className="w-16 h-16 rounded-xl overflow-hidden shadow-sm border border-slate-100 shrink-0 bg-slate-50 mt-1">
+                                                        <img
+                                                            src={p.representativePhoto || p.details?.building_photo || p.image_url}
+                                                            alt=""
+                                                            loading="lazy"
+                                                            className="w-full h-full object-cover"
+                                                        />
+                                                    </div>
+                                                ) : (
+                                                    <div className="w-12 h-12 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-center shrink-0 mt-1">
+                                                        <Building2 size={20} className="text-slate-300" />
+                                                    </div>
+                                                )}
+
+                                                {/* Right Data */}
+                                                <div className="flex-1 min-w-0 flex flex-col justify-center">
+                                                    {p.management_info?.name && (
+                                                        <div className="text-[10px] font-black text-indigo-600 uppercase tracking-wide mb-1 flex items-center gap-1">
+                                                            <Building2 size={10} />
+                                                            <span className="truncate">{p.management_info.name}</span>
+                                                        </div>
+                                                    )}
+                                                    <h4 className="text-base font-bold text-slate-800 leading-tight">
+                                                        {p.address}
+                                                        {!p.isComplex && p.derivedUnit && <span className="text-slate-400 font-medium ml-1">#{p.derivedUnit}</span>}
+                                                    </h4>
+
+                                                    <div className="flex items-center gap-1.5 mt-1 text-xs text-slate-500 font-medium">
+                                                        <span>{p.city}</span>
+                                                        <span className="w-1 h-1 rounded-full bg-slate-300"></span>
+                                                        <span className="truncate">{p.owner}</span>
+                                                    </div>
+
+                                                    <div className="flex items-center gap-2 mt-2.5 flex-wrap">
+                                                        {renderJurisdictionBadge(p)}
+                                                        {p.unit_count > 1 && (
+                                                            <span className="text-[10px] bg-slate-100 text-slate-700 font-bold px-2 py-0.5 rounded-md">
+                                                                {p.unit_count} Units
+                                                            </span>
+                                                        )}
+                                                        <span className="text-[10px] font-mono font-bold text-slate-600 bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-md">
+                                                            {p.assessed_value}
+                                                        </span>
+                                                        {p.violation_count > 0 && (
+                                                            <span className="text-[10px] bg-red-50 text-red-600 font-bold px-2 py-0.5 rounded-md flex items-center gap-1">
+                                                                <AlertCircle size={10} />
+                                                                {p.violation_count} Code Cases
+                                                            </span>
+                                                        )}
+                                                        {getItemEvictionCount(p) > 0 && (
+                                                            <span className="text-[10px] bg-rose-50 text-rose-700 font-bold px-2 py-0.5 rounded-md">
+                                                                {getItemEvictionCount(p)} Evictions
+                                                            </span>
+                                                        )}
+                                                        {renderSubsidyBadges(p, true)}
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            {/* Expandable Complex Units */}
+                                            {p.isComplex && (
+                                                <div className="mt-4 pt-3 border-t border-slate-100">
+                                                    <div className="flex items-center justify-between text-xs font-bold text-slate-500 uppercase tracking-widest px-1">
+                                                        <span>{p.subProperties.length} Parcels</span>
+                                                        <button
+                                                            className="flex items-center gap-1 text-indigo-600 bg-indigo-50 px-2 py-1 rounded-md"
+                                                            onClick={(e) => toggleComplexExpansion(e, p.id)}
+                                                        >
+                                                            {expanded ? 'Hide' : 'Show All'}
+                                                            <ChevronDown size={14} className={`transition-transform ${expanded ? 'rotate-180' : ''}`} />
+                                                        </button>
+                                                    </div>
+
+                                                    <AnimatePresence>
+                                                        {expanded && (
+                                                            <motion.div
+                                                                initial={{ height: 0, opacity: 0 }}
+                                                                animate={{ height: 'auto', opacity: 1 }}
+                                                                exit={{ height: 0, opacity: 0 }}
+                                                                className="overflow-hidden"
+                                                            >
+                                                                <div className="mt-3 flex flex-col gap-2 relative">
+                                                                    <div className="absolute left-3 top-2 bottom-4 w-px bg-slate-200"></div>
+                                                                    {p.subProperties.map((sub, idx) => (
+                                                                        <div
+                                                                            key={sub.id}
+                                                                            className="ml-6 bg-slate-50 rounded-lg p-3 border border-slate-100 flex items-center justify-between active:bg-slate-100 transition-colors"
+                                                                            onClick={(e) => {
+                                                                                e.stopPropagation();
+                                                                                if (isMultiSelectActive) toggleSelection(e, sub);
+                                                                                else onSelectProperty(sub);
+                                                                            }}
+                                                                        >
+                                                                            <div className="flex flex-col gap-1">
+                                                                                <div className="flex items-center gap-2">
+                                                                                    {isMultiSelectActive && (
+                                                                                        <div className={`w-4 h-4 rounded-full border shrink-0 flex items-center justify-center ${selectedIds.has(sub.id) ? 'bg-blue-600 border-blue-600' : 'border-slate-300 bg-white'}`}>
+                                                                                            {selectedIds.has(sub.id) && <Check size={10} className="text-white" />}
+                                                                                        </div>
+                                                                                    )}
+                                                                                    <span className="text-xs font-bold text-slate-700 bg-white px-1.5 py-0.5 rounded border border-slate-200 shadow-sm">
+                                                                                        Unit {sub.derivedUnit || sub.unit}
+                                                                                    </span>
+                                                                                </div>
+                                                                                <span className="text-[10px] text-slate-500 truncate max-w-[150px]">{sub.owner}</span>
+                                                                                {renderJurisdictionBadge(sub, true)}
+                                                                            </div>
+                                                                            <div className="text-[11px] font-mono font-bold text-slate-600">{sub.assessed_value}</div>
+                                                                        </div>
+                                                                    ))}
+                                                                </div>
+                                                            </motion.div>
+                                                        )}
+                                                    </AnimatePresence>
+                                                </div>
+                                            )}
+                                        </motion.div>
+                                    );
+                                })}
+                            </AnimatePresence>
+                        </div>
+                        {sortedProperties.length > displayLimit && (
+                            <div className="p-4 border-t border-slate-100 bg-slate-50 flex flex-col items-center justify-center gap-2 w-full">
+                                <span className="text-xs text-slate-500 font-bold">
+                                    Showing {displayLimit} of {sortedProperties.length} properties
+                                </span>
+                                <button
+                                    onClick={() => setDisplayLimit(prev => prev + 150)}
+                                    className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition-all shadow-sm active:scale-95 text-xs uppercase tracking-wider"
+                                >
+                                    Load More
+                                </button>
+                            </div>
+                        )}
                     </div>
                 )}
 
@@ -1067,7 +1409,7 @@ export default function PropertyTable({
                             ))}
                         </div>
 
-                        <div className="p-2 md:p-3 ${autoHeight ? '' : 'flex-1 overflow-y-auto'}">
+                        <div className={`p-2 md:p-3 ${autoHeight ? '' : 'flex-1 overflow-y-auto'}`}>
                             <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3 md:gap-4 pb-16 md:pb-0">
                                 {groupedByCity && Object.entries(groupedByCity).map(([city, props]) => (
                                     <div
@@ -1076,149 +1418,310 @@ export default function PropertyTable({
                                         className="bg-white border border-gray-200 rounded-lg md:rounded-xl shadow-sm flex flex-col lg:h-[450px] h-auto scroll-mt-4"
                                     >
                                         <div className="p-2 md:p-3 bg-gray-50 border-b border-gray-100 flex justify-between items-center sticky top-0 z-10 rounded-t-lg md:rounded-t-xl">
-                                            <h4 className="font-bold text-gray-800 text-sm">{city}</h4>
-                                            <span className="text-xs bg-gray-200 text-gray-600 px-2 py-0.5 rounded-full">{props.length}</span>
+                                            <div className="flex items-center gap-2 min-w-0">
+                                                <h4 className="font-bold text-gray-800 text-sm truncate">{city}</h4>
+                                                {renderJurisdictionBadge(props[0], true)}
+                                            </div>
+                                            <span className="text-xs bg-gray-200 text-gray-600 px-2 py-0.5 rounded-full shrink-0">{props.length}</span>
                                         </div>
                                         {/* On mobile (default), allow auto height. On md+, fix height to 400px for grid alignment */}
                                         <div className="overflow-visible md:flex-1 md:overflow-y-auto">
-                                            <table className="w-full text-left border-collapse">
-                                                <thead className="bg-white md:sticky md:top-0 z-10 shadow-sm border-b border-gray-100 hidden md:table-header-group">
-                                                    <tr>
-                                                        {isMultiSelectActive && <th className="p-2 w-8">
-                                                            <input type="checkbox" readOnly checked={props.every(p => isItemSelected(p))} />
-                                                        </th>}
-                                                        <th className="p-2 text-[10px] font-bold text-gray-500 uppercase">Address</th>
-                                                        <th className="p-2 text-[10px] font-bold text-gray-500 uppercase text-right">Owner</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody className="divide-y divide-gray-100">
-                                                    {props.map((p, i) => {
-                                                        const isExpanded = p.isComplex && expandedComplexIds.has(p.id);
-                                                        const selected = isItemSelected(p);
+                                            {/* Desktop Table View */}
+                                            <div className="hidden md:block">
+                                                <table className="w-full text-left border-collapse">
+                                                    <thead className="bg-white md:sticky md:top-0 z-10 shadow-sm border-b border-gray-100 hidden md:table-header-group">
+                                                        <tr>
+                                                            {isMultiSelectActive && <th className="p-2 w-8">
+                                                                <input type="checkbox" readOnly checked={props.every(p => isItemSelected(p))} />
+                                                            </th>}
+                                                            <th className="p-2 text-[10px] font-bold text-gray-500 uppercase">Address</th>
+                                                            <th className="p-2 text-[10px] font-bold text-gray-500 uppercase text-right">Owner</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody className="divide-y divide-gray-100">
+                                                        {props.map((p, i) => {
+                                                            const isExpanded = p.isComplex && expandedComplexIds.has(p.id);
+                                                            const selected = isItemSelected(p);
 
-                                                        return (
-                                                            <React.Fragment key={p.id || i}>
-                                                                <tr
-                                                                    className={`hover:bg-blue-50/50 cursor-pointer ${selected && isMultiSelectActive ? 'bg-blue-50' : ''} ${isExpanded ? 'bg-indigo-50/20' : ''}`}
-                                                                    onClick={(e) => {
-                                                                        if (e.target.tagName === "INPUT" || e.target.closest("button")) return;
-                                                                        if (isMultiSelectActive) {
-                                                                            toggleSelection(e, p);
-                                                                        } else {
-                                                                            if (p.isComplex) {
-                                                                                toggleComplexExpansion(e, p.id);
+                                                            return (
+                                                                <React.Fragment key={p.id || i}>
+                                                                    <tr
+                                                                        className={`hover:bg-blue-50/50 cursor-pointer ${selected && isMultiSelectActive ? 'bg-blue-50' : ''} ${isExpanded ? 'bg-indigo-50/20' : ''}`}
+                                                                        onClick={(e) => {
+                                                                            if (e.target.tagName === "INPUT" || e.target.closest("button")) return;
+                                                                            if (isMultiSelectActive) {
+                                                                                toggleSelection(e, p);
                                                                             } else {
-                                                                                onSelectProperty(p);
+                                                                                if (p.isComplex) {
+                                                                                    toggleComplexExpansion(e, p.id);
+                                                                                } else {
+                                                                                    onSelectProperty(p);
+                                                                                }
                                                                             }
-                                                                        }
-                                                                    }}
-                                                                >
-                                                                    {isMultiSelectActive && (
-                                                                        <td className="p-2 text-center w-8 align-top pt-3" onClick={(e) => toggleSelection(e, p)}>
-                                                                            <input type="checkbox" checked={selected} readOnly className="pointer-events-none rounded text-blue-600" />
-                                                                        </td>
-                                                                    )}
-                                                                    <td className="p-2">
-                                                                        <div className="flex gap-2">
-                                                                            {/* Expand Toggle for Complex */}
-                                                                            <div className="shrink-0 pt-0.5">
-                                                                                {p.isComplex ? (
-                                                                                    <button
-                                                                                        onClick={(e) => toggleComplexExpansion(e, p.id)}
-                                                                                        className={`w-5 h-5 flex items-center justify-center rounded-full hover:bg-gray-200 text-gray-400 transition-colors ${isExpanded ? 'bg-gray-100 text-gray-600' : ''}`}
-                                                                                    >
-                                                                                        {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                                                                                    </button>
-                                                                                ) : (
-                                                                                    /* Spacer same size as button */
-                                                                                    <div className="w-5" />
-                                                                                )}
-                                                                            </div>
-
-                                                                            <div className="flex flex-col gap-1 min-w-0">
-                                                                                {/* Building Photo in Grid View */}
-                                                                                {(p.details?.building_photo || p.image_url) && (
-                                                                                    <div className="mb-1 w-full h-24 overflow-hidden rounded-md border border-gray-100 relative bg-gray-50">
-                                                                                        <img
-                                                                                            src={p.details?.building_photo || p.image_url}
-                                                                                            alt={`Property at ${p.address}`}
-                                                                                            className="w-full h-full object-cover transform hover:scale-105 transition-transform duration-500"
-                                                                                            loading="lazy"
-                                                                                            onError={(e) => e.target.closest('div').style.display = 'none'}
-                                                                                        />
-                                                                                    </div>
-                                                                                )}
-
-                                                                                <div className="text-xs font-medium text-gray-900 truncate" title={p.address}>{p.address}</div>
-                                                                                <div className="flex items-center gap-1 md:hidden">
-                                                                                    <div className="text-[10px] text-gray-500 truncate">{p.owner}</div>
+                                                                        }}
+                                                                    >
+                                                                        {isMultiSelectActive && (
+                                                                            <td className="p-2 text-center w-8 align-top pt-3" onClick={(e) => toggleSelection(e, p)}>
+                                                                                <input type="checkbox" checked={selected} readOnly className="pointer-events-none rounded text-blue-600" />
+                                                                            </td>
+                                                                        )}
+                                                                        <td className="p-2">
+                                                                            <div className="flex gap-2">
+                                                                                {/* Expand Toggle for Complex */}
+                                                                                <div className="shrink-0 pt-0.5">
+                                                                                    {p.isComplex ? (
+                                                                                        <button
+                                                                                            onClick={(e) => toggleComplexExpansion(e, p.id)}
+                                                                                            className={`w-5 h-5 flex items-center justify-center rounded-full hover:bg-gray-200 text-gray-400 transition-colors ${isExpanded ? 'bg-gray-100 text-gray-600' : ''}`}
+                                                                                        >
+                                                                                            {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                                                                                        </button>
+                                                                                    ) : (
+                                                                                        /* Spacer same size as button */
+                                                                                        <div className="w-5" />
+                                                                                    )}
                                                                                 </div>
-                                                                                {p.isComplex ? (
-                                                                                    <span className="text-[10px] bg-indigo-50 text-indigo-700 font-bold px-1.5 py-0.5 rounded uppercase self-start border border-indigo-100">
-                                                                                        {p.unit_count} Units
-                                                                                    </span>
-                                                                                ) : (
-                                                                                    ((p.unit_count > 1) || (p.number_of_units > 1 && !p.unit)) ? (
+
+                                                                                <div className="flex flex-col gap-1 min-w-0">
+                                                                                    {/* Building Photo in Grid View */}
+                                                                                    {(p.details?.building_photo || p.image_url) && (
+                                                                                        <div className="mb-1 w-full h-24 overflow-hidden rounded-md border border-gray-100 relative bg-gray-50">
+                                                                                            <img
+                                                                                                src={p.details?.building_photo || p.image_url}
+                                                                                                alt={`Property at ${p.address}`}
+                                                                                                className="w-full h-full object-cover transform hover:scale-105 transition-transform duration-500"
+                                                                                                loading="lazy"
+                                                                                                onError={(e) => e.target.closest('div').style.display = 'none'}
+                                                                                            />
+                                                                                        </div>
+                                                                                    )}
+
+                                                                                    <div className="text-xs font-medium text-gray-900 truncate" title={p.address}>{p.address}</div>
+                                                                                    <div className="flex items-center gap-1">
+                                                                                        {renderJurisdictionBadge(p, true)}
+                                                                                    </div>
+                                                                                    <div className="flex items-center gap-1 md:hidden">
+                                                                                        <div className="text-[10px] text-gray-500 truncate">{p.owner}</div>
+                                                                                    </div>
+                                                                                    {p.isComplex ? (
                                                                                         <span className="text-[10px] bg-indigo-50 text-indigo-700 font-bold px-1.5 py-0.5 rounded uppercase self-start border border-indigo-100">
-                                                                                            {p.unit_count || p.number_of_units} Units
+                                                                                            {p.unit_count} Units
                                                                                         </span>
                                                                                     ) : (
-                                                                                        p.unit ? <span className="text-[9px] text-gray-400 inline-block">Unit #{p.unit}</span> : null
-                                                                                    )
-                                                                                )}
-                                                                            </div>
-                                                                        </div>
-                                                                    </td>
-                                                                    {/* Hide Owner column on mobile to save space, show under address */}
-                                                                    <td className="p-2 text-right hidden md:table-cell align-top pt-3">
-                                                                        <div className="text-[10px] text-gray-500 truncate max-w-[100px]">{p.owner}</div>
-                                                                        <div className="text-[10px] font-mono">{p.assessed_value}</div>
-                                                                    </td>
-                                                                    {/* Mobile Only Value */}
-                                                                    <td className="p-2 text-right md:hidden align-top pt-3">
-                                                                        <div className="text-[10px] font-mono font-bold text-slate-700">{p.assessed_value}</div>
-                                                                    </td>
-                                                                </tr>
-
-                                                                {/* Expanded Sub-Rows */}
-                                                                <AnimatePresence>
-                                                                    {isExpanded && p.subProperties.map(sub => (
-                                                                        <motion.tr
-                                                                            key={sub.id}
-                                                                            initial={{ opacity: 0, height: 0 }}
-                                                                            animate={{ opacity: 1, height: 'auto' }}
-                                                                            exit={{ opacity: 0, height: 0 }}
-                                                                            className="bg-indigo-50/30 border-b border-indigo-50"
-                                                                            onClick={(e) => {
-                                                                                if (e.target.tagName === "INPUT") return;
-                                                                                if (isMultiSelectActive) toggleSelection(e, sub);
-                                                                                else onSelectProperty(sub);
-                                                                            }}
-                                                                        >
-                                                                            {isMultiSelectActive && <td className="p-2"></td>}
-                                                                            <td className="p-2 pl-9" colSpan={isMultiSelectActive ? 1 : 1}>
-                                                                                <div className="flex flex-col gap-0.5 relative pl-3 border-l-2 border-indigo-100">
-                                                                                    <div className="flex items-center justify-between">
-                                                                                        <span className="text-[10px] font-bold text-indigo-700 bg-indigo-100/50 px-1.5 rounded">
-                                                                                            Unit {sub.derivedUnit || sub.unit}
-                                                                                        </span>
-                                                                                        <span className="text-[10px] font-mono text-gray-500 md:hidden">{sub.assessed_value}</span>
-                                                                                    </div>
-                                                                                    <span className="text-[10px] text-gray-400 truncate">{sub.owner}</span>
+                                                                                        ((p.unit_count > 1) || (p.number_of_units > 1 && !p.unit)) ? (
+                                                                                            <span className="text-[10px] bg-indigo-50 text-indigo-700 font-bold px-1.5 py-0.5 rounded uppercase self-start border border-indigo-100">
+                                                                                                {p.unit_count || p.number_of_units} Units
+                                                                                            </span>
+                                                                                        ) : (
+                                                                                            p.unit ? <span className="text-[9px] text-gray-400 inline-block">Unit #{p.unit}</span> : null
+                                                                                        )
+                                                                                    )}
                                                                                 </div>
-                                                                            </td>
-                                                                            <td className="p-2 text-right hidden md:table-cell align-top">
-                                                                                <div className="text-[10px] font-mono text-gray-600">{sub.assessed_value}</div>
-                                                                            </td>
-                                                                            <td className="md:hidden"></td>
-                                                                        </motion.tr>
-                                                                    ))}
-                                                                </AnimatePresence>
-                                                            </React.Fragment>
+                                                                            </div>
+                                                                        </td>
+                                                                        {/* Hide Owner column on mobile to save space, show under address */}
+                                                                        <td className="p-2 text-right hidden md:table-cell align-top pt-3">
+                                                                            <div className="text-[10px] text-gray-500 truncate max-w-[100px]">{p.owner}</div>
+                                                                            <div className="text-[10px] font-mono">{p.assessed_value}</div>
+                                                                        </td>
+                                                                        {/* Mobile Only Value */}
+                                                                        <td className="p-2 text-right md:hidden align-top pt-3">
+                                                                            <div className="text-[10px] font-mono font-bold text-slate-700">{p.assessed_value}</div>
+                                                                        </td>
+                                                                    </tr>
+
+                                                                    {/* Expanded Sub-Rows */}
+                                                                    <AnimatePresence>
+                                                                        {isExpanded && p.subProperties.map(sub => (
+                                                                            <motion.tr
+                                                                                key={sub.id}
+                                                                                initial={{ opacity: 0, height: 0 }}
+                                                                                animate={{ opacity: 1, height: 'auto' }}
+                                                                                exit={{ opacity: 0, height: 0 }}
+                                                                                className="bg-indigo-50/30 border-b border-indigo-50"
+                                                                                onClick={(e) => {
+                                                                                    if (e.target.tagName === "INPUT") return;
+                                                                                    if (isMultiSelectActive) toggleSelection(e, sub);
+                                                                                    else onSelectProperty(sub);
+                                                                                }}
+                                                                            >
+                                                                                {isMultiSelectActive && <td className="p-2"></td>}
+                                                                                <td className="p-2 pl-9" colSpan={isMultiSelectActive ? 1 : 1}>
+                                                                                    <div className="flex flex-col gap-0.5 relative pl-3 border-l-2 border-indigo-100">
+                                                                                        <div className="flex items-center justify-between">
+                                                                                            <span className="text-[10px] font-bold text-indigo-700 bg-indigo-100/50 px-1.5 rounded">
+                                                                                                Unit {sub.derivedUnit || sub.unit}
+                                                                                            </span>
+                                                                                            <span className="text-[10px] font-mono text-gray-500 md:hidden">{sub.assessed_value}</span>
+                                                                                        </div>
+                                                                                        <span className="text-[10px] text-gray-400 truncate">{sub.owner}</span>
+                                                                                        {renderJurisdictionBadge(sub, true)}
+                                                                                    </div>
+                                                                                </td>
+                                                                                <td className="p-2 text-right hidden md:table-cell align-top">
+                                                                                    <div className="text-[10px] font-mono text-gray-600">{sub.assessed_value}</div>
+                                                                                </td>
+                                                                                <td className="md:hidden"></td>
+                                                                            </motion.tr>
+                                                                        ))}
+                                                                    </AnimatePresence>
+                                                                </React.Fragment>
+                                                            );
+                                                        })}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+
+                                            {/* Mobile 'Tap-First' Card View */}
+                                            <div className="md:hidden flex flex-col gap-3 p-3">
+                                                <AnimatePresence>
+                                                    {props.map((p, i) => {
+                                                        const selected = isItemSelected(p);
+                                                        const expanded = p.isComplex && expandedComplexIds.has(p.id);
+
+                                                        return (
+                                                            <motion.div
+                                                                layout
+                                                                initial={{ opacity: 0, y: 10 }}
+                                                                animate={{ opacity: 1, y: 0 }}
+                                                                exit={{ opacity: 0, scale: 0.95 }}
+                                                                key={p.id || i}
+                                                                onClick={(e) => {
+                                                                    if (e.target.tagName === "INPUT" || e.target.closest("a") || e.target.closest("button")) return;
+                                                                    if (isMultiSelectActive) {
+                                                                        toggleSelection(e, p);
+                                                                    } else {
+                                                                        if (p.isComplex) {
+                                                                            toggleComplexExpansion(e, p.id);
+                                                                        } else {
+                                                                            onSelectProperty(p);
+                                                                        }
+                                                                    }
+                                                                }}
+                                                                className={`relative bg-white rounded-2xl p-4 shadow-sm border transition-all overflow-hidden ${selected && isMultiSelectActive
+                                                                        ? 'border-blue-400 ring-2 ring-blue-500/20 bg-blue-50/10'
+                                                                        : 'border-slate-200/60 active:bg-slate-50'
+                                                                    }`}
+                                                            >
+                                                                {/* Selection Checkbox Ring */}
+                                                                {isMultiSelectActive && (
+                                                                    <div className="absolute top-4 right-4 z-10">
+                                                                        <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors ${selected ? 'bg-blue-600 border-blue-600' : 'border-slate-300 bg-white'}`}>
+                                                                            {selected && <Check size={14} className="text-white" />}
+                                                                        </div>
+                                                                    </div>
+                                                                )}
+
+                                                                <div className="flex gap-4">
+                                                                    {/* Left Thumbnail */}
+                                                                    {(p.representativePhoto || p.details?.building_photo || p.image_url) ? (
+                                                                        <div className="w-16 h-16 rounded-xl overflow-hidden shadow-sm border border-slate-100 shrink-0 bg-slate-50 mt-1">
+                                                                            <img
+                                                                                src={p.representativePhoto || p.details?.building_photo || p.image_url}
+                                                                                alt=""
+                                                                                loading="lazy"
+                                                                                className="w-full h-full object-cover"
+                                                                            />
+                                                                        </div>
+                                                                    ) : (
+                                                                        <div className="w-12 h-12 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-center shrink-0 mt-1">
+                                                                            <Building2 size={20} className="text-slate-300" />
+                                                                        </div>
+                                                                    )}
+
+                                                                    {/* Right Data */}
+                                                                    <div className="flex-1 min-w-0 flex flex-col justify-center">
+                                                                        {p.management_info?.name && (
+                                                                            <div className="text-[10px] font-black text-indigo-600 uppercase tracking-wide mb-1 flex items-center gap-1">
+                                                                                <Building2 size={10} />
+                                                                                <span className="truncate">{p.management_info.name}</span>
+                                                                            </div>
+                                                                        )}
+                                                                        <h4 className="text-base font-bold text-slate-800 leading-tight">
+                                                                            {p.address}
+                                                                            {!p.isComplex && p.derivedUnit && <span className="text-slate-400 font-medium ml-1">#{p.derivedUnit}</span>}
+                                                                        </h4>
+
+                                                                        <div className="flex items-center gap-1.5 mt-1 text-xs text-slate-500 font-medium">
+                                                                            <span className="truncate">{p.owner}</span>
+                                                                        </div>
+
+                                                                        <div className="flex items-center gap-2 mt-2.5 flex-wrap">
+                                                                            {renderJurisdictionBadge(p)}
+                                                                            {p.unit_count > 1 && (
+                                                                                <span className="text-[10px] bg-slate-100 text-slate-700 font-bold px-2 py-0.5 rounded-md">
+                                                                                    {p.unit_count} Units
+                                                                                </span>
+                                                                            )}
+                                                                            <span className="text-[10px] font-mono font-bold text-slate-600 bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-md">
+                                                                                {p.assessed_value}
+                                                                            </span>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+
+                                                                {/* Expandable Complex Units */}
+                                                                {p.isComplex && (
+                                                                    <div className="mt-4 pt-3 border-t border-slate-100">
+                                                                        <div className="flex items-center justify-between text-xs font-bold text-slate-500 uppercase tracking-widest px-1">
+                                                                            <span>{p.subProperties.length} Parcels</span>
+                                                                            <button
+                                                                                className="flex items-center gap-1 text-indigo-600 bg-indigo-50 px-2 py-1 rounded-md"
+                                                                                onClick={(e) => toggleComplexExpansion(e, p.id)}
+                                                                            >
+                                                                                {expanded ? 'Hide' : 'Show All'}
+                                                                                <ChevronDown size={14} className={`transition-transform ${expanded ? 'rotate-180' : ''}`} />
+                                                                            </button>
+                                                                        </div>
+
+                                                                        <AnimatePresence>
+                                                                            {expanded && (
+                                                                                <motion.div
+                                                                                    initial={{ height: 0, opacity: 0 }}
+                                                                                    animate={{ height: 'auto', opacity: 1 }}
+                                                                                    exit={{ height: 0, opacity: 0 }}
+                                                                                    className="overflow-hidden"
+                                                                                >
+                                                                                    <div className="mt-3 flex flex-col gap-2 relative">
+                                                                                        <div className="absolute left-3 top-2 bottom-4 w-px bg-slate-200"></div>
+                                                                                        {p.subProperties.map((sub, idx) => (
+                                                                                            <div
+                                                                                                key={sub.id}
+                                                                                                className="ml-6 bg-slate-50 rounded-lg p-3 border border-slate-100 flex items-center justify-between active:bg-slate-100 transition-colors"
+                                                                                                onClick={(e) => {
+                                                                                                    e.stopPropagation();
+                                                                                                    if (isMultiSelectActive) toggleSelection(e, sub);
+                                                                                                    else onSelectProperty(sub);
+                                                                                                }}
+                                                                                            >
+                                                                                                <div className="flex flex-col gap-1">
+                                                                                                    <div className="flex items-center gap-2">
+                                                                                                        {isMultiSelectActive && (
+                                                                                                            <div className={`w-4 h-4 rounded-full border shrink-0 flex items-center justify-center ${selectedIds.has(sub.id) ? 'bg-blue-600 border-blue-600' : 'border-slate-300 bg-white'}`}>
+                                                                                                                {selectedIds.has(sub.id) && <Check size={10} className="text-white" />}
+                                                                                                            </div>
+                                                                                                        )}
+                                                                                                        <span className="text-xs font-bold text-slate-700 bg-white px-1.5 py-0.5 rounded border border-slate-200 shadow-sm">
+                                                                                                            Unit {sub.derivedUnit || sub.unit}
+                                                                                                        </span>
+                                                                                                    </div>
+                                                                                                    <span className="text-[10px] text-slate-500 truncate max-w-[150px]">{sub.owner}</span>
+                                                                                                    {renderJurisdictionBadge(sub, true)}
+                                                                                                </div>
+                                                                                                <div className="text-[11px] font-mono font-bold text-slate-600">{sub.assessed_value}</div>
+                                                                                            </div>
+                                                                                        ))}
+                                                                                    </div>
+                                                                                </motion.div>
+                                                                            )}
+                                                                        </AnimatePresence>
+                                                                    </div>
+                                                                )}
+                                                            </motion.div>
                                                         );
                                                     })}
-                                                </tbody>
-                                            </table>
+                                                </AnimatePresence>
+                                            </div>
                                         </div>
                                     </div>
                                 ))}

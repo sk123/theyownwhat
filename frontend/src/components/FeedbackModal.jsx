@@ -46,20 +46,40 @@ const FeedbackModal = ({ isOpen, onClose, initialEntity = null }) => {
 
     const handleSearch = async (term) => {
         setSearchTerm(term);
-        // Updated to matched backend's minimum length requirement of 3
-        if (term.length < 3) {
-            setSearchResults([]);
-            return;
-        }
+        if (term.length < 3) { setSearchResults([]); return; }
         setSearching(true);
         try {
-            // Updated to match backend signature: type (required), term (required)
-            const res = await fetch(`/api/search?type=all&term=${encodeURIComponent(term)}`);
-            if (!res.ok) throw new Error(`Search failed: ${res.status}`);
-            const data = await res.json();
-            setSearchResults(data || []);
+            const cities = ['nyc', 'dc', 'baltimore', 'boston'];
+            const searchPromises = [
+                fetch(`/api/search?type=all&term=${encodeURIComponent(term)}`).then(r => r.ok ? r.json() : []),
+                ...cities.map(city => fetch(`/api/${city}/search?q=${encodeURIComponent(term)}&limit=5`).then(r => r.ok ? r.json().then(res => ({ city, res })) : { city, res: [] }))
+            ];
+
+            const settled = await Promise.allSettled(searchPromises);
+
+            const ctResults = (settled[0].status === 'fulfilled' ? settled[0].value : []) || [];
+            const otherResults = [];
+
+            settled.slice(1).forEach(item => {
+                if (item.status === 'fulfilled' && item.value) {
+                    const { city, res } = item.value;
+                    const cityUpper = city === 'nyc' ? 'NYC' : city === 'dc' ? 'D.C.' : city.charAt(0).toUpperCase() + city.slice(1);
+                    res.forEach(r => {
+                        otherResults.push({
+                            id: `${city}-${r.network_key || r.bbl || r.name || r.label}`,
+                            name: r.name || r.display_name || r.label,
+                            type: r.type?.endsWith('_network') ? `${cityUpper} Network` : `${cityUpper} Property`,
+                            _source: city,
+                            ...r
+                        });
+                    });
+                }
+            });
+
+            const ctNorm = ctResults.map(r => ({ ...r, _source: 'ct' }));
+            setSearchResults([...ctNorm, ...otherResults].slice(0, 16));
         } catch (e) {
-            console.error("Search failed", e);
+            console.error('Search failed', e);
             setSearchResults([]);
         } finally {
             setSearching(false);
@@ -176,14 +196,16 @@ const FeedbackModal = ({ isOpen, onClose, initialEntity = null }) => {
                                     {searchResults.map(res => (
                                         <div
                                             key={res.id}
-                                            onMouseDown={() => selectEntity(res)} // Use onMouseDown to trigger before blur
+                                            onMouseDown={() => selectEntity(res)}
                                             className="p-3 hover:bg-blue-50 cursor-pointer flex items-center justify-between border-b border-gray-50 last:border-0"
                                         >
                                             <div className="truncate">
-                                                {/* Updated to usage 'name' field */}
                                                 <div className="text-sm font-medium text-gray-900">{res.name}</div>
                                                 <div className="text-xs text-gray-500">{res.type}</div>
                                             </div>
+                                            {res._source === 'nyc' && (
+                                                <span className="ml-2 shrink-0 text-[9px] font-black px-1.5 py-0.5 rounded bg-violet-100 text-violet-700">NYC</span>
+                                            )}
                                         </div>
                                     ))}
                                 </div>
@@ -207,8 +229,8 @@ const FeedbackModal = ({ isOpen, onClose, initialEntity = null }) => {
 
     return (
         // Increased z-index to 100 to ensure it sits above the sticky header (z-50)
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={onClose}>
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 z-[100] overflow-y-auto bg-black/60 backdrop-blur-sm p-4 flex justify-center items-start md:items-center" onClick={onClose}>
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg flex flex-col my-auto h-auto max-h-none md:max-h-[90vh] overflow-visible md:overflow-hidden" onClick={e => e.stopPropagation()}>
 
                 {/* Header */}
                 <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
@@ -219,11 +241,12 @@ const FeedbackModal = ({ isOpen, onClose, initialEntity = null }) => {
                         {flow === 'correction' && <FileQuestion className="w-5 h-5 text-amber-600" />}
                         {flow === 'missing' && <HelpCircle className="w-5 h-5 text-purple-600" />}
 
-                        {flow === 'menu' && "Report Data Issue"}
+                        {flow === 'menu' && "Feedback"}
                         {flow === 'link' && "Report Missing Connection"}
                         {flow === 'unlink' && "Report Incorrect Connection"}
                         {flow === 'correction' && "Report Incorrect Information"}
                         {flow === 'missing' && "Report Missing Data"}
+                        {flow === 'other' && "General Feedback"}
                     </h3>
                     <button onClick={onClose}><X className="w-5 h-5 text-gray-400 hover:text-gray-600" /></button>
                 </div>
@@ -277,6 +300,15 @@ const FeedbackModal = ({ isOpen, onClose, initialEntity = null }) => {
                                     </div>
                                     <ArrowRight className="w-4 h-4 text-gray-300 group-hover:text-purple-500" />
                                 </button>
+
+                                <button onClick={() => setFlow('other')} className="p-4 rounded-xl border border-gray-200 hover:border-gray-400 hover:bg-gray-50 transition-all flex items-center gap-4 group text-left">
+                                    <div className="p-2 bg-gray-100 text-gray-600 rounded-lg group-hover:scale-110 transition-transform"><MessageSquare className="w-5 h-5" /></div>
+                                    <div className="flex-1">
+                                        <div className="font-semibold text-gray-900">Other / General Feedback</div>
+                                        <div className="text-xs text-gray-500 mt-0.5">Questions, comments, or UI suggestions.</div>
+                                    </div>
+                                    <ArrowRight className="w-4 h-4 text-gray-300 group-hover:text-gray-500" />
+                                </button>
                             </div>
                         )}
 
@@ -326,6 +358,7 @@ const FeedbackModal = ({ isOpen, onClose, initialEntity = null }) => {
                                         {flow === 'unlink' && "Why should they be unlinked?"}
                                         {flow === 'correction' && "What information is incorrect?"}
                                         {flow === 'missing' && "What data is missing? Please provide details."}
+                                        {flow === 'other' && "How can we improve?"}
                                     </label>
                                     <textarea
                                         autoFocus={flow === 'missing'}

@@ -3,12 +3,12 @@ import os
 import sys
 import pandas as pd
 import psycopg2
-from psycopg2.extras import execute_values
+from psycopg2.extras import Json, execute_values
 import requests
-import datetime
 import logging
 import re
-from io import StringIO
+from email.utils import parsedate_to_datetime
+from io import BytesIO
 
 # Add parent directory to path for sibling imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -26,10 +26,93 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://user:password@ctdata_db:5432/ctdata")
-EVICTIONS_URL = os.environ.get("EVICTION_DATA_URL", "")
+DEFAULT_EVICTIONS_URL = "https://evictions.ctfairhousing.com/data/evictionlab/ct_evictions.csv"
+EVICTION_LANDING_URLS = {
+    "https://ctfairhousing.com/data/evictionlab",
+    "https://ctfairhousing.com/metabase/evictionlab",
+    "https://data.ctfairhousing.com/metabase/evictionlab",
+}
+
+def resolve_evictions_url():
+    raw = (os.environ.get("EVICTION_DATA_URL") or DEFAULT_EVICTIONS_URL).strip().strip('"')
+    normalized = raw.rstrip("/")
+    if normalized in EVICTION_LANDING_URLS:
+        logger.info("Resolved CT Fair Housing Metabase landing page to raw CT Judicial CSV feed.")
+        return DEFAULT_EVICTIONS_URL
+    return raw
+
+EVICTIONS_URL = resolve_evictions_url()
 
 def get_db_connection():
     return psycopg2.connect(DATABASE_URL)
+
+def parse_http_date(value):
+    if not value:
+        return None
+    try:
+        return parsedate_to_datetime(value).date()
+    except Exception:
+        return None
+
+def clean_source_text(value):
+    if pd.isna(value):
+        return ""
+    text = str(value).strip()
+    if not text or text.upper() in {"NAN", "NULL", "\\N"}:
+        return ""
+    return text
+
+def none_if_blank(value):
+    text = clean_source_text(value)
+    return text or None
+
+def download_eviction_csv(url):
+    response = requests.get(
+        url,
+        headers={"Accept": "text/csv,text/plain;q=0.9,*/*;q=0.1"},
+        timeout=(20, 300),
+    )
+    response.raise_for_status()
+    external_last_updated = parse_http_date(response.headers.get("Last-Modified"))
+
+    sample = response.content[:4096].lstrip().lower()
+    content_type = (response.headers.get("Content-Type") or "").lower()
+    if sample.startswith(b"<") or "text/html" in content_type:
+        raise ValueError(
+            "Eviction data URL returned HTML instead of a CSV export. "
+            f"Use the raw feed URL: {DEFAULT_EVICTIONS_URL}"
+        )
+    if not response.content:
+        raise ValueError("Eviction data URL returned an empty response.")
+
+    # Based on source inspection: semicolon-delimited, quoted fields, no header row.
+    df = pd.read_csv(BytesIO(response.content), sep=';', quotechar='"', header=None, low_memory=False)
+    return df, external_last_updated
+
+def ensure_schema(conn):
+    schema_path = os.path.join(os.path.dirname(__file__), "setup_evictions_table.sql")
+    with open(schema_path, "r", encoding="utf-8") as f:
+        ddl = f.read()
+    with conn.cursor() as cur:
+        cur.execute(ddl)
+    conn.commit()
+
+def update_status(conn, status, details, external_last_updated=None):
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO data_source_status
+                (source_name, source_type, external_last_updated, last_refreshed_at, refresh_status, details)
+            VALUES ('CT_EVICTIONS', 'court_evictions', %s, NOW(), %s, %s)
+            ON CONFLICT (source_name)
+            DO UPDATE SET
+                source_type = EXCLUDED.source_type,
+                external_last_updated = EXCLUDED.external_last_updated,
+                last_refreshed_at = EXCLUDED.last_refreshed_at,
+                refresh_status = EXCLUDED.refresh_status,
+                details = EXCLUDED.details;
+        """, (external_last_updated, status, Json(details)))
+        cur.execute("DELETE FROM kv_cache WHERE key = 'completeness_matrix'")
+    conn.commit()
 
 def normalize_address_for_match(addr):
     if not addr: return ""
@@ -60,24 +143,21 @@ def normalize_plaintiff_name(name):
 
 def ingest_evictions():
     if not EVICTIONS_URL:
-        logger.error("EVICTION_DATA_URL not set — skipping eviction ingest.")
-        return
+        raise RuntimeError("No eviction feed URL configured.")
     logger.info(f"Downloading eviction data from {EVICTIONS_URL}...")
     try:
-        response = requests.get(EVICTIONS_URL, timeout=120)
-        response.raise_for_status()
-        # Use StringIO to feed CSV to pandas
-        csv_data = StringIO(response.text)
-        # Based on inspection: sep=';', quotechar='"', no header
-        df = pd.read_csv(csv_data, sep=';', quotechar='"', header=None, low_memory=False)
+        df, external_last_updated = download_eviction_csv(EVICTIONS_URL)
     except Exception as e:
-        logger.error(f"Failed to download or parse eviction CSV: {e}")
-        return
+        logger.exception(f"Failed to download or parse eviction CSV: {e}")
+        raise
 
     logger.info(f"Processing {len(df)} eviction records...")
     
     # Mapping based on inspection:
     # 5: Case Number
+    # 6: Official CT Judicial case-detail URL
+    # 7: Official CT Judicial document URL
+    # 10: Case Type
     # 11: Plaintiff Name
     # 17: Filing Date
     # 20: Address
@@ -94,24 +174,27 @@ def ingest_evictions():
     # 37: Defendant Attorney First
     
     df_clean = pd.DataFrame()
-    df_clean['case_number'] = df[5]
-    df_clean['plaintiff_name'] = df[11].fillna("")
+    df_clean['case_number'] = df[5].apply(clean_source_text)
+    df_clean['case_detail_url'] = df[6].apply(clean_source_text)
+    df_clean['document_url'] = df[7].apply(clean_source_text)
+    df_clean['case_type'] = df[10].apply(clean_source_text)
+    df_clean['plaintiff_name'] = df[11].apply(clean_source_text)
     df_clean['filing_date'] = pd.to_datetime(df[17], errors='coerce').dt.date
-    df_clean['address'] = df[20].fillna("")
-    df_clean['unit'] = df[21].fillna("")
-    df_clean['town'] = df[22].fillna("")
-    df_clean['status'] = df[26].fillna("")
+    df_clean['address'] = df[20].apply(clean_source_text)
+    df_clean['unit'] = df[21].apply(clean_source_text)
+    df_clean['town'] = df[22].apply(clean_source_text)
+    df_clean['status'] = df[26].apply(clean_source_text)
     df_clean['disposition_date'] = pd.to_datetime(df[29], errors='coerce').dt.date
-    df_clean['plaintiff_attorney_juris_id'] = df[30].fillna("")
-    df_clean['plaintiff_attorney_name'] = df[31].fillna("")
-    df_clean['plaintiff_attorney_firm'] = df[32].fillna("")
-    df_clean['defendant_attorney_juris_id'] = df[34].fillna("")
-    df_clean['defendant_attorney_name'] = df[35].fillna("")
-    df_clean['defendant_attorney_last'] = df[36].fillna("")
-    df_clean['defendant_attorney_first'] = df[37].fillna("")
+    df_clean['plaintiff_attorney_juris_id'] = df[30].apply(clean_source_text)
+    df_clean['plaintiff_attorney_name'] = df[31].apply(clean_source_text)
+    df_clean['plaintiff_attorney_firm'] = df[32].apply(clean_source_text)
+    df_clean['defendant_attorney_juris_id'] = df[34].apply(clean_source_text)
+    df_clean['defendant_attorney_name'] = df[35].apply(clean_source_text)
+    df_clean['defendant_attorney_last'] = df[36].apply(clean_source_text)
+    df_clean['defendant_attorney_first'] = df[37].apply(clean_source_text)
     
     # Strictly filter out empty case numbers
-    df_clean = df_clean[df_clean['case_number'].notnull()]
+    df_clean = df_clean[df_clean['case_number'] != ""]
     
     # Normalization
     logger.info("Normalizing plaintiff names and addresses...")
@@ -131,6 +214,7 @@ def ingest_evictions():
     df_clean['norm_addr'] = df_clean['address'].apply(normalize_address_for_match)
     
     conn = get_db_connection()
+    ensure_schema(conn)
     cur = conn.cursor()
     
     # 1. Build Address+Town -> property_id mapping
@@ -163,22 +247,25 @@ def ingest_evictions():
         
         ingest_data.append((
             row['case_number'],
+            none_if_blank(row['case_detail_url']),
+            none_if_blank(row['document_url']),
+            none_if_blank(row['case_type']),
             prop_id,
-            row['plaintiff_name'],
-            row['plaintiff_norm'],
-            row['plaintiff_attorney_juris_id'],
-            row['plaintiff_attorney_name'],
-            row['plaintiff_attorney_firm'],
-            row['plaintiff_attorney_norm'],
-            row['defendant_attorney_juris_id'],
-            row['defendant_attorney_name'],
-            row['defendant_attorney_last'],
-            row['defendant_attorney_first'],
-            row['town'],
+            none_if_blank(row['plaintiff_name']),
+            none_if_blank(row['plaintiff_norm']),
+            none_if_blank(row['plaintiff_attorney_juris_id']),
+            none_if_blank(row['plaintiff_attorney_name']),
+            none_if_blank(row['plaintiff_attorney_firm']),
+            none_if_blank(row['plaintiff_attorney_norm']),
+            none_if_blank(row['defendant_attorney_juris_id']),
+            none_if_blank(row['defendant_attorney_name']),
+            none_if_blank(row['defendant_attorney_last']),
+            none_if_blank(row['defendant_attorney_first']),
+            none_if_blank(row['town']),
             row['filing_date'],
-            row['status'],
-            row['address'],
-            row['norm_addr'],
+            none_if_blank(row['status']),
+            none_if_blank(row['address']),
+            none_if_blank(row['norm_addr']),
             row['disposition_date'] if pd.notna(row['disposition_date']) else None
         ))
 
@@ -186,12 +273,16 @@ def ingest_evictions():
     logger.info(f"Upserting {len(ingest_data)} records into evictions...")
     upsert_query = """
         INSERT INTO evictions (
-            case_number, property_id, plaintiff_name, plaintiff_norm, 
+            case_number, case_detail_url, document_url, case_type,
+            property_id, plaintiff_name, plaintiff_norm,
             plaintiff_attorney_juris_id, plaintiff_attorney_name, plaintiff_attorney_firm, plaintiff_attorney_norm,
             defendant_attorney_juris_id, defendant_attorney_name, defendant_attorney_last, defendant_attorney_first,
             municipality, filing_date, status, address, normalized_address, disposition_date
         ) VALUES %s
         ON CONFLICT (case_number) DO UPDATE SET
+            case_detail_url = EXCLUDED.case_detail_url,
+            document_url = EXCLUDED.document_url,
+            case_type = EXCLUDED.case_type,
             property_id = EXCLUDED.property_id,
             plaintiff_name = EXCLUDED.plaintiff_name,
             plaintiff_norm = EXCLUDED.plaintiff_norm,
@@ -216,10 +307,51 @@ def ingest_evictions():
     batch_size = 5000
     for i in range(0, len(ingest_data), batch_size):
         batch = ingest_data[i:i+batch_size]
-        execute_values(cur, upsert_query, batch)
+        if batch:
+            execute_values(cur, upsert_query, batch)
         conn.commit()
         logger.info(f"  Ingested {min(i+batch_size, len(ingest_data))}/{len(ingest_data)}...")
+
+    if ingest_data:
+        current_cases = [(row[0],) for row in ingest_data if row[0]]
+        if not current_cases:
+            raise RuntimeError("Official eviction feed did not include any case numbers; refusing snapshot cleanup.")
+        cur.execute("""
+            CREATE TEMP TABLE ct_current_eviction_cases (
+                case_number TEXT PRIMARY KEY
+            ) ON COMMIT DROP
+        """)
+        for i in range(0, len(current_cases), batch_size):
+            execute_values(
+                cur,
+                "INSERT INTO ct_current_eviction_cases (case_number) VALUES %s ON CONFLICT DO NOTHING",
+                current_cases[i:i+batch_size],
+            )
+        cur.execute("""
+            DELETE FROM evictions e
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM ct_current_eviction_cases current_cases
+                WHERE current_cases.case_number = e.case_number
+            )
+        """)
+        deleted_stale = cur.rowcount
+        conn.commit()
+    else:
+        deleted_stale = 0
     
+    linked_count = sum(1 for row in ingest_data if row[4] is not None)
+    filing_dates = [d for d in df_clean['filing_date'].tolist() if pd.notna(d)]
+    update_status(conn, "success", {
+        "source_url": EVICTIONS_URL,
+        "source_records": len(ingest_data),
+        "matched_records": linked_count,
+        "records_without_local_property": len(ingest_data) - linked_count,
+        "removed_records_not_in_current_source": deleted_stale,
+        "min_filing_date": str(min(filing_dates)) if filing_dates else None,
+        "max_filing_date": str(max(filing_dates)) if filing_dates else None,
+    }, external_last_updated)
+
     logger.info("Eviction ingestion complete.")
     cur.close()
     conn.close()

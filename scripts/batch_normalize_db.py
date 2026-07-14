@@ -1,7 +1,7 @@
 import os
 import psycopg2
 from io import StringIO
-from api.shared_utils import normalize_person_name, normalize_business_name
+from api.shared_utils import normalize_person_name, normalize_owner_name
 import logging
 import sys
 
@@ -45,8 +45,8 @@ def main():
         
         output = StringIO()
         for pid, owner, co_owner in rows:
-            owner_norm = normalize_business_name(owner) if owner else ""
-            co_owner_norm = normalize_business_name(co_owner) if co_owner else ""
+            owner_norm = normalize_owner_name(owner) if owner else ""
+            co_owner_norm = normalize_owner_name(co_owner) if co_owner else ""
             output.write(f"{pid}\t{owner_norm}\t{co_owner_norm}\n")
         output.seek(0)
 

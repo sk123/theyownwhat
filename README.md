@@ -1,84 +1,153 @@
 # they own WHAT??
 
-> [!IMPORTANT]
-> **Service Restoration Notice (February 2026)**
-> We apologize for the prolonged downtime while we migrated to a new database infrastructure and refined our network matching algorithms. Thank you for your patience as we work to bring more transparency to Connecticut's housing landscape.
-
 [![Open Source | Love](https://img.shields.io/badge/Open%20Source-Love-red)](https://github.com/sk123/theyownwhat)
 [![Sponsor](https://img.shields.io/badge/Sponsor-Pink?style=flat&logo=github-sponsors&logoColor=white)](https://github.com/sponsors/sk123)
 
-**Source Code:** [https://github.com/sk123/theyownwhat](https://github.com/sk123/theyownwhat)
-
-**Published at:** [https://theyownwhat.net](https://theyownwhat.net)
-
-**Version 2.1 // February 2026**
+**Published at:** [https://theyownwhat.net](https://theyownwhat.net)  
+**Source code:** [https://github.com/sk123/theyownwhat](https://github.com/sk123/theyownwhat)  
+**Current app build:** `v0.1.5`
 
 ## Purpose
 
-**they own WHAT??** is an investigative and advocacy tool designed to bring transparency to **Connecticut's** property landscape. By linking fragmented public records, the tool reveals the hidden networks of ownership that shape neighborhoods.
+**they own WHAT??** is a source-backed property and landlord-network explorer for public-interest research, tenant advocacy, journalism, and local accountability work.
 
-## Recent Updates (February 2026)
+The app links fragmented public records across owners, LLCs, principals, mailing addresses, parcels, code-enforcement signals, subsidy records, and other official datasets so users can inspect ownership networks that are difficult to see through one-record-at-a-time lookup tools. The tool automatically refreshes all datasets nightly (or at the interval of the source), and I've tried to be transparent about data gaps.
 
-*   **Network Accuracy & Link Restoration:** Fixed core synchronization issues between principals and business records. Cross-link "badges" and "Related Businesses" in detail modals are now fully restored.
-*   **Ranking Improvements:** Updated statewide ranking algorithms to prioritize portfolio significance by building count rather than simple parcel count.
-*   **Header Resolution:** Fixed an issue where network headers incorrectly defaulted to secondary entities.
-*   **Data Backfill:** Re-run ownership matching across 25,000+ unique principals, increasing linked property counts by ~48%.
-*   **Performance:** Restored real-time property streaming and resolved frontend/backend key format mismatches.
+## Why This Exists
 
-## Previous Updates (January 2026)
+Halfway through my Business Entities class in law school (UW '07-'10), I raised my hand to ask, "so this ENTIRE system is designed for rich people to hide from the consequences of their actions?" Years later, as a fair housing lawyer, I filed numerous complaints against what appeared to be mom-and-pop LLCs - small, independent landlords unconnected to one another. I realized (too late) that they were often tentacles manufactured by massive, often out-of-state investors extracting wealth from our cities. This has been my on-the-side passion project for the last six years.
 
-*   **Subsidized Housing Integration:** Integrated the **National Housing Preservation Database (NHPD)**.
-*   **Search Interface:** Merged the search bar and button into a unified interface with autocomplete.
+## What It Does
 
-## Key Features
+- Search by owner, business, principal, network, property address, or city.
+- Build ownership networks from public registry records, municipal assessment data, property records, mailing-address links, and source-loaded relationship data.
+- Inspect property cards with official-record links, property photos where available, embedded maps, enforcement signals, subsidy details, parcel metadata, and source provenance.
+- Explore top-network dashboards by jurisdiction and metric, including properties, units, businesses, human principals, code violations where available, attorney activity where available, and subsidy flags.
+- Generate investigative reports that combine local source records with cited external web/news/legal research.
+- Show source freshness and data coverage so users can see which datasets were relied on and when they were last refreshed.
+- Export records for follow-up analysis.
 
-### 🕸️ Network Discovery
-The "Top Networks" engine visualizes connections between shell companies. It supports:
-*   **Graph Visualization:** Displays business and principal connections.
-*   **Portfolio Analysis:** Aggregates total assessed value and property counts for discovered networks.
+## Supported Jurisdictions
 
-### 🤖 AI Digest
-The **AI Digest** performs automated web searches across multiple entities simultaneously to identify:
-*   Systemic tenant complaints and property condition issues.
-*   Legal violations and court case patterns.
-*   Corporate footprints and out-of-state investment trends.
+### Connecticut
 
+The Connecticut mode remains the core statewide workflow. It combines CT business registry records, municipal parcel and assessment data, CAMA/GIS sources, municipal assessor records, property photos where available, Hartford code-enforcement data, and subsidy records.
 
+The CT dashboard now includes statewide source totals, ranked ownership-network cards, city/town filters, jurisdiction badges, and controls for hiding or including non-CT properties in a network.
+
+### New York City
+
+NYC support uses HPD multiple-dwelling registrations, HPD contact records, PLUTO/MapPLUTO parcel data, HPD housing maintenance and litigation datasets, DOI marshal-executed eviction data, and NHPD subsidy enrichment where configured.
+
+### Washington, D.C.
+
+D.C. support adds property and network exploration from District property assessment/CAMA-style source data.
+
+### Baltimore
+
+Baltimore support adds property ownership, official-record views, source-backed code-enforcement and vacant-building layers, and official Maryland court event data at the city/ZIP level where parcel-level joins are not published.
+
+### Boston
+
+Boston support adds property assessment data and source-backed code/property violation enrichment from public Boston datasets.
+
+### Detroit
+
+Detroit support adds City GIS property records, property assessment data, code enforcement violations, and ownership networks.
+
+## Source-Only Data Policy
+
+The app must not invent records, infer unavailable values as facts, or generate fallback data when a source is missing.
+
+Source-only rules:
+
+- Missing data is shown as missing, unavailable, or unsupported.
+- Scheduled jobs run child processes with `THEYOWNWHAT_SOURCE_ONLY=true`.
+- Enforcement enrichment uses official records with explicit parcel IDs or official crosswalk keys.
+- Address geocoding is used to fix bad coordinates, not to fabricate ownership, enforcement, subsidy, or court records.
+- AI reports may synthesize and summarize, but factual claims must be tied to loaded records or cited external sources.
+
+## Recent Highlights
+
+- Multi-jurisdiction navigation for CT, NYC, D.C., Baltimore, Boston, and Detroit.
+- Root landing page now starts with a dataset picker instead of silently defaulting to Connecticut.
+- CT Network Dashboard with statewide source totals and card-based top-network exploration.
+- Improved property cards with richer official-record sidebars, embedded maps, CT property photos, subsidy record text, and jurisdiction badges.
+- Hartford code-enforcement records integrated into property and network views.
+- Baltimore official-record handling and source-backed code-enforcement enrichment.
+- Source freshness report expanded to show all relied-on non-CT datasets and their latest known update dates.
+- Investigative report formatting upgraded with sections, tables, citations, and inline links.
+- CT network loading and map-coordinate handling optimized for large portfolios.
+
+See [RELEASE_NOTES.md](./RELEASE_NOTES.md) for the fuller release history.
 
 ## Data Sources
 
-*   [CT Business Registry - Business Master](https://data.ct.gov/Business/Connecticut-Business-Registry-Business-Master/n7gp-d28j/about_data)
-*   [CT Business Registry - Principals](https://data.ct.gov/Business/Connecticut-Business-Registry-Principals/ka36-64k6/about_data)
-*   [Municipal Parcel & CAMA Records](https://geodata.ct.gov/datasets/ctmaps::connecticut-cama-and-parcel-layer/about)
-*   Fresh & supplemental data scraped from VISION, MapXpress, and other municipal GIS sites
-*   Real-time News Highlights
+Primary sources currently include:
 
-## How it works
+- [Connecticut Business Registry - Business Master](https://data.ct.gov/Business/Connecticut-Business-Registry-Business-Master/n7gp-d28j/about_data)
+- [Connecticut Business Registry - Principals](https://data.ct.gov/Business/Connecticut-Business-Registry-Principals/ka36-64k6/about_data)
+- [Connecticut CAMA and Parcel Layer](https://geodata.ct.gov/datasets/ctmaps::connecticut-cama-and-parcel-layer/about)
+- Municipal assessor, GIS, CAMA, VISION, MapXpress, MapGeo, and related local property systems
+- Hartford Open Data code-enforcement records
+- NYC HPD registrations and contacts
+- NYC PLUTO/MapPLUTO property data
+- NYC HPD violations and housing litigation datasets
+- NYC DOI marshal-executed eviction dataset
+- National Housing Preservation Database subsidy records
+- D.C. property assessment data
+- Baltimore City GIS property and housing/code-enforcement layers
+- Maryland Open Data court event datasets for Baltimore city-level context
+- Boston property assessment and violation datasets
+- Detroit City GIS and code enforcement datasets
 
-The system uses name normalization and link-analysis to connect principals to businesses, and businesses to properties, creating a "graph" of ownership that surpasses simple database lookups.
+Exact availability varies by jurisdiction. The freshness and completeness views in the app are the best place to confirm what is loaded in a running deployment.
 
-## Installation & Setup
+## Architecture
 
-Want to run this locally? See the [Installation Guide](https://github.com/sk123/theyownwhat/blob/main/INSTALLATION.md) for detailed instructions on how to download the required data and run the Docker containers.
+- **Frontend:** React, Vite, Tailwind, Leaflet, Framer Motion.
+- **API:** FastAPI with PostgreSQL-backed property, network, enforcement, subsidy, report, and freshness endpoints.
+- **Ingestion:** Python importers for CT municipal data, NYC HPD/PLUTO, D.C., Baltimore, Boston, Hartford enforcement, subsidy enrichment, and source-status tracking.
+- **Network building:** Name normalization and graph-style linking across businesses, principals, properties, addresses, and locally loaded relationship records.
+- **Scheduling:** Nightly and weekly jobs refresh source data, rebuild networks, and update source freshness metadata.
+
+## Local Development
+
+For setup instructions, see [INSTALLATION.md](./INSTALLATION.md).
+
+Common frontend commands:
+
+```bash
+cd frontend
+npm install
+npm run dev
+npm run build
+```
+
+Common backend entry points:
+
+```bash
+uvicorn api.main:app --reload
+python updater/scheduled_runner.py
+python updater/update_cities.py --full
+```
 
 ## Transparency Notice
 
-This tool is for informational and advocacy purposes. While every effort is made for 100% accuracy in the linking logic, users should verify critical findings with primary municipal and state sources.
+This tool is for informational, research, journalism, and advocacy purposes. Public records can be stale, incomplete, misspelled, or internally inconsistent. Users should verify important findings against primary municipal, state, court, and registry sources before relying on them.
 
 ## Contact & Support
 
 > [!NOTE]
-> **they own WHAT??** is currently in active development. We are still ironing out the kinks in the network discovery and property linking logic. If you encounter incorrect data or "meganetworks," please let us know!
+> **they own WHAT??** is in active development. If you encounter incorrect links, missing sources, stale data, or over-broad networks, please report them.
 
-Feel free to report issues via **GitHub Issues** or reach out to [salmunk@gmail.com](mailto:salmunk@gmail.com).
-
-> "I will do this work regardless of whether I'm paid or not. However, the more funding Dr. Benjamin provides, the more time I can dedicate to this project instead of taking on solely-for-money jobs."
+Report issues via **GitHub Issues** or email [salmunk@gmail.com](mailto:salmunk@gmail.com).
 
 ## License
 
 This project is licensed under the **Creative Commons Attribution-NonCommercial 4.0 International License**.
 
-*   **Attribution**: You must give appropriate credit, provide a link to the license, and indicate if changes were made.
-*   **Non-Commercial**: You may not use the material for commercial purposes.
+- **Attribution:** You must give appropriate credit, provide a link to the license, and indicate if changes were made.
+- **Non-Commercial:** You may not use the material for commercial purposes.
 
-See [LICENSE](https://github.com/sk123/theyownwhat/blob/main/LICENSE) for the full text.
+See [LICENSE](./LICENSE) for the full text.

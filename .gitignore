@@ -36,3 +36,4 @@ statewide.json
 # Environments
 .venv/
 node_modules/
+.env2

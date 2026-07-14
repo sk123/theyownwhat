@@ -2,6 +2,9 @@
 CREATE TABLE IF NOT EXISTS evictions (
     id SERIAL PRIMARY KEY,
     case_number TEXT UNIQUE,
+    case_detail_url TEXT,
+    document_url TEXT,
+    case_type TEXT,
     property_id INTEGER REFERENCES properties(id) ON DELETE SET NULL,
     plaintiff_name TEXT,
     plaintiff_norm TEXT,
@@ -30,6 +33,9 @@ ALTER TABLE evictions ADD COLUMN IF NOT EXISTS defendant_attorney_juris_id TEXT;
 ALTER TABLE evictions ADD COLUMN IF NOT EXISTS defendant_attorney_name TEXT;
 ALTER TABLE evictions ADD COLUMN IF NOT EXISTS defendant_attorney_last TEXT;
 ALTER TABLE evictions ADD COLUMN IF NOT EXISTS defendant_attorney_first TEXT;
+ALTER TABLE evictions ADD COLUMN IF NOT EXISTS case_detail_url TEXT;
+ALTER TABLE evictions ADD COLUMN IF NOT EXISTS document_url TEXT;
+ALTER TABLE evictions ADD COLUMN IF NOT EXISTS case_type TEXT;
 
 -- Indices for performance
 CREATE INDEX IF NOT EXISTS idx_evictions_property_id ON evictions(property_id);

@@ -260,13 +260,14 @@ def main():
             conn.commit()
             
             business_cols = {
-                'id': 'id', 'name': 'name', 'status': 'status', 
+                'id': 'id', 'dos_id': 'id', 'name': 'name', 'current_entity_name': 'name', 'status': 'status', 'entity_status': 'status',
                 'date_of_formation': 'date_of_formation',
                 'date_of_organization_meeting': 'date_of_formation',
-                'business_type': 'business_type', 'nature_of_business': 'nature_of_business', 
+                'initial_dos_filing_date': 'date_of_formation',
+                'business_type': 'business_type', 'entity_type': 'business_type', 'nature_of_business': 'nature_of_business', 
                 'principal_name': 'principal_name', 'agent_name': 'principal_name',
                 'agent': 'principal_name', 'registered_agent': 'principal_name',
-                'registered_agent_name': 'principal_name',
+                'registered_agent_name': 'principal_name', 'dos_process_name': 'principal_name',
                 'principal_address': 'principal_address', 'agent_address': 'principal_address',
                 'agent_street_address': 'principal_address',
                 'business_address': 'business_address',
@@ -276,8 +277,12 @@ def main():
                 'address_line_1': 'business_address',
                 'street': 'business_address',
                 'business_street': 'business_address',
-                'business_city': 'business_city', 'business_state': 'business_state', 
-                'business_zip': 'business_zip', 'mailing_address': 'mail_address', 
+                'dos_process_address_line_1': 'business_address',
+                'dos_process_address': 'business_address',
+                'business_city': 'business_city', 'dos_process_city': 'business_city',
+                'business_state': 'business_state', 'dos_process_state': 'business_state',
+                'business_zip': 'business_zip', 'dos_process_zip_code': 'business_zip',
+                'mailing_address': 'mail_address', 
                 'mail_city': 'mail_city', 'mail_state': 'mail_state', 'mail_zip': 'mail_zip'
             }
             
@@ -297,19 +302,19 @@ def main():
             
             # --- UPDATED property_cols to include ALL fields ---
             property_cols = {
-                'pid': 'serial_number', 
+                'pid': 'serial_number', 'print_key': 'serial_number', 'sbl': 'serial_number',
                 'list_year': 'list_year',
-                'property_city': 'property_city',
-                'owner': 'owner', 
-                'co_owner': 'co_owner', 
-                'location_cama': 'location', # FIX: Use CAMA location, it's more accurate
-                'style_desc': 'property_type', 
-                'living_area': 'living_area', 
-                'ayb': 'year_built', 
-                'land_acres': 'acres', 
+                'property_city': 'property_city', 'muni_name': 'property_city',
+                'owner': 'owner', 'primary_owner': 'owner',
+                'co_owner': 'co_owner', 'add_owner': 'co_owner',
+                'location_cama': 'location', 'parcel_addr': 'location', # FIX: Use CAMA location, it's more accurate
+                'style_desc': 'property_type', 'prop_class': 'property_type',
+                'living_area': 'living_area', 'sqft_living': 'living_area',
+                'ayb': 'year_built', 'yr_blt': 'year_built',
+                'land_acres': 'acres', 'acres': 'acres',
                 'zone': 'zone', 
-                'assessed_total': 'assessed_value',
-                'appraised_total': 'appraised_value',
+                'assessed_total': 'assessed_value', 'total_av': 'assessed_value',
+                'appraised_total': 'appraised_value', 'full_market_val': 'appraised_value',
                 'sale_price': 'sale_amount', 
                 'sale_date': 'sale_date',
                 'link': 'link',
@@ -321,10 +326,10 @@ def main():
                 'block_cut': 'block_cut',
                 'lot': 'lot',
                 'lot_cut': 'lot_cut',
-                'unit': 'unit',
+                'unit': 'unit', 'loc_unit': 'unit',
                 'unit_cut': 'unit_cut',
-                'property_zip': 'property_zip',
-                'property_county': 'property_county',
+                'property_zip': 'property_zip', 'loc_zip': 'property_zip',
+                'property_county': 'property_county', 'county_name': 'property_county',
                 'street_name': 'street_name',
                 'address_number': 'address_number',
                 'address_prefix': 'address_prefix',
@@ -334,10 +339,10 @@ def main():
                 'number_of_units': 'number_of_units',
                 'latitude': 'latitude',
                 'longitude': 'longitude',
-                'mailing_address': 'mailing_address',
-                'mailing_city': 'mailing_city',
-                'mailing_state': 'mailing_state',
-                'mailing_zip': 'mailing_zip'
+                'mailing_address': 'mailing_address', 'mail_addr': 'mailing_address',
+                'mailing_city': 'mailing_city', 'mail_city': 'mailing_city',
+                'mailing_state': 'mailing_state', 'mail_state': 'mailing_state',
+                'mailing_zip': 'mailing_zip', 'mail_zip': 'mailing_zip'
             }
             
             all_mappings = {}

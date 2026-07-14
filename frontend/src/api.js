@@ -45,7 +45,7 @@ export const api = {
     },
 
     // Streaming helper for network loading
-    streamNetwork: async (entityId, entityType, entityName, onChunk, onComplete, onError) => {
+    streamNetwork: async (entityId, entityType, entityName, onChunk, onComplete, onError, city) => {
         try {
             const response = await fetch(`${API_BASE}/network/stream_load`, {
                 method: 'POST',
@@ -53,7 +53,8 @@ export const api = {
                 body: JSON.stringify({
                     entity_id: entityId,
                     entity_type: entityType,
-                    entity_name: entityName
+                    entity_name: entityName,
+                    city: city
                 })
             });
 

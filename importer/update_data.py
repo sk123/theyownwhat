@@ -36,7 +36,7 @@ def get_db_connection():
             time.sleep(5)
     raise Exception("❌ Could not connect to the database after multiple retries.")
 
-from api.shared_utils import normalize_person_name, normalize_business_name
+from api.shared_utils import normalize_person_name, normalize_business_name, normalize_owner_name
 
 # --- Helper Function (from import_data.py) ---
 def construct_principal_name(row):
@@ -216,9 +216,9 @@ def run_properties_update(conn, file_path, column_map):
 
             # Create normalized owner fields
             if 'owner' in chunk.columns:
-                chunk['owner_norm'] = chunk['owner'].apply(normalize_business_name)
+                chunk['owner_norm'] = chunk['owner'].apply(normalize_owner_name)
             if 'co_owner' in chunk.columns:
-                chunk['co_owner_norm'] = chunk['co_owner'].apply(normalize_business_name)
+                chunk['co_owner_norm'] = chunk['co_owner'].apply(normalize_owner_name)
 
             final_chunk = chunk.reindex(columns=staging_col_names)
 

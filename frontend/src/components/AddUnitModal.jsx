@@ -19,8 +19,8 @@ export default function AddUnitModal({ isOpen, onClose, onAdd, complexName = '' 
     };
 
     return (
-        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden animate-in fade-in zoom-in duration-200">
+        <div className="fixed inset-0 z-[110] overflow-y-auto bg-slate-900/60 backdrop-blur-sm p-4 flex justify-center items-start md:items-center" onClick={onClose}>
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm my-auto h-auto max-h-none overflow-visible animate-in fade-in zoom-in duration-200" onClick={e => e.stopPropagation()}>
                 <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
                     <h3 className="font-black text-slate-700 text-lg flex items-center gap-2">
                         <Hash className="text-blue-500" size={20} />

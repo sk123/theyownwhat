@@ -6,6 +6,7 @@ Estimated runtime: 4-6 hours
 """
 import subprocess
 import time
+import os
 from datetime import datetime
 
 # Priority municipalities with configured data sources
@@ -31,6 +32,8 @@ TOWNS_TO_PROCESS = [
     'ESSEX',           # 108 missing (52.7%) - PropertyRecordCards
 ]
 
+SOURCE_ONLY_ENV_VAR = "THEYOWNWHAT_SOURCE_ONLY"
+
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
 
@@ -54,15 +57,18 @@ def main():
             # Assumes virtual environment or system Python has dependencies
             cmd = [
                 'python3', 'updater/update_data.py',
-                town, '--force'
+                '-m', town, '--force'
             ]
+            env = os.environ.copy()
+            env[SOURCE_ONLY_ENV_VAR] = "true"
             
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
                 timeout=3600,  # 1 hour max per town
-                cwd='/home/sk/dev/theyownwhat'  # Run from project root
+                cwd='/home/sk/dev/theyownwhat',  # Run from project root
+                env=env
             )
             
             if result.returncode == 0:

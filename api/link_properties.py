@@ -8,7 +8,7 @@ import sys
 
 # Add the current directory to Python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from shared_utils import normalize_business_name
+from shared_utils import normalize_business_name, normalize_owner_name
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -75,12 +75,13 @@ def link_properties():
             for r in batch_rows:
                 pid = r[0]
                 owner = r[1]
-                norm = normalize_business_name(owner)
+                norm = normalize_owner_name(owner)
+                business_norm = normalize_business_name(owner)
                 
-                bid = b_map.get(norm)
-                if not bid and norm:
+                bid = b_map.get(business_norm)
+                if not bid and business_norm:
                     # Try fallback
-                    bid = b_map_nospace.get(norm.replace(" ", ""))
+                    bid = b_map_nospace.get(business_norm.replace(" ", ""))
                 
                 if bid:
                     match_count += 1

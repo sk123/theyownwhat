@@ -8,7 +8,7 @@ import re
 
 # Add the current directory to Python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from shared_utils import normalize_business_name, normalize_person_name, get_name_variations, normalize_mailing_address
+from shared_utils import normalize_business_name, normalize_owner_name, get_name_variations, normalize_mailing_address
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -109,11 +109,12 @@ def link_properties():
             
             bid = None
             pid = None
-            owner_norm = normalize_business_name(owner)
+            owner_norm = normalize_owner_name(owner)
+            owner_business_norm = normalize_business_name(owner)
             
             # --- PHASE A: Name Match ---
             if owner_norm:
-                bid = b_map.get(owner_norm)
+                bid = b_map.get(owner_business_norm)
                 pid = p_map.get(owner_norm)
                 if bid: b_name_links += 1
                 if pid: p_name_links += 1

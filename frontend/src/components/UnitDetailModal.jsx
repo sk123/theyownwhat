@@ -65,19 +65,19 @@ export default function UnitDetailModal({ property, group, onClose, onUpdate }) 
         const file = e.target.files[0];
         if (!file) return;
 
-        // In a real app, we'd upload to S3/Cloudinary and get a URL.
-        // For this demo/tool, we'll suggest using a URL or mock it.
-        const mockUrl = URL.createObjectURL(file);
-        const newPhoto = { id: Date.now(), url: mockUrl, caption: file.name };
+        const localUrl = URL.createObjectURL(file);
+        const newPhoto = { id: Date.now(), url: localUrl, caption: file.name };
         setUserData(prev => ({
             ...prev,
             photos: [...prev.photos, newPhoto]
         }));
     };
-
     return (
-        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/60 backdrop-blur-md p-4">
-            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-4xl overflow-hidden flex flex-col max-h-[95vh] animate-in fade-in zoom-in duration-200">
+        <div className="fixed inset-0 z-[120] overflow-y-auto bg-black/60 backdrop-blur-md p-4 flex justify-center items-start md:items-center" onClick={onClose}>
+            <div 
+                className="bg-white rounded-3xl shadow-2xl w-full max-w-4xl flex flex-col my-auto h-auto max-h-none md:max-h-[95vh] overflow-visible md:overflow-hidden animate-in fade-in zoom-in duration-200"
+                onClick={e => e.stopPropagation()}
+            >
                 {/* Header */}
                 <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-white shrink-0">
                     <div className="flex items-center gap-4">
@@ -90,58 +90,35 @@ export default function UnitDetailModal({ property, group, onClose, onUpdate }) 
                                 <MapPin size={14} className="text-blue-500" />
                                 {property.address} {property.city && `, ${property.city}`}
                                 {property.subsidies && property.subsidies.length > 0 && (() => {
-                                    const programTypes = property.subsidies.map(s => (s.program_type || '').toLowerCase());
-                                    const programNames = property.subsidies.map(s => (s.program_name || '').toLowerCase());
-                                    const subsidyKeywords = [
-                                        'public housing',
-                                        'project-based',
-                                        'project based',
-                                        'pbv',
-                                        'section 8',
-                                        'ct sh moderate rental',
-                                        'mod rehab',
-                                        'mod. rehab',
-                                        'mod. rental',
-                                        'mod rental',
-                                        'hud',
-                                        'lihtc',
-                                        'tax credit',
-                                        'rental assistance',
-                                        'rental subsidy',
-                                        'subsidized',
-                                        '811',
-                                        '202',
-                                        '236',
-                                        '221(d)(3)',
-                                        '221d3',
-                                        'section 236',
-                                        'section 202',
-                                        'section 221',
-                                        'section 811',
-                                    ];
-                                    const restrictiveKeywords = [
-                                        'restrictive covenant',
-                                        'deed restriction',
-                                        'affordability covenant',
-                                    ];
-                                    const hasSubsidy = programTypes.concat(programNames).some(type =>
-                                        subsidyKeywords.some(keyword => type.includes(keyword))
-                                    );
-                                    const allRestrictive = programTypes.concat(programNames).every(type =>
-                                        restrictiveKeywords.some(keyword => type.includes(keyword))
-                                    );
-                                    let label = 'Preservation';
-                                    if (hasSubsidy) {
-                                        label = 'Subsidized';
-                                    } else if (allRestrictive) {
-                                        label = 'Restricted Covenant';
-                                    }
-                                    return (
-                                        <span className="ml-2 text-[10px] font-bold px-2 py-0.5 rounded-full border border-amber-100 bg-amber-50 text-amber-600 uppercase">
-                                            {label}
+                                    const getSubsidyBadgeText = (sub) => {
+                                        const type = (sub.subsidy_type || '').toUpperCase();
+                                        switch (type) {
+                                            case 'S8': return 'Section 8';
+                                            case 'LIHTC': return 'LIHTC';
+                                            case 'HOME': return 'HOME';
+                                            case 'PH': return 'Public Housing';
+                                            case 'FHA': return 'FHA';
+                                            case 'RHS515': return 'RHS 515';
+                                            case 'RHS538': return 'RHS 538';
+                                            case 'STATE': return 'State Subsidy';
+                                            case 'PBV': return 'PBV';
+                                            case 'MR': return 'Mod Rental';
+                                            case 'NHTF': return 'NHTF';
+                                            default: return sub.subsidy_type || 'Subsidized';
+                                        }
+                                    };
+                                    const programs = [...new Set(property.subsidies.map(getSubsidyBadgeText).filter(Boolean))];
+                                    return programs.map((prog, idx) => (
+                                        <span key={idx} className="ml-2 text-[10px] font-bold px-2 py-0.5 rounded-full border border-amber-100 bg-amber-50 text-amber-600 uppercase">
+                                            {prog}
                                         </span>
-                                    );
+                                    ));
                                 })()}
+                                {property.nhpd_subsidy && (
+                                    <span className="ml-2 text-[10px] font-bold px-2 py-0.5 rounded-full border border-purple-100 bg-purple-50 text-purple-600 uppercase">
+                                        {property.nhpd_program || 'Subsidized'}
+                                    </span>
+                                )}
                             </p>
                         </div>
                     </div>
