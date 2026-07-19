@@ -378,6 +378,9 @@ def run_nightly_other_cities_update():
         logger.info("Starting NHPD subsidy enrichment...")
         nhpd_cmd = [sys.executable, "scripts/enrich_all_cities_nhpd.py"]
         run_source_only(nhpd_cmd, check=False)
+        logger.info("Starting Connecticut NHPD subsidy enrichment...")
+        ct_nhpd_cmd = [sys.executable, "scripts/import_nhpd.py"]
+        run_source_only(ct_nhpd_cmd, check=False)
         logger.info("Starting DC CAMA enrichment...")
         dc_cama_cmd = [sys.executable, "scripts/enrich_dc_cama.py"]
         run_source_only(dc_cama_cmd, check=False)
@@ -408,6 +411,9 @@ def run_weekly_other_cities_full_scan():
         logger.info("Starting NHPD subsidy enrichment...")
         nhpd_cmd = [sys.executable, "scripts/enrich_all_cities_nhpd.py"]
         run_source_only(nhpd_cmd, check=False)
+        logger.info("Starting Connecticut NHPD subsidy enrichment...")
+        ct_nhpd_cmd = [sys.executable, "scripts/import_nhpd.py"]
+        run_source_only(ct_nhpd_cmd, check=False)
         logger.info("Starting DC CAMA enrichment...")
         dc_cama_cmd = [sys.executable, "scripts/enrich_dc_cama.py"]
         run_source_only(dc_cama_cmd, check=False)

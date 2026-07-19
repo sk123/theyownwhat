@@ -11,11 +11,11 @@ from api.populate_cities import populate_city, get_connection
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-CITIES = ["dc", "baltimore", "boston", "detroit", "philadelphia", "chicago", "miami"]
+CITIES = ["dc", "baltimore", "boston", "detroit", "philadelphia", "chicago", "miami", "minneapolis"]
 
 def run_update(full=False):
     if full:
-        logger.info("Starting FULL multi-city property ingestion & network rebuilding (D.C., Baltimore, Boston, Detroit, Philadelphia, Chicago, Miami)")
+        logger.info("Starting FULL multi-city property ingestion & network rebuilding (D.C., Baltimore, Boston, Detroit, Philadelphia, Chicago, Miami, Minneapolis)")
         try:
             conn = get_connection()
             try:

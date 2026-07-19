@@ -1,5 +1,6 @@
 import os
 import sys
+import subprocess
 import requests
 import logging
 import shutil
@@ -124,24 +125,46 @@ def refresh_system_data():
 
     # 4. NYC HPD Refresh (opt-in via NYC_HPD_ENABLED=true)
     if os.environ.get("NYC_HPD_ENABLED", "").lower() == "true":
-        logger.info("NYC_HPD_ENABLED=true — starting NYC HPD ingest...")
+        logger.info("NYC_HPD_ENABLED=true — starting NYC HPD refresh...")
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
         try:
-            sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
             from nyc.ingest_hpd import ingest_hpd
             ingest_hpd()
             logger.info("NYC HPD ingest complete.")
         except Exception as e:
             logger.error(f"NYC HPD ingest failed: {e}")
 
-        logger.info("Building NYC networks...")
-        try:
-            from nyc.build_nyc_networks import build_nyc_networks
-            build_nyc_networks()
-            logger.info("NYC network build complete.")
-        except Exception as e:
-            logger.error(f"NYC network build failed: {e}")
+        nyc_steps = [
+            ("NYC HPD enrichment", "nyc.enrich_hpd"),
+            ("NYC network build", "nyc.build_nyc_networks"),
+            ("NYC NHPD/rent-stabilization enrichment", "nyc.enrich_nhpd"),
+        ]
+        for label, module in nyc_steps:
+            logger.info(f"Starting {label}...")
+            result = subprocess.run([sys.executable, "-m", module], check=False)
+            if result.returncode == 0:
+                logger.info(f"{label} complete.")
+            else:
+                logger.warning(f"{label} exited with code {result.returncode}.")
+
+        logger.info("NYC HPD refresh sequence complete.")
     else:
         logger.info("NYC_HPD_ENABLED not set — skipping NYC refresh.")
+
+    # 5. NJ DCA BHI Refresh (opt-in via NJ_BHI_ENABLED=true)
+    if os.environ.get("NJ_BHI_ENABLED", "").lower() == "true":
+        logger.info("NJ_BHI_ENABLED=true — starting NJ DCA BHI refresh...")
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+        try:
+            from nj.ingest_bhi import ingest_bhi
+            ingest_bhi()
+            logger.info("NJ DCA BHI refresh sequence complete.")
+        except Exception as e:
+            logger.error(f"NJ DCA BHI refresh failed: {e}")
+    else:
+        logger.info("NJ_BHI_ENABLED not set — skipping NJ DCA BHI refresh.")
 
 if __name__ == "__main__":
     refresh_system_data()

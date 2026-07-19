@@ -23,6 +23,8 @@ const getCityState = (city) => {
     if (upper === 'PHILADELPHIA') return 'PA';
     if (upper === 'CHICAGO') return 'IL';
     if (upper === 'MIAMI') return 'FL';
+    if (upper === 'MINNEAPOLIS') return 'MN';
+    if (upper === 'NJ' || upper === 'NEW JERSEY') return 'NJ';
     return 'CT';
 };
 
@@ -40,12 +42,18 @@ const DATE_PRESETS = [
     { label: 'All Time', value: () => null },
 ];
 
+const RAP_SHEETS_ENABLED_CITY = 'HARTFORD';
+const normalizeRapSheetCity = (city) => {
+    const requested = city ? String(city).toUpperCase() : RAP_SHEETS_ENABLED_CITY;
+    return requested === 'CT' || requested === 'CONNECTICUT' ? RAP_SHEETS_ENABLED_CITY : requested;
+};
+
 const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
     const [data, setData] = useState([]);
     const [loading, setLoading] = useState(true);
     const [filter, setFilter] = useState('');
     const [cities, setCities] = useState(['HARTFORD']);
-    const [selectedCity, setSelectedCity] = useState(initialCity || 'HARTFORD');
+    const [selectedCity, setSelectedCity] = useState(normalizeRapSheetCity(initialCity));
     const [dimension, setDimension] = useState('network');
     const [dateFrom, setDateFrom] = useState(null);
     const [sortBy, setSortBy] = useState('violations');
@@ -53,6 +61,11 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
     const [isScrolled, setIsScrolled] = useState(false);
     const [expandedCompanies, setExpandedCompanies] = useState({});
     const scrollContainerRef = useRef(null);
+    const rapSheetsEnabled = selectedCity?.toUpperCase() === RAP_SHEETS_ENABLED_CITY;
+    const visibleCities = useMemo(() => {
+        const requested = selectedCity && selectedCity.toUpperCase() !== RAP_SHEETS_ENABLED_CITY ? [selectedCity] : [];
+        return [...new Set([...requested, RAP_SHEETS_ENABLED_CITY])];
+    }, [selectedCity]);
 
     const handleScroll = useCallback(() => {
         if (scrollContainerRef.current) {
@@ -64,11 +77,9 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
         let cancelled = false;
         api.get('/monitor/cities')
             .then((rows) => {
-                if (cancelled || !Array.isArray(rows) || rows.length === 0) return;
-                setCities(rows);
-                const fallback = rows.includes('HARTFORD') ? 'HARTFORD' : rows[0];
-                const matched = initialCity ? rows.find(c => c.toUpperCase() === initialCity.toUpperCase()) : null;
-                setSelectedCity(matched || fallback);
+                if (cancelled) return;
+                setCities([RAP_SHEETS_ENABLED_CITY]);
+                setSelectedCity(normalizeRapSheetCity(initialCity));
             })
             .catch((err) => console.error('Failed to load monitor cities', err));
         return () => { cancelled = true; };
@@ -76,6 +87,10 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
 
     // Fetch city-wide stats (independent of dimension/network matching)
     useEffect(() => {
+        if (!rapSheetsEnabled) {
+            setCityStats(null);
+            return undefined;
+        }
         let cancelled = false;
         const params = new URLSearchParams({ city: selectedCity });
         if (dateFrom) params.set('date_from', dateFrom);
@@ -83,11 +98,11 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
             .then(stats => { if (!cancelled) setCityStats(stats); })
             .catch(err => console.error('Failed to load city stats', err));
         return () => { cancelled = true; };
-    }, [selectedCity, dateFrom]);
+    }, [selectedCity, dateFrom, rapSheetsEnabled]);
 
     // Handle dynamic sorting/dimension switches based on city capabilities
     useEffect(() => {
-        if (cityStats) {
+        if (rapSheetsEnabled && cityStats) {
             if (cityStats.code_data_available) {
                 setSortBy('violations');
             } else if (cityStats.eviction_data_available) {
@@ -97,10 +112,16 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
                 setDimension('network');
             }
         }
-    }, [cityStats]);
+    }, [cityStats, rapSheetsEnabled]);
 
 
     useEffect(() => {
+        if (!rapSheetsEnabled) {
+            setData([]);
+            setLoading(false);
+            setExpandedCompanies({});
+            return undefined;
+        }
         let cancelled = false;
         setLoading(true);
         setExpandedCompanies({});
@@ -117,7 +138,7 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
             })
             .finally(() => { if (!cancelled) setLoading(false); });
         return () => { cancelled = true; };
-    }, [selectedCity, dimension, dateFrom, sortBy]);
+    }, [selectedCity, dimension, dateFrom, sortBy, rapSheetsEnabled]);
 
     const filteredData = useMemo(() => data.filter(item => {
         const q = filter.toLowerCase();
@@ -149,7 +170,7 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
     });
 
     return (
-        <div className="flex flex-col h-full bg-slate-50/50">
+        <div className="flex flex-col h-full min-h-0 bg-slate-50/50">
             {/* Collapsible Hero Header — hides on scroll */}
             <div className={`transition-all duration-300 ease-out overflow-hidden shrink-0 ${isScrolled ? 'max-h-0 opacity-0' : 'max-h-[300px] opacity-100'}`}>
                 <div className="p-8 bg-gradient-to-r from-slate-900 to-slate-800 text-white relative overflow-hidden">
@@ -160,13 +181,22 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
                         <div className="flex items-center gap-2 mb-4">
                             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-red-500/20 border border-red-500/30 text-red-100 text-[10px] font-bold uppercase tracking-widest">
                                 <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
-                                {cityStats?.eviction_data_available && !cityStats?.code_data_available
+                                {!rapSheetsEnabled
+                                    ? 'Light Maintenance'
+                                    : cityStats?.eviction_data_available && !cityStats?.code_data_available
                                     ? 'Eviction Watch'
                                     : 'Landlord Rap Sheets'}
                             </div>
                             <span className="px-2 py-0.5 rounded-md bg-amber-500/20 border border-amber-500/30 text-amber-200 text-[10px] font-black uppercase tracking-widest">Beta</span>
                         </div>
-                        <h1 className="text-4xl font-black mb-2 tracking-tight">{selectedCity} Landlord Rap Sheets</h1>
+                        <h1 className="text-4xl font-black mb-2 tracking-tight">
+                            {rapSheetsEnabled ? `${selectedCity} Landlord Rap Sheets` : 'Non-Hartford Rap Sheets Paused'}
+                        </h1>
+                        {!rapSheetsEnabled && (
+                            <p className="text-sm font-medium text-slate-300">
+                                Hartford remains available while non-Hartford enforcement and eviction matching is audited.
+                            </p>
+                        )}
                     </div>
                 </div>
             </div>
@@ -178,13 +208,15 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
                     {isScrolled && (
                         <div className="flex items-center gap-2 mb-2 -mt-1">
                             <ShieldAlert size={18} className="text-slate-800" />
-                            <h2 className="text-lg font-black text-slate-900 tracking-tight">{selectedCity} Landlord Rap Sheets</h2>
+                            <h2 className="text-lg font-black text-slate-900 tracking-tight">
+                                {rapSheetsEnabled ? `${selectedCity} Landlord Rap Sheets` : 'Rap Sheets Paused'}
+                            </h2>
                             <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-[9px] font-black uppercase">Beta</span>
                         </div>
                     )}
                     {/* Row 1: Dimension toggle + City + Search */}
                     <div className="flex flex-wrap items-center gap-3">
-                        {cityStats?.eviction_data_available && (
+                        {rapSheetsEnabled && cityStats?.eviction_data_available && (
                             <>
                                 <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mr-1">Analyze by</div>
                                 {DIMENSIONS.map(d => {
@@ -213,7 +245,7 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
                                 onChange={(e) => setSelectedCity(e.target.value)}
                                 className="pl-10 pr-8 py-2 bg-slate-100 border-transparent focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 rounded-xl text-sm font-semibold text-slate-700 transition-all"
                             >
-                                {cities.map(city => (
+                                {visibleCities.map(city => (
                                     <option key={city} value={city}>{city} ({getCityState(city)})</option>
                                 ))}
                             </select>
@@ -231,7 +263,7 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
                     </div>
 
                     {/* Row 2: Date presets + Sort */}
-                    <div className="flex flex-wrap items-center gap-3">
+                    {rapSheetsEnabled && <div className="flex flex-wrap items-center gap-3">
                         <div className="flex items-center gap-1">
                             <Calendar size={14} className="text-slate-400" />
                             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mr-1">Time Range</span>
@@ -268,10 +300,10 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
                                 </button>
                             )}
                         </div>
-                    </div>
+                    </div>}
 
                     {/* Summary Stats */}
-                    <div className="flex flex-wrap items-center gap-6">
+                    {rapSheetsEnabled && <div className="flex flex-wrap items-center gap-6">
                         <div className="flex flex-col">
                             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{dimConfig.label}s</span>
                             <span className="text-2xl font-black text-slate-900">{totals.count}</span>
@@ -290,7 +322,7 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
                                 <span className="text-[10px] font-semibold text-slate-500">{cityStats.open_violations.toLocaleString()} open</span>
                             </div>
                         )}
-                    </div>
+                    </div>}
 
                     {/* Disclaimer and Data Sources Note */}
                     <div className="pt-4 border-t border-slate-100 flex items-start gap-2 text-[11px] text-slate-500 leading-relaxed">
@@ -299,7 +331,11 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
                         </span>
                         <div>
                             <span className="font-bold text-slate-700">Data Sources & Disclaimers: </span>
-                            {selectedCity === 'NYC' ? (
+                            {!rapSheetsEnabled ? (
+                                <span>
+                                    Rap Sheets are temporarily available for Hartford only while non-Hartford code and eviction joins are audited.
+                                </span>
+                            ) : selectedCity === 'NYC' ? (
                                 <span>
                                     NYC eviction statistics reflect marshal-executed evictions since 2017 (sourced from the NYC Department of Investigation), not court filings. Code enforcement records reflect housing violations registered with the NYC Department of Housing Preservation & Development (HPD).
                                 </span>
@@ -325,9 +361,25 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
             </div>
 
             {/* Results */}
-            <div className="flex-1 overflow-auto p-8 pb-24 md:pb-8" ref={scrollContainerRef} onScroll={handleScroll}>
+            <div className="flex-1 overflow-auto overscroll-contain min-h-0 p-8 pb-24 md:pb-8" ref={scrollContainerRef} onScroll={handleScroll} style={{ WebkitOverflowScrolling: 'touch' }}>
                 <div className="max-w-6xl mx-auto space-y-4">
-                    {loading ? (
+                    {!rapSheetsEnabled ? (
+                        <div className="p-10 text-center bg-white rounded-3xl border border-amber-200 shadow-sm">
+                            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-50 text-amber-600">
+                                <ShieldAlert size={26} />
+                            </div>
+                            <h3 className="text-xl font-black text-slate-900">Rap Sheets paused outside Hartford</h3>
+                            <p className="mx-auto mt-2 max-w-xl text-sm font-medium leading-6 text-slate-500">
+                                Non-Hartford rankings are in light maintenance while code, eviction, and network attribution are audited. Hartford Rap Sheets remain available.
+                            </p>
+                            <button
+                                onClick={() => setSelectedCity(RAP_SHEETS_ENABLED_CITY)}
+                                className="mt-5 rounded-xl bg-slate-900 px-4 py-2 text-xs font-black text-white hover:bg-slate-700"
+                            >
+                                Open Hartford Rap Sheets
+                            </button>
+                        </div>
+                    ) : loading ? (
                         <div className="space-y-4">
                             <div className="flex items-center justify-center py-8">
                                 <div className="flex items-center gap-3 text-slate-500">

@@ -45,6 +45,18 @@ const routes = [
     title: 'They Own WHAT?? | Boston Landlord & Property Explorer',
     description: 'Explore Boston property assessment records, ownership networks, and public violation-source enrichment.',
   },
+  {
+    path: '/miami',
+    file: 'miami.html',
+    title: 'They Own WHAT?? | Miami Landlord & Property Explorer',
+    description: 'Explore Miami-Dade parcel ownership records, owner networks, Florida business registration links, and NHPD enrichment.',
+  },
+  {
+    path: '/nj',
+    file: 'nj.html',
+    title: 'They Own WHAT?? | New Jersey BHI Landlord & Property Explorer',
+    description: 'Explore New Jersey DCA BHI active-building registration records and conservative owner networks from public source-loaded data.',
+  },
 ];
 
 function escapeHtml(value) {

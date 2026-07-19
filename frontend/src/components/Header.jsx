@@ -4,7 +4,6 @@ import { Home, BookOpen, AlertCircle, RefreshCw, Toolbox, LogIn, LayoutDashboard
 export default function Header({ onHome, onDatasets, onReset, onAbout, OnOpenToolbox, toolboxEnabled, onShowFreshness, onReportIssue, onHartfordPlayground, onBurstDetector, evictionToolsEnabled, currentView, activeState, onStateChange }) {
     const [user, setUser] = React.useState(null);
     const isDatasetLanding = currentView === 'datasets';
-    const showValidationCities = typeof window !== 'undefined' && (new URLSearchParams(window.location.search).get('dev') === 'true' || new URLSearchParams(window.location.search).get('validate') === 'true');
 
     React.useEffect(() => {
         if (toolboxEnabled) {
@@ -89,6 +88,8 @@ export default function Header({ onHome, onDatasets, onReset, onAbout, OnOpenToo
                                               activeState === 'PHILADELPHIA' ? 'PHILADELPHIA' :
                                               activeState === 'CHICAGO' ? 'CHICAGO' :
                                               activeState === 'MIAMI' ? 'MIAMI' :
+                                              activeState === 'MINNEAPOLIS' ? 'MINNEAPOLIS' :
+                                              activeState === 'NJ' ? 'NEW JERSEY' :
                                               activeState} LANDLORD / PROPERTY EXPLORER
                                          </span>
                                          <span className="text-[8px] font-black bg-violet-100 text-violet-700 px-1 py-0.5 rounded uppercase tracking-wider">Beta</span>
@@ -135,30 +136,19 @@ export default function Header({ onHome, onDatasets, onReset, onAbout, OnOpenToo
                              >
                                  Detroit
                              </button>
-                             {(showValidationCities || activeState === 'PHILADELPHIA') && (
+
                               <button
-                                  onClick={() => onStateChange('PHILADELPHIA')}
-                                  className={`px-2.5 py-1.5 text-xs font-black rounded-lg transition-all ${activeState === 'PHILADELPHIA' ? 'bg-white text-indigo-600 shadow-sm border border-indigo-200' : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'}`}
+                                  onClick={() => onStateChange('MINNEAPOLIS')}
+                                  className={`px-2.5 py-1.5 text-xs font-black rounded-lg transition-all ${activeState === 'MINNEAPOLIS' ? 'bg-white text-indigo-600 shadow-sm border border-indigo-200' : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'}`}
                               >
-                                  Philly
+                                  Minneapolis
                               </button>
-                             )}
-                             {(showValidationCities || activeState === 'CHICAGO') && (
                               <button
-                                  onClick={() => onStateChange('CHICAGO')}
-                                  className={`px-2.5 py-1.5 text-xs font-black rounded-lg transition-all ${activeState === 'CHICAGO' ? 'bg-white text-indigo-600 shadow-sm border border-indigo-200' : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'}`}
+                                  onClick={() => onStateChange('NJ')}
+                                  className={`px-2.5 py-1.5 text-xs font-black rounded-lg transition-all ${activeState === 'NJ' ? 'bg-white text-indigo-600 shadow-sm border border-indigo-200' : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'}`}
                               >
-                                  Chicago
+                                  NJ
                               </button>
-                             )}
-                             {(showValidationCities || activeState === 'MIAMI') && (
-                              <button
-                                  onClick={() => onStateChange('MIAMI')}
-                                  className={`px-2.5 py-1.5 text-xs font-black rounded-lg transition-all ${activeState === 'MIAMI' ? 'bg-white text-indigo-600 shadow-sm border border-indigo-200' : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'}`}
-                              >
-                                  Miami
-                              </button>
-                             )}
                         </div>}
                     </div>
                     {/* Desktop-only buttons */}
@@ -277,30 +267,19 @@ export default function Header({ onHome, onDatasets, onReset, onAbout, OnOpenToo
                         >
                             Detroit
                         </button>
-                        {(showValidationCities || activeState === 'PHILADELPHIA') && (
+
                         <button
-                            onClick={() => onStateChange('PHILADELPHIA')}
-                            className={`px-2.5 py-1 text-xs font-black rounded-lg transition-all ${activeState === 'PHILADELPHIA' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'}`}
+                            onClick={() => onStateChange('MINNEAPOLIS')}
+                            className={`px-2.5 py-1 text-xs font-black rounded-lg transition-all ${activeState === 'MINNEAPOLIS' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'}`}
                         >
-                            Philly
+                            Minneapolis
                         </button>
-                        )}
-                        {(showValidationCities || activeState === 'CHICAGO') && (
                         <button
-                            onClick={() => onStateChange('CHICAGO')}
-                            className={`px-2.5 py-1 text-xs font-black rounded-lg transition-all ${activeState === 'CHICAGO' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'}`}
+                            onClick={() => onStateChange('NJ')}
+                            className={`px-2.5 py-1 text-xs font-black rounded-lg transition-all ${activeState === 'NJ' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'}`}
                         >
-                            Chicago
+                            NJ
                         </button>
-                        )}
-                        {(showValidationCities || activeState === 'MIAMI') && (
-                        <button
-                            onClick={() => onStateChange('MIAMI')}
-                            className={`px-2.5 py-1 text-xs font-black rounded-lg transition-all ${activeState === 'MIAMI' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'}`}
-                        >
-                            Miami
-                        </button>
-                        )}
                     </div>
                 </div>}
             </header>

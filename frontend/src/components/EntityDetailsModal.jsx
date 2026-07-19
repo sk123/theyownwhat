@@ -28,7 +28,7 @@ export default function EntityDetailsModal({ entity, type, networkData, onNaviga
 
     return (
         <AnimatePresence>
-            <div className="fixed inset-0 z-[60] p-4 flex justify-center items-center">
+            <div className="fixed inset-0 z-[200] p-4 flex justify-center items-center">
                 {/* Backdrop */}
                 <motion.div
                     initial={{ opacity: 0 }}

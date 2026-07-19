@@ -229,7 +229,7 @@ const FeedbackModal = ({ isOpen, onClose, initialEntity = null }) => {
 
     return (
         // Increased z-index to 100 to ensure it sits above the sticky header (z-50)
-        <div className="fixed inset-0 z-[100] overflow-y-auto bg-black/60 backdrop-blur-sm p-4 flex justify-center items-start md:items-center" onClick={onClose}>
+        <div className="fixed inset-0 z-[200] overflow-y-auto bg-black/60 backdrop-blur-sm px-4 pt-16 pb-4 flex justify-center items-start md:items-center md:p-4" onClick={onClose}>
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg flex flex-col my-auto h-auto max-h-none md:max-h-[90vh] overflow-visible md:overflow-hidden" onClick={e => e.stopPropagation()}>
 
                 {/* Header */}

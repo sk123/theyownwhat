@@ -313,7 +313,7 @@ def compute_top_business_networks(cur, town_col: Optional[str], town_filter: Opt
     where = ""
     params: List = []
     if town_col and town_filter:
-        where = f"AND UPPER(p.{town_col}) = UPPER(%s)"
+        where = f"AND COALESCE(p.source, '') <> 'NYS_OPEN_DATA' AND UPPER(p.{town_col}) = UPPER(%s)"
         params.append(town_filter)
 
     sql = f"""
@@ -327,8 +327,8 @@ def compute_top_business_networks(cur, town_col: Optional[str], town_filter: Opt
             COALESCE(SUM(p.appraised_value), 0) AS total_appraised_value,
             (SELECT business_count FROM {SCHEMA}.networks WHERE id = en.network_id) as business_count,
             (SELECT primary_name FROM {SCHEMA}.networks WHERE id = en.network_id) as network_primary_name,
-            (SELECT COUNT(DISTINCT regexp_replace(UPPER(location), '\s*(?:UNIT|APT|#|STE|SUITE|FL|RM|BLDG|BUILDING|DEPT|DEPARTMENT|OFFICE).*$', '', 'g')) FROM {SCHEMA}.properties WHERE business_id = b.id) as building_count,
-            (SELECT COALESCE(SUM(number_of_units), 0) FROM {SCHEMA}.properties WHERE business_id = b.id) as unit_count
+            COUNT(DISTINCT regexp_replace(UPPER(p.location), '\s*(?:UNIT|APT|#|STE|SUITE|FL|RM|BLDG|BUILDING|DEPT|DEPARTMENT|OFFICE).*$', '', 'g')) as building_count,
+            COALESCE(SUM(p.number_of_units), 0) as unit_count
         FROM {SCHEMA}.entity_networks en
         JOIN {SCHEMA}.businesses b
           ON en.entity_type = 'business'
@@ -591,11 +591,8 @@ def rank_first_n(rows: List[Dict], n: int = 10) -> List[Dict]:
 import json
 
 def insert_ranked_combined(cur, title, ranked_list, table_name=f"{SCHEMA}.cached_insights"):
-    # Sort by RESIDENTIAL assessed value ONLY (push purely commercial/institutional to bottom)
-    # The 'item' dict comes from 'compute_top_...' which queries the temp table.
-    ranked_list.sort(key=lambda x: float(x.get('residential_assessed_value') or 0), reverse=True)
-    
-    # Re-rank
+    # Keep the rank produced by merge_and_rank. The UI can re-sort these rows by
+    # assessed value, but the cache's default order should stay count/portfolio based.
     for i, item in enumerate(ranked_list, start=1):
         item['rank'] = i
         
@@ -708,6 +705,7 @@ def rebuild_cached_insights(db_conn=None):
                             FROM {SCHEMA}.properties p
                             JOIN {SCHEMA}.entity_networks en ON en.entity_type = 'business' AND p.business_id::text = en.entity_id
                             WHERE p.{town_col} IS NOT NULL AND p.{town_col} <> ''
+                              AND COALESCE(p.source, '') <> 'NYS_OPEN_DATA'
                             
                             UNION
                             
@@ -715,6 +713,7 @@ def rebuild_cached_insights(db_conn=None):
                             FROM {SCHEMA}.properties p
                             JOIN {SCHEMA}.entity_networks en ON en.entity_type = 'principal' AND p.principal_id::text = en.entity_id
                             WHERE p.{town_col} IS NOT NULL AND p.{town_col} <> ''
+                              AND COALESCE(p.source, '') <> 'NYS_OPEN_DATA'
                         )
                         SELECT 
                             network_id AS id,
@@ -806,9 +805,11 @@ def rebuild_cached_insights(db_conn=None):
                 # ---------- Per-town ----------
                 if town_col:
                     cur.execute(f"""
-                        SELECT DISTINCT {town_col} AS town
+                        SELECT DISTINCT UPPER({town_col}) AS town
                         FROM {SCHEMA}.properties
                         WHERE {town_col} IS NOT NULL AND {town_col} <> ''
+                          AND COALESCE(source, '') <> 'NYS_OPEN_DATA'
+                        ORDER BY town
                     """)
                     towns = [r["town"] for r in cur.fetchall() if r["town"]]
                     for t in towns:

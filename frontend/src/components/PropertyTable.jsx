@@ -93,7 +93,7 @@ export default function PropertyTable({
     const isNonLocalProperty = (p) => {
         const state = getItemState(p);
         if (!state || state === 'MIXED') return false;
-        const localState = activeState === 'NY' ? 'NY' : activeState === 'DC' ? 'DC' : activeState === 'BALTIMORE' ? 'MD' : activeState === 'BOSTON' ? 'MA' : activeState === 'DETROIT' ? 'MI' : 'CT';
+        const localState = activeState === 'NY' ? 'NY' : activeState === 'DC' ? 'DC' : activeState === 'BALTIMORE' ? 'MD' : activeState === 'BOSTON' ? 'MA' : activeState === 'DETROIT' ? 'MI' : activeState === 'NJ' ? 'NJ' : 'CT';
         return state !== localState;
     };
 

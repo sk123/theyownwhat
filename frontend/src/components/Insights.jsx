@@ -84,6 +84,11 @@ const getMetricValue = (row, metric) => {
     return row[metric.valueKey] || 0;
 };
 
+const getSortValue = (row, metric, sortMode) => {
+    if (metric.source !== 'cached' || sortMode !== 'value') return getMetricValue(row, metric);
+    return Number(row?.total_assessed_value || row?.residential_assessed_value || row?.total_appraised_value || 0);
+};
+
 const getNetworkName = (row) => (
     row?.primary_entity_name ||
     row?.entity_name ||
@@ -106,6 +111,7 @@ const metricHint = (metric, selectedCity) => {
 export default function Insights({ data, onSelect, activeState }) {
     const [selectedCity, setSelectedCity] = useState('STATEWIDE');
     const [metricKey, setMetricKey] = useState('properties');
+    const [sortMode, setSortMode] = useState('count');
     const [query, setQuery] = useState('');
     const [monitorCities, setMonitorCities] = useState([]);
     const [ctTowns, setCtTowns] = useState([]);
@@ -226,42 +232,47 @@ export default function Insights({ data, onSelect, activeState }) {
     const cachedRows = useMemo(() => {
         let rows = [];
         if (selectedCity === 'STATEWIDE') {
-            const allowed = new Set(ctTowns);
-            const hasCtTownList = allowed.size > 0;
-            const merged = new Map();
-            Object.entries(dataKeyByCity).forEach(([cityKey, dataKey]) => {
-                if (cityKey === 'STATEWIDE') return;
-                if (hasCtTownList && !allowed.has(cityKey)) return;
-                (data?.[dataKey] || []).forEach(row => {
-                    const mergeKey = String(row.network_id || row.primary_entity_id || row.entity_id || getNetworkName(row));
-                    const existing = merged.get(mergeKey);
-                    if (!existing) {
-                        merged.set(mergeKey, { ...row });
-                        return;
-                    }
-                    existing.property_count = Number(existing.property_count || existing.value || 0) + Number(row.property_count || row.value || 0);
-                    existing.value = existing.property_count;
-                    existing.unit_count = Number(existing.unit_count || 0) + Number(row.unit_count || 0);
-                    existing.total_assessed_value = Number(existing.total_assessed_value || 0) + Number(row.total_assessed_value || 0);
-                    existing.business_count = Math.max(Number(existing.business_count || 0), Number(row.business_count || 0));
-                    existing.principal_count = Math.max(Number(existing.principal_count || 0), Number(row.principal_count || 0));
+            const statewideKey = dataKeyByCity.STATEWIDE;
+            if (statewideKey && Array.isArray(data?.[statewideKey])) {
+                rows = [...data[statewideKey]];
+            } else {
+                const allowed = new Set(ctTowns);
+                const hasCtTownList = allowed.size > 0;
+                const merged = new Map();
+                Object.entries(dataKeyByCity).forEach(([cityKey, dataKey]) => {
+                    if (cityKey === 'STATEWIDE') return;
+                    if (hasCtTownList && !allowed.has(cityKey)) return;
+                    (data?.[dataKey] || []).forEach(row => {
+                        const mergeKey = String(row.network_id || row.primary_entity_id || row.entity_id || getNetworkName(row));
+                        const existing = merged.get(mergeKey);
+                        if (!existing) {
+                            merged.set(mergeKey, { ...row });
+                            return;
+                        }
+                        existing.property_count = Number(existing.property_count || existing.value || 0) + Number(row.property_count || row.value || 0);
+                        existing.value = existing.property_count;
+                        existing.unit_count = Number(existing.unit_count || 0) + Number(row.unit_count || 0);
+                        existing.total_assessed_value = Number(existing.total_assessed_value || 0) + Number(row.total_assessed_value || 0);
+                        existing.business_count = Math.max(Number(existing.business_count || 0), Number(row.business_count || 0));
+                        existing.principal_count = Math.max(Number(existing.principal_count || 0), Number(row.principal_count || 0));
+                    });
                 });
-            });
-            rows = Array.from(merged.values());
+                rows = Array.from(merged.values());
+            }
         } else {
             const dataKey = dataKeyByCity[selectedCity];
             rows = Array.isArray(data?.[dataKey]) ? [...data[dataKey]] : [];
         }
         return rows
-            .sort((a, b) => getMetricValue(b, metric) - getMetricValue(a, metric))
+            .sort((a, b) => getSortValue(b, metric, sortMode) - getSortValue(a, metric, sortMode))
             .slice(0, selectedCity === 'STATEWIDE' ? 100 : 50);
-    }, [data, dataKeyByCity, selectedCity, metric, ctTowns]);
+    }, [data, dataKeyByCity, selectedCity, metric, ctTowns, sortMode]);
 
     const sourceRows = metric.source === 'monitor' ? monitorRows : cachedRows;
 
     const rows = useMemo(() => {
         const q = query.trim().toLowerCase();
-        if (!q) return sourceRows.sort((a, b) => getMetricValue(b, metric) - getMetricValue(a, metric)).slice(0, 50);
+        if (!q) return [...sourceRows].sort((a, b) => getSortValue(b, metric, sortMode) - getSortValue(a, metric, sortMode)).slice(0, 50);
 
         const queryWords = q.split(/\s+/).filter(Boolean);
         return sourceRows
@@ -277,9 +288,9 @@ export default function Insights({ data, onSelect, activeState }) {
 
                 return queryWords.every(word => names.includes(word));
             })
-            .sort((a, b) => getMetricValue(b, metric) - getMetricValue(a, metric))
+            .sort((a, b) => getSortValue(b, metric, sortMode) - getSortValue(a, metric, sortMode))
             .slice(0, 50);
-    }, [sourceRows, query, metric]);
+    }, [sourceRows, query, metric, sortMode]);
 
     useEffect(() => {
         if (metric.source !== 'cached' || rows.length === 0) {
@@ -402,6 +413,26 @@ export default function Insights({ data, onSelect, activeState }) {
                                 ))}
                             </select>
                         </label>
+                        {metric.source === 'cached' && (
+                            <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1">
+                                {[
+                                    ['count', 'Count'],
+                                    ['value', 'Value']
+                                ].map(([mode, label]) => (
+                                    <button
+                                        key={mode}
+                                        onClick={() => setSortMode(mode)}
+                                        className={`rounded-md px-3 py-1.5 text-xs font-black transition-all ${
+                                            sortMode === mode
+                                                ? 'bg-white text-blue-700 shadow-sm ring-1 ring-blue-100'
+                                                : 'text-slate-500 hover:text-slate-800'
+                                        }`}
+                                    >
+                                        {label}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
                         <div className="relative min-w-[240px]">
                             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={15} />
                             <input
@@ -436,6 +467,13 @@ export default function Insights({ data, onSelect, activeState }) {
                     })}
                 </div>
             </section>
+
+            <div className="flex items-start gap-2 rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs font-semibold leading-5 text-amber-900">
+                <Info size={14} className="mt-0.5 shrink-0 text-amber-600" />
+                <span>
+                    Network associations are algorithmic estimates. Small backend tuning changes can make a network overbroad or underbroad, so counts may differ from the last time you used the tool. Fine-tuning is in progress.
+                </span>
+            </div>
 
             <section className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
                 <div className="mb-3 flex flex-col gap-1 md:flex-row md:items-end md:justify-between">
@@ -487,7 +525,7 @@ export default function Insights({ data, onSelect, activeState }) {
                     </div>
                     <div className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
                         <ArrowUpDown size={12} />
-                        Sorted by {metric.label}
+                        Sorted by {metric.source === 'cached' && sortMode === 'value' ? 'Assessed Value' : metric.label}
                     </div>
                 </div>
 
@@ -552,6 +590,11 @@ function NetworkInsightCard({ row, rank, metric, networkMetric, networkMetricsLo
         ? '...'
         : fmt(evictionCount);
     const codeCount = row.violation_count || 0;
+    const hartfordCodeCount = networkMetric ? (networkMetric.hartford_code_count || 0) : null;
+    const hartfordOpenCodeCount = networkMetric ? (networkMetric.hartford_open_code_count || 0) : null;
+    const hartfordCodeDisplay = metric.source === 'cached' && networkMetricsLoading && hartfordCodeCount === null
+        ? '...'
+        : hartfordCodeCount !== null ? fmt(hartfordCodeCount) : null;
     const assessed = Number(row.total_assessed_value || 0);
     const sourceLabel = metric.source === 'monitor'
         ? (metric.key === 'code_violations' ? 'Hartford code records' : 'CT Judicial eviction feed')
@@ -603,6 +646,13 @@ function NetworkInsightCard({ row, rank, metric, networkMetric, networkMetricsLo
                     value={metric.key === 'code_violations' ? fmt(codeCount) : evictionDisplay}
                     accent={metric.key === 'code_violations' ? 'text-red-700' : 'text-rose-700'}
                 />
+                {metric.source === 'cached' && hartfordCodeDisplay !== null && hartfordCodeCount > 0 && (
+                    <MetricTile
+                        label="Code (Hartford)"
+                        value={hartfordCodeDisplay}
+                        accent="text-red-700"
+                    />
+                )}
             </div>
 
             <div className="mt-4 flex-1 space-y-3 border-t border-slate-100 pt-3">
@@ -612,7 +662,7 @@ function NetworkInsightCard({ row, rank, metric, networkMetric, networkMetricsLo
                 {visibleBusinesses.length > 0 && (
                     <ChipGroup icon={Briefcase} label="Linked entities" values={visibleBusinesses} tone="slate" />
                 )}
-                {(evictionCount > 0 || codeCount > 0 || row.attorney_surge_filings > 0) && (
+                {(evictionCount > 0 || codeCount > 0 || row.attorney_surge_filings > 0 || (hartfordCodeCount > 0 && metric.source === 'cached')) && (
                     <div className="flex flex-wrap gap-1.5">
                         {evictionCount > 0 && (
                             <span className="rounded bg-rose-50 px-2 py-1 text-[10px] font-black uppercase text-rose-700">
@@ -622,6 +672,14 @@ function NetworkInsightCard({ row, rank, metric, networkMetric, networkMetricsLo
                         {codeCount > 0 && (
                             <span className="rounded bg-red-50 px-2 py-1 text-[10px] font-black uppercase text-red-700">
                                 {fmt(codeCount)} code records
+                            </span>
+                        )}
+                        {metric.source === 'cached' && hartfordCodeCount > 0 && (
+                            <span className="rounded bg-red-50 px-2 py-1 text-[10px] font-black uppercase text-red-700">
+                                {fmt(hartfordCodeCount)} Hartford code cases
+                                {hartfordOpenCodeCount > 0 && (
+                                    <span className="ml-1 opacity-70">({fmt(hartfordOpenCodeCount)} open)</span>
+                                )}
                             </span>
                         )}
                         {row.attorney_surge_filings > 0 && (

@@ -57,7 +57,7 @@ export default function AddBuildingModal({ isOpen, onClose, onAdd, targetArea = 
     };
 
     return (
-        <div className="fixed inset-0 z-[100] overflow-y-auto bg-slate-900/60 backdrop-blur-md p-4 flex justify-center items-start md:items-center" onClick={onClose}>
+        <div className="fixed inset-0 z-[200] overflow-y-auto bg-slate-900/60 backdrop-blur-md px-4 pt-16 pb-4 flex justify-center items-start md:items-center md:p-4" onClick={onClose}>
             <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg flex flex-col my-auto h-auto max-h-none md:h-[600px] overflow-visible md:overflow-hidden animate-in fade-in zoom-in duration-200" onClick={e => e.stopPropagation()}>
                 {/* Header */}
                 <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-white shrink-0 font-sans">

@@ -1906,11 +1906,17 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                         OR
                         (en.entity_type = 'business' AND UPPER(p.owner) = UPPER(en.entity_name))
                         OR
+                        (en.entity_type = 'business' AND p.owner_norm = en.normalized_name)
+                        OR
                         (en.entity_type = 'principal' AND p.principal_id = en.entity_id)
                         OR
                         (en.entity_type = 'principal' AND p.owner_norm = en.entity_id)
                         OR
                         (en.entity_type = 'principal' AND p.co_owner_norm = en.entity_id)
+                        OR
+                        (en.entity_type = 'principal' AND p.owner_norm = en.normalized_name)
+                        OR
+                        (en.entity_type = 'principal' AND p.co_owner_norm = en.normalized_name)
                     )
                     WHERE en.network_id = ANY(%s)
                     """
@@ -2578,18 +2584,19 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
 
                 # --- NEW: Shared Address Links for Visualization ---
                 # We want to show the user that these businesses are linked because they share an address.
-                # This is display-only; the guarded network builder does not use shared addresses
-                # as graph edges because that can over-broaden ownership networks.
-                from .shared_utils import normalize_mailing_address
+                # This is display-only; mirror the guarded address normalization so junk
+                # placeholders do not appear as shared-address evidence in the UI.
+                from .shared_utils import first_normalized_mailing_address, is_ignored_shared_address
 
                 # Group businesses by normalized address locally for this network
                 addr_groups = defaultdict(list)
                 for b in businesses:
-                    raw_addr = b.get('mail_address') or b.get('business_address')
-                    if raw_addr:
-                        norm = normalize_mailing_address(raw_addr)
-                        if norm and len(norm) > 4:
-                            addr_groups[norm].append(f"business_{b['id']}")
+                    norm = first_normalized_mailing_address(
+                        b.get('mail_address'),
+                        b.get('business_address'),
+                    )
+                    if norm and not is_ignored_shared_address(norm) and len(norm) > 4:
+                        addr_groups[norm].append(f"business_{b['id']}")
 
                 links["shared_address"] = []
                 for addr, b_keys in addr_groups.items():
@@ -2631,9 +2638,12 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
 
                 addr_counts = defaultdict(int)
                 for b in businesses:
-                    raw_addr = b.get('mail_address') or b.get('business_address')
-                    if raw_addr:
-                        addr_counts[raw_addr.strip().upper()] += 1
+                    norm = first_normalized_mailing_address(
+                        b.get('mail_address'),
+                        b.get('business_address'),
+                    )
+                    if norm and not is_ignored_shared_address(norm):
+                        addr_counts[norm] += 1
 
                 shared_addresses = sorted(
                     [addr for addr, count in addr_counts.items() if count >= 2],
@@ -2976,12 +2986,6 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                         subsidies_map[s_row['property_id']].append(dict(s_row))
 
                     # --- DEDUPLICATION LOGIC START ---
-                    def base_addr(addr):
-                        if not addr:
-                            return ""
-                        # Remove trailing unit (space + 1 letter or 1-4 digits)
-                        return re.sub(r'\s+([A-Z]|\d{1,4})$', '', addr.strip())
-
                     # Official record for 384 Orchard St, New Haven
                     OFFICIAL_384 = {
                         "address": "384 ORCHARD ST",
@@ -2997,12 +3001,16 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                         # Add more fields if needed
                     }
 
-                    # Group by (base address, city)
+                    # Group by the exact SQL loader identity. Do not normalize case,
+                    # whitespace, or null-vs-empty units here; the top-network cache
+                    # and network totals are based on this same raw property identity.
                     deduped = {}
                     for row in all_raw_rows:
-                        key = (base_addr(row.get("location")), (row.get("property_city") or "").upper())
+                        unit_value = row.get("unit")
+                        unit_key = ("__NULL_UNIT__" if unit_value is None else str(unit_value))
+                        key = (row.get("location"), row.get("property_city"), unit_key)
                         # Special handling for 384 Orchard St, New Haven
-                        if key == (base_addr("384 ORCHARD ST"), "NEW HAVEN"):
+                        if (str(row.get("location") or "").strip().upper(), str(row.get("property_city") or "").strip().upper()) == ("384 ORCHARD ST", "NEW HAVEN"):
                             # Always prefer the official record if present
                             if "384 ORCHARD LLC" in (row.get("owner") or ""):
                                 deduped[key] = row
@@ -3014,9 +3022,17 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                                 deduped[key] = row
 
                     # For 384 Orchard St, ensure the official record is present and override fields if needed
-                    k_384 = (base_addr("384 ORCHARD ST"), "NEW HAVEN")
-                    if k_384 in deduped:
-                        row = deduped[k_384]
+                    row_384 = next(
+                        (
+                            row
+                            for row in deduped.values()
+                            if str(row.get("location") or "").strip().upper() == "384 ORCHARD ST"
+                            and str(row.get("property_city") or "").strip().upper() == "NEW HAVEN"
+                        ),
+                        None,
+                    )
+                    if row_384:
+                        row = row_384
                         # Patch fields to match official record
                         row["location"] = OFFICIAL_384["address"]
                         row["property_city"] = OFFICIAL_384["city"]
@@ -3532,7 +3548,8 @@ def _calculate_dashboard_network_eviction_metrics(
             t.target_key,
             p.id::int AS property_id,
             p.owner_norm,
-            p.co_owner_norm
+            p.co_owner_norm,
+            UPPER(COALESCE(p.property_city, '')) AS property_city
         FROM tmp_dashboard_target_networks t
         JOIN entity_networks en ON en.network_id = t.network_id
         JOIN properties p ON (
@@ -3540,11 +3557,17 @@ def _calculate_dashboard_network_eviction_metrics(
             OR
             (en.entity_type = 'business' AND UPPER(p.owner) = UPPER(en.entity_name))
             OR
+            (en.entity_type = 'business' AND p.owner_norm = en.normalized_name)
+            OR
             (en.entity_type = 'principal' AND p.principal_id = en.entity_id)
             OR
             (en.entity_type = 'principal' AND p.owner_norm = en.entity_id)
             OR
             (en.entity_type = 'principal' AND p.co_owner_norm = en.entity_id)
+            OR
+            (en.entity_type = 'principal' AND p.owner_norm = en.normalized_name)
+            OR
+            (en.entity_type = 'principal' AND p.co_owner_norm = en.normalized_name)
         )
         WHERE p.id IS NOT NULL
     """)
@@ -3675,6 +3698,28 @@ def _calculate_dashboard_network_eviction_metrics(
             "property_linked_count": int(row.get("property_linked_count") or 0),
             "plaintiff_linked_count": int(row.get("plaintiff_linked_count") or 0),
             "last_eviction_date": row.get("last_eviction_date"),
+        })
+
+    # Hartford code enforcement counts — only for properties in Hartford
+    cursor.execute("""
+        SELECT
+            tp.target_key,
+            COUNT(DISTINCT ce.id)::int AS hartford_code_count,
+            COUNT(DISTINCT ce.id) FILTER (
+                WHERE lower(COALESCE(ce.record_status, '')) NOT LIKE 'closed%%'
+                  AND NULLIF(TRIM(COALESCE(ce.record_status, '')), '') IS NOT NULL
+            )::int AS hartford_open_code_count
+        FROM tmp_dashboard_target_properties tp
+        JOIN code_enforcement ce ON ce.property_id = tp.property_id
+        WHERE tp.property_city = 'HARTFORD'
+          AND UPPER(COALESCE(ce.municipality, 'HARTFORD')) = 'HARTFORD'
+        GROUP BY tp.target_key
+    """)
+    for row in cursor.fetchall() or []:
+        key = row["target_key"]
+        result[key].update({
+            "hartford_code_count": int(row.get("hartford_code_count") or 0),
+            "hartford_open_code_count": int(row.get("hartford_open_code_count") or 0),
         })
 
     return result
@@ -3919,7 +3964,7 @@ def _calculate_completeness_matrix(conn):
     with conn.cursor(cursor_factory=RealDictCursor) as cursor:
         # Check active cities
         active_cities = []
-        for city in ["nyc", "dc", "baltimore", "boston", "detroit", "philadelphia", "chicago", "miami"]:
+        for city in ["nyc", "dc", "baltimore", "boston", "detroit", "philadelphia", "chicago", "miami", "minneapolis", "nj"]:
             try:
                 cursor.execute(f"SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = '{city}_properties')")
                 row = cursor.fetchone()
@@ -3997,6 +4042,8 @@ def _calculate_completeness_matrix(conn):
             "PHILADELPHIA": ["PHILADELPHIA"],
             "CHICAGO": ["CHICAGO"],
             "MIAMI": ["MIAMI"],
+            "MINNEAPOLIS": ["MINNEAPOLIS"],
+            "NJ": ["NJ"],
         }
         cursor.execute("""
             SELECT source_name, source_type, external_last_updated, last_refreshed_at,
@@ -4010,6 +4057,8 @@ def _calculate_completeness_matrix(conn):
                OR source_name LIKE 'PHILADELPHIA%%'
                OR source_name LIKE 'CHICAGO%%'
                OR source_name LIKE 'MIAMI%%'
+               OR source_name LIKE 'MINNEAPOLIS%%'
+               OR source_name LIKE 'NJ%%'
             ORDER BY source_name
         """)
         city_dataset_rows = cursor.fetchall()
@@ -4113,6 +4162,12 @@ def _calculate_completeness_matrix(conn):
             elif town_upper == "MIAMI":
                 state = "FL"
                 portal_url = "https://opendata.miamidade.gov/"
+            elif town_upper == "MINNEAPOLIS":
+                state = "MN"
+                portal_url = "https://opendata.minneapolismn.gov/"
+            elif town_upper == "NJ":
+                state = "NJ"
+                portal_url = "https://www.nj.gov/dca/codes/offices/bhi.shtml"
 
             sources.append({
                 "municipality": row['town'],
@@ -4254,6 +4309,7 @@ NON_CT_MONITOR_CITIES = {
     "DETROIT": {"db_prefix": "detroit", "name": "Detroit", "state": "MI"},
     "NYC": {"db_prefix": "nyc", "name": "New York City", "state": "NY"},
     "DC": {"db_prefix": "dc", "name": "Washington D.C.", "state": "DC"},
+    "MINNEAPOLIS": {"db_prefix": "minneapolis", "name": "Minneapolis", "state": "MN"},
 }
 
 @app.get("/api/monitor")

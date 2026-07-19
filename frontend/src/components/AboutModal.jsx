@@ -150,7 +150,7 @@ export default function AboutModal({ isOpen, onClose, onShowFreshness }) {
 
     return (
         <AnimatePresence>
-            <div className="fixed inset-0 z-[100] overflow-y-auto bg-black/40 backdrop-blur-sm p-4 flex justify-center items-start md:items-center" onClick={onClose}>
+            <div className="fixed inset-0 z-[200] overflow-y-auto bg-black/40 backdrop-blur-sm px-4 pt-16 pb-4 flex justify-center items-start md:items-center md:p-4" onClick={onClose}>
                 <motion.div
                     initial={{ opacity: 0, scale: 0.95, y: 20 }}
                     animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -181,7 +181,13 @@ export default function AboutModal({ isOpen, onClose, onShowFreshness }) {
                         <div className="my-4 rounded-xl border border-blue-100 bg-gradient-to-br from-blue-50/80 to-indigo-50/50 p-5">
                             <h4 className="text-xs font-black uppercase tracking-[0.14em] text-blue-500 mb-3">Why This Exists</h4>
                             <p className="text-sm leading-relaxed text-slate-700">
-                                Halfway through my Business Entities class in law school (UW '07-'10), I raised my hand to ask, <span className="font-semibold text-slate-900">"so this ENTIRE system is designed for rich people to hide from the consequences of their actions?"</span> Years later, as a fair housing lawyer, I filed numerous complaints against what appeared to be mom-and-pop LLCs - small, independent landlords unconnected to one another. I realized (too late) that they were often tentacles manufactured by massive, often out-of-state investors extracting wealth from our cities. This has been my on-the-side passion project for the last six years.
+                                Halfway through my Business Entities class in law school (UW '07-'10), I raised my hand to ask, <span className="font-semibold text-slate-900">"so this ENTIRE system is designed for rich people to hide from the consequences of their actions?"</span>
+                            </p>
+                            <p className="text-sm leading-relaxed text-slate-700 mt-3">
+                                It was, but even the inventors didn't imagine people would eventually use the system to create separate entities for each bad act. The effect? Everything they do is split across a thousand artificial buckets, each responsible for a thousandth of their misdeeds, so that it's irrelevant whether the totality is so egregious that law (usually state law) might allow holding the actual human accountable (<span className="italic">"piercing the veil"</span> is the euphemism) because each misdeed is treated and litigated as an isolated incident by a small actor.
+                            </p>
+                            <p className="text-sm leading-relaxed text-slate-700 mt-3">
+                                Years later, as a fair housing lawyer, I filed numerous complaints against what appeared to be mom-and-pop LLCs - small, independent landlords unconnected to one another. I realized (too late) that they were often tentacles manufactured by massive, often out-of-state investors extracting wealth from our cities. This has been my on-the-side passion project for the last six years.
                             </p>
                         </div>
 
@@ -196,6 +202,13 @@ export default function AboutModal({ isOpen, onClose, onShowFreshness }) {
                             <p className="text-sm leading-relaxed text-slate-700">
                                 Data sources are refreshed automatically on nightly and weekly schedules. Municipal assessment data, business registries, code enforcement records, eviction filings, and subsidy records are continuously updated as sources publish new data.{' '}
                                 <button onClick={onShowFreshness} className="inline font-bold text-emerald-700 underline decoration-emerald-300 underline-offset-2 hover:decoration-emerald-600 transition-colors">View the live Data Completeness report →</button>
+                            </p>
+                        </div>
+
+                        <div className="mt-4 rounded-xl border border-amber-100 bg-gradient-to-br from-amber-50/80 to-yellow-50/50 p-4">
+                            <h4 className="text-xs font-black uppercase tracking-[0.14em] text-amber-600 mb-2">Network Accuracy</h4>
+                            <p className="text-sm leading-relaxed text-slate-700">
+                                Ownership networks are rebuilt nightly using automated graph algorithms that link businesses, principals, properties, and addresses. Small refinements to those backend algorithms can make associations overbroad or underbroad, so network sizes may shift from the last time you used the tool. Fine-tuning is in progress. If you notice a connection that doesn't look right (e.g., unrelated landlords grouped together), please use the feedback button to let us know — it helps improve accuracy for everyone.
                             </p>
                         </div>
                     </div>

@@ -7,8 +7,8 @@ then writes results to the nyc_networks table.
 
 Clustering signals (applied in order):
   1. Shared normalized person name  (HeadOfficer / IndividualOwner full_name_norm)
-  2. Shared corporation name        (corporation_name_norm across any contact type)
-  3. Shared mailing address         (business_address + business_zip across any contact)
+  2. Shared owner corporation name  (CorporateOwner corporation_name_norm)
+  3. Shared owner/officer mailing address (not Agent-only management addresses)
 
 Mega-net prevention:
   Any cluster exceeding MAX_NETWORK_BBLS buildings is re-clustered using
@@ -56,6 +56,8 @@ DEFAULT_MAX_BUILDINGS = 300
 
 # Only anchor on person names with these contact types
 PERSON_CONTACT_TYPES = {"HEADOFFICER", "INDIVIDUALOWNER", "JOINTOWNER"}
+CORP_CONTACT_TYPES = {"CORPORATEOWNER"}
+ADDRESS_CONTACT_TYPES = PERSON_CONTACT_TYPES | CORP_CONTACT_TYPES
 
 # Noise person name tokens — skip anything that is only these
 NOISE_NAMES = {"UNKNOWN", "VACANT", "NONE", "N A", "NA", "N/A", "TBD", "SAME"}
@@ -110,6 +112,28 @@ def get_conn():
     return psycopg2.connect(DATABASE_URL)
 
 
+def update_network_status(conn, status: str, details: dict):
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO data_source_status
+                    (source_name, source_type, last_refreshed_at, refresh_status, details)
+                VALUES ('NYC_NETWORKS', 'nyc', NOW(), %s, %s::jsonb)
+                ON CONFLICT (source_name)
+                DO UPDATE SET
+                    source_type = EXCLUDED.source_type,
+                    last_refreshed_at = EXCLUDED.last_refreshed_at,
+                    refresh_status = EXCLUDED.refresh_status,
+                    details = EXCLUDED.details;
+                """,
+                (status, json.dumps(details or {})),
+            )
+        conn.commit()
+    except Exception as e:
+        logger.warning(f"Could not update NYC network status: {e}")
+
+
 # ---------------------------------------------------------------------------
 # Name-only re-clustering for mega-nets
 # ---------------------------------------------------------------------------
@@ -151,6 +175,7 @@ def split_meganet(
 def build_nyc_networks(skip_property_join: bool = False, max_buildings: int = DEFAULT_MAX_BUILDINGS):
     conn = get_conn()
     cur  = conn.cursor()
+    update_network_status(conn, "running", {"message": "Rebuilding NYC owner-contact networks"})
 
     # ------------------------------------------------------------------
     # 1. Load all contacts
@@ -183,31 +208,30 @@ def build_nyc_networks(skip_property_join: bool = False, max_buildings: int = DE
     reg_rows = cur.fetchall()
     reg_bbl:     dict[str, Optional[str]] = {}
     reg_borough: dict[str, Optional[str]] = {}
+    bbl_index:   dict[str, list[str]] = defaultdict(list)
     for reg_id, bbl, borough in reg_rows:
         reg_bbl[reg_id]     = bbl
         reg_borough[reg_id] = borough
+        if bbl:
+            bbl_index[bbl].append(reg_id)
     logger.info(f"  {len(reg_bbl):,} registrations loaded.")
 
     # ------------------------------------------------------------------
     # 3. Build per-registration metadata (names + addresses)
     # ------------------------------------------------------------------
-    reg_names: dict[str, set] = defaultdict(set)   # all norm names that touched a reg
-    reg_addrs: dict[str, set] = defaultdict(set)   # all mailing addresses
+    reg_names: dict[str, set] = defaultdict(set)   # strong owner/officer names used for linking
+    reg_addrs: dict[str, set] = defaultdict(set)   # all mailing addresses for display/audit
     reg_people: dict[str, set] = defaultdict(set)  # valid person names per reg_id
-    reg_corps: dict[str, set] = defaultdict(set)   # valid corp names per reg_id
+    reg_corps: dict[str, set] = defaultdict(set)   # valid owner corp names per reg_id
 
     person_index: dict[str, list[str]] = defaultdict(list)
     corp_index:   dict[str, list[str]] = defaultdict(list)
     addr_index:   dict[str, list[str]] = defaultdict(list)
 
     for reg_id, contact_type, name_norm, corp_norm, biz_addr, biz_zip in contacts:
-        if not reg_id:
+        if not reg_id or reg_id not in reg_bbl:
             continue
 
-        if name_norm:
-            reg_names[reg_id].add(name_norm)
-        if corp_norm:
-            reg_names[reg_id].add(corp_norm)
         if biz_addr and biz_zip:
             reg_addrs[reg_id].add(f"{biz_addr.strip()} {biz_zip.strip()}")
 
@@ -216,14 +240,17 @@ def build_nyc_networks(skip_property_join: bool = False, max_buildings: int = DE
             if len(name_norm) >= 5 and name_norm not in NOISE_NAMES:
                 person_index[name_norm].append(reg_id)
                 reg_people[reg_id].add(name_norm)
+                reg_names[reg_id].add(name_norm)
 
-        # Signal 2: corp name
-        if corp_norm and len(corp_norm) >= 4:
+        # Signal 2: owner corp name. AGENT corporations are management signals,
+        # not ownership signals, so they should not stitch landlord networks.
+        if corp_norm and len(corp_norm) >= 4 and contact_type and contact_type.upper() in CORP_CONTACT_TYPES:
             corp_index[corp_norm].append(reg_id)
             reg_corps[reg_id].add(corp_norm)
+            reg_names[reg_id].add(corp_norm)
 
-        # Signal 3: mailing address (block high-frequency registered-agent addresses)
-        if biz_addr and biz_zip:
+        # Signal 3: owner/officer mailing address (block high-frequency offices)
+        if biz_addr and biz_zip and contact_type and contact_type.upper() in ADDRESS_CONTACT_TYPES:
             addr_key = f"{biz_addr.strip()}|{biz_zip.strip()}"
             if len(addr_key) >= 10:
                 addr_index[addr_key].append(reg_id)
@@ -272,6 +299,7 @@ def build_nyc_networks(skip_property_join: bool = False, max_buildings: int = DE
     merge_index(person_index, "person-name signal")
     merge_index(corp_index,   "corp-name signal")
     merge_index(addr_index,   "address signal")
+    merge_index(bbl_index,    "same-BBL registration signal")
 
     # Ensure every registration has a node
     for reg_id in reg_bbl:
@@ -283,25 +311,28 @@ def build_nyc_networks(skip_property_join: bool = False, max_buildings: int = DE
     # ------------------------------------------------------------------
     # 5. Mega-net detection & name-only re-splitting
     # ------------------------------------------------------------------
-    mega_count   = sum(1 for members in components.values() if len(members) > max_buildings)
-    logger.info(f"  Mega-nets (>{max_buildings} buildings): {mega_count}")
+    def member_bbl_count(members: list[str]) -> int:
+        return len({reg_bbl.get(reg_id) for reg_id in members if reg_bbl.get(reg_id)})
+
+    mega_count = sum(1 for members in components.values() if member_bbl_count(members) > max_buildings)
+    logger.info(f"  Mega-nets (>{max_buildings} BBLs): {mega_count}")
 
     if mega_count > 0:
         logger.info(f"Pass 2: name-only re-clustering for {mega_count} mega-net(s) …")
         final_components: list[list[str]] = []
 
         for root, members in components.items():
-            if len(members) <= max_buildings:
+            if member_bbl_count(members) <= max_buildings:
                 final_components.append(members)
                 continue
 
             # Re-cluster this mega-net with name signal only
             sub_clusters = split_meganet(members, reg_names, max_buildings)
             split_count  = len(sub_clusters)
-            max_sub      = max(len(s) for s in sub_clusters)
+            max_sub      = max(member_bbl_count(s) for s in sub_clusters)
             logger.info(
-                f"  Mega-net '{root[:40]}' ({len(members)} bldgs) → "
-                f"{split_count} sub-clusters (largest: {max_sub})"
+                f"  Mega-net '{root[:40]}' ({member_bbl_count(members)} BBLs) → "
+                f"{split_count} sub-clusters (largest: {max_sub} BBLs)"
             )
 
             # Recursively check if any sub-cluster is still oversized.
@@ -309,10 +340,10 @@ def build_nyc_networks(skip_property_join: bool = False, max_buildings: int = DE
             # (one network per registration). A real portfolio will be
             # re-unified on the next ingest cycle; a fake mega-net disappears.
             for sub in sub_clusters:
-                if len(sub) > max_buildings:
+                if member_bbl_count(sub) > max_buildings:
                     logger.warning(
                         f"    Sub-cluster still >{max_buildings} after name-only split "
-                        f"({len(sub)} regs) — breaking into {len(sub)} singletons."
+                        f"({member_bbl_count(sub)} BBLs) — breaking into {len(sub)} singletons."
                     )
                     # Each registration becomes its own isolated network
                     for singleton in sub:
@@ -326,6 +357,41 @@ def build_nyc_networks(skip_property_join: bool = False, max_buildings: int = DE
         )
     else:
         final_components = list(components.values())
+
+    # Mega-net splitting can break a multi-registration BBL into more than one
+    # component. Re-merge by BBL so parcel-level code/enforcement stats are not
+    # attributed to multiple separate network cards.
+    if final_components:
+        parent = list(range(len(final_components)))
+
+        def comp_find(i: int) -> int:
+            while parent[i] != i:
+                parent[i] = parent[parent[i]]
+                i = parent[i]
+            return i
+
+        def comp_union(a: int, b: int):
+            ra, rb = comp_find(a), comp_find(b)
+            if ra != rb:
+                parent[rb] = ra
+
+        bbl_owner: dict[str, int] = {}
+        for idx, members in enumerate(final_components):
+            for bbl in {reg_bbl.get(reg_id) for reg_id in members if reg_bbl.get(reg_id)}:
+                if bbl in bbl_owner:
+                    comp_union(idx, bbl_owner[bbl])
+                else:
+                    bbl_owner[bbl] = idx
+
+        merged_components: dict[int, list[str]] = defaultdict(list)
+        for idx, members in enumerate(final_components):
+            merged_components[comp_find(idx)].extend(members)
+        if len(merged_components) != len(final_components):
+            logger.info(
+                f"  BBL re-merge: {len(final_components):,} clusters → "
+                f"{len(merged_components):,} clusters"
+            )
+        final_components = list(merged_components.values())
 
     # ------------------------------------------------------------------
     # 6. Optional: load PLUTO unit counts per BBL
@@ -350,7 +416,7 @@ def build_nyc_networks(skip_property_join: bool = False, max_buildings: int = DE
         all_names: set = set()
         all_addrs: set = set()
         all_bbls:  set = set()
-        borough_counts: dict[str, int] = defaultdict(int)
+        bbl_borough: dict[str, str] = {}
 
         for reg_id in members:
             all_names.update(reg_names.get(reg_id, set()))
@@ -359,23 +425,14 @@ def build_nyc_networks(skip_property_join: bool = False, max_buildings: int = DE
             borough = reg_borough.get(reg_id)
             if bbl:
                 all_bbls.add(bbl)
-            if borough:
-                borough_counts[borough] += 1
+                if borough and bbl not in bbl_borough:
+                    bbl_borough[bbl] = borough
+
+        borough_counts: dict[str, int] = defaultdict(int)
+        for borough in bbl_borough.values():
+            borough_counts[borough] += 1
 
         unit_count = sum(bbl_units.get(bbl, 0) for bbl in all_bbls)
-
-        clean_names = sorted(
-            [n for n in all_names if n and len(n) >= 4],
-            key=lambda n: -len(n)
-        )
-        display_name = clean_names[0] if clean_names else (members[0] if members else "UNKNOWN")
-
-        # Anchor type heuristic
-        root_words = set(display_name.upper().split())
-        anchor_type = "corp" if root_words & BUSINESS_TOKENS else "person"
-
-        # Use a stable, deterministic network_key
-        network_key = min(members)  # smallest registration_id string → stable
 
         # Connection signals: the shared names/corps that actually stitched this
         # cluster together. Person names that appear on 2+ registrations within
@@ -399,9 +456,27 @@ def build_nyc_networks(skip_property_join: bool = False, max_buildings: int = DE
             key=lambda c: -corps_counts[c]
         )[:10]
 
+        clean_names = sorted(
+            [n for n in all_names if n and len(n) >= 4],
+            key=lambda n: -len(n)
+        )
+        display_name = (
+            linking_people[0]
+            if linking_people
+            else (linking_corps[0] if linking_corps else (clean_names[0] if clean_names else (members[0] if members else "UNKNOWN")))
+        )
+
+        # Anchor type heuristic
+        root_words = set(display_name.upper().split())
+        anchor_type = "corp" if root_words & BUSINESS_TOKENS else "person"
+
+        # Use a stable, deterministic network_key
+        network_key = min(members)  # smallest registration_id string → stable
+
         connection_signals = json.dumps({
             "people": linking_people,
             "corps":  linking_corps,
+            "signal_scope": "owner/officer contacts; agent-only management signals excluded",
         })
 
         network_rows.append((
@@ -412,7 +487,7 @@ def build_nyc_networks(skip_property_join: bool = False, max_buildings: int = DE
             sorted(all_addrs)[:50],
             sorted(members),
             sorted(all_bbls),
-            len(members),
+            len(all_bbls) or len(members),
             unit_count,
             json.dumps(dict(borough_counts)),
             connection_signals,
@@ -490,6 +565,13 @@ def build_nyc_networks(skip_property_join: bool = False, max_buildings: int = DE
     logger.info("Top 15 networks by unit count:")
     for name, blds, units, boroughs in cur.fetchall():
         logger.info(f"  {name[:55]:<57} {int(blds or 0):>5} bldgs  {int(units or 0):>7} units  {boroughs}")
+
+    update_network_status(conn, "success", {
+        "message": "NYC owner-contact networks rebuilt",
+        "networks": int(total_written or 0),
+        "buildings": int(bld_total or 0),
+        "units": int(unit_total or 0),
+    })
 
     cur.close()
     conn.close()

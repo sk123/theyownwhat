@@ -9,19 +9,14 @@ server {
         internal;
     }
 
+    # DEV: No maintenance lock check — dev port stays up during maintenance
     location / {
-        if (-f /app_root/maintenance.lock) {
-            return 503;
-        }
         root /usr/share/nginx/html;
         index index.html index.htm;
-        try_files $uri $uri/ /index.html;
+        try_files $uri $uri/ $uri.html /index.html;
     }
 
     location /api/ {
-        if (-f /app_root/maintenance.lock) {
-            return 503;
-        }
         proxy_pass http://api_dev:8000;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;

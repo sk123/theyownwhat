@@ -10,6 +10,7 @@ services:
     volumes:
       - ./api:/app/api
       - ./reporter:/app/reporter
+      - ./nj:/app/nj
       # Mount updater too for dev work
       - ./updater:/app/updater
     environment:

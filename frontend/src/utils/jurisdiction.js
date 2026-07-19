@@ -39,6 +39,7 @@ const STATE_NAMES = {
   VERMONT: 'VT',
   'NEW HAMPSHIRE': 'NH',
   MAINE: 'ME',
+  MINNESOTA: 'MN',
 };
 
 export const JURISDICTION_CONFIG = {
@@ -96,6 +97,18 @@ export const JURISDICTION_CONFIG = {
     includeLabel: 'Include properties outside Miami',
     outsideLabel: 'outside Miami',
   },
+  MINNEAPOLIS: {
+    key: 'MINNEAPOLIS',
+    localLabel: 'Minneapolis',
+    includeLabel: 'Include properties outside Minneapolis',
+    outsideLabel: 'outside Minneapolis',
+  },
+  NJ: {
+    key: 'NJ',
+    localLabel: 'New Jersey',
+    includeLabel: 'Include properties outside New Jersey',
+    outsideLabel: 'outside New Jersey',
+  },
 };
 
 export function getJurisdictionConfig(activeState = 'CT') {
@@ -146,6 +159,8 @@ export function getPropertyState(property) {
   if (source.includes('PHILADELPHIA') || source.includes('PENNSYLVANIA')) return 'PA';
   if (source.includes('CHICAGO') || source.includes('ILLINOIS')) return 'IL';
   if (source.includes('MIAMI') || source.includes('FLORIDA')) return 'FL';
+  if (source.includes('MINNEAPOLIS') || source.includes('MINNESOTA')) return 'MN';
+  if (source.includes('NEW JERSEY') || source.includes('NJ DCA') || source.includes('BHI') || String(property?.bbl || '').startsWith('BHI-')) return 'NJ';
 
   const addressState = extractStateFromAddress(property?.address || property?.location || property?.details?.location);
   if (addressState) return addressState;
@@ -160,6 +175,7 @@ export function getPropertyState(property) {
   if (city === 'PHILADELPHIA') return 'PA';
   if (city === 'CHICAGO') return 'IL';
   if (city === 'MIAMI' || city === 'MIAMI-DADE') return 'FL';
+  if (city === 'MINNEAPOLIS') return 'MN';
 
   return null;
 }
@@ -186,6 +202,10 @@ export function isPropertyInActiveJurisdiction(property, activeState = 'CT') {
       return city === 'CHICAGO' || source.includes('CHICAGO');
     case 'MIAMI':
       return city === 'MIAMI' || city === 'MIAMI-DADE' || source.includes('MIAMI');
+    case 'MINNEAPOLIS':
+      return city === 'MINNEAPOLIS' || source.includes('MINNEAPOLIS');
+    case 'NJ':
+      return state === 'NJ' || source.includes('NEW JERSEY') || source.includes('NJ DCA') || source.includes('BHI') || String(property?.bbl || '').startsWith('BHI-');
     case 'CT':
     default:
       return state === 'CT';
@@ -255,5 +275,7 @@ function getPropertyStateForJurisdiction(activeState) {
   if (activeState === 'PHILADELPHIA') return 'PA';
   if (activeState === 'CHICAGO') return 'IL';
   if (activeState === 'MIAMI') return 'FL';
+  if (activeState === 'MINNEAPOLIS') return 'MN';
+  if (activeState === 'NJ') return 'NJ';
   return 'CT';
 }

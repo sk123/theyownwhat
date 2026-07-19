@@ -26,7 +26,7 @@ const MultiPropertyMapModal = React.lazy(() => import('./components/MultiPropert
 const FreshnessModal = React.lazy(() => import('./components/FreshnessModal'));
 const FeedbackModal = React.lazy(() => import('./components/FeedbackModal'));
 
-const CITY_EXPLORER_STATES = new Set(['NY', 'DC', 'BALTIMORE', 'BOSTON', 'DETROIT', 'PHILADELPHIA', 'CHICAGO', 'MIAMI']);
+const CITY_EXPLORER_STATES = new Set(['NY', 'DC', 'BALTIMORE', 'BOSTON', 'DETROIT', 'PHILADELPHIA', 'CHICAGO', 'MIAMI', 'MINNEAPOLIS', 'NJ']);
 const DATASET_STORAGE_KEY = 'theyownwhat.dataset';
 const DATASET_PATHS = {
   CT: '/ct',
@@ -38,6 +38,8 @@ const DATASET_PATHS = {
   PHILADELPHIA: '/philadelphia',
   CHICAGO: '/chicago',
   MIAMI: '/miami',
+  MINNEAPOLIS: '/minneapolis',
+  NJ: '/nj',
 };
 const PATH_DATASETS = Object.fromEntries(Object.entries(DATASET_PATHS).map(([state, path]) => [path, state]));
 
@@ -91,6 +93,16 @@ const SEO_BY_DATASET = {
     title: 'They Own WHAT?? | Miami Landlord & Property Explorer',
     description: 'Explore Miami property records, owner networks, and Florida business registration data.',
     path: '/miami',
+  },
+  MINNEAPOLIS: {
+    title: 'They Own WHAT?? | Minneapolis Landlord & Property Explorer',
+    description: 'Explore Minneapolis property records, active rental licenses, owner networks, and municipal database.',
+    path: '/minneapolis',
+  },
+  NJ: {
+    title: 'They Own WHAT?? | New Jersey BHI Landlord & Property Explorer',
+    description: 'Explore New Jersey DCA BHI active-building registration records and conservative owner networks from public source-loaded data.',
+    path: '/nj',
   },
 };
 
@@ -171,19 +183,12 @@ function NetworkJumpBar({ propertyCount, businessCount, principalCount, activeTa
 
 // NOTE: This is a simplified App.jsx. In a real scenario we'd use React Router.
 function App() {
-  const showValidationCities = typeof window !== 'undefined' && (new URLSearchParams(window.location.search).get('dev') === 'true' || new URLSearchParams(window.location.search).get('validate') === 'true');
   const initialDataset = (() => {
     const raw = datasetFromPath();
-    if (!showValidationCities && (raw === 'CHICAGO' || raw === 'MIAMI' || raw === 'PHILADELPHIA')) {
-      return null;
-    }
     return raw;
   })();
   const initialStoredDataset = (() => {
     const stored = getStoredDataset();
-    if (!showValidationCities && (stored === 'CHICAGO' || stored === 'MIAMI' || stored === 'PHILADELPHIA')) {
-      return null;
-    }
     return stored;
   })();
   const [view, setView] = useState(initialDataset ? datasetHomeView(initialDataset) : 'datasets'); // datasets | home | dashboard | toolbox | hartford | nyc
@@ -316,6 +321,8 @@ function App() {
         'BOSTON': 'BOSTON',
         'DETROIT': 'DETROIT',
         'DC': 'DC',
+        'NJ': 'NJ',
+        'NEW JERSEY': 'NJ',
       };
       if (stateMap[cityUpper]) {
         setActiveState(stateMap[cityUpper]);
@@ -728,7 +735,9 @@ function App() {
       api.get('/system/status')
         .then(data => {
           if (data && data.maintenance !== undefined) {
-            setMaintenanceMode(data.maintenance);
+            const isDevPort = window.location.port === '6264';
+            const isMaintenanceTest = new URLSearchParams(window.location.search).has('testMaintenance');
+            setMaintenanceMode(isDevPort && !isMaintenanceTest ? false : data.maintenance);
           }
         })
         .catch(() => {
@@ -752,7 +761,10 @@ function App() {
         toolboxEnabled={toolboxEnabled}
         onShowFreshness={() => setShowFreshness(true)}
         onReportIssue={() => setShowFeedback(true)}
-        onHartfordPlayground={() => setView('hartford')}
+        onHartfordPlayground={() => {
+          setActiveState('CT');
+          setView('hartford');
+        }}
         onBurstDetector={evictionToolsEnabled ? () => setView('burst') : null}
         evictionToolsEnabled={evictionToolsEnabled}
         currentView={view}
@@ -803,18 +815,8 @@ function App() {
                 activeDataset={activeState}
                 lastDataset={lastDataset}
                 onSelect={(state) => openDataset(state)}
-                onOpenMonitor={(city) => {
-                  let stateVal = 'CT';
-                  if (city === 'NY' || city === 'NYC') stateVal = 'NY';
-                  else if (city === 'BALTIMORE') stateVal = 'Balt';
-                  else if (city === 'BOSTON') stateVal = 'Boston';
-                  else if (city === 'DETROIT') stateVal = 'Detroit';
-                  else if (city === 'DC' || city === 'D.C.') stateVal = 'DC';
-                  else if (city === 'PHILADELPHIA') stateVal = 'PHILADELPHIA';
-                  else if (city === 'CHICAGO') stateVal = 'CHICAGO';
-                  else if (city === 'MIAMI') stateVal = 'MIAMI';
-
-                  setActiveState(stateVal);
+                onOpenMonitor={() => {
+                  setActiveState('CT');
                   setView('hartford');
                 }}
               />

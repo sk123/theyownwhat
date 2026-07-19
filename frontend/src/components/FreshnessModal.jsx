@@ -18,7 +18,7 @@ import {
     X,
 } from 'lucide-react';
 
-const DATASET_ORDER = ['CT', 'NYC', 'DC', 'BALTIMORE', 'BOSTON', 'DETROIT'];
+const DATASET_ORDER = ['CT', 'NYC', 'DC', 'BALTIMORE', 'BOSTON', 'DETROIT', 'MINNEAPOLIS', 'NJ'];
 
 const DATASET_META = {
     CT: { label: 'Connecticut', short: 'CT', accent: 'blue' },
@@ -30,6 +30,8 @@ const DATASET_META = {
     PHILADELPHIA: { label: 'Philadelphia', short: 'Philadelphia', accent: 'violet' },
     CHICAGO: { label: 'Chicago', short: 'Chicago', accent: 'sky' },
     MIAMI: { label: 'Miami', short: 'Miami', accent: 'teal' },
+    MINNEAPOLIS: { label: 'Minneapolis', short: 'Mpls', accent: 'blue' },
+    NJ: { label: 'New Jersey', short: 'NJ', accent: 'cyan' },
     OTHER: { label: 'Other Sources', short: 'Other', accent: 'slate' },
 };
 
@@ -69,6 +71,8 @@ function getDatasetKey(row) {
     if (municipality.includes('PHILADELPHIA')) return 'PHILADELPHIA';
     if (municipality.includes('CHICAGO')) return 'CHICAGO';
     if (municipality.includes('MIAMI')) return 'MIAMI';
+    if (municipality.includes('MINNEAPOLIS')) return 'MINNEAPOLIS';
+    if (state === 'NJ' || municipality.includes('NEW JERSEY') || municipality === 'NJ') return 'NJ';
     return 'OTHER';
 }
 
@@ -165,7 +169,7 @@ function normalizeRows(data) {
             datasets: Array.isArray(row.datasets) ? row.datasets : [],
             total_properties: Number(row.total_properties || 0),
         };
-    });
+    }).filter(row => row.datasetKey !== 'PHILADELPHIA' && row.datasetKey !== 'CHICAGO');
 }
 
 function matchesSearch(row, term) {
@@ -319,7 +323,7 @@ const FreshnessModal = ({ isOpen, onClose }) => {
     };
 
     return (
-        <div className="fixed inset-0 z-[100] overflow-y-auto bg-slate-950/60 p-3 backdrop-blur-sm md:p-5 flex justify-center items-start md:items-center" onClick={onClose}>
+        <div className="fixed inset-0 z-[200] overflow-y-auto bg-slate-950/60 px-3 pt-16 pb-3 backdrop-blur-sm md:p-5 flex justify-center items-start md:items-center" onClick={onClose}>
             <div
                 className="flex w-full max-w-7xl flex-col rounded-2xl border border-slate-200 bg-slate-50 shadow-2xl my-auto max-h-[90vh] overflow-hidden"
                 onClick={(event) => event.stopPropagation()}

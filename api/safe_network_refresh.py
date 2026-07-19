@@ -14,6 +14,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
+GUREVITCH_MIN_PROPERTIES = int(os.environ.get("GUREVITCH_MIN_PROPERTIES", "900"))
+GUREVITCH_MAX_PROPERTIES = int(os.environ.get("GUREVITCH_MAX_PROPERTIES", "2500"))
 
 def setup_shadow_tables(conn):
     """Creates shadow tables for safe writing."""
@@ -55,17 +57,61 @@ def validate_shadow_data(conn):
     with conn.cursor(cursor_factory=RealDictCursor) as cursor:
         cursor.execute("SELECT COUNT(*) as count FROM networks")
         live_count = cursor.fetchone()['count']
-        
+
         cursor.execute("SELECT COUNT(*) as count FROM networks_shadow")
         shadow_count = cursor.fetchone()['count']
-        
+
         if live_count > 0:
             diff_percent = abs(live_count - shadow_count) / live_count
             logger.info(f"Current variance: {diff_percent:.1%}")
             # Relaxing for this restoration run
-            # if diff_percent > 0.5: 
+            # if diff_percent > 0.5:
             #     return False
-        
+
+        cursor.execute("""
+            WITH menachem_networks AS (
+                SELECT DISTINCT network_id
+                FROM entity_networks_shadow
+                WHERE entity_name ILIKE '%%MENACHEM%%GUREVITCH%%'
+                   OR entity_name ILIKE '%%GUREVITCH%%MENACHEM%%'
+            )
+            SELECT
+                n.id,
+                n.primary_name,
+                n.total_properties,
+                EXISTS (
+                    SELECT 1
+                    FROM entity_networks_shadow y
+                    WHERE y.network_id = n.id
+                      AND (
+                          y.entity_name ILIKE '%%YEHUDA%%GUREVITCH%%'
+                          OR y.entity_name ILIKE '%%GUREVITCH%%YEHUDA%%'
+                      )
+                ) AS has_yehuda
+            FROM networks_shadow n
+            JOIN menachem_networks m ON m.network_id = n.id
+            ORDER BY n.total_properties DESC
+            LIMIT 5
+        """)
+        gurevitch_rows = cursor.fetchall()
+        valid_gurevitch = any(
+            row["has_yehuda"]
+            and GUREVITCH_MIN_PROPERTIES <= (row["total_properties"] or 0) <= GUREVITCH_MAX_PROPERTIES
+            for row in gurevitch_rows
+        )
+        if not valid_gurevitch:
+            logger.error(
+                "❌ Gurevitch validation failed. Expected Menachem+Yehuda with %s-%s properties; got %s",
+                GUREVITCH_MIN_PROPERTIES,
+                GUREVITCH_MAX_PROPERTIES,
+                [dict(row) for row in gurevitch_rows],
+            )
+            return False
+
+        logger.info(
+            "✅ Gurevitch validation passed: %s",
+            [dict(row) for row in gurevitch_rows],
+        )
         logger.info(f"✅ Validation passed: Live={live_count}, Shadow={shadow_count}")
         return True
 
@@ -76,11 +122,11 @@ def atomic_swap(conn):
         cursor.execute("ALTER TABLE networks RENAME TO networks_old;")
         cursor.execute("ALTER TABLE entity_networks RENAME TO entity_networks_old;")
         cursor.execute("ALTER TABLE ownership_links RENAME TO ownership_links_old;")
-        
+
         cursor.execute("ALTER TABLE networks_shadow RENAME TO networks;")
         cursor.execute("ALTER TABLE entity_networks_shadow RENAME TO entity_networks;")
         cursor.execute("ALTER TABLE ownership_links_shadow RENAME TO ownership_links;")
-        
+
         cursor.execute("DROP TABLE networks_old CASCADE;")
         cursor.execute("DROP TABLE entity_networks_old CASCADE;")
         cursor.execute("DROP TABLE ownership_links_old CASCADE;")
@@ -99,26 +145,26 @@ def run_refresh(dry_run=False, skip_linking=False, skip_emails=False):
                 logger.info("🧹 PHASE 0: Clearing stale property links...")
                 # Optimization: Only update rows that actually have data
                 cur.execute("""
-                    UPDATE properties 
+                    UPDATE properties
                     SET business_id = NULL, principal_id = NULL
                     WHERE business_id IS NOT NULL OR principal_id IS NOT NULL
                 """)
             conn.commit()
-            
+
             # 1. Link properties
             link_properties_to_entities(conn)
 
         else:
             logger.info("⏩ PHASES 0 & 1 SKIPPED: Assuming property links are already set.")
-        
+
         # 2. Build graph and discover networks
         if skip_emails:
             logger.info("⚠️ DIAGNOSTIC MODE: Skipping email matching.")
         else:
             logger.info("📧 Email Matching ENABLED.")
-            
+
         graph_data = build_graph(conn, skip_emails=skip_emails)
-        
+
         logger.info("Gathering seed nodes...")
         seeds = set()
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -126,13 +172,13 @@ def run_refresh(dry_run=False, skip_linking=False, skip_emails=False):
             for r in cur: seeds.add(('business', r['business_id']))
             cur.execute("SELECT DISTINCT principal_id FROM properties WHERE principal_id IS NOT NULL")
             for r in cur: seeds.add(('principal', r['principal_id']))
-            
+
         networks = discover_networks_depth_limited(graph_data, list(seeds))
-        
+
         # 3. Setup shadow and store
         setup_shadow_tables(conn)
         store_networks_shadow(conn, networks, graph_data=graph_data)
-        
+
         # 4. Validate and Swap
         if validate_shadow_data(conn):
             if dry_run:
@@ -140,7 +186,7 @@ def run_refresh(dry_run=False, skip_linking=False, skip_emails=False):
             else:
                 atomic_swap(conn)
                 logger.info("✅ Refresh cycle complete. Networks updated.")
-                
+
                 # 5. Flush Cache & Rebuild Insights
                 # We do this AFTER the swap so the new data is live in 'networks', 'entity_networks', etc.
                 logger.info("🔄 Triggering Insights Refresh...")
@@ -149,7 +195,7 @@ def run_refresh(dry_run=False, skip_linking=False, skip_emails=False):
                     with conn.cursor() as cur:
                         cur.execute("DELETE FROM kv_cache WHERE key = 'insights'")
                     conn.commit()
-                    
+
                     # Rebuild
                     from generate_insights import rebuild_cached_insights
                     rebuild_cached_insights(db_conn=conn)
@@ -158,7 +204,7 @@ def run_refresh(dry_run=False, skip_linking=False, skip_emails=False):
                     logger.error(f"❌ Insights Rebuild Failed: {e}")
             return True
         return False
-            
+
     except Exception as e:
         logger.error(f"Refresh failed: {e}")
         if conn: conn.rollback()

@@ -83,7 +83,7 @@ export default function ManageTeamModal({ isOpen, onClose, groupId }) {
     if (!isOpen) return null;
 
     return (
-        <div className="fixed inset-0 z-[110] overflow-y-auto bg-slate-900/60 backdrop-blur-sm p-4 flex justify-center items-start md:items-center" onClick={onClose}>
+        <div className="fixed inset-0 z-[210] overflow-y-auto bg-slate-900/60 backdrop-blur-sm px-4 pt-16 pb-4 flex justify-center items-start md:items-center md:p-4" onClick={onClose}>
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl flex flex-col my-auto h-auto max-h-none md:h-[80vh] overflow-visible md:overflow-hidden animate-in fade-in zoom-in duration-200" onClick={e => e.stopPropagation()}>
                 <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
                     <div className="flex items-center gap-3">
