@@ -187,7 +187,7 @@ export default function AboutModal({ isOpen, onClose, onShowFreshness }) {
                                 It was, but even the inventors didn't imagine people would eventually use the system to create separate entities for each bad act. The effect? Everything they do is split across a thousand artificial buckets, each responsible for a thousandth of their misdeeds, so that it's irrelevant whether the totality is so egregious that law (usually state law) might allow holding the actual human accountable (<span className="italic">"piercing the veil"</span> is the euphemism) because each misdeed is treated and litigated as an isolated incident by a small actor.
                             </p>
                             <p className="text-sm leading-relaxed text-slate-700 mt-3">
-                                Years later, as a fair housing lawyer, I filed numerous complaints against what appeared to be mom-and-pop LLCs - small, independent landlords unconnected to one another. I realized (too late) that they were often tentacles manufactured by massive, often out-of-state investors extracting wealth from our cities. This has been my on-the-side passion project for the last six years.
+                                Years later, as a fair housing lawyer, I filed numerous lawsuits against what appeared to be mom-and-pop LLCs - small, independent landlords unconnected to one another. I realized (too late) that they were often tentacles manufactured by massive, often out-of-state investors extracting wealth from our cities. This has been my on-the-side passion project for the last six years.
                             </p>
                         </div>
 

@@ -4026,11 +4026,19 @@ def _calculate_completeness_matrix(conn):
         prop_rows = cursor.fetchall()
 
         # Fetch system sources
-        cursor.execute("SELECT source_name, last_refreshed_at, refresh_status FROM data_source_status WHERE source_type = 'system'")
+        cursor.execute("""
+            SELECT source_name, last_refreshed_at, refresh_status
+            FROM data_source_status
+            WHERE source_type = 'system' OR source_name = 'HARTFORD_CODE_ENFORCEMENT'
+        """)
         system_rows = cursor.fetchall()
         system_freshness = {}
         for r in system_rows:
-             key = r['source_name'].lower().replace(' ', '_') + "_last_updated"
+             name = r['source_name']
+             if name == 'HARTFORD_CODE_ENFORCEMENT':
+                 key = 'hartford_ce_last_updated'
+             else:
+                 key = name.lower().replace(' ', '_') + "_last_updated"
              system_freshness[key] = r['last_refreshed_at'].isoformat() if r['last_refreshed_at'] else None
 
         city_dataset_prefixes = {
