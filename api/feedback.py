@@ -11,6 +11,15 @@ from api.db import get_db_connection
 from fastapi import APIRouter, HTTPException, Depends
 from psycopg2.extras import RealDictCursor
 
+from dotenv import load_dotenv
+
+# Load .env file if available
+env_path = os.path.join(os.path.dirname(__file__), "..", ".env")
+if os.path.exists(env_path):
+    load_dotenv(env_path)
+else:
+    load_dotenv()
+
 router = APIRouter()
 
 # ---------------------------------------------------------------------------
