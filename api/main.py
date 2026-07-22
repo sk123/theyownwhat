@@ -5391,20 +5391,33 @@ def get_monitor_city_stats(
 
 
 @app.get("/api/monitor/cities", response_model=List[str])
-def get_monitor_cities(conn=Depends(get_db_connection)):
-    """Top municipalities by property count for the city monitor selector."""
+def get_monitor_cities(evictions_only: bool = Query(False), conn=Depends(get_db_connection)):
+    """Top municipalities by property count or eviction case count for the city monitor selector."""
     try:
         with conn.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT UPPER(TRIM(property_city)) AS city
-                FROM properties
-                WHERE property_city IS NOT NULL AND TRIM(property_city) <> ''
-                GROUP BY UPPER(TRIM(property_city))
-                ORDER BY COUNT(*) DESC, UPPER(TRIM(property_city))
-                LIMIT 200
-                """
-            )
+            if evictions_only:
+                cursor.execute(
+                    """
+                    SELECT UPPER(TRIM(p.property_city)) AS city
+                    FROM properties p
+                    JOIN evictions e ON e.property_id = p.id
+                    WHERE p.property_city IS NOT NULL AND TRIM(p.property_city) <> ''
+                    GROUP BY UPPER(TRIM(p.property_city))
+                    HAVING COUNT(e.id) > 0
+                    ORDER BY COUNT(e.id) DESC, UPPER(TRIM(p.property_city))
+                    """
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT UPPER(TRIM(property_city)) AS city
+                    FROM properties
+                    WHERE property_city IS NOT NULL AND TRIM(property_city) <> ''
+                    GROUP BY UPPER(TRIM(property_city))
+                    ORDER BY COUNT(*) DESC, UPPER(TRIM(property_city))
+                    LIMIT 200
+                    """
+                )
             ct_cities = [r[0] for r in cursor.fetchall() if r and r[0]]
             ct_cities = [c for c in ct_cities if c != "HARTFORD"]
             non_ct_keys = list(NON_CT_MONITOR_CITIES.keys())

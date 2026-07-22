@@ -103,23 +103,25 @@ def run_weekly_app_audit():
                 if s["refresh_status"] != "success":
                     audit_results["issues_found"].append(f"Jurisdiction {name} status is '{s['refresh_status']}' (last refreshed {ts})")
 
-            # 4. Rap Sheets & Eviction Surge Detector Audit
-            logger.info("4. Auditing Rap Sheets & Eviction Surge Detector...")
-            try:
-                cur.execute("SELECT COUNT(*) as bbl_count FROM nyc_bbl_stats")
-                nyc_stats = cur.fetchone()["bbl_count"]
-                audit_results["rap_sheet_stats"]["nyc_bbl_stats"] = nyc_stats
-            except Exception as e:
-                conn.rollback()
-                audit_results["rap_sheet_stats"]["nyc_bbl_stats"] = f"Unavailable ({e})"
-
-            try:
-                cur.execute("SELECT COUNT(*) as surge_count FROM eviction_surges")
-                surges = cur.fetchone()["surge_count"]
-                audit_results["eviction_surges"] = surges
-            except Exception:
-                conn.rollback()
-                audit_results["eviction_surges"] = 0
+            # 4. Nationwide Court & Administrative Eviction / Code Enforcement Audit
+            logger.info("4. Auditing Nationwide Court & Administrative Eviction/Code Data Feeds...")
+            court_data_sources = [
+                ("CT Judicial Evictions", "SELECT COUNT(*) FROM evictions"),
+                ("NYC DOI Marshals & HPD Violations", "SELECT COUNT(*) FROM nyc_bbl_stats"),
+                ("NJ BHI Active Multi-family Registrations", "SELECT COUNT(*) FROM nj_bhi_buildings"),
+                ("Maryland / Baltimore Evictions & Code Orders", "SELECT COUNT(*) FROM baltimore_evictions"),
+                ("Eviction Surge Detector Aggregates", "SELECT COUNT(*) FROM eviction_surges"),
+            ]
+            for label, query in court_data_sources:
+                try:
+                    cur.execute(query)
+                    cnt = cur.fetchone()["count"]
+                    audit_results["rap_sheet_stats"][label] = cnt
+                    logger.info(f"  - {label:<45}: {cnt:,} records")
+                except Exception as e:
+                    conn.rollback()
+                    audit_results["rap_sheet_stats"][label] = f"Unavailable ({e})"
+                    logger.warning(f"  - {label:<45}: Unavailable ({e})")
 
             # 5. Direct Source Record Link Audit
             logger.info("5. Auditing Direct Source Links across Properties...")

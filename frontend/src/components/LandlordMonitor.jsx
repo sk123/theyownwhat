@@ -170,7 +170,7 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
     });
 
     return (
-        <div className="flex flex-col h-full min-h-0 bg-slate-50/50">
+        <div className="flex flex-col h-full min-h-0 overflow-y-auto md:overflow-hidden bg-slate-50/50 touch-pan-y">
             {/* Collapsible Hero Header — hides on scroll */}
             <div className={`transition-all duration-300 ease-out overflow-hidden shrink-0 ${isScrolled ? 'max-h-0 opacity-0' : 'max-h-[300px] opacity-100'}`}>
                 <div className="p-8 bg-gradient-to-r from-slate-900 to-slate-800 text-white relative overflow-hidden">
@@ -361,7 +361,7 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
             </div>
 
             {/* Results */}
-            <div className="flex-1 overflow-auto overscroll-contain min-h-0 p-8 pb-24 md:pb-8" ref={scrollContainerRef} onScroll={handleScroll} style={{ WebkitOverflowScrolling: 'touch' }}>
+            <div className="flex-1 overflow-y-visible md:overflow-auto overscroll-contain min-h-0 p-4 md:p-8 pb-32 md:pb-8 touch-pan-y" ref={scrollContainerRef} onScroll={handleScroll} style={{ WebkitOverflowScrolling: 'touch' }}>
                 <div className="max-w-6xl mx-auto space-y-4">
                     {!rapSheetsEnabled ? (
                         <div className="p-10 text-center bg-white rounded-3xl border border-amber-200 shadow-sm">

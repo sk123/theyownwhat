@@ -51,7 +51,7 @@ export default function BurstDetector({ onSelectEntity }) {
     const [sortBy, setSortBy] = useState('multiplier'); // 'multiplier' | 'peak' | 'total'
 
     useEffect(() => {
-        api.get('/monitor/cities')
+        api.get('/monitor/cities?evictions_only=true')
             .then(rows => { if (Array.isArray(rows)) setCities(rows); })
             .catch(err => console.error('Failed to load cities', err));
     }, []);

@@ -1187,7 +1187,7 @@ function App() {
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
-              className="h-full w-full"
+              className="h-full w-full min-h-0 flex flex-col overflow-y-auto md:overflow-hidden touch-pan-y"
             >
               <LandlordMonitor
                 initialCity={
