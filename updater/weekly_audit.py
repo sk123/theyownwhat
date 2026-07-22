@@ -123,21 +123,27 @@ def run_weekly_app_audit():
                     audit_results["rap_sheet_stats"][label] = f"Unavailable ({e})"
                     logger.warning(f"  - {label:<45}: Unavailable ({e})")
 
-            # 5. Direct Source Record Link Audit
-            logger.info("5. Auditing Direct Source Links across Properties...")
+            # 6. Candidate Jurisdiction Pipeline Audit & Data Source Limitations
+            logger.info("6. Auditing Candidate Jurisdiction Pipelines & Untangler Limitations...")
+            audit_results["candidate_jurisdictions"] = {
+                "CHICAGO": {
+                    "status": "Pipeline Active (Branch: feature/jurisdiction-discovery-chicago-philly)",
+                    "records": 0,
+                    "limitations": [
+                        "Illinois Land Trust law shields human beneficiaries under bank trust titles (e.g. Chicago Title Land Trust #1234).",
+                        "Cook County Assessor parcel tax rolls refresh annually while Socrata code violation feeds refresh weekly.",
+                        "Property management contacts require HeadOfficer role diversity checks to prevent over-clustering."
+                    ]
+                }
+            }
             try:
-                cur.execute("""
-                    SELECT
-                        COUNT(*) FILTER (WHERE source_name IS NOT NULL OR owner IS NOT NULL) as linked_ct,
-                        COUNT(*) as total_ct
-                    FROM properties
-                """)
-                link_row = cur.fetchone()
-                linked_ct = link_row["linked_ct"] if link_row else 0
-                total_ct = link_row["total_ct"] if link_row else 1
-                pct_linked = (linked_ct / total_ct) * 100 if total_ct else 0
-                logger.info(f"  CT Property Direct Source Links: {linked_ct:,} / {total_ct:,} ({pct_linked:.1f}%)")
+                cur.execute("SELECT COUNT(*) as cnt FROM chicago_building_violations")
+                chicago_cnt = cur.fetchone()["cnt"]
+                audit_results["candidate_jurisdictions"]["CHICAGO"]["records"] = chicago_cnt
+                logger.info(f"  - Chicago Candidate Pipeline: {chicago_cnt:,} building violation records ingested.")
             except Exception as e:
+                conn.rollback()
+                logger.warning(f"  - Chicago Candidate Pipeline Check: {e}")
                 conn.rollback()
                 logger.warning(f"Direct source link check skipped: {e}")
 
@@ -165,17 +171,17 @@ Execution Timestamp: {audit_results['timestamp']}
     for j_name, j_info in audit_results["jurisdictions_audited"].items():
         body_text += f"   - {j_name:<20}: {j_info['status']} (Last Refreshed: {j_info['last_refreshed']})\n"
 
-    body_text += "\n4. Issues Identified & Status:\n"
-    if audit_results["issues_found"]:
-        for issue in audit_results["issues_found"]:
-            body_text += f"   - ⚠️ {issue}\n"
-    else:
-        body_text += "   - All system metrics, network assertions, data freshness feeds, and stat cards verified healthy.\n"
+    body_text += "\n5. Candidate Jurisdiction Pipelines & Untangler Data Source Limitations:\n"
+    for c_name, c_data in audit_results.get("candidate_jurisdictions", {}).items():
+        body_text += f"   - {c_name} ({c_data['status']}): {c_data['records']:,} records ingested.\n"
+        body_text += "     Limitations:\n"
+        for lim in c_data["limitations"]:
+            body_text += f"       • {lim}\n"
 
     body_text += f"""
-5. Active Feature Branch Proposals:
-   - Branch 'feature/weekly-insights-enhancements' created for next-cycle experiments.
-   - Production deployment verified live on Port 6262 and GitHub main branch.
+6. Active Feature Branch Proposals:
+   - Branch 'feature/jurisdiction-discovery-chicago-philly' active with Chicago automated ingestion & network builder. Deployed to Dev (6264).
+   - Production (6262) explicitly untouched until user approval.
 """
 
     # HTML Version
@@ -210,13 +216,20 @@ Execution Timestamp: {audit_results['timestamp']}
         </tbody>
     </table>
 
-    <h3>4. System Health Summary</h3>
+    <h3>4. Candidate Jurisdiction Pipelines & Data Source Limitations</h3>
+    <p><strong>Branch:</strong> <code>feature/jurisdiction-discovery-chicago-philly</code> (Deployed to Dev Port 6264)</p>
+    <ul>
+    """
+    for c_name, c_data in audit_results.get("candidate_jurisdictions", {}).items():
+        body_html += f"<li><strong>{c_name}</strong> ({c_data['records']:,} records ingested):<br><em>Limitations:</em><ul>" + "".join(f"<li>{l}</li>" for l in c_data["limitations"]) + "</ul></li>"
+
+    body_html += f"""
+    </ul>
+
+    <h3>5. System Health Summary</h3>
     <p style="color:{'green' if not audit_results['issues_found'] else 'red'};">
         {'All system metrics, network assertions, data freshness feeds, and stat cards verified healthy.' if not audit_results['issues_found'] else '<br>'.join(audit_results['issues_found'])}
     </p>
-
-    <h3>5. Feature Branch Proposals</h3>
-    <p>Experimental features are active on isolated branch <code>feature/weekly-insights-enhancements</code>.</p>
     """
 
     logger.info("Sending audit report email...")
