@@ -73,6 +73,25 @@ class TestNetworkAlgorithmsAndNormalization(unittest.TestCase):
             rows = cur.fetchall()
             self.assertTrue(len(rows) >= 1, "Edelkopf principal network missing")
 
+    def test_nyc_speliotis_burgess_separation(self):
+        """Assert MHANY (Ismene Speliotis) and Banana Kelly (Hope Burgess) remain separate in NYC HPD and are NEVER merged."""
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT c.full_name_norm, r.bbl
+                FROM nyc_hpd_contacts c
+                JOIN nyc_hpd_registrations r ON c.registration_id = r.registration_id
+                WHERE c.full_name_norm LIKE '%SPELIOTIS%' OR c.full_name_norm LIKE '%BURGESS%'
+            """)
+            rows = cur.fetchall()
+            speliotis_bbls = set(r['bbl'] for r in rows if 'SPELIOTIS' in r['full_name_norm'])
+            burgess_bbls = set(r['bbl'] for r in rows if 'BURGESS' in r['full_name_norm'])
+
+            shared_bbls = speliotis_bbls.intersection(burgess_bbls)
+            self.assertEqual(
+                len(shared_bbls), 0,
+                f"CATASTROPHIC OVERINCLUSION: MHANY (Speliotis) and Banana Kelly (Burgess) share {len(shared_bbls)} BBLs: {shared_bbls}"
+            )
+
     def test_address_normalization(self):
         """Audit fine and coarse address normalization routines."""
         self.assertEqual(normalize_mailing_address("123 Main St, Suite 400"), "123 MAIN STREET #400")
