@@ -183,7 +183,7 @@ const DATASETS = [
   },
 ];
 
-const PRODUCTION_DATASET_KEYS = new Set(['CT', 'NY', 'DC', 'BALTIMORE', 'BOSTON', 'DETROIT', 'MIAMI']);
+const PRODUCTION_DATASET_KEYS = new Set(['CT', 'NY', 'DC', 'BALTIMORE', 'BOSTON', 'DETROIT', 'MIAMI', 'MINNEAPOLIS', 'NJ']);
 const RELIABLE_UNIT_DATASET_KEYS = new Set(['CT', 'NY', 'BALTIMORE', 'MIAMI', 'MINNEAPOLIS', 'NJ']);
 
 const TONE_CLASSES = {
