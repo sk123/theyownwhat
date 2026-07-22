@@ -972,6 +972,8 @@ function App() {
                      initialEntityName={networkData.initialEntityName}
                      onBack={handleReset}
                      onOpenFeedback={handleOpenFeedback}
+                     onViewProperty={(prop) => setSelectedProperty(prop)}
+                     onSelectEntity={(id, type, name, city) => loadNetwork(id, type, name, city)}
                      onExport={() => {
                        const csvContent = "data:text/csv;charset=utf-8,"
                          + "Address,City,Owner,Assessed Value,Appraised Value\n"

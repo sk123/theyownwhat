@@ -235,7 +235,19 @@ const InvestigativeReportView = ({ content }) => {
     );
 };
 
-export default function NetworkProfileCard({ networkData, stats, networkName, initialEntityName, onBack, onExport, featureNav = null, onOpenFeedback }) {
+export default function NetworkProfileCard({
+    networkData,
+    stats,
+    networkName,
+    initialEntityName,
+    onBack,
+    onExport,
+    featureNav = null,
+    onOpenFeedback,
+    onViewProperty,
+    onSelectEntity,
+    onFilterSearch
+}) {
     const [showReport, setShowReport] = useState(false);
     const [reportLoading, setReportLoading] = useState(false);
     const [reportContent, setReportContent] = useState(null);
@@ -245,6 +257,13 @@ export default function NetworkProfileCard({ networkData, stats, networkName, in
     const [editedContent, setEditedContent] = useState('');
     const [saveStatus, setSaveStatus] = useState(null);
     const [expandedSigs, setExpandedSigs] = useState({ people: false, corps: false, addresses: false });
+
+    // Interactive Transaction & Layout States
+    const [txFilter, setTxFilter] = useState('all'); // 'all' | 'acquired' | 'disposed'
+    const [showTxModal, setShowTxModal] = useState(false);
+    const [txModalFilter, setTxModalFilter] = useState('all'); // 'all' | 'acquired' | 'disposed' | 'intra' | 'inter'
+    const [txSearch, setTxSearch] = useState('');
+    const [isCompactLayout, setIsCompactLayout] = useState(false);
 
     if (!networkData) return null;
 
@@ -315,7 +334,6 @@ export default function NetworkProfileCard({ networkData, stats, networkName, in
         }
     };
 
-    // Helper to calculate connection count (Robust Logic)
     const principalCounts = new Map();
     if (networkData.links) {
         networkData.links.forEach(l => {
@@ -329,17 +347,15 @@ export default function NetworkProfileCard({ networkData, stats, networkName, in
     const normalizeId = (id) => {
         if (!id) return '';
         let n = String(id).toUpperCase().trim();
-        n = n.replace(/[`"'.]/g, ''); // remove punctuation
+        n = n.replace(/[`"'.]/g, '');
 
-        // Remove Suffixes
         const suffixes = ['JR', 'SR', 'III', 'IV', 'II', 'ESQ', 'MD', 'PHD', 'DDS'];
         const suffixRegex = new RegExp(`\\s+(${suffixes.join('|')})$`);
         n = n.replace(suffixRegex, '');
 
-        n = n.replace(/\s+/g, ' '); // collapse spaces
+        n = n.replace(/\s+/g, ' ');
         n = n.trim();
 
-        // Handle Last, First
         if (n.includes(',')) {
             const parts = n.split(',').map(s => s.trim());
             if (parts.length >= 2) {
@@ -348,183 +364,187 @@ export default function NetworkProfileCard({ networkData, stats, networkName, in
                 n = `${first} ${last}`;
             }
         }
-        n = n.replace(/\s+/g, ' ').trim();
-
-        // Sort parts alphabetically (matches backend canonicalize_person_name)
-        n = n.split(' ').sort().join(' ');
-
         return n;
     };
 
-    const getCount = (p) => {
-        if (!p) return 0;
-        const candidates = new Set();
-        if (p.id) candidates.add(String(p.id));
-        if (p.name) {
-            candidates.add(p.name);
-            candidates.add(normalizeId(p.name));
-        }
+    const humanPrincipalsMap = new Map();
+    const entityPrincipalsMap = new Map();
 
-        let max = 0;
-        candidates.forEach(c => {
-            max = Math.max(max, principalCounts.get(c) || 0);
-            max = Math.max(max, principalCounts.get(`principal_${c}`) || 0);
-            max = Math.max(max, principalCounts.get(`principal_${normalizeId(c)}`) || 0);
-        });
+    if (networkData.principals) {
+        networkData.principals.forEach(p => {
+            const rawName = p.name || p.id;
+            const normName = normalizeId(rawName);
 
-        // Fallback to property count if links are 0
-        if (max === 0 && p.details?.property_count) return p.details.property_count;
-        return max;
-    };
+            if (!normName) return;
 
-    // Sort principals to find the "Manager"
-    const humanPrincipals = networkData.principals
-        .filter(p => !p.isEntity)
-        .sort((a, b) => getCount(b) - getCount(a));
+            const isCorp = p.is_corporate || p.type === 'business' || p.type === 'entity' ||
+                /LLC|INC|CORP|HOLDINGS|PROPERTIES|REALTY|PARTNERS|GROUP|LIMITED|CO\b/i.test(rawName);
 
-    const entityPrincipals = networkData.principals
-        .filter(p => p.isEntity)
-        .sort((a, b) => getCount(b) - getCount(a));
+            const count = principalCounts.get(String(p.id)) || principalCounts.get(rawName) || 1;
 
-    const activeBusinesses = networkData.businesses.filter(b => !b.status || b.status.toUpperCase() === 'ACTIVE');
-
-    // Determine Header Name — prefer key principal(s) over LLC names
-    let managerName = 'Unknown Entity';
-    let networkLabel = null; // The LLC/business name shown as subtitle
-    let isHuman = false;
-
-    // Always try to surface the top human principal(s) as the header
-    if (humanPrincipals.length > 0) {
-        // Show top 1-2 principals
-        if (humanPrincipals.length >= 2) {
-            managerName = `${humanPrincipals[0].name} & ${humanPrincipals[1].name}`;
-        } else {
-            managerName = humanPrincipals[0].name;
-        }
-        isHuman = true;
-        // Use the API-provided network name or first business as subtitle
-        if (networkName && !humanPrincipals.some(p => p.name === networkName)) {
-            networkLabel = networkName;
-        } else if (activeBusinesses.length > 0) {
-            networkLabel = activeBusinesses[0].name;
-        }
-    } else if (networkName) {
-        managerName = networkName;
-    } else if (entityPrincipals.length > 0) {
-        managerName = entityPrincipals[0].name;
-    } else if (networkData.businesses.length > 0) {
-        managerName = networkData.businesses[0].name;
-    }
-
-    // Safely handle missing stats object
-    const safeStats = stats || { totalProperties: 0, totalValue: 0, totalAppraised: 0 };
-    const propCount = safeStats.totalProperties !== undefined ? safeStats.totalProperties : networkData.properties.length;
-
-    // Detailed Business List
-    const topBusinesses = activeBusinesses
-        // Sort by property count? We don't have explicit count per business easily available without calculating.
-        // Falback to simple slice.
-        .slice(0, 4);
-
-    // Terminology Calculations
-    const parcelsCount = propCount;
-    // Prefer backend unit_count, fallback to calculation
-    const unitsCount = networkData.unit_count || (networkData.properties ? networkData.properties.reduce((acc, p) => acc + (p.number_of_units || 1), 0) : 0);
-
-    // Group properties by street address (without unit) to count complexes
-    const uniqueAddresses = new Set();
-    if (networkData.properties) {
-        networkData.properties.forEach(p => {
-            const addr = p.address || p.location || "";
-            // Robust address normalization: strip unit info
-            const unitPattern = /(?:,|\s+)\s*(?:(?:UNIT|APT|APARTMENT|SUITE|STE|FL|FLOOR|RM|ROOM)(?:\b|(?=\d))|#)\s*[\w\d-]+$/i;
-            const baseAddr = addr.replace(unitPattern, '').replace(/,$/, '').trim().toUpperCase();
-            if (baseAddr) uniqueAddresses.add(`${baseAddr}|${p.city}`);
-        });
-    }
-    const complexesCount = networkData.building_count || uniqueAddresses.size;
-
-    const businessList = topBusinesses.map((b, i) => (
-        <span key={i} className="inline-block mr-1">
-            <span className="italic text-slate-100">{b.name}</span>
-            {i < topBusinesses.length - 1 ? ', ' : ''}
-        </span>
-    ));
-
-    const evictionSummary = networkData.evictionSummary || {};
-    const evictionsLast12m = evictionSummary.evictions_last_365d || 0;
-    const evictionsPrev12m = evictionSummary.evictions_prev_365d || 0;
-    const evictionTrend = (() => {
-        if (!evictionsLast12m && !evictionsPrev12m) return 'No filings in the last 24 months';
-        if (!evictionsPrev12m && evictionsLast12m) return `+${evictionsLast12m} vs prior 12 months`;
-        const deltaPct = Math.round(((evictionsLast12m - evictionsPrev12m) / evictionsPrev12m) * 100);
-        if (deltaPct > 0) return `Up ${deltaPct}% vs prior 12 months`;
-        if (deltaPct < 0) return `Down ${Math.abs(deltaPct)}% vs prior 12 months`;
-        return 'Flat vs prior 12 months';
-    })();
-    const lastEvictionDate = evictionSummary.last_eviction_date
-        ? new Date(evictionSummary.last_eviction_date).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
-        : null;
-    const topEvictionStatuses = Array.isArray(evictionSummary.status_breakdown)
-        ? evictionSummary.status_breakdown.filter(s => !s.label?.toUpperCase().includes('WITHDRAWAL')).slice(0, 2)
-        : [];
-    const codeSummary = networkData.codeEnforcementSummary || networkData.code_enforcement_summary || {};
-    const hasCodeSummary = Boolean(
-        codeSummary.source_available ||
-        codeSummary.hartford_property_count > 0 ||
-        codeSummary.total_records > 0 ||
-        codeSummary.open_records > 0
-    );
-    const lastCodeDate = codeSummary.last_record_date
-        ? new Date(codeSummary.last_record_date).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
-        : null;
-    const topCodeStatuses = Array.isArray(codeSummary.status_breakdown)
-        ? codeSummary.status_breakdown.slice(0, 2)
-        : [];
-
-    // Analyze property acquisition dates
-    const propertyAcquisitions = [];
-    if (networkData.properties) {
-        networkData.properties.forEach(p => {
-            if (p.properties && Array.isArray(p.properties)) {
-                p.properties.forEach(subP => {
-                    if (subP.sale_date) {
-                        const date = new Date(subP.sale_date);
-                        if (!isNaN(date.getTime())) {
-                            propertyAcquisitions.push({ date, amount: parseFloat(subP.sale_amount) || 0 });
-                        }
-                    }
-                });
-            } else if (p.sale_date) {
-                const date = new Date(p.sale_date);
-                if (!isNaN(date.getTime())) {
-                    propertyAcquisitions.push({ date, amount: parseFloat(p.sale_amount) || 0 });
+            if (isCorp) {
+                if (!entityPrincipalsMap.has(normName) || (entityPrincipalsMap.get(normName).count < count)) {
+                    entityPrincipalsMap.set(normName, { id: p.id, name: rawName, count, role: p.role, original: p });
+                }
+            } else {
+                if (!humanPrincipalsMap.has(normName) || (humanPrincipalsMap.get(normName).count < count)) {
+                    humanPrincipalsMap.set(normName, { id: p.id, name: rawName, count, role: p.role, original: p });
                 }
             }
         });
     }
 
-    // Sort acquisitions by date descending
+    const humanPrincipals = Array.from(humanPrincipalsMap.values()).sort((a, b) => b.count - a.count);
+    const entityPrincipals = Array.from(entityPrincipalsMap.values()).sort((a, b) => b.count - a.count);
+
+    const isHuman = humanPrincipals.length > 0 && (
+        !networkName ||
+        humanPrincipals.some(p => p.name.toUpperCase() === networkName.toUpperCase()) ||
+        !/LLC|INC|CORP|PROPERTIES|HOLDINGS|GROUP/i.test(networkName)
+    );
+
+    let managerName = networkName;
+    if (!managerName || managerName === "Unknown Landlord" || managerName === "Property Owner") {
+        if (humanPrincipals.length > 0) {
+            managerName = humanPrincipals[0].name;
+            if (humanPrincipals.length > 1) {
+                managerName += ` & ${humanPrincipals[1].name}`;
+            }
+        } else if (entityPrincipals.length > 0) {
+            managerName = entityPrincipals[0].name;
+        } else if (initialEntityName) {
+            managerName = initialEntityName;
+        } else {
+            managerName = "Ownership Network";
+        }
+    }
+
+    let networkLabel = "";
+    if (initialEntityName && initialEntityName !== managerName) {
+        networkLabel = `${initialEntityName}`;
+    }
+
+    const activeBusinesses = networkData.businesses || [];
+    const safeStats = stats || networkData.stats || {};
+    const complexesCount = safeStats.totalComplexes || safeStats.total_complexes || networkData.properties?.length || 0;
+    const parcelsCount = safeStats.totalParcels || safeStats.total_parcels || networkData.properties?.length || 0;
+    const unitsCount = safeStats.totalUnits || safeStats.total_units || 0;
+
+    const evictionSummary = networkData.evictionSummary || {};
+    const evictionsLast12m = evictionSummary.evictions_last_12m || 0;
+
+    const evictionTrend = useMemo(() => {
+        if (!evictionSummary.evictions_last_12m && !evictionSummary.evictions_prior_12m) return 'No recent data';
+        const curr = evictionSummary.evictions_last_12m || 0;
+        const prev = evictionSummary.evictions_prior_12m || 0;
+        if (prev === 0) return curr > 0 ? `${curr} new filings` : 'Flat';
+        const diff = ((curr - prev) / prev) * 100;
+        if (diff > 0) return `Up ${Math.round(diff)}% vs prior 12 months`;
+        if (diff < 0) return `Down ${Math.round(Math.abs(diff))}% vs prior 12 months`;
+        return 'Flat vs prior 12 months';
+    }, [evictionSummary]);
+
+    const lastEvictionDate = useMemo(() => {
+        if (!evictionSummary.latest_filing_date) return null;
+        try {
+            const d = new Date(evictionSummary.latest_filing_date);
+            return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+        } catch (e) {
+            return evictionSummary.latest_filing_date;
+        }
+    }, [evictionSummary]);
+
+    const codeSummary = networkData.codeSummary || {};
+    const hasCodeSummary = (codeSummary.total_records || 0) > 0;
+    const topCodeStatuses = (codeSummary.top_statuses || []).slice(0, 3);
+    const lastCodeDate = useMemo(() => {
+        if (!codeSummary.latest_record_date) return null;
+        try {
+            const d = new Date(codeSummary.latest_record_date);
+            return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+        } catch (e) {
+            return codeSummary.latest_record_date;
+        }
+    }, [codeSummary]);
+
+    const propertyAcquisitions = [];
+    if (networkData.properties) {
+        networkData.properties.forEach(p => {
+            if (p.last_sale_date) {
+                const date = new Date(p.last_sale_date);
+                if (!isNaN(date.getTime())) {
+                    propertyAcquisitions.push({
+                        date,
+                        amount: parseFloat(p.sale_amount) || 0,
+                        location: p.location || p.address || 'Property',
+                        city: p.city || p.property_city || 'CT',
+                        owner: p.owner || managerName,
+                        property: p
+                    });
+                }
+            }
+        });
+    }
     propertyAcquisitions.sort((a, b) => b.date - a.date);
 
-    // Compute stats
     const now = new Date();
     const oneYearAgo = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
-    const threeYearsAgo = new Date(now.getTime() - 3 * 365 * 24 * 60 * 60 * 1000);
-    const fiveYearsAgo = new Date(now.getTime() - 5 * 365 * 24 * 60 * 60 * 1000);
-
     const acquiredLastYear = propertyAcquisitions.filter(a => a.date >= oneYearAgo).length;
-    const acquiredLast3Years = propertyAcquisitions.filter(a => a.date >= threeYearsAgo).length;
-    const acquiredLast5Years = propertyAcquisitions.filter(a => a.date >= fiveYearsAgo).length;
-    const mostRecentAcquisition = propertyAcquisitions.length > 0 ? propertyAcquisitions[0].date : null;
+
+    const txSummary = networkData.transactionSummary;
+    const allTxns = txSummary?.recent_transactions || [];
+
+    const handlePropertyClick = (txn) => {
+        if (!onViewProperty) return;
+        const matchedProp = (networkData?.properties || []).find(p =>
+            (p.location || p.address || '').toLowerCase().includes((txn.location || '').toLowerCase())
+        ) || {
+            location: txn.location,
+            city: txn.city,
+            owner: txn.buyer_name || txn.seller_name || managerName,
+            assessed_value: txn.amount || 0
+        };
+        onViewProperty(matchedProp);
+    };
+
+    const formatAmount = (amt) => {
+        if (!amt || amt <= 0) return null;
+        if (amt >= 1000000) return `$${(amt / 1000000).toFixed(1)}M`;
+        if (amt >= 1000) return `$${Math.round(amt / 1000)}K`;
+        return `$${Math.round(amt).toLocaleString()}`;
+    };
+
+    const filteredInCardTxns = useMemo(() => {
+        if (txFilter === 'acquired') return allTxns.filter(t => t.direction === 'acquired');
+        if (txFilter === 'disposed') return allTxns.filter(t => t.direction === 'disposed');
+        return allTxns;
+    }, [allTxns, txFilter]);
+
+    const filteredModalTxns = useMemo(() => {
+        let list = [...allTxns];
+        if (txModalFilter === 'acquired') list = list.filter(t => t.direction === 'acquired');
+        else if (txModalFilter === 'disposed') list = list.filter(t => t.direction === 'disposed');
+        else if (txModalFilter === 'intra') list = list.filter(t => t.scope === 'intra_network' || t.direction === 'reshuffle');
+        else if (txModalFilter === 'inter') list = list.filter(t => t.scope === 'inter_network' || t.direction === 'acquired' || t.direction === 'disposed');
+
+        if (txSearch.trim()) {
+            const q = txSearch.toLowerCase().trim();
+            list = list.filter(t =>
+                (t.location || '').toLowerCase().includes(q) ||
+                (t.city || '').toLowerCase().includes(q) ||
+                (t.buyer_name || '').toLowerCase().includes(q) ||
+                (t.seller_name || '').toLowerCase().includes(q)
+            );
+        }
+        return list;
+    }, [allTxns, txModalFilter, txSearch]);
 
     return (
         <>
             <section
                 aria-label="Network Profile Summary"
-                className="bg-white rounded-xl p-3 shadow-sm border border-slate-200 w-full flex items-center justify-between flex-wrap gap-3"
+                className="bg-white rounded-xl p-3 shadow-sm border border-slate-200 w-full flex items-center justify-between flex-wrap gap-3 shrink-0"
             >
-                {/* Left: Back Arrow + Name */}
                 <div className="flex items-center gap-3 min-w-0">
                     {onBack && (
                         <button
@@ -554,8 +574,20 @@ export default function NetworkProfileCard({ networkData, stats, networkName, in
                     </div>
                 </div>
 
-                {/* Right: Actions */}
-                <div className="flex items-center gap-2 ml-auto">
+                <div className="flex items-center gap-2 ml-auto flex-wrap">
+                    <button
+                        onClick={() => setIsCompactLayout(prev => !prev)}
+                        className={`px-2.5 py-1.5 rounded-lg text-[10px] font-extrabold uppercase tracking-wider border transition-all flex items-center gap-1.5 ${
+                            isCompactLayout
+                                ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                                : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
+                        }`}
+                        title={isCompactLayout ? "Switch to full analytics view" : "Compact analytics to bring Property Tables right to the top"}
+                    >
+                        <BarChart3 size={13} />
+                        <span>{isCompactLayout ? 'Full Analytics' : 'Compact View'}</span>
+                    </button>
+
                     {onOpenFeedback && (
                         <button
                             onClick={() => onOpenFeedback({
@@ -571,7 +603,7 @@ export default function NetworkProfileCard({ networkData, stats, networkName, in
                             <span className="hidden sm:inline">See something wrong?</span>
                         </button>
                     )}
-                    {/* AI Report Button */}
+
                     <div className="relative group">
                         <button
                             onClick={parcelsCount >= 10 ? handleOpenReportModal : undefined}
@@ -586,19 +618,8 @@ export default function NetworkProfileCard({ networkData, stats, networkName, in
                             <Sparkles size={12} className="shrink-0 text-amber-500" />
                             <span>AI Report</span>
                         </button>
-
-                        {parcelsCount < 10 && (
-                            <div className="absolute bottom-full right-0 mb-2 px-3 py-2 bg-slate-900 text-white text-xs rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-[9999] shadow-xl border border-slate-700">
-                                <div className="font-bold mb-0.5">AI Reports require 10+ parcels</div>
-                                <div className="text-slate-400">Currently: {parcelsCount}</div>
-                                <div className="absolute top-full right-4 -mt-px">
-                                    <div className="w-2 h-2 bg-slate-900 border-b border-r border-slate-700 transform rotate-45"></div>
-                                </div>
-                            </div>
-                        )}
                     </div>
 
-                    {/* Export Button */}
                     {onExport && (
                         <button
                             onClick={onExport}
@@ -613,17 +634,12 @@ export default function NetworkProfileCard({ networkData, stats, networkName, in
 
             {featureNav}
 
-            {/* Stats Grid: Portfolio+Activity | Evictions | Code Enforcement */}
             {(() => {
                 const sigs = networkData.connection_signals || {};
                 const allPeople = sigs.people || [];
                 const allCorps = sigs.corps || [];
                 const allAddresses = sigs.addresses || [];
-
                 const hasSignals = allPeople.length > 0 || allCorps.length > 0 || allAddresses.length > 0;
-                const txSummary = networkData.transactionSummary;
-
-                const topCols = hasCodeSummary ? "grid-cols-1 md:grid-cols-3" : "grid-cols-1 md:grid-cols-2";
 
                 const displayedPeople = expandedSigs.people ? allPeople : allPeople.slice(0, 5);
                 const hasMorePeople = allPeople.length > 5;
@@ -632,18 +648,60 @@ export default function NetworkProfileCard({ networkData, stats, networkName, in
                 const displayedAddresses = expandedSigs.addresses ? allAddresses : allAddresses.slice(0, 5);
                 const hasMoreAddresses = allAddresses.length > 5;
 
-                const formatAmount = (amt) => {
-                    if (!amt || amt <= 0) return null;
-                    if (amt >= 1000000) return `$${(amt / 1000000).toFixed(1)}M`;
-                    if (amt >= 1000) return `$${Math.round(amt / 1000)}K`;
-                    return `$${Math.round(amt).toLocaleString()}`;
-                };
+                if (isCompactLayout) {
+                    return (
+                        <div className="bg-white border border-slate-200 rounded-xl p-2.5 shadow-sm mt-1 flex items-center justify-between flex-wrap gap-2 text-xs">
+                            <div className="flex items-center gap-3 flex-wrap">
+                                <div className="flex items-center gap-1.5 bg-blue-50 text-blue-800 border border-blue-100 px-2.5 py-1 rounded-lg font-bold">
+                                    <Home size={13} className="text-blue-600" />
+                                    <span>{complexesCount.toLocaleString()} bldgs ({unitsCount.toLocaleString()} units)</span>
+                                    <span className="text-blue-500 font-extrabold ml-1">
+                                        {safeStats.totalValue >= 1000000000 ? `$${(safeStats.totalValue / 1000000000).toFixed(2)}B` : `$${(safeStats.totalValue / 1000000).toFixed(1)}M`}
+                                    </span>
+                                </div>
+
+                                <div className="flex items-center gap-1.5 bg-indigo-50 text-indigo-800 border border-indigo-100 px-2.5 py-1 rounded-lg font-bold">
+                                    <Gavel size={13} className="text-indigo-600" />
+                                    <span>{(evictionSummary.eviction_count || 0).toLocaleString()} evictions</span>
+                                    {evictionsLast12m > 0 && <span className="text-indigo-600 font-extrabold text-[10px]">({evictionsLast12m} last 12m)</span>}
+                                </div>
+
+                                {txSummary && (
+                                    <div className="flex items-center gap-1.5 bg-amber-50 text-amber-800 border border-amber-100 px-2.5 py-1 rounded-lg font-bold">
+                                        <TrendingUp size={13} className="text-amber-600" />
+                                        <span>+{txSummary.acquisitions_last_12m} acq / -{txSummary.dispositions_last_12m} disp</span>
+                                        <button
+                                            onClick={() => setShowTxModal(true)}
+                                            className="text-blue-700 hover:underline text-[10px] font-black uppercase ml-1"
+                                        >
+                                            History
+                                        </button>
+                                    </div>
+                                )}
+
+                                {hasSignals && (
+                                    <div className="flex items-center gap-1.5 bg-violet-50 text-violet-800 border border-violet-100 px-2.5 py-1 rounded-lg font-bold">
+                                        <GitMerge size={13} className="text-violet-600" />
+                                        <span>{allPeople.length} people · {allCorps.length} corps · {allAddresses.length} addrs</span>
+                                    </div>
+                                )}
+                            </div>
+
+                            <button
+                                onClick={() => setIsCompactLayout(false)}
+                                className="text-[10px] font-bold text-slate-500 hover:text-slate-800 uppercase tracking-wider underline ml-auto"
+                            >
+                                Expand Full Dashboard
+                            </button>
+                        </div>
+                    );
+                }
+
+                const topCols = hasCodeSummary ? "grid-cols-1 md:grid-cols-3" : "grid-cols-1 md:grid-cols-2";
 
                 return (
                     <>
-                    {/* Row 1: Main stats */}
                     <div className={`grid ${topCols} gap-2 mt-2 items-start`}>
-                        {/* Card 1: Portfolio & Transaction Activity (merged) */}
                         <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-sm flex flex-col self-start">
                             <div>
                                 <div className="flex items-center gap-2 mb-2">
@@ -672,16 +730,44 @@ export default function NetworkProfileCard({ networkData, stats, networkName, in
                                     </div>
                                 </div>
 
-                                {/* Transaction Activity subsection */}
                                 {txSummary && (txSummary.acquisitions_last_12m > 0 || txSummary.dispositions_last_12m > 0) && (() => {
                                     const netFlow = txSummary.net_acquisitions_12m;
-                                    const recentTxns = txSummary.recent_transactions || [];
                                     return (
                                         <div className="mt-2 pt-2 border-t border-slate-100">
-                                            <div className="flex items-center gap-1.5 mb-2">
-                                                <TrendingUp size={11} className="text-amber-500" />
-                                                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">12-Month Activity</span>
+                                            <div className="flex items-center justify-between gap-2 mb-2">
+                                                <div className="flex items-center gap-1.5">
+                                                    <TrendingUp size={11} className="text-amber-500" />
+                                                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">12-Month Activity</span>
+                                                </div>
+
+                                                <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200">
+                                                    <button
+                                                        onClick={() => setTxFilter('all')}
+                                                        className={`px-1.5 py-0.5 text-[8px] font-extrabold uppercase rounded transition-all ${
+                                                            txFilter === 'all' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'
+                                                        }`}
+                                                    >
+                                                        All ({allTxns.length})
+                                                    </button>
+                                                    <button
+                                                        onClick={() => setTxFilter('acquired')}
+                                                        className={`px-1.5 py-0.5 text-[8px] font-extrabold uppercase rounded transition-all ${
+                                                            txFilter === 'acquired' ? 'bg-emerald-600 text-white shadow-sm' : 'text-emerald-700 hover:bg-emerald-50'
+                                                        }`}
+                                                    >
+                                                        +Acq ({txSummary.acquisitions_last_12m})
+                                                    </button>
+                                                    <button
+                                                        onClick={() => setTxFilter('disposed')}
+                                                        className={`px-1.5 py-0.5 text-[8px] font-extrabold uppercase rounded transition-all ${
+                                                            txFilter === 'disposed' ? 'bg-rose-600 text-white shadow-sm' : 'text-rose-700 hover:bg-rose-50'
+                                                        }`}
+                                                    >
+                                                        -Disp ({txSummary.dispositions_last_12m})
+                                                    </button>
+                                                </div>
                                             </div>
+
                                             <div className="grid grid-cols-3 gap-2 mb-2">
                                                 <div className="rounded-lg bg-emerald-50 border border-emerald-100 px-2 py-1 text-center">
                                                     <div className="text-base font-black text-emerald-700 leading-none">{txSummary.acquisitions_last_12m}</div>
@@ -700,24 +786,22 @@ export default function NetworkProfileCard({ networkData, stats, networkName, in
                                                     <div className="text-[8px] font-bold text-slate-400 uppercase mt-0.5">Net</div>
                                                 </div>
                                             </div>
-                                            {txSummary.acquisition_volume_12m > 0 && (
-                                                <div className="flex items-center justify-between text-[10px] text-slate-500 mb-1">
-                                                    <span>Volume In:</span>
-                                                    <span className="font-bold text-emerald-700">{formatAmount(txSummary.acquisition_volume_12m)}</span>
-                                                </div>
-                                            )}
 
-                                            {/* Recent transactions timeline */}
-                                            {recentTxns.length > 0 && (
+                                            {allTxns.length > 0 && (
                                                 <div className="mt-2 pt-2 border-t border-slate-100">
                                                     <div className="flex items-center justify-between gap-2 mb-1.5">
                                                         <div className="text-[8px] font-bold uppercase tracking-wider text-slate-400">Recent Transactions</div>
-                                                        <div className="text-[8px] font-semibold text-slate-400 truncate" title="Intra-network means buyer and seller both match this loaded ownership network. Inter-network means only one side matches.">
-                                                            Intra = internal paper transfer
-                                                        </div>
+                                                        <button
+                                                            onClick={() => setShowTxModal(true)}
+                                                            className="text-[8px] font-extrabold text-blue-600 hover:text-blue-800 flex items-center gap-1 uppercase tracking-wider"
+                                                        >
+                                                            <span>Expand History ({allTxns.length})</span>
+                                                            <ExternalLink size={10} />
+                                                        </button>
                                                     </div>
-                                                    <div className="space-y-1 max-h-[74px] overflow-y-auto pr-1">
-                                                        {recentTxns.slice(0, 3).map((txn, i) => {
+
+                                                    <div className="space-y-1 max-h-[90px] overflow-y-auto pr-1">
+                                                        {filteredInCardTxns.slice(0, 3).map((txn, i) => {
                                                             const isAcq = txn.direction === 'acquired';
                                                             const isDisp = txn.direction === 'disposed';
                                                             const isIntra = txn.scope === 'intra_network' || txn.direction === 'reshuffle';
@@ -728,7 +812,7 @@ export default function NetworkProfileCard({ networkData, stats, networkName, in
                                                             const scopeNote = txn.scope_note || (isIntra ? 'Buyer and seller both match this ownership network.' : isInter ? 'Only one side matches this ownership network.' : 'Insufficient buyer/seller match data to classify.');
 
                                                             return (
-                                                                <div key={i} className="flex items-start gap-1.5 text-[9px] leading-tight">
+                                                                <div key={i} className="flex items-start gap-1.5 text-[9px] leading-tight hover:bg-slate-50 p-1 rounded-md transition-colors">
                                                                     <span className={`w-[14px] h-[14px] rounded-full flex items-center justify-center shrink-0 mt-0.5 ${
                                                                         isAcq ? 'bg-emerald-100 text-emerald-600' :
                                                                         isDisp ? 'bg-rose-100 text-rose-600' :
@@ -739,9 +823,13 @@ export default function NetworkProfileCard({ networkData, stats, networkName, in
                                                                     <div className="flex-1 min-w-0">
                                                                         <div className="flex items-center gap-1.5 min-w-0">
                                                                             <span className="text-slate-400 font-medium shrink-0">{dateStr}</span>
-                                                                            <span className="text-slate-700 font-bold truncate" title={`${txn.location}${txn.city ? ', ' + txn.city : ''}`}>
+                                                                            <button
+                                                                                onClick={() => handlePropertyClick(txn)}
+                                                                                className="text-blue-700 hover:text-blue-900 font-bold hover:underline truncate text-left"
+                                                                                title="Click to view property details"
+                                                                            >
                                                                                 {txn.location}{txn.city ? `, ${txn.city}` : ''}
-                                                                            </span>
+                                                                            </button>
                                                                             {txn.amount > 0 && (
                                                                                 <span className="text-slate-400 font-bold shrink-0">{formatAmount(txn.amount)}</span>
                                                                             )}
@@ -779,30 +867,9 @@ export default function NetworkProfileCard({ networkData, stats, networkName, in
                                         </div>
                                     );
                                 })()}
-
-                                {/* Fallback: client-side acquisition stats when no API transaction data */}
-                                {!txSummary && propertyAcquisitions.length > 0 && (
-                                    <div className="mt-4 pt-3 border-t border-slate-100">
-                                        <div className="flex items-center gap-1.5 mb-2">
-                                            <TrendingUp size={11} className="text-amber-500" />
-                                            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Tracked Acquisitions</span>
-                                        </div>
-                                        <div className="flex items-baseline gap-2">
-                                            <span className="text-lg font-black text-slate-800 leading-none">{propertyAcquisitions.length}</span>
-                                            <span className="text-[10px] text-slate-400 font-bold">total</span>
-                                            <span className="text-[10px] text-slate-400">·</span>
-                                            <span className="text-[10px] text-slate-500 font-bold">{acquiredLastYear} last 12mo</span>
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-
-                            <div className="text-[9px] text-slate-400 mt-2 pt-2 border-t border-slate-100 italic font-medium leading-normal">
-                                Based on municipal assessment data.
                             </div>
                         </div>
 
-                        {/* Card 2: Eviction Filings */}
                         <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-sm flex flex-col justify-between self-start">
                             <div>
                                 <div className="flex items-center gap-2 mb-2">
@@ -846,25 +913,10 @@ export default function NetworkProfileCard({ networkData, stats, networkName, in
                                             )}
                                         </div>
                                     </div>
-                                    {!!(evictionSummary.plaintiff_only_count || 0) && (
-                                        <div className="flex items-center justify-between text-xs border-b border-slate-100 pb-1.5">
-                                            <span className="text-slate-500 font-medium">Attribution:</span>
-                                            <span className="font-medium text-indigo-700 bg-indigo-50 border border-indigo-100 px-1.5 py-0.5 rounded-md text-[10px]">
-                                                {(evictionSummary.plaintiff_only_count || 0).toLocaleString()} linked by name
-                                            </span>
-                                        </div>
-                                    )}
                                 </div>
                             </div>
-
-                            {lastEvictionDate && (
-                                <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-2 pt-2 border-t border-slate-100">
-                                    Last filing: {lastEvictionDate}
-                                </div>
-                            )}
                         </div>
 
-                        {/* Card 3: Code Enforcement */}
                         {hasCodeSummary && (
                             <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-sm flex flex-col justify-between self-start">
                                 <div>
@@ -893,99 +945,112 @@ export default function NetworkProfileCard({ networkData, stats, networkName, in
                                             <span className="text-slate-500 font-medium">Last 12 Months:</span>
                                             <span className="font-bold text-slate-800">{(codeSummary.records_last_365d || 0).toLocaleString()} records</span>
                                         </div>
-                                        <div className="flex items-center justify-between text-xs border-b border-slate-100 pb-1.5">
-                                            <span className="text-slate-500 font-medium">Matched Parcels:</span>
-                                            <span className="font-bold text-slate-700">
-                                                {(codeSummary.properties_with_records || 0).toLocaleString()} / {(codeSummary.hartford_property_count || 0).toLocaleString()}
-                                            </span>
-                                        </div>
-                                        {topCodeStatuses.length > 0 && (
-                                            <div className="flex flex-wrap gap-1 pt-0.5">
-                                                {topCodeStatuses.map(status => (
-                                                    <span key={status.label} className="text-[9px] font-bold text-slate-600 bg-slate-50 border border-slate-200 px-1.5 py-0.5 rounded">
-                                                        {status.label}: {(status.count || 0).toLocaleString()}
-                                                    </span>
-                                                ))}
-                                            </div>
-                                        )}
                                     </div>
-                                </div>
-
-                                <div className="text-[9px] text-slate-400 mt-2 pt-2 border-t border-slate-100 italic font-medium leading-normal">
-                                    {lastCodeDate ? `Last opened: ${lastCodeDate}. ` : ''}
-                                    Official Hartford records matched by parcel ID.
                                 </div>
                             </div>
                         )}
                     </div>
 
-                    {/* Row 2: Connection Signals (full-width horizontal banner) */}
                     {hasSignals && (
-                        <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm mt-3">
-                            <div className="flex items-center gap-2 mb-2">
-                                <div className="p-1.5 rounded-lg bg-violet-50 text-violet-600">
-                                    <GitMerge size={14} />
+                        <div className="bg-white border border-slate-200 rounded-xl p-3.5 shadow-sm mt-2">
+                            <div className="flex items-center justify-between mb-2">
+                                <div className="flex items-center gap-2">
+                                    <div className="p-1.5 rounded-lg bg-violet-50 text-violet-600">
+                                        <GitMerge size={14} />
+                                    </div>
+                                    <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">Why is this a network?</span>
+                                    <span className="text-[10px] text-slate-400 font-medium hidden md:inline">
+                                        Click any connection pill to filter or jump directly to that matching entity
+                                    </span>
                                 </div>
-                                <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Why is this a network?</span>
-                                <span className="text-[10px] text-slate-400 font-medium ml-1 hidden md:inline">Linked due to sharing one or more of the following connections:</span>
                             </div>
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                                 {allPeople.length > 0 && (
-                                    <div>
-                                        <div className="text-[9px] font-bold uppercase tracking-wider text-violet-500 mb-1.5 flex items-center justify-between">
+                                    <div className="rounded-xl border border-violet-100 bg-violet-50/30 p-2.5">
+                                        <div className="text-[9px] font-black uppercase tracking-wider text-violet-700 mb-1.5 flex items-center justify-between">
                                             <span>Shared People ({allPeople.length})</span>
                                             {hasMorePeople && (
                                                 <button
                                                     onClick={() => setExpandedSigs(prev => ({ ...prev, people: !prev.people }))}
-                                                    className="text-[9px] font-black text-violet-600 hover:text-violet-800 transition-colors uppercase tracking-widest focus:outline-none"
+                                                    className="text-[9px] font-black text-violet-600 hover:text-violet-800 uppercase tracking-widest"
                                                 >
-                                                    {expandedSigs.people ? 'Show Less' : `+${allPeople.length - 5} More`}
+                                                    {expandedSigs.people ? 'Less' : `+${allPeople.length - 5}`}
                                                 </button>
                                             )}
                                         </div>
                                         <div className="flex flex-wrap gap-1">
                                             {displayedPeople.map(p => (
-                                                <span key={p} className="text-[9.5px] font-medium px-2 py-0.5 rounded-full bg-violet-50 text-violet-800 border border-violet-100">{p}</span>
+                                                <button
+                                                    key={p}
+                                                    onClick={() => {
+                                                        if (onSelectEntity) onSelectEntity(p, 'principal', p, 'CT');
+                                                    }}
+                                                    className="text-[9.5px] font-semibold px-2 py-0.5 rounded-full bg-white text-violet-800 border border-violet-200 hover:bg-violet-100 hover:border-violet-300 transition-all cursor-pointer shadow-2xs"
+                                                    title={`Click to filter network by principal ${p}`}
+                                                >
+                                                    {p}
+                                                </button>
                                             ))}
                                         </div>
                                     </div>
                                 )}
+
                                 {allCorps.length > 0 && (
-                                    <div>
-                                        <div className="text-[9px] font-bold uppercase tracking-wider text-indigo-500 mb-1.5 flex items-center justify-between">
+                                    <div className="rounded-xl border border-indigo-100 bg-indigo-50/30 p-2.5">
+                                        <div className="text-[9px] font-black uppercase tracking-wider text-indigo-700 mb-1.5 flex items-center justify-between">
                                             <span>Shared Corporations ({allCorps.length})</span>
                                             {hasMoreCorps && (
                                                 <button
                                                     onClick={() => setExpandedSigs(prev => ({ ...prev, corps: !prev.corps }))}
-                                                    className="text-[9px] font-black text-indigo-600 hover:text-indigo-800 transition-colors uppercase tracking-widest focus:outline-none"
+                                                    className="text-[9px] font-black text-indigo-600 hover:text-indigo-800 uppercase tracking-widest"
                                                 >
-                                                    {expandedSigs.corps ? 'Show Less' : `+${allCorps.length - 5} More`}
+                                                    {expandedSigs.corps ? 'Less' : `+${allCorps.length - 5}`}
                                                 </button>
                                             )}
                                         </div>
                                         <div className="flex flex-wrap gap-1">
                                             {displayedCorps.map(c => (
-                                                <span key={c} className="text-[9.5px] font-medium px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-800 border border-indigo-100">{c}</span>
+                                                <button
+                                                    key={c}
+                                                    onClick={() => {
+                                                        if (onSelectEntity) onSelectEntity(c, 'business', c, 'CT');
+                                                    }}
+                                                    className="text-[9.5px] font-semibold px-2 py-0.5 rounded-full bg-white text-indigo-800 border border-indigo-200 hover:bg-indigo-100 hover:border-indigo-300 transition-all cursor-pointer shadow-2xs"
+                                                    title={`Click to filter network by corporation ${c}`}
+                                                >
+                                                    {c}
+                                                </button>
                                             ))}
                                         </div>
                                     </div>
                                 )}
+
                                 {allAddresses.length > 0 && (
-                                    <div>
-                                        <div className="text-[9px] font-bold uppercase tracking-wider text-emerald-500 mb-1.5 flex items-center justify-between">
+                                    <div className="rounded-xl border border-emerald-100 bg-emerald-50/30 p-2.5">
+                                        <div className="text-[9px] font-black uppercase tracking-wider text-emerald-700 mb-1.5 flex items-center justify-between">
                                             <span>Shared Addresses ({allAddresses.length})</span>
                                             {hasMoreAddresses && (
                                                 <button
                                                     onClick={() => setExpandedSigs(prev => ({ ...prev, addresses: !prev.addresses }))}
-                                                    className="text-[9px] font-black text-emerald-600 hover:text-emerald-800 transition-colors uppercase tracking-widest focus:outline-none"
+                                                    className="text-[9px] font-black text-emerald-600 hover:text-emerald-800 uppercase tracking-widest"
                                                 >
-                                                    {expandedSigs.addresses ? 'Show Less' : `+${allAddresses.length - 5} More`}
+                                                    {expandedSigs.addresses ? 'Less' : `+${allAddresses.length - 5}`}
                                                 </button>
                                             )}
                                         </div>
                                         <div className="flex flex-wrap gap-1">
                                             {displayedAddresses.map(a => (
-                                                <span key={a} className="text-[9.5px] font-medium px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-100 truncate max-w-full" title={a}>{a}</span>
+                                                <button
+                                                    key={a}
+                                                    onClick={() => {
+                                                        if (onFilterSearch) onFilterSearch(a);
+                                                    }}
+                                                    className="text-[9.5px] font-semibold px-2 py-0.5 rounded-lg bg-white text-emerald-800 border border-emerald-200 hover:bg-emerald-100 hover:border-emerald-300 transition-all cursor-pointer shadow-2xs truncate max-w-full text-left"
+                                                    title={`Click to filter properties by address ${a}`}
+                                                >
+                                                    {a}
+                                                </button>
                                             ))}
                                         </div>
                                     </div>
@@ -997,13 +1062,13 @@ export default function NetworkProfileCard({ networkData, stats, networkName, in
                 );
             })()}
 
-            {
-                showReport && (
-                    <div className="fixed inset-0 z-[200] bg-slate-900/60 backdrop-blur-md p-4 flex justify-center items-center">
-                        <div className="bg-white text-slate-900 rounded-3xl w-full max-w-6xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden border border-slate-200">
-                            <div className="p-6 md:p-8 shrink-0 flex items-center justify-between border-b border-slate-100">
-                                <div className="flex items-center gap-3">
-                                    <div className="p-2 bg-amber-100 text-amber-600 rounded-xl">
+            {/* AI Report Modal */}
+            {showReport && (
+                <div className="fixed inset-0 z-[200] bg-slate-900/60 backdrop-blur-md p-4 flex justify-center items-center">
+                    <div className="bg-white text-slate-900 rounded-3xl w-full max-w-6xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden border border-slate-200">
+                        <div className="p-6 md:p-8 shrink-0 flex items-center justify-between border-b border-slate-100">
+                            <div className="flex items-center gap-3">
+                                <div className="p-2 bg-amber-100 text-amber-600 rounded-xl">
                                         <Sparkles size={24} />
                                     </div>
                                     <div>
