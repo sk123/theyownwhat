@@ -1219,6 +1219,148 @@ export default function NetworkProfileCard({
                     </div>
                 )
             }
+
+            {/* Recent Transactions Full Modal */}
+            {showTxModal && (
+                <div className="fixed inset-0 z-[250] bg-slate-900/60 backdrop-blur-sm p-4 flex justify-center items-center">
+                    <div className="bg-white text-slate-900 rounded-3xl w-full max-w-4xl shadow-2xl flex flex-col max-h-[85vh] overflow-hidden border border-slate-200">
+                        {/* Modal Header */}
+                        <div className="p-5 md:p-6 shrink-0 flex items-center justify-between border-b border-slate-100 bg-slate-50/50">
+                            <div className="flex items-center gap-3">
+                                <div className="p-2.5 bg-amber-100 text-amber-700 rounded-xl">
+                                    <TrendingUp size={22} />
+                                </div>
+                                <div>
+                                    <h3 className="text-xl font-black tracking-tight text-slate-900">Network Recent Transactions</h3>
+                                    <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mt-0.5">{managerName}</p>
+                                </div>
+                            </div>
+                            <button
+                                onClick={() => setShowTxModal(false)}
+                                className="p-2 hover:bg-slate-200/60 rounded-full transition-colors"
+                            >
+                                <X size={20} className="text-slate-500" />
+                            </button>
+                        </div>
+
+                        {/* Modal Controls Bar */}
+                        <div className="p-4 bg-white border-b border-slate-100 flex flex-wrap items-center justify-between gap-3 shrink-0">
+                            {/* Search Filter */}
+                            <input
+                                type="text"
+                                value={txSearch}
+                                onChange={(e) => setTxSearch(e.target.value)}
+                                placeholder="Search by street, city, buyer, or seller..."
+                                className="px-3 py-1.5 text-xs border border-slate-200 rounded-lg w-full sm:w-72 focus:outline-none focus:border-blue-500"
+                            />
+
+                            {/* Category Filter Pills */}
+                            <div className="flex items-center gap-1 flex-wrap bg-slate-100 p-1 rounded-lg border border-slate-200">
+                                <button
+                                    onClick={() => setTxModalFilter('all')}
+                                    className={`px-2.5 py-1 text-[10px] font-extrabold uppercase rounded-md transition-all ${
+                                        txModalFilter === 'all' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+                                    }`}
+                                >
+                                    All ({allTxns.length})
+                                </button>
+                                <button
+                                    onClick={() => setTxModalFilter('acquired')}
+                                    className={`px-2.5 py-1 text-[10px] font-extrabold uppercase rounded-md transition-all ${
+                                        txModalFilter === 'acquired' ? 'bg-emerald-600 text-white shadow-sm' : 'text-emerald-700 hover:bg-emerald-50'
+                                    }`}
+                                >
+                                    Acquired ({allTxns.filter(t => t.direction === 'acquired').length})
+                                </button>
+                                <button
+                                    onClick={() => setTxModalFilter('disposed')}
+                                    className={`px-2.5 py-1 text-[10px] font-extrabold uppercase rounded-md transition-all ${
+                                        txModalFilter === 'disposed' ? 'bg-rose-600 text-white shadow-sm' : 'text-rose-700 hover:bg-rose-50'
+                                    }`}
+                                >
+                                    Disposed ({allTxns.filter(t => t.direction === 'disposed').length})
+                                </button>
+                                <button
+                                    onClick={() => setTxModalFilter('intra')}
+                                    className={`px-2.5 py-1 text-[10px] font-extrabold uppercase rounded-md transition-all ${
+                                        txModalFilter === 'intra' ? 'bg-amber-600 text-white shadow-sm' : 'text-amber-700 hover:bg-amber-50'
+                                    }`}
+                                >
+                                    Intra-Network ({allTxns.filter(t => t.scope === 'intra_network' || t.direction === 'reshuffle').length})
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Modal Transactions Scroll List */}
+                        <div className="p-4 md:p-6 overflow-y-auto space-y-2 flex-1">
+                            {filteredModalTxns.length === 0 ? (
+                                <div className="text-center py-12 text-slate-400 text-sm font-medium">
+                                    No transactions match your current search or filter criteria.
+                                </div>
+                            ) : (
+                                filteredModalTxns.map((txn, idx) => {
+                                    const isAcq = txn.direction === 'acquired';
+                                    const isDisp = txn.direction === 'disposed';
+                                    const isIntra = txn.scope === 'intra_network' || txn.direction === 'reshuffle';
+                                    const dateStr = txn.date ? new Date(txn.date).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '—';
+
+                                    return (
+                                        <div key={idx} className="bg-slate-50/70 border border-slate-200 rounded-xl p-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 hover:border-slate-300 hover:bg-white transition-all">
+                                            <div className="flex items-start gap-3 min-w-0">
+                                                <span className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 mt-0.5 font-bold ${
+                                                    isAcq ? 'bg-emerald-100 text-emerald-700' :
+                                                    isDisp ? 'bg-rose-100 text-rose-700' :
+                                                    'bg-amber-100 text-amber-700'
+                                                }`}>
+                                                    {isAcq ? <ArrowUpRight size={16} /> : isDisp ? <ArrowDownRight size={16} /> : <Repeat2 size={16} />}
+                                                </span>
+                                                <div className="min-w-0">
+                                                    <div className="flex items-center gap-2 flex-wrap">
+                                                        <button
+                                                            onClick={() => {
+                                                                setShowTxModal(false);
+                                                                handlePropertyClick(txn);
+                                                            }}
+                                                            className="text-sm font-black text-blue-700 hover:text-blue-900 hover:underline text-left truncate"
+                                                            title="Click to view property details modal"
+                                                        >
+                                                            {txn.location}{txn.city ? `, ${txn.city}` : ''}
+                                                        </button>
+                                                        <span className={`rounded-full px-2 py-0.5 text-[9px] font-extrabold uppercase tracking-wide border ${
+                                                            isIntra ? 'bg-amber-50 text-amber-800 border-amber-200' :
+                                                            isAcq ? 'bg-emerald-50 text-emerald-800 border-emerald-200' :
+                                                            'bg-rose-50 text-rose-800 border-rose-200'
+                                                        }`}>
+                                                            {isIntra ? 'Intra-Network Paper Transfer' : isAcq ? 'Acquisition' : 'Disposition'}
+                                                        </span>
+                                                    </div>
+                                                    <div className="text-xs text-slate-500 mt-1 flex flex-wrap gap-x-4 gap-y-1">
+                                                        {txn.buyer_name && (
+                                                            <span><strong className="text-slate-700">Buyer:</strong> {txn.buyer_name}</span>
+                                                        )}
+                                                        {txn.seller_name && (
+                                                            <span><strong className="text-slate-700">Seller:</strong> {txn.seller_name}</span>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <div className="text-right shrink-0 self-end sm:self-center">
+                                                {txn.amount > 0 ? (
+                                                    <div className="text-base font-black text-slate-900">{formatAmount(txn.amount)}</div>
+                                                ) : (
+                                                    <div className="text-xs font-bold text-slate-400 italic">No price recorded</div>
+                                                )}
+                                                <div className="text-[10px] font-bold text-slate-400 uppercase mt-0.5">{dateStr}</div>
+                                            </div>
+                                        </div>
+                                    );
+                                })
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
         </>
     );
 }
