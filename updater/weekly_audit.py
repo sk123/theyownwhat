@@ -116,9 +116,9 @@ def run_weekly_app_audit():
             court_data_sources = [
                 ("CT Judicial Evictions", "SELECT COUNT(*) FROM evictions"),
                 ("NYC DOI Marshals & HPD Violations", "SELECT COUNT(*) FROM nyc_bbl_stats"),
-                ("NJ BHI Active Multi-family Registrations", "SELECT COUNT(*) FROM nj_bhi_buildings"),
-                ("Maryland / Baltimore Evictions & Code Orders", "SELECT COUNT(*) FROM baltimore_evictions"),
-                ("Eviction Surge Detector Aggregates", "SELECT COUNT(*) FROM eviction_surges"),
+                ("New Jersey DCA Buildings & Networks", "SELECT COUNT(*) FROM nj_properties"),
+                ("Baltimore Properties & Networks", "SELECT COUNT(*) FROM baltimore_properties"),
+                ("City Eviction Events", "SELECT COUNT(*) FROM city_eviction_events"),
             ]
             for label, query in court_data_sources:
                 try:
@@ -137,7 +137,7 @@ def run_weekly_app_audit():
             try:
                 cur.execute("""
                     SELECT
-                        COUNT(*) FILTER (WHERE source_name IS NOT NULL OR owner IS NOT NULL) as linked_ct,
+                        COUNT(*) FILTER (WHERE owner IS NOT NULL OR location IS NOT NULL) as linked_ct,
                         COUNT(*) as total_ct
                     FROM properties
                 """)

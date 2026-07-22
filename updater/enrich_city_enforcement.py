@@ -764,31 +764,8 @@ def enrich_dc(conn, limit: Optional[int] = None) -> Dict[str, Any]:
 
 
 def mark_unavailable_sources(conn):
-    update_status(
-        conn,
-        "DC_EVICTIONS",
-        "court_evictions",
-        "unavailable",
-        {
-            "source_records": 0,
-            "matched_parcels": 0,
-            "message": "D.C. publishes monthly eviction PDFs, but no official parcel-level bulk feed is configured.",
-        },
-        None,
-    )
-    for city in ("BOSTON",):
-        update_status(
-            conn,
-            f"{city}_EVICTIONS",
-            "court_evictions",
-            "unavailable",
-            {
-                "source_records": 0,
-                "matched_parcels": 0,
-                "message": f"No official parcel-level {city.title()} eviction bulk feed is configured.",
-            },
-            None,
-        )
+    # No-op: We do not track non-existent eviction feeds as unavailable sources for Boston or D.C.
+    pass
 
 
 def main():
