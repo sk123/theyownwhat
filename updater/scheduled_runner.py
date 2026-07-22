@@ -451,6 +451,19 @@ def run_nightly_nj_update():
     logger.info("✓ Nightly NJ pipeline complete.")
     logger.info("=" * 80)
 
+def run_weekly_app_audit():
+    """Weekly full application audit & status email dispatch."""
+    logger.info("=" * 80)
+    logger.info("Starting Weekly Full Application Audit")
+    logger.info("=" * 80)
+    try:
+        cmd = [sys.executable, "updater/weekly_audit.py"]
+        run_source_only(cmd, check=False)
+        logger.info("✓ Weekly full application audit finished.")
+    except Exception as e:
+        logger.error(f"✘ Weekly full application audit crashed: {e}")
+    logger.info("=" * 80)
+
 def main():
     """Main scheduler loop"""
     logger.info("Vision Data Updater Service Starting")
@@ -464,6 +477,7 @@ def main():
     schedule.every(30).days.at("01:00").do(run_monthly_other_updates)
     schedule.every().sunday.at("03:00").do(run_weekly_full_scan)
     schedule.every().sunday.at("05:00").do(run_weekly_other_cities_full_scan)
+    schedule.every().sunday.at("06:00").do(run_weekly_app_audit)
     
     logger.info("Scheduled jobs:")
     logger.info("  - Nightly CT update (Vision/Current Owner): 2:00 AM daily")
@@ -474,8 +488,7 @@ def main():
     logger.info("  - Monthly update (Other towns): 1:00 AM every 30 days")
     logger.info("  - Weekly full scan: 3:00 AM Sunday")
     logger.info("  - Weekly Multi-city full scan (D.C., Baltimore, Boston, Detroit, Philadelphia): 5:00 AM Sunday")
-    logger.info("  - Multi-city and Detroit enforcement enrichment runs inside nightly/weekly multi-city hooks")
-    logger.info("  - Maryland/Baltimore eviction event ingest runs inside nightly/weekly multi-city hooks")
+    logger.info("  - Weekly Full App Audit & Email Report (salmunk@gmail.com): 6:00 AM Sunday")
     
     # Keep running
     while True:

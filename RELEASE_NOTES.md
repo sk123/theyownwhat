@@ -1,5 +1,21 @@
 # Release Notes
 
+## July 2026
+
+### Added
+
+- Added an automated weekly application audit pipeline (`updater/weekly_audit.py`) executing full system diagnostics every Sunday.
+- Added automated regression testing (`tests/test_network_algorithms.py` & `tests/test_gurevitch_linkage.py`) asserting that Menachem and Yehuda Gurevitch portfolios remain linked to 1,200+ properties.
+- Added automated email notification dispatch (`updater/send_audit_email.py`) delivering status reports and feature branch proposals to `salmunk@gmail.com`.
+- Added a Network Health & Data Integrity API endpoint (`/api/system/network-health`) returning dataset update timestamps, node counts, edge statistics, and source-only policy flags.
+- Added explicit connection signal provenance metadata and numerical link confidence scores (`1.0` for deed/SOTS officers, `0.90` for family co-principals, `0.85` for shared mailing addresses) on network records.
+- Added automated nightly New Jersey BHI multi-family ingestion and network building jobs (`run_nightly_nj_update`).
+
+### Changed
+
+- Standardized mailing address normalization across all jurisdictions to unify Post Office Box formats (`P.O. BOX` $\rightarrow$ `PO BOX`) and secondary unit keywords (`SUITE 100` $\rightarrow$ `# 100`) while preserving exact deed strings in database records.
+- Added a Managing Agent Contact Role Diversity Check in NYC network discovery to prevent managing agents acting as HeadOfficers across $>10$ distinct corporate owners from over-clustering unrelated landlord portfolios.
+
 ## June 2026
 
 ### Added
