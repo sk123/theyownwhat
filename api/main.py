@@ -91,6 +91,59 @@ def get_system_status():
     is_maintenance = os.path.exists(LOCK_FILE_PATH)
     return {"maintenance": is_maintenance}
 
+@app.get("/api/system/network-health")
+def get_network_health():
+    """
+    Returns platform-wide network health, jurisdiction dataset freshness,
+    and source-only policy transparency metrics.
+    """
+    health_data = {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "source_only_policy": {
+            "enabled": True,
+            "inferred_facts": False,
+            "synthetic_placeholders": False,
+            "transparency_notice": "All ownership networks, enforcement counts, and subsidy flags are built strictly from source public records."
+        },
+        "jurisdictions": {}
+    }
+    
+    try:
+        with cursor_context() as cur:
+            # Query data_source_status
+            cur.execute("""
+                SELECT source_name, source_type, last_refreshed_at, refresh_status, details, external_last_updated
+                FROM data_source_status
+                ORDER BY source_name ASC
+            """)
+            sources = cur.fetchall()
+            for s in sources:
+                health_data["jurisdictions"][s["source_name"]] = {
+                    "source_type": s["source_type"],
+                    "last_refreshed_at": s["last_refreshed_at"].isoformat() if s["last_refreshed_at"] else None,
+                    "status": s["refresh_status"],
+                    "details": s["details"],
+                    "external_last_updated": s["external_last_updated"].isoformat() if s.get("external_last_updated") else None
+                }
+                
+            # CT Network & Property Summary
+            cur.execute("SELECT COUNT(*) as count FROM properties")
+            row_p = cur.fetchone()
+            cur.execute("SELECT COUNT(*) as count FROM networks")
+            row_n = cur.fetchone()
+            health_data["jurisdictions"]["CONNECTICUT"] = {
+                "source_type": "statewide_cama_sots_vision",
+                "total_properties": row_p["count"] if row_p else 0,
+                "total_networks": row_n["count"] if row_n else 0,
+                "status": "active"
+            }
+    except Exception as e:
+        health_data["status"] = "partial_error"
+        health_data["error"] = str(e)
+        
+    return health_data
+
 
 # ------------------------------------------------------------
 # Helpers (make available to all endpoints)

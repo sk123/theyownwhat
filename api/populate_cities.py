@@ -130,8 +130,8 @@ def normalize_link_address(value):
         return ""
     text = text.upper().replace("&", " AND ")
     text = re.sub(r"[.,]", " ", text)
-    text = re.sub(r"\bSUITE\b|\bSTE\b|\bUNIT\b|\bAPT\b|\bAPARTMENT\b|\bROOM\b|\bRM\b", "#", text)
-    text = re.sub(r"\bFLOOR\b|\bFLR\b|\bFL\b", "FL", text)
+    text = re.sub(r"\b(?:P\s*O\s*BOX|POBOX|P\.?O\.?\s*BOX|POST\s+OFFICE\s+BOX)\b", "PO BOX", text)
+    text = re.sub(r"\bSUITE\b|\bSTE\b|\bUNIT\b|\bAPT\b|\bAPARTMENT\b|\bROOM\b|\bRM\b|\bFLOOR\b|\bFLR\b|\bFL\b", "#", text)
     text = re.sub(r"\bSTREET\b", "ST", text)
     text = re.sub(r"\bAVENUE\b", "AVE", text)
     text = re.sub(r"\bROAD\b", "RD", text)
@@ -1098,15 +1098,21 @@ def save_city_data(conn, city, network_groups):
                 latitude, longitude
             ))
 
+        has_mail_links = len(member_address_norms) > 0
+        link_confidence = 1.0 if len(member_names) == 1 else (0.95 if primary_human_name else (0.85 if has_mail_links else 0.75))
+
         connection_signals = {
             "member_name_count": len(member_names),
             "member_address_count": len(member_addresses),
             "member_address_norm_count": len(member_address_norms),
-            "has_mailing_address_links": len(member_address_norms) > 0,
+            "has_mailing_address_links": has_mail_links,
             "source_human_names": source_human_names,
             "primary_human_name": primary_human_name,
             "primary_entity_name": max(entity_owner_counts, key=entity_owner_counts.get) if entity_owner_counts else None,
             "principal_status": "source_listed_person" if primary_human_name else "unresolved_entity",
+            "provenance": ["OFFICIAL_MUNICIPAL_PROPERTY_RECORDS", f"{city.upper()}_OPEN_DATA"],
+            "link_confidence": link_confidence,
+            "data_transparency_note": "Assembled strictly from source-loaded property, tax parcel, and mailing records. No missing values inferred or generated."
         }
         db_networks.append((
             network_key, anchor_type, display_name, member_names, member_addresses,

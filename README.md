@@ -17,6 +17,13 @@ The app links fragmented public records across owners, LLCs, principals, mailing
 
 Halfway through my Business Entities class in law school (UW '07-'10), I raised my hand to ask, "so this ENTIRE system is designed for rich people to hide from the consequences of their actions?" Years later, as a fair housing lawyer, I filed numerous complaints against what appeared to be mom-and-pop LLCs - small, independent landlords unconnected to one another. I realized (too late) that they were often tentacles manufactured by massive, often out-of-state investors extracting wealth from our cities. This has been my on-the-side passion project for the last six years.
 
+My other side project, a phone app designed with both renters and their advocates in mind, is here: [renter.help](https://renter.help).
+
+| Apple App Store | Google Play Store |
+| :---: | :---: |
+| [<img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=https://apps.apple.com/us/app/fix-it-please/id6761016352" width="120" alt="Apple App Store QR Code" />](https://apps.apple.com/us/app/fix-it-please/id6761016352) | [<img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=https://play.google.com/store/apps/details?id=com.fixitplease.app" width="120" alt="Google Play Store QR Code" />](https://play.google.com/store/apps/details?id=com.fixitplease.app) |
+| [App Store](https://apps.apple.com/us/app/fix-it-please/id6761016352) | [Google Play](https://play.google.com/store/apps/details?id=com.fixitplease.app) |
+
 ## What It Does
 
 - Search by owner, business, principal, network, property address, or city.

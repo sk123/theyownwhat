@@ -187,8 +187,29 @@ export default function AboutModal({ isOpen, onClose, onShowFreshness }) {
                                 It was, but even the inventors didn't imagine people would eventually use the system to create separate entities for each bad act. The effect? Everything they do is split across a thousand artificial buckets, each responsible for a thousandth of their misdeeds, so that it's irrelevant whether the totality is so egregious that law (usually state law) might allow holding the actual human accountable (<span className="italic">"piercing the veil"</span> is the euphemism) because each misdeed is treated and litigated as an isolated incident by a small actor.
                             </p>
                             <p className="text-sm leading-relaxed text-slate-700 mt-3">
-                                Years later, as a fair housing lawyer, I filed numerous lawsuits against what appeared to be mom-and-pop LLCs - small, independent landlords unconnected to one another. I realized (too late) that they were often tentacles manufactured by massive, often out-of-state investors extracting wealth from our cities. This has been my on-the-side passion project for the last six years.
+                                As a fair housing lawyer, I filed numerous lawsuits against what appeared to be mom-and-pop LLCs - small, independent landlords unconnected to one another. I realized (too late) that they were often tentacles manufactured by massive, often out-of-state investors extracting wealth from our cities. This has been my on-the-side passion project for the last six years.
                             </p>
+                            <p className="text-sm leading-relaxed text-slate-700 mt-3">
+                                My other side project, a phone app designed with both renters and their advocates in mind, is here: <a href="https://renter.help" target="_blank" rel="noopener noreferrer" className="font-bold text-blue-600 underline hover:text-blue-800">renter.help</a>.
+                            </p>
+                            <div className="mt-4 pt-4 border-t border-blue-100/80 flex flex-wrap items-center justify-around gap-4 text-center">
+                                <div className="flex flex-col items-center">
+                                    <a href="https://apps.apple.com/us/app/fix-it-please/id6761016352" target="_blank" rel="noopener noreferrer" className="hover:scale-105 transition-transform">
+                                        <img src="/images/qr_app_store.png" alt="Apple App Store QR Code" className="w-24 h-24 rounded-lg shadow-sm border border-slate-200 bg-white p-1" />
+                                    </a>
+                                    <a href="https://apps.apple.com/us/app/fix-it-please/id6761016352" target="_blank" rel="noopener noreferrer" className="mt-1.5 text-xs font-bold text-slate-700 hover:text-blue-600 underline">
+                                        Apple App Store
+                                    </a>
+                                </div>
+                                <div className="flex flex-col items-center">
+                                    <a href="https://play.google.com/store/apps/details?id=com.fixitplease.app" target="_blank" rel="noopener noreferrer" className="hover:scale-105 transition-transform">
+                                        <img src="/images/qr_play_store.png" alt="Google Play Store QR Code" className="w-24 h-24 rounded-lg shadow-sm border border-slate-200 bg-white p-1" />
+                                    </a>
+                                    <a href="https://play.google.com/store/apps/details?id=com.fixitplease.app" target="_blank" rel="noopener noreferrer" className="mt-1.5 text-xs font-bold text-slate-700 hover:text-blue-600 underline">
+                                        Google Play Store
+                                    </a>
+                                </div>
+                            </div>
                         </div>
 
                         {SECTIONS.map(section => (

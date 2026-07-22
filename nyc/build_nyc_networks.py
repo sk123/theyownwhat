@@ -73,6 +73,17 @@ ADDR_MAX_USERS = 10  # any address seen on ≥10 registrations → blocked
 # registrations is almost certainly not a mom-and-pop landlord.
 CORP_MAX_USERS = 75  # any corp seen on ≥75 registrations → excluded from corp_index
 
+# Nonprofit intermediary corporations that hold title on behalf of NYC HPD
+# (e.g. Third Party Transfer program) before transferring to community
+# development organizations.  They appear as CorporateOwner on registrations
+# managed by completely separate nonprofits (MHANY, Banana Kelly, etc.) and
+# must NOT be used as ownership-linking signals.
+NONPROFIT_INTERMEDIARY_CORPS = {
+    "NEIGHBORHOOD RESTORE HDFC",
+    "RESTORING COMMUNITIES HDFC",
+    "JOE NYC CLUSTER LLC",
+}
+
 
 # ---------------------------------------------------------------------------
 # Union-Find
@@ -277,6 +288,43 @@ def build_nyc_networks(skip_property_join: bool = False, max_buildings: int = DE
         )
         for k in blocked_corps:
             del corp_index[k]
+
+    # Remove nonprofit intermediary corps (e.g. Neighborhood Restore HDFC) that
+    # hold title on behalf of HPD and transfer to separate community orgs.
+    intermediary_hits = NONPROFIT_INTERMEDIARY_CORPS & set(corp_index.keys())
+    if intermediary_hits:
+        logger.info(
+            f"  Nonprofit intermediary blocklist: removing {len(intermediary_hits)} corps: "
+            + ", ".join(sorted(intermediary_hits))
+        )
+        blocked_corps |= intermediary_hits
+        for k in intermediary_hits:
+            del corp_index[k]
+
+    # Auto-compute blocked person names (Managing Agents acting as HeadOfficers across ≥10 distinct corps)
+    person_corps = defaultdict(set)
+    person_addrs = defaultdict(set)
+    for reg_id, contact_type, name_norm, corp_norm, biz_addr, biz_zip in contacts:
+        if name_norm and name_norm in person_index and corp_norm:
+            person_corps[name_norm].add(corp_norm)
+        if name_norm and name_norm in person_index and biz_addr:
+            person_addrs[name_norm].add(biz_addr.strip())
+
+    blocked_people = set()
+    for p_name, corps in person_corps.items():
+        if len(corps) >= 10:
+            addrs = person_addrs.get(p_name, set())
+            if len(addrs) > 0 and (len(addrs) / len(corps)) >= 0.5:
+                blocked_people.add(p_name)
+
+    if blocked_people:
+        logger.info(
+            f"  Managing Agent Person blocklist: {len(blocked_people)} names blocked "
+            f"(each acting as HeadOfficer across ≥10 distinct corporate owners): "
+            + ", ".join(sorted(blocked_people)[:10])
+        )
+        for k in blocked_people:
+            del person_index[k]
 
     # ------------------------------------------------------------------
     # 4. Initial Union-Find (all three signals)

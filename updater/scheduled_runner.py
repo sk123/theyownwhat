@@ -421,6 +421,36 @@ def run_weekly_other_cities_full_scan():
         logger.error(f"✘ Weekly full multi-city updates crashed: {e}")
     logger.info("=" * 80)
 
+def run_nightly_nj_update():
+    """
+    Nightly New Jersey BHI multi-family data & network pipeline — runs at 3:45 AM.
+    Steps:
+      1. Ingest NJ BHI landlord registrations & Mod-IV properties
+      2. Rebuild NJ owner networks
+    """
+    logger.info("=" * 80)
+    logger.info("Starting nightly NJ BHI data & network pipeline")
+    logger.info("=" * 80)
+
+    steps = [
+        ("NJ BHI registrations & properties ingestion", [sys.executable, "-m", "nj.ingest_bhi"]),
+        ("NJ Owner Network rebuild",                  [sys.executable, "-m", "nj.build_nj_networks"]),
+    ]
+
+    for label, cmd in steps:
+        try:
+            logger.info(f"▶  {label} …")
+            result = run_source_only(cmd, check=False, capture_output=False)
+            if result.returncode == 0:
+                logger.info(f"✓  {label} finished.")
+            else:
+                logger.warning(f"⚠  {label} exited with code {result.returncode}.")
+        except Exception as e:
+            logger.error(f"✘  {label} crashed: {e}")
+
+    logger.info("✓ Nightly NJ pipeline complete.")
+    logger.info("=" * 80)
+
 def main():
     """Main scheduler loop"""
     logger.info("Vision Data Updater Service Starting")
@@ -428,6 +458,7 @@ def main():
     # Schedule jobs
     schedule.every().day.at("02:00").do(run_nightly_update)
     schedule.every().day.at("03:30").do(run_nightly_nyc_update)
+    schedule.every().day.at("03:45").do(run_nightly_nj_update)
     schedule.every().day.at("04:00").do(run_nightly_other_cities_update)
     schedule.every().sunday.at("00:00").do(run_weekly_nightly_updates)
     schedule.every(30).days.at("01:00").do(run_monthly_other_updates)
@@ -437,6 +468,7 @@ def main():
     logger.info("Scheduled jobs:")
     logger.info("  - Nightly CT update (Vision/Current Owner): 2:00 AM daily")
     logger.info("  - Nightly NYC update (HPD + enrichment + networks): 3:30 AM daily")
+    logger.info("  - Nightly NJ update (BHI + networks): 3:45 AM daily")
     logger.info("  - Nightly multi-city source-only hook: 4:00 AM daily")
     logger.info("  - Weekly update (Weekly/Nightly towns): 12:00 AM Sunday")
     logger.info("  - Monthly update (Other towns): 1:00 AM every 30 days")
@@ -452,3 +484,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

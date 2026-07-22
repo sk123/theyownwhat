@@ -332,17 +332,14 @@ def normalize_mailing_address(address: str) -> str:
         (r"\bPL\b", "PLACE"),
         (r"\bCT\b(?!\s+(?:(?:UNITED STATES|USA)\s+)?\d{5}(?:-\d{4})?\b)", "COURT"),
         (r"\bTER\b", "TERRACE"),
-        (r"\bP\s*O\s*BOX\b", "PO BOX"),
+        (r"\b(?:P\s*O\s*BOX|POBOX|P\.?O\.?\s*BOX|POST\s+OFFICE\s+BOX)\b", "PO BOX"),
     ]
     for pattern, repl in replacements:
         norm = re.sub(pattern, repl, norm)
 
     # 3. Standardize Unit/Suite (Do NOT strip them, or we merge skyscrapers)
-    # We convert common prefixes to a standard '#' symbol to catch "Suite 100" == "Ste 100"
-    # But we preserve the number "100" so "Suite 100" != "Suite 200"
-
-    # Replace variations with '#'
-    norm = re.sub(r"\b(?:SUITE|STE|UNIT|APT|RM|ROOM|FL|FLOOR)\b[\.\s]*", "#", norm)
+    # Convert common prefixes to a standard '#' symbol
+    norm = re.sub(r"\b(?:SUITE|STE|UNIT|APT|APARTMENT|RM|ROOM|FL|FLOOR|FLR)\b[\.\s]*", "#", norm)
 
     # Ensure space before '#'
     norm = re.sub(r"([^\s])#", r"\1 #", norm)
