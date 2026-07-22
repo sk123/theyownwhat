@@ -90,5 +90,63 @@ class TestNetworkAlgorithmsAndNormalization(unittest.TestCase):
         name2 = canonicalize_person_name("GUREVITCH MENACHEM")
         self.assertEqual(name1, name2)
 
+    def test_multi_jurisdiction_network_accuracy(self):
+        """Verify network builder graph counts, top network thresholds, and overbroadness limits across all jurisdictions."""
+        jurisdictions = [
+            ("CT", "networks", "total_properties", 50000, 1000, 1000000),
+            ("NYC", "nyc_networks", "building_count", 50000, 100, 500000),
+            ("NJ", "nj_networks", "building_count", 30000, 100, 200000),
+            ("BALTIMORE", "baltimore_networks", "building_count", 50000, 100, 300000),
+            ("BOSTON", "boston_networks", "building_count", 50000, 100, 200000),
+            ("DC", "dc_networks", "building_count", 40000, 50, 150000),
+            ("MINNEAPOLIS", "minneapolis_networks", "building_count", 5000, 30, 30000),
+        ]
+
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            for code, tbl, col, min_nets, min_largest, max_largest in jurisdictions:
+                # 1. Total Networks Existence Check
+                cur.execute(f"SELECT COUNT(*) as net_count, MAX({col}) as largest_net FROM {tbl}")
+                row = cur.fetchone()
+                self.assertIsNotNone(row, f"{code} networks table {tbl} is unreadable")
+                net_count = row["net_count"]
+                largest_net = row["largest_net"] or 0
+
+                self.assertGreaterEqual(
+                    net_count, min_nets,
+                    f"[{code}] Network count drop detected! Found {net_count:,} networks, expected >= {min_nets:,}"
+                )
+
+                # 2. Largest Network Lower Bound Check (Underbroadness assertion)
+                self.assertGreaterEqual(
+                    largest_net, min_largest,
+                    f"[{code}] Top network size underbroad! Largest network has {largest_net} buildings, expected >= {min_largest}"
+                )
+
+                # 3. Largest Network Upper Bound Check (Overbroadness super-cluster safeguard)
+                self.assertLessEqual(
+                    largest_net, max_largest,
+                    f"[{code}] CATASTROPHIC OVERBROADNESS DETECTED! Largest network collapsed into super-cluster with {largest_net} buildings"
+                )
+
+    def test_cross_jurisdiction_multi_property_clustering(self):
+        """Verify every jurisdiction successfully clusters multi-property portfolios into networks."""
+        jurisdictions = [
+            ("CT", "networks", "total_properties"),
+            ("NYC", "nyc_networks", "building_count"),
+            ("NJ", "nj_networks", "building_count"),
+            ("BALTIMORE", "baltimore_networks", "building_count"),
+            ("BOSTON", "boston_networks", "building_count"),
+            ("DC", "dc_networks", "building_count"),
+            ("MINNEAPOLIS", "minneapolis_networks", "building_count"),
+        ]
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            for code, tbl, col in jurisdictions:
+                cur.execute(f"SELECT COUNT(*) as cnt FROM {tbl} WHERE {col} > 1")
+                multi_cnt = cur.fetchone()["cnt"]
+                self.assertGreater(
+                    multi_cnt, 0,
+                    f"[{code}] Zero multi-property networks built in {tbl}! Network untangler algorithm failed."
+                )
+
 if __name__ == "__main__":
     unittest.main()

@@ -59,23 +59,20 @@ def run_weekly_app_audit():
         "fixes_applied": []
     }
 
-    # 1. CT Network Algorithm & Linkage Assertions
-    logger.info("1. Auditing CT Network Algorithms & Linkage Assertions...")
+    # 1. Multi-Jurisdiction Network Algorithm & Graph Integrity Assertions
+    logger.info("1. Auditing Multi-Jurisdiction Network Algorithms & Graph Integrity Assertions...")
     from tests.test_network_algorithms import TestNetworkAlgorithmsAndNormalization
-    suite = unittest.TestSuite()
-    suite.addTest(TestNetworkAlgorithmsAndNormalization("test_gurevitch_portfolio_linkage"))
-    suite.addTest(TestNetworkAlgorithmsAndNormalization("test_edelkopf_portfolio_linkage"))
-    suite.addTest(TestNetworkAlgorithmsAndNormalization("test_address_normalization"))
-    suite.addTest(TestNetworkAlgorithmsAndNormalization("test_person_name_canonicalization"))
+    loader = unittest.TestLoader()
+    suite = loader.loadTestsFromTestCase(TestNetworkAlgorithmsAndNormalization)
     runner = unittest.TextTestRunner(stream=sys.stdout, verbosity=2)
     result = runner.run(suite)
 
     if result.wasSuccessful():
-        audit_results["gurevitch_test"] = "PASSED (Network algorithms, normalization, and Gurevitch >= 1,200 property linkage verified)"
-        logger.info("✓ Network algorithms and linkage assertions PASSED.")
+        audit_results["gurevitch_test"] = "PASSED (All multi-jurisdiction network linkage, graph integrity, and Gurevitch assertions verified)"
+        logger.info("✓ Multi-jurisdiction network algorithms and graph integrity assertions PASSED.")
     else:
-        audit_results["gurevitch_test"] = "FAILED (Network assertions or Gurevitch linkage failed)"
-        issue_msg = "CRITICAL: Network discovery or Gurevitch portfolio linkage assertion failed!"
+        audit_results["gurevitch_test"] = "FAILED (Multi-jurisdiction network assertions failed)"
+        issue_msg = "CRITICAL: Multi-jurisdiction network discovery or portfolio linkage assertion failed!"
         audit_results["issues_found"].append(issue_msg)
         logger.error(f"✘ {issue_msg}")
 
