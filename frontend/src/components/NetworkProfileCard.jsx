@@ -235,7 +235,7 @@ const InvestigativeReportView = ({ content }) => {
     );
 };
 
-export default function NetworkProfileCard({ networkData, stats, networkName, initialEntityName, onBack, onExport, featureNav = null }) {
+export default function NetworkProfileCard({ networkData, stats, networkName, initialEntityName, onBack, onExport, featureNav = null, onOpenFeedback }) {
     const [showReport, setShowReport] = useState(false);
     const [reportLoading, setReportLoading] = useState(false);
     const [reportContent, setReportContent] = useState(null);
@@ -556,6 +556,21 @@ export default function NetworkProfileCard({ networkData, stats, networkName, in
 
                 {/* Right: Actions */}
                 <div className="flex items-center gap-2 ml-auto">
+                    {onOpenFeedback && (
+                        <button
+                            onClick={() => onOpenFeedback({
+                                id: managerName,
+                                name: managerName,
+                                type: 'Network',
+                                city: 'CT'
+                            })}
+                            className="px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-lg text-[10px] font-extrabold uppercase tracking-wider transition-all flex items-center gap-1 shrink-0"
+                            title="Report a data error, wrong landlord grouping, or missing detail"
+                        >
+                            <ShieldAlert size={12} className="text-amber-600 shrink-0" />
+                            <span className="hidden sm:inline">See something wrong?</span>
+                        </button>
+                    )}
                     {/* AI Report Button */}
                     <div className="relative group">
                         <button

@@ -123,8 +123,9 @@ def run_weekly_app_audit():
                     audit_results["rap_sheet_stats"][label] = f"Unavailable ({e})"
                     logger.warning(f"  - {label:<45}: Unavailable ({e})")
 
-            # 5. Direct Source Record Link Audit
-            logger.info("5. Auditing Direct Source Links across Properties...")
+            # 5. Modal Cross-Links & Source Data Link Audit across Jurisdictions
+            logger.info("5. Auditing Modal Cross-Links & Direct Source Links across Jurisdictions...")
+            audit_results["cross_link_audit"] = {}
             try:
                 cur.execute("""
                     SELECT
@@ -136,10 +137,21 @@ def run_weekly_app_audit():
                 linked_ct = link_row["linked_ct"] if link_row else 0
                 total_ct = link_row["total_ct"] if link_row else 1
                 pct_linked = (linked_ct / total_ct) * 100 if total_ct else 0
+                audit_results["cross_link_audit"]["ct_properties"] = f"{linked_ct:,} / {total_ct:,} ({pct_linked:.1f}%)"
                 logger.info(f"  CT Property Direct Source Links: {linked_ct:,} / {total_ct:,} ({pct_linked:.1f}%)")
             except Exception as e:
                 conn.rollback()
-                logger.warning(f"Direct source link check skipped: {e}")
+                logger.warning(f"  Direct source link check: {e}")
+
+            # Verify business <-> principal cross-links
+            try:
+                cur.execute("SELECT COUNT(*) as cnt FROM principals WHERE business_id IS NOT NULL")
+                p_cnt = cur.fetchone()["cnt"]
+                audit_results["cross_link_audit"]["principal_business_links"] = f"{p_cnt:,} linked principal-business edges"
+                logger.info(f"  Principal-Business Cross Links: {p_cnt:,} verified edges")
+            except Exception as e:
+                conn.rollback()
+                logger.warning(f"  Principal-Business cross-link check: {e}")
 
     finally:
         conn.close()

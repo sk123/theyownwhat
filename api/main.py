@@ -19,7 +19,7 @@ import psycopg2
 from psycopg2 import pool
 from psycopg2.extras import RealDictCursor, execute_batch
 
-from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi import FastAPI, Depends, HTTPException, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles

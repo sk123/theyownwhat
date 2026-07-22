@@ -222,6 +222,12 @@ function App() {
   const [showAbout, setShowAbout] = useState(false);
   const [showFreshness, setShowFreshness] = useState(false);
   const [showFeedback, setShowFeedback] = useState(false);
+  const [feedbackEntity, setFeedbackEntity] = useState(null);
+
+  const handleOpenFeedback = (entity) => {
+    setFeedbackEntity(entity);
+    setShowFeedback(true);
+  };
 
   // Mobile Tabs
   const [activeMobileTab, setActiveMobileTab] = useState('properties');
@@ -965,6 +971,7 @@ function App() {
                      networkName={networkData.networkName} 
                      initialEntityName={networkData.initialEntityName}
                      onBack={handleReset}
+                     onOpenFeedback={handleOpenFeedback}
                      onExport={() => {
                        const csvContent = "data:text/csv;charset=utf-8,"
                          + "Address,City,Owner,Assessed Value,Appraised Value\n"
@@ -1207,6 +1214,7 @@ function App() {
             networkData={networkData}
             onViewEntity={(entity, type) => setSelectedDetailEntity({ entity, type })}
             onClose={() => setSelectedProperty(null)}
+            onOpenFeedback={handleOpenFeedback}
           />
           <EntityDetailsModal
             entity={selectedDetailEntity?.entity}
@@ -1215,6 +1223,7 @@ function App() {
             onNavigate={(entity, type) => setSelectedDetailEntity({ entity, type })}
             onViewProperty={setSelectedProperty}
             onClose={() => setSelectedDetailEntity(null)}
+            onOpenFeedback={handleOpenFeedback}
           />
 
           <AboutModal
@@ -1232,8 +1241,11 @@ function App() {
           />
           <FeedbackModal
             isOpen={showFeedback}
-            onClose={() => setShowFeedback(false)}
-            initialEntity={selectedEntityId ? { id: selectedEntityId, title: 'Selected Entity' } : null}
+            onClose={() => {
+              setShowFeedback(false);
+              setFeedbackEntity(null);
+            }}
+            initialEntity={feedbackEntity || (selectedEntityId ? { id: selectedEntityId, title: 'Selected Entity' } : null)}
           />
           <MultiPropertyMapModal
             properties={selectedMapProperties}

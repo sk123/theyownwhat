@@ -46,40 +46,26 @@ const FeedbackModal = ({ isOpen, onClose, initialEntity = null }) => {
 
     const handleSearch = async (term) => {
         setSearchTerm(term);
-        if (term.length < 3) { setSearchResults([]); return; }
+        if (term.length < 2) { setSearchResults([]); return; }
         setSearching(true);
         try {
-            const cities = ['nyc', 'dc', 'baltimore', 'boston'];
-            const searchPromises = [
-                fetch(`/api/search?type=all&term=${encodeURIComponent(term)}`).then(r => r.ok ? r.json() : []),
-                ...cities.map(city => fetch(`/api/${city}/search?q=${encodeURIComponent(term)}&limit=5`).then(r => r.ok ? r.json().then(res => ({ city, res })) : { city, res: [] }))
-            ];
-
-            const settled = await Promise.allSettled(searchPromises);
-
-            const ctResults = (settled[0].status === 'fulfilled' ? settled[0].value : []) || [];
-            const otherResults = [];
-
-            settled.slice(1).forEach(item => {
-                if (item.status === 'fulfilled' && item.value) {
-                    const { city, res } = item.value;
-                    const cityUpper = city === 'nyc' ? 'NYC' : city === 'dc' ? 'D.C.' : city.charAt(0).toUpperCase() + city.slice(1);
-                    res.forEach(r => {
-                        otherResults.push({
-                            id: `${city}-${r.network_key || r.bbl || r.name || r.label}`,
-                            name: r.name || r.display_name || r.label,
-                            type: r.type?.endsWith('_network') ? `${cityUpper} Network` : `${cityUpper} Property`,
-                            _source: city,
-                            ...r
-                        });
-                    });
-                }
-            });
-
-            const ctNorm = ctResults.map(r => ({ ...r, _source: 'ct' }));
-            setSearchResults([...ctNorm, ...otherResults].slice(0, 16));
+            const res = await fetch(`/api/autocomplete?q=${encodeURIComponent(term)}&type=all`);
+            if (res.ok) {
+                const data = await res.json();
+                const mapped = data.map(item => ({
+                    id: item.id || item.value,
+                    name: item.label || item.value,
+                    type: item.type,
+                    context: item.context,
+                    jurisdiction: item.jurisdiction || 'CT',
+                    ...item
+                }));
+                setSearchResults(mapped);
+            } else {
+                setSearchResults([]);
+            }
         } catch (e) {
-            console.error('Search failed', e);
+            console.error('Feedback autocomplete search failed', e);
             setSearchResults([]);
         } finally {
             setSearching(false);

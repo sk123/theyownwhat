@@ -17,7 +17,7 @@ function DetailItem({ icon: Icon, label, value }) {
     );
 }
 
-export default function PropertyDetailsModal({ property, networkData = {}, onClose, onViewEntity }) {
+export default function PropertyDetailsModal({ property, networkData = {}, onClose, onViewEntity, onOpenFeedback }) {
     if (!property) return null;
 
     const isComplex = property.isComplex;
@@ -468,6 +468,21 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
                                         )}
                                     </AnimatePresence>
                                 </div>
+                            )}
+                            {onOpenFeedback && (
+                                <button
+                                    onClick={() => onOpenFeedback({
+                                        id: property.id || property.location,
+                                        name: propertyAddress || property.location || 'Property',
+                                        type: 'Property',
+                                        city: property.city || 'CT'
+                                    })}
+                                    className="px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5"
+                                    title="Report a data error, wrong owner association, or missing detail"
+                                >
+                                    <AlertCircle size={14} className="text-amber-600 shrink-0" />
+                                    <span>See something wrong?</span>
+                                </button>
                             )}
                             <button
                                 onClick={onClose}

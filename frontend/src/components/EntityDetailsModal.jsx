@@ -2,7 +2,7 @@ import React from 'react';
 import { X, User, Building, MapPin, Calendar, Hash, Link as LinkIcon, AlertCircle, Info } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-export default function EntityDetailsModal({ entity, type, networkData, onNavigate, onViewProperty, onClose }) {
+export default function EntityDetailsModal({ entity, type, networkData, onNavigate, onViewProperty, onClose, onOpenFeedback }) {
     if (!entity) return null;
 
     const d = entity.details || {};
@@ -38,34 +38,55 @@ export default function EntityDetailsModal({ entity, type, networkData, onNaviga
                     className="fixed inset-0 bg-black/60 backdrop-blur-sm"
                 />
 
-                {/* Modal */}
+                {/* Modal Container */}
                 <motion.div
                     initial={{ opacity: 0, scale: 0.95, y: 20 }}
                     animate={{ opacity: 1, scale: 1, y: 0 }}
                     exit={{ opacity: 0, scale: 0.95, y: 20 }}
-                    className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl flex flex-col max-h-[90vh] overflow-hidden"
+                    className="relative bg-white rounded-2xl shadow-2xl border border-gray-100 w-full max-w-2xl max-h-[85vh] overflow-hidden flex flex-col z-10"
                 >
                     {/* Header */}
-                    <div className="p-6 border-b border-gray-100 flex items-start justify-between bg-gray-50/50 shrink-0">
-                        <div>
-                            <div className="flex items-center gap-2 text-blue-600 mb-1">
-                                {isPrincipal ? <User size={16} /> : <Building size={16} />}
-                                <span className="text-xs font-bold uppercase tracking-wider">{type}</span>
+                    <div className="p-6 border-b border-gray-100 flex items-start justify-between bg-gradient-to-r from-gray-50 to-white">
+                        <div className="flex items-center gap-3">
+                            <div className={`p-3 rounded-xl ${isPrincipal ? 'bg-indigo-50 text-indigo-600' : 'bg-blue-50 text-blue-600'}`}>
+                                {isPrincipal ? <User size={24} /> : <Building size={24} />}
                             </div>
-                            <h2 className="text-2xl font-bold text-gray-900 leading-tight">
-                                {entity.name || entity.name_c}
-                            </h2>
-                            {/* Subtitle */}
-                            <p className="text-gray-500 font-medium">
-                                {d.address || d.principal_address || d.business_address || 'No Address Listed'}
-                            </p>
+                            <div>
+                                <span className={`text-xs font-bold uppercase tracking-wider ${isPrincipal ? 'text-indigo-500' : 'text-blue-500'}`}>
+                                    {isPrincipal ? 'Business Principal' : 'Business Entity'}
+                                </span>
+                                <h2 className="text-xl font-bold text-gray-900 leading-tight">
+                                    {entity.name || entity.name_c || 'Unknown Entity'}
+                                </h2>
+                                <p className="text-xs text-gray-500 flex items-center gap-1 mt-0.5">
+                                    <MapPin size={12} />
+                                    {d.address || d.principal_address || d.business_address || 'No Address Listed'}
+                                </p>
+                            </div>
                         </div>
-                        <button
-                            onClick={onClose}
-                            className="p-2 bg-white rounded-full text-gray-400 hover:text-gray-600 hover:bg-gray-100 border border-gray-200 transition-all"
-                        >
-                            <X size={20} />
-                        </button>
+                        <div className="flex items-center gap-2">
+                            {onOpenFeedback && (
+                                <button
+                                    onClick={() => onOpenFeedback({
+                                        id: entity.id || entity.principal_id || entity.business_id,
+                                        name: entity.name || entity.name_c || 'Entity',
+                                        type: isPrincipal ? 'Business Principal' : 'Business',
+                                        city: entity.city || entity.business_city || 'CT'
+                                    })}
+                                    className="px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5"
+                                    title="Report a data error, wrong owner association, or missing detail"
+                                >
+                                    <AlertCircle size={14} className="text-amber-600 shrink-0" />
+                                    <span>See something wrong?</span>
+                                </button>
+                            )}
+                            <button
+                                onClick={onClose}
+                                className="p-2 bg-white rounded-full text-gray-400 hover:text-gray-600 hover:bg-gray-100 border border-gray-200 transition-all"
+                            >
+                                <X size={20} />
+                            </button>
+                        </div>
                     </div>
 
                     <div className="flex-1 overflow-y-auto p-6">
