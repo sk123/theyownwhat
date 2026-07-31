@@ -1,7 +1,7 @@
 import React from 'react';
 import { Home, BookOpen, AlertCircle, RefreshCw, Toolbox, LogIn, LayoutDashboard, Database, MessageSquare, Heart, Building2, TrendingUp, ShieldAlert, Menu } from 'lucide-react';
 
-export default function Header({ onHome, onDatasets, onReset, onAbout, OnOpenToolbox, toolboxEnabled, onShowFreshness, onReportIssue, onHartfordPlayground, onBurstDetector, evictionToolsEnabled, currentView, activeState, onStateChange }) {
+export default function Header({ onHome, onDatasets, onReset, onAbout, OnOpenToolbox, toolboxEnabled, onShowFreshness, onReportIssue, onHartfordPlayground, onBurstDetector, evictionToolsEnabled, currentView, activeState, onStateChange, onOpenAnalytics }) {
     const [user, setUser] = React.useState(null);
     const isDatasetLanding = currentView === 'datasets';
 
@@ -196,6 +196,8 @@ export default function Header({ onHome, onDatasets, onReset, onAbout, OnOpenToo
                                 <span>Data Completeness</span>
                             </button>
                         )}
+
+
 
                         <button
                             onClick={onAbout}

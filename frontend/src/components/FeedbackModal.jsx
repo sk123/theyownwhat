@@ -1,8 +1,141 @@
-import { useState, useEffect } from 'react';
-import { X, MessageSquare, AlertTriangle, Send, Search, Check, Link, Unlink, FileQuestion, HelpCircle, ArrowRight, ArrowLeft } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { X, MessageSquare, AlertTriangle, Send, Search, Check, Link, Unlink, FileQuestion, HelpCircle, ArrowRight, ArrowLeft, Briefcase, User, MapPin } from 'lucide-react';
 
-const FeedbackModal = ({ isOpen, onClose, initialEntity = null }) => {
-    // Flow state: 'menu' | 'link' | 'unlink' | 'correction' | 'missing'
+const SearchInput = ({
+    label,
+    value,
+    fieldName,
+    placeholder,
+    activeSearchField,
+    setActiveSearchField,
+    searchTerm,
+    handleSearch,
+    searchResults,
+    searching,
+    selectEntity,
+    onClear,
+}) => {
+    const containerRef = useRef(null);
+
+    useEffect(() => {
+        const handleClickOutside = (e) => {
+            if (containerRef.current && !containerRef.current.contains(e.target)) {
+                if (activeSearchField === fieldName) {
+                    setActiveSearchField(null);
+                }
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [activeSearchField, fieldName, setActiveSearchField]);
+
+    const typeConfig = {
+        'Business': { icon: Briefcase, color: 'text-blue-600', bg: 'bg-blue-50', badge: 'bg-blue-100 text-blue-800' },
+        'Business Principal': { icon: User, color: 'text-indigo-600', bg: 'bg-indigo-50', badge: 'bg-indigo-100 text-indigo-800' },
+        'Property Owner': { icon: User, color: 'text-emerald-600', bg: 'bg-emerald-50', badge: 'bg-emerald-100 text-emerald-800' },
+        'Address': { icon: MapPin, color: 'text-rose-600', bg: 'bg-rose-50', badge: 'bg-rose-100 text-rose-800' },
+        'Ownership Network': { icon: Link, color: 'text-purple-600', bg: 'bg-purple-50', badge: 'bg-purple-100 text-purple-800' },
+    };
+
+    return (
+        <div className="mb-4 relative" ref={containerRef}>
+            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">{label}</label>
+
+            {value ? (
+                <div className="flex items-center justify-between p-3 bg-blue-50 border border-blue-200 rounded-lg text-blue-800">
+                    <div className="flex items-center gap-2 overflow-hidden">
+                        <Check className="w-4 h-4 text-blue-600 flex-shrink-0" />
+                        <span className="font-medium truncate">{value.name || value.label || value.title}</span>
+                        <span className="text-xs opacity-70 border-l border-blue-200 pl-2 ml-1">{value.type}</span>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={onClear}
+                        className="p-1 hover:bg-blue-100 rounded-full transition-colors"
+                    >
+                        <X className="w-4 h-4" />
+                    </button>
+                </div>
+            ) : (
+                <div className="relative">
+                    {activeSearchField === fieldName ? (
+                        <>
+                            <Search className="absolute left-3 top-3 w-4 h-4 text-blue-500 z-10" />
+                            <input
+                                autoFocus
+                                type="text"
+                                value={searchTerm}
+                                onChange={e => handleSearch(e.target.value)}
+                                placeholder="Search by business, owner, address, or network..."
+                                className="w-full pl-9 pr-9 py-2.5 border border-blue-500 ring-2 ring-blue-100 rounded-lg text-sm bg-white outline-none transition-all"
+                            />
+                            <button
+                                type="button"
+                                onClick={() => setActiveSearchField(null)}
+                                className="absolute right-3 top-3 text-gray-400 hover:text-gray-600 z-10"
+                            >
+                                <X className="w-4 h-4" />
+                            </button>
+
+                            {/* Dropdown */}
+                            {(searchResults.length > 0 || searching) && (
+                                <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-2xl max-h-64 overflow-y-auto z-[300]">
+                                    {searching && <div className="p-4 text-xs text-center text-gray-400 font-medium">Searching across all jurisdictions...</div>}
+                                    {!searching && searchResults.length === 0 && (
+                                        <div className="p-4 text-xs text-center text-gray-400 font-medium">No matching entities found.</div>
+                                    )}
+                                    {searchResults.map((res, idx) => {
+                                        const config = typeConfig[res.type] || { icon: Search, color: 'text-gray-400', bg: 'bg-gray-50', badge: 'bg-gray-100 text-gray-600' };
+                                        const IconComp = config.icon;
+                                        return (
+                                            <div
+                                                key={res.id || `${res.name}-${idx}`}
+                                                onMouseDown={(e) => {
+                                                    e.preventDefault();
+                                                    selectEntity(res);
+                                                }}
+                                                className="p-3 hover:bg-blue-50/70 cursor-pointer flex items-center justify-between border-b border-gray-100 last:border-0 transition-colors"
+                                            >
+                                                <div className="flex items-center gap-3 truncate pr-2">
+                                                    <div className={`p-2 rounded-lg ${config.bg} ${config.color} shrink-0`}>
+                                                        <IconComp className="w-4 h-4" />
+                                                    </div>
+                                                    <div className="truncate">
+                                                        <div className="text-sm font-semibold text-gray-900 truncate">{res.name || res.label}</div>
+                                                        <div className="text-xs text-gray-500 truncate">{res.context || res.type}</div>
+                                                    </div>
+                                                </div>
+                                                <div className="flex items-center gap-1.5 shrink-0">
+                                                    {res.type && (
+                                                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${config.badge}`}>{res.type}</span>
+                                                    )}
+                                                    {res._source === 'nyc' && (
+                                                        <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-violet-100 text-violet-700">NYC</span>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </>
+                    ) : (
+                        <div
+                            onClick={() => { setActiveSearchField(fieldName); handleSearch(''); }}
+                            className="w-full pl-9 pr-4 py-2.5 border border-gray-200 rounded-lg text-sm bg-gray-50 text-gray-500 cursor-text hover:border-gray-300 hover:bg-white transition-all flex items-center"
+                        >
+                            <Search className="absolute left-3 w-4 h-4 text-gray-400" />
+                            {placeholder}
+                        </div>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+};
+
+const FeedbackModal = ({ isOpen, onClose, initialEntity = null, activeState = null }) => {
+    // Flow state: 'menu' | 'link' | 'unlink' | 'correction' | 'missing' | 'other'
     const [flow, setFlow] = useState('menu');
     const [step, setStep] = useState(1);
 
@@ -25,8 +158,6 @@ const FeedbackModal = ({ isOpen, onClose, initialEntity = null }) => {
         if (isOpen) {
             resetState();
             if (initialEntity) {
-                // If opened with context, default to correction flow but allowing navigation back?
-                // Actually, let's just pre-fill entity A if they choose a relevant flow
                 setEntityA(initialEntity);
             }
         }
@@ -42,22 +173,27 @@ const FeedbackModal = ({ isOpen, onClose, initialEntity = null }) => {
         setSearchResults([]);
         setSuccess(false);
         setSubmitting(false);
+        setActiveSearchField(null);
     };
 
     const handleSearch = async (term) => {
         setSearchTerm(term);
-        if (term.length < 2) { setSearchResults([]); return; }
+        if (!term || term.length < 2) { setSearchResults([]); return; }
         setSearching(true);
         try {
-            const res = await fetch(`/api/autocomplete?q=${encodeURIComponent(term)}&type=all`);
+            let url = `/api/autocomplete?q=${encodeURIComponent(term)}&type=all`;
+            if (activeState) {
+                url += `&state=${encodeURIComponent(activeState)}`;
+            }
+            const res = await fetch(url);
             if (res.ok) {
                 const data = await res.json();
                 const mapped = data.map(item => ({
-                    id: item.id || item.value,
-                    name: item.label || item.value,
-                    type: item.type,
-                    context: item.context,
-                    jurisdiction: item.jurisdiction || 'CT',
+                    id: item.id || item.value || item.name,
+                    name: item.label || item.name || item.value,
+                    type: item.type || 'Entity',
+                    context: item.context || '',
+                    jurisdiction: item.jurisdiction || activeState || 'CT',
                     ...item
                 }));
                 setSearchResults(mapped);
@@ -129,103 +265,21 @@ const FeedbackModal = ({ isOpen, onClose, initialEntity = null }) => {
         }
     };
 
-    // --- Sub-Components ---
-
-    const SearchInput = ({ label, value, fieldName, placeholder }) => (
-        <div className="mb-4">
-            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">{label}</label>
-
-            {value ? (
-                <div className="flex items-center justify-between p-3 bg-blue-50 border border-blue-200 rounded-lg text-blue-800">
-                    <div className="flex items-center gap-2 overflow-hidden">
-                        <Check className="w-4 h-4 text-blue-600 flex-shrink-0" />
-                        {/* Updated to prefer 'name' as per backend SearchResult model */}
-                        <span className="font-medium truncate">{value.name || value.title}</span>
-                        <span className="text-xs opacity-70 border-l border-blue-200 pl-2 ml-1">{value.type}</span>
-                    </div>
-                    <button
-                        onClick={() => {
-                            if (fieldName === 'A') setEntityA(null);
-                            if (fieldName === 'B') setEntityB(null);
-                            if (fieldName === 'single') setEntityA(null);
-                        }}
-                        className="p-1 hover:bg-blue-100 rounded-full"
-                    >
-                        <X className="w-4 h-4" />
-                    </button>
-                </div>
-            ) : (
-                <div className="relative">
-                    {activeSearchField === fieldName ? (
-                        <>
-                            <Search className="absolute left-3 top-3 w-4 h-4 text-blue-500" />
-                            <input
-                                autoFocus
-                                type="text"
-                                value={searchTerm}
-                                onChange={e => handleSearch(e.target.value)}
-                                placeholder="Search for property, business, or person..."
-                                className="w-full pl-9 pr-9 py-2.5 border border-blue-500 ring-2 ring-blue-100 rounded-lg text-sm bg-white outline-none transition-all"
-                                onBlur={() => setTimeout(() => setActiveSearchField(null), 200)} // Delay to allow click
-                            />
-                            <button
-                                onMouseDown={() => setActiveSearchField(null)}
-                                className="absolute right-3 top-3 text-gray-400 hover:text-gray-600"
-                            >
-                                <X className="w-4 h-4" />
-                            </button>
-
-                            {/* Dropdown */}
-                            {(searchResults.length > 0 || searching) && (
-                                <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-100 rounded-lg shadow-xl max-h-48 overflow-y-auto z-10">
-                                    {searching && <div className="p-3 text-xs text-center text-gray-400">Searching...</div>}
-                                    {searchResults.map(res => (
-                                        <div
-                                            key={res.id}
-                                            onMouseDown={() => selectEntity(res)}
-                                            className="p-3 hover:bg-blue-50 cursor-pointer flex items-center justify-between border-b border-gray-50 last:border-0"
-                                        >
-                                            <div className="truncate">
-                                                <div className="text-sm font-medium text-gray-900">{res.name}</div>
-                                                <div className="text-xs text-gray-500">{res.type}</div>
-                                            </div>
-                                            {res._source === 'nyc' && (
-                                                <span className="ml-2 shrink-0 text-[9px] font-black px-1.5 py-0.5 rounded bg-violet-100 text-violet-700">NYC</span>
-                                            )}
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
-                        </>
-                    ) : (
-                        <div
-                            onClick={() => { setActiveSearchField(fieldName); setSearchTerm(''); }}
-                            className="w-full pl-9 pr-4 py-2.5 border border-gray-200 rounded-lg text-sm bg-gray-50 text-gray-500 cursor-text hover:border-gray-300 hover:bg-white transition-all flex items-center"
-                        >
-                            <Search className="absolute left-3 w-4 h-4 text-gray-400" />
-                            {placeholder}
-                        </div>
-                    )}
-                </div>
-            )}
-        </div>
-    );
-
     if (!isOpen) return null;
 
     return (
-        // Increased z-index to 100 to ensure it sits above the sticky header (z-50)
         <div className="fixed inset-0 z-[200] overflow-y-auto bg-black/60 backdrop-blur-sm px-4 pt-16 pb-4 flex justify-center items-start md:items-center md:p-4" onClick={onClose}>
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg flex flex-col my-auto h-auto max-h-none md:max-h-[90vh] overflow-visible md:overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg flex flex-col my-auto h-auto max-h-none md:max-h-[90vh] overflow-visible" onClick={e => e.stopPropagation()}>
 
                 {/* Header */}
-                <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+                <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50 rounded-t-2xl">
                     <h3 className="font-bold text-gray-900 flex items-center gap-2">
                         {flow === 'menu' && <MessageSquare className="w-5 h-5 text-gray-600" />}
                         {flow === 'link' && <Link className="w-5 h-5 text-blue-600" />}
                         {flow === 'unlink' && <Unlink className="w-5 h-5 text-orange-600" />}
                         {flow === 'correction' && <FileQuestion className="w-5 h-5 text-amber-600" />}
                         {flow === 'missing' && <HelpCircle className="w-5 h-5 text-purple-600" />}
+                        {flow === 'other' && <MessageSquare className="w-5 h-5 text-gray-600" />}
 
                         {flow === 'menu' && "Feedback"}
                         {flow === 'link' && "Report Missing Connection"}
@@ -246,7 +300,7 @@ const FeedbackModal = ({ isOpen, onClose, initialEntity = null }) => {
                         <p className="text-gray-500">Thank you for helping us improve the data.</p>
                     </div>
                 ) : (
-                    <div className="flex-1 overflow-y-auto p-6">
+                    <div className="flex-1 overflow-y-visible p-6">
 
                         {/* MENU VIEW */}
                         {flow === 'menu' && (
@@ -310,6 +364,14 @@ const FeedbackModal = ({ isOpen, onClose, initialEntity = null }) => {
                                             value={entityA}
                                             fieldName="A"
                                             placeholder="Search for property, business, or person..."
+                                            activeSearchField={activeSearchField}
+                                            setActiveSearchField={setActiveSearchField}
+                                            searchTerm={searchTerm}
+                                            handleSearch={handleSearch}
+                                            searchResults={searchResults}
+                                            searching={searching}
+                                            selectEntity={selectEntity}
+                                            onClear={() => setEntityA(null)}
                                         />
                                         <div className="flex justify-center -my-2 relative z-10">
                                             <div className="p-1.5 bg-white border border-gray-200 rounded-full shadow-sm text-gray-400">
@@ -321,6 +383,14 @@ const FeedbackModal = ({ isOpen, onClose, initialEntity = null }) => {
                                             value={entityB}
                                             fieldName="B"
                                             placeholder="Search for property, business, or person..."
+                                            activeSearchField={activeSearchField}
+                                            setActiveSearchField={setActiveSearchField}
+                                            searchTerm={searchTerm}
+                                            handleSearch={handleSearch}
+                                            searchResults={searchResults}
+                                            searching={searching}
+                                            selectEntity={selectEntity}
+                                            onClear={() => setEntityB(null)}
                                         />
                                     </div>
                                 )}
@@ -333,6 +403,14 @@ const FeedbackModal = ({ isOpen, onClose, initialEntity = null }) => {
                                             value={entityA}
                                             fieldName="single"
                                             placeholder="Search for property, business, or person..."
+                                            activeSearchField={activeSearchField}
+                                            setActiveSearchField={setActiveSearchField}
+                                            searchTerm={searchTerm}
+                                            handleSearch={handleSearch}
+                                            searchResults={searchResults}
+                                            searching={searching}
+                                            selectEntity={selectEntity}
+                                            onClear={() => setEntityA(null)}
                                         />
                                     </div>
                                 )}
@@ -362,7 +440,7 @@ const FeedbackModal = ({ isOpen, onClose, initialEntity = null }) => {
 
                 {/* Footer */}
                 {!success && (
-                    <div className="p-4 border-t border-gray-100 bg-gray-50 flex justify-between items-center">
+                    <div className="p-4 border-t border-gray-100 bg-gray-50 flex justify-between items-center rounded-b-2xl">
                         {flow !== 'menu' ? (
                             <button
                                 onClick={() => setFlow('menu')}

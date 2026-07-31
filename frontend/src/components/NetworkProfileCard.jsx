@@ -492,7 +492,24 @@ export default function NetworkProfileCard({
     const acquiredLastYear = propertyAcquisitions.filter(a => a.date >= oneYearAgo).length;
 
     const txSummary = networkData.transactionSummary;
-    const allTxns = txSummary?.recent_transactions || [];
+    const allTxns = useMemo(() => {
+        if (txSummary?.recent_transactions && txSummary.recent_transactions.length > 0) {
+            return txSummary.recent_transactions;
+        }
+        return propertyAcquisitions.map(p => ({
+            date: p.date,
+            amount: p.amount,
+            location: p.location,
+            city: p.city,
+            direction: 'acquired',
+            scope: 'inter_network',
+            scope_label: 'Inter-network',
+            scope_note: 'Acquired property',
+            buyer_name: p.owner || managerName,
+            seller_name: p.property?.prior_owner || 'Prior Owner',
+            property: p.property
+        }));
+    }, [txSummary, propertyAcquisitions, managerName]);
 
     const handlePropertyClick = (txn) => {
         if (!onViewProperty) return;
@@ -666,10 +683,10 @@ export default function NetworkProfileCard({
                                     {evictionsLast12m > 0 && <span className="text-indigo-600 font-extrabold text-[10px]">({evictionsLast12m} last 12m)</span>}
                                 </div>
 
-                                {txSummary && (
+                                {allTxns.length > 0 && (
                                     <div className="flex items-center gap-1.5 bg-amber-50 text-amber-800 border border-amber-100 px-2.5 py-1 rounded-lg font-bold">
                                         <TrendingUp size={13} className="text-amber-600" />
-                                        <span>+{txSummary.acquisitions_last_12m} acq / -{txSummary.dispositions_last_12m} disp</span>
+                                        <span>{allTxns.length} transactions</span>
                                         <button
                                             onClick={() => setShowTxModal(true)}
                                             className="text-blue-700 hover:underline text-[10px] font-black uppercase ml-1"
@@ -730,8 +747,11 @@ export default function NetworkProfileCard({
                                     </div>
                                 </div>
 
-                                {txSummary && (txSummary.acquisitions_last_12m > 0 || txSummary.dispositions_last_12m > 0) && (() => {
-                                    const netFlow = txSummary.net_acquisitions_12m;
+                                {/* Transaction Activity subsection */}
+                                {(allTxns.length > 0 || propertyAcquisitions.length > 0) && (() => {
+                                    const netFlow = txSummary?.net_acquisitions_12m ?? (acquiredLastYear);
+                                    const acqCount = txSummary?.acquisitions_last_12m ?? (acquiredLastYear);
+                                    const dispCount = txSummary?.dispositions_last_12m ?? 0;
                                     return (
                                         <div className="mt-2 pt-2 border-t border-slate-100">
                                             <div className="flex items-center justify-between gap-2 mb-2">

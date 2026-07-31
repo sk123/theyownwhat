@@ -13,25 +13,21 @@ logger = logging.getLogger(__name__)
 
 CITIES = ["dc", "baltimore", "boston", "detroit", "philadelphia", "chicago", "miami", "minneapolis"]
 
-def run_update(full=False):
-    if full:
-        logger.info("Starting FULL multi-city property ingestion & network rebuilding (D.C., Baltimore, Boston, Detroit, Philadelphia, Chicago, Miami, Minneapolis)")
+def run_update(full=True):
+    logger.info("Starting multi-city property ingestion & network rebuilding (D.C., Baltimore, Boston, Detroit, Philadelphia, Chicago, Miami, Minneapolis)")
+    try:
+        conn = get_connection()
         try:
-            conn = get_connection()
-            try:
-                for city in CITIES:
-                    populate_city(conn, city)
-                logger.info("✓ Full multi-city sync and network rebuild completed successfully.")
-            finally:
-                conn.close()
-        except Exception as e:
-            logger.error(f"Error during full multi-city update: {e}")
-    else:
-        logger.info("Skipping daily multi-city update: no real incremental source is configured.")
-        logger.info("Run with --full to rebuild D.C., Baltimore, and Boston from public source data.")
+            for city in CITIES:
+                populate_city(conn, city)
+            logger.info("✓ Multi-city sync and network rebuild completed successfully.")
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.error(f"Error during multi-city update: {e}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Multi-city property update runner")
-    parser.add_argument("--full", action="store_true", help="Perform full ingestion and network rebuild")
+    parser.add_argument("--full", action="store_true", default=True, help="Perform full ingestion and network rebuild")
     args = parser.parse_args()
     run_update(full=args.full)

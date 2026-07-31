@@ -14,7 +14,7 @@ const DATASETS = [
     icon: MapPinned,
     endpoint: '/api/dashboard/summary?city=STATEWIDE',
     sources: ['Business registry', 'Municipal parcels', 'CAMA/GIS', 'Hartford code', 'NHPD'],
-    rapSheets: { type: 'evictions_and_code', label: 'Hartford only' },
+    rapSheets: { type: 'evictions_and_code', label: 'Hartford Rap Sheets' },
   },
   {
     key: 'NY',
@@ -25,7 +25,7 @@ const DATASETS = [
     icon: Building2,
     endpoint: '/api/nyc/stats',
     sources: ['HPD registrations', 'HPD contacts', 'PLUTO', 'HPD cases & complaints', 'NHPD'],
-    rapSheets: null,
+    rapSheets: { type: 'hpd_violations', label: 'NYC HPD Violations & Rap Sheets' },
     networkLimit: {
       needed: 'HPD contacts, state business IDs, and officer, manager, and member filings',
       gap: 'HPD roles identify accountable contacts, not necessarily beneficial owners. New York entity-chain records are not bulk-loaded.',
@@ -281,11 +281,54 @@ function metricsFor(dataset, stats) {
   ].filter(([, value]) => value);
 }
 
+function formatNetworkMetrics(datasetKey, net) {
+  if (!net) return '';
+  if (datasetKey === 'CT') {
+    const props = compactCount(net.property_count);
+    const evicts = compactCount(net.eviction_count);
+    const viols = compactCount(net.violation_count);
+    return [
+      props ? `${props} props` : null,
+      evicts ? `${evicts} evictions` : null,
+      viols ? `${viols} code cases` : null,
+    ].filter(Boolean).join(' • ');
+  }
+
+  const bldgs = compactCount(net.building_count);
+  const units = compactCount(net.unit_count);
+  const openC = compactCount(net.open_violations_c);
+  const openViols = compactCount(net.open_violations || net.total_violations);
+  const evicts = compactCount(net.evictions_total);
+
+  if (datasetKey === 'NY') {
+    return [
+      bldgs ? `${bldgs} bldgs` : null,
+      units ? `${units} units` : null,
+      openC ? `${openC} Class C` : (openViols ? `${openViols} HPD records` : null),
+      evicts ? `${evicts} evictions` : null,
+    ].filter(Boolean).join(' • ');
+  }
+
+  return [
+    bldgs ? `${bldgs} bldgs` : null,
+    units ? `${units} units` : null,
+    openViols ? `${openViols} violations` : null,
+    evicts ? `${evicts} evictions` : null,
+  ].filter(Boolean).join(' • ');
+}
+
 function updatedText(dataset, stats) {
   if (!stats) return 'Loading source status';
+  const rawDate = stats.last_updated || stats.external_last_updated || stats.code_data?.last_success_at;
+  const formattedDate = formatDate(rawDate);
+
   if (dataset.key === 'CT') {
     const townCount = formatCount(stats.town_count);
-    return townCount ? `${townCount} towns loaded` : 'Source status loaded';
+    const evictEnd = stats.date_ranges?.evictions?.end ? formatDate(stats.date_ranges.evictions.end) : null;
+    const dateStr = formattedDate ? `Refreshed ${formattedDate}` : 'Auto-synced daily';
+    return townCount
+      ? `${townCount} towns • ${dateStr}${evictEnd ? ` (Evictions: ${evictEnd})` : ''}`
+      : `Source data: ${dateStr}`;
   }
   if (dataset.key === 'NY') {
     const codeData = stats.code_data || {};
@@ -294,15 +337,18 @@ function updatedText(dataset, stats) {
       const attempted = formatDate(codeData.last_refreshed_at);
       return attempted ? `HPD refresh ${refreshStatus} ${attempted}` : `HPD refresh ${refreshStatus}`;
     }
-    const hpdDate = formatDate(codeData.last_success_at || codeData.last_refreshed_at);
-    if (hpdDate) return `HPD refreshed ${hpdDate}`;
+    const hpdDate = formatDate(codeData.last_success_at || codeData.last_refreshed_at || stats.last_updated);
+    if (hpdDate) return `Source Data Date: ${hpdDate}`;
   }
-  const date = formatDate(stats.last_updated);
-  return date ? `Updated ${date}` : 'Source status loaded';
+  if (formattedDate) {
+    return `Source Data Date: ${formattedDate}`;
+  }
+  return 'Source status loaded';
 }
 
 export default function DatasetLanding({ onSelect, onOpenMonitor, activeDataset = 'CT', lastDataset }) {
   const [statsByDataset, setStatsByDataset] = React.useState({});
+  const [topNetworksByDataset, setTopNetworksByDataset] = React.useState({});
   const [expandedLimits, setExpandedLimits] = React.useState({});
 
   const toggleLimit = (key, event) => {
@@ -321,6 +367,7 @@ export default function DatasetLanding({ onSelect, onOpenMonitor, activeDataset 
   React.useEffect(() => {
     let cancelled = false;
     displayedDatasets.forEach((dataset) => {
+      // 1. Stats fetch
       fetch(dataset.endpoint)
         .then((res) => (res.ok ? res.json() : null))
         .then((data) => {
@@ -333,6 +380,21 @@ export default function DatasetLanding({ onSelect, onOpenMonitor, activeDataset 
             setStatsByDataset((prev) => ({ ...prev, [dataset.key]: null }));
           }
         });
+
+      // 2. Top Networks fetch
+      const apiPrefix = dataset.key === 'NY' ? 'nyc' : dataset.key.toLowerCase();
+      const topNetworksUrl = dataset.key === 'CT'
+        ? '/api/monitor?city=STATEWIDE&sort_by=evictions'
+        : `/api/${apiPrefix}/networks?limit=3&include_institutional=true`;
+
+      fetch(topNetworksUrl)
+        .then((res) => (res.ok ? res.json() : []))
+        .then((data) => {
+          if (!cancelled && Array.isArray(data)) {
+            setTopNetworksByDataset((prev) => ({ ...prev, [dataset.key]: data.slice(0, 3) }));
+          }
+        })
+        .catch(() => {});
     });
     return () => {
       cancelled = true;
@@ -408,10 +470,10 @@ export default function DatasetLanding({ onSelect, onOpenMonitor, activeDataset 
                       e.stopPropagation();
                       if (onOpenMonitor) onOpenMonitor(dataset.key);
                     }}
-                    className="mt-3 inline-flex items-center gap-1.5 text-[11px] font-semibold text-slate-400 hover:text-slate-600 transition-colors px-0 py-0.5"
+                    className="mt-2 inline-flex items-center gap-1.5 text-[11px] font-bold text-blue-600 hover:text-blue-800 transition-colors px-0 py-0.5 cursor-pointer"
                   >
-                    <ShieldAlert size={12} />
-                    Open Hartford Rap Sheets &rarr;
+                    <ShieldAlert size={13} />
+                    Open {dataset.key === 'CT' ? 'Hartford' : dataset.title} Rap Sheets &rarr;
                   </div>
                 )}
 
@@ -438,6 +500,52 @@ export default function DatasetLanding({ onSelect, onOpenMonitor, activeDataset 
                     );
                   })}
                 </div>
+
+                {/* Top Networks Showcase for Jurisdiction */}
+                {topNetworksByDataset[dataset.key] && topNetworksByDataset[dataset.key].length > 0 && (
+                  <div className="mt-4 border-t border-slate-100 pt-3">
+                    <div className="flex items-center justify-between text-[10px] font-black uppercase tracking-wider text-slate-400 mb-2">
+                      <span>Top Networks ({dataset.shortLabel})</span>
+                      {dataset.rapSheets && (
+                        <span 
+                          className="text-blue-600 font-bold hover:underline cursor-pointer" 
+                          onClick={(e) => { 
+                            e.stopPropagation(); 
+                            if (onOpenMonitor) onOpenMonitor(dataset.key); 
+                          }}
+                        >
+                          All Rap Sheets &rarr;
+                        </span>
+                      )}
+                    </div>
+                    <div className="space-y-1.5">
+                      {topNetworksByDataset[dataset.key].map((net, idx) => {
+                        const name = net.entity_name || net.label || net.display_name || 'Network';
+                        const metricsSummary = formatNetworkMetrics(dataset.key, net);
+                        return (
+                          <div 
+                            key={idx}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onSelect(dataset.key);
+                            }}
+                            className="flex flex-col gap-0.5 rounded-md border border-slate-100 bg-slate-50/80 px-2.5 py-1.5 hover:bg-slate-100 hover:border-slate-200 transition-all cursor-pointer"
+                          >
+                            <div className="flex items-center justify-between text-xs font-bold text-slate-900 truncate gap-2">
+                              <span className="truncate" title={name}>{name}</span>
+                              <span className="text-[10px] font-semibold text-slate-500 shrink-0">{metricsSummary}</span>
+                            </div>
+                            {net.sublabel && (
+                              <div className="text-[9px] font-medium text-slate-400 truncate">
+                                {net.sublabel}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
 
                 <div className="mt-4 flex flex-wrap gap-1.5">
                   {dataset.sources.map((source) => (
@@ -500,10 +608,21 @@ export default function DatasetLanding({ onSelect, onOpenMonitor, activeDataset 
                   </div>
                 )}
 
+                {stats?.data_source && (
+                  <div className="mt-3 flex items-center justify-between text-[11px] font-semibold text-slate-500 bg-slate-50 border border-slate-100 rounded-md px-2.5 py-1.5">
+                    <span className="truncate max-w-[210px]" title={stats.data_source}>
+                      {stats.data_source}
+                    </span>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider shrink-0">
+                      Auto-Refreshed
+                    </span>
+                  </div>
+                )}
+
                 <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-4">
-                  <div className="flex items-center gap-2 text-xs font-bold text-slate-500">
-                    <Clock className="h-4 w-4 text-slate-400" />
-                    {updatedText(dataset, stats)}
+                  <div className="flex items-center gap-2 text-xs font-bold text-slate-600">
+                    <Clock className="h-4 w-4 text-slate-400 shrink-0" />
+                    <span>{updatedText(dataset, stats)}</span>
                   </div>
                   <div className="flex items-center gap-1 text-xs font-black uppercase tracking-wider text-slate-400 group-hover:text-slate-700">
                     Open Search

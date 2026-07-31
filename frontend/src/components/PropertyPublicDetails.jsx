@@ -177,19 +177,32 @@ export default function PropertyPublicDetails({ property, networkData = {}, onVi
             </div>
 
             {/* Subsidies */}
-            {property.subsidies && property.subsidies.length > 0 && (
+            {(property.nhpd_subsidy || property.nhpd_program || (property.subsidies && property.subsidies.length > 0)) && (
                 <div className="space-y-2">
-                    <h3 className="text-xs font-bold text-gray-900 uppercase tracking-wider flex items-center gap-2 mb-2 text-amber-600">
-                        <span className="w-3.5 h-3.5 flex items-center justify-center rounded-full bg-amber-100 text-amber-600 font-bold text-[10px]">$</span>
-                        Housing Programs
+                    <h3 className="text-xs font-bold uppercase tracking-wider flex items-center gap-2 mb-2 text-purple-700">
+                        <span className="w-3.5 h-3.5 flex items-center justify-center rounded-full bg-purple-100 text-purple-700 font-black text-[10px]">$</span>
+                        Affordable Housing &amp; Subsidy Records
                     </h3>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        {property.subsidies.map((sub, idx) => (
-                            <div key={idx} className="bg-white p-3 rounded-lg border border-amber-100 shadow-sm">
+                        {property.nhpd_program && (
+                            <div className="bg-purple-50 p-3 rounded-lg border border-purple-200 shadow-sm">
                                 <div className="flex justify-between items-start mb-1">
-                                    <span className="font-bold text-amber-700 text-xs">{sub.subsidy_type}</span>
+                                    <span className="font-bold text-purple-900 text-xs">{property.nhpd_program}</span>
+                                    {property.nhpd_expiration && (
+                                        <span className="text-[10px] bg-purple-200 text-purple-900 px-1.5 py-0.5 rounded-full font-bold">
+                                            Expires {property.nhpd_expiration}
+                                        </span>
+                                    )}
+                                </div>
+                                <div className="text-[11px] font-medium text-purple-700">National Housing Preservation Database (NHPD)</div>
+                            </div>
+                        )}
+                        {property.subsidies && property.subsidies.map((sub, idx) => (
+                            <div key={idx} className="bg-white p-3 rounded-lg border border-purple-100 shadow-sm">
+                                <div className="flex justify-between items-start mb-1">
+                                    <span className="font-bold text-purple-800 text-xs">{sub.subsidy_type || 'Subsidy'}</span>
                                     {sub.units_subsidized > 0 && (
-                                        <span className="text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded-full font-bold">
+                                        <span className="text-[10px] bg-purple-100 text-purple-800 px-1.5 py-0.5 rounded-full font-bold">
                                             {sub.units_subsidized} Units
                                         </span>
                                     )}
@@ -199,6 +212,11 @@ export default function PropertyPublicDetails({ property, networkData = {}, onVi
                                     <div className="text-[10px] text-gray-500">
                                         Expires: <span className="font-bold">{sub.expiry_date}</span>
                                     </div>
+                                )}
+                                {sub.source_url && (
+                                    <a href={sub.source_url} target="_blank" rel="noopener noreferrer" className="text-[10px] text-purple-600 hover:text-purple-800 font-bold underline mt-1 inline-block">
+                                        View NHPD Record →
+                                    </a>
                                 )}
                             </div>
                         ))}

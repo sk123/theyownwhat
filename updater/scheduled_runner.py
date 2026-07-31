@@ -6,6 +6,7 @@ Runs automatically to keep property data fresh by updating "Current Owner" prope
 import os
 import sys
 import time
+import threading
 import schedule
 import logging
 import subprocess
@@ -464,11 +465,41 @@ def run_weekly_app_audit():
         logger.error(f"✘ Weekly full application audit crashed: {e}")
     logger.info("=" * 80)
 
+def run_daily_usage_report():
+    """Daily server-side local analytics report by city."""
+    logger.info("=" * 80)
+    logger.info("Starting Daily Usage & City Analytics Report Dispatch")
+    logger.info("=" * 80)
+    try:
+        cmd = [sys.executable, "updater/daily_usage_report.py"]
+        run_source_only(cmd, check=False)
+        logger.info("✓ Daily usage report finished.")
+    except Exception as e:
+        logger.error(f"✘ Daily usage report crashed: {e}")
+    logger.info("=" * 80)
+
+def _daily_report_thread():
+    """Independent daemon thread for daily usage report.
+    Runs on its own schedule instance so it is never blocked by long-running
+    nightly syncs that monopolize the main schedule loop for hours."""
+    import schedule as daily_schedule  # private instance
+    daily_schedule.clear()  # ensure clean
+    daily_schedule.every().day.at("08:00").do(run_daily_usage_report)
+    logger.info("[Daily Report Thread] Started — fires at 08:00 UTC daily (independent of main loop)")
+    while True:
+        daily_schedule.run_pending()
+        time.sleep(30)
+
 def main():
     """Main scheduler loop"""
     logger.info("Vision Data Updater Service Starting")
     
-    # Schedule jobs
+    # Start the daily usage report in a SEPARATE daemon thread
+    # so it fires reliably even when nightly syncs block the main loop for hours
+    report_thread = threading.Thread(target=_daily_report_thread, daemon=True, name="daily-report")
+    report_thread.start()
+    
+    # Schedule heavy jobs on the main loop
     schedule.every().day.at("02:00").do(run_nightly_update)
     schedule.every().day.at("03:30").do(run_nightly_nyc_update)
     schedule.every().day.at("03:45").do(run_nightly_nj_update)
@@ -484,6 +515,7 @@ def main():
     logger.info("  - Nightly NYC update (HPD + enrichment + networks): 3:30 AM daily")
     logger.info("  - Nightly NJ update (BHI + networks): 3:45 AM daily")
     logger.info("  - Nightly multi-city source-only hook: 4:00 AM daily")
+    logger.info("  - Daily Server-Side Usage Analytics Email (salmunk@gmail.com): 8:00 AM daily [INDEPENDENT THREAD]")
     logger.info("  - Weekly update (Weekly/Nightly towns): 12:00 AM Sunday")
     logger.info("  - Monthly update (Other towns): 1:00 AM every 30 days")
     logger.info("  - Weekly full scan: 3:00 AM Sunday")

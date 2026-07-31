@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
-  Building2, Users, MapPin, ChevronRight, Search, X,
+  Building, Building2, Users, MapPin, ChevronRight, Search, X,
   ArrowLeft, ExternalLink, Home, TrendingUp, Loader2,
   Info, Scale, Gavel, TriangleAlert, GitMerge,
   Hash, Calendar, DollarSign, Layers, ArrowUpDown, Filter, Map as MapIcon
@@ -567,10 +567,19 @@ const BoroughBadge = ({ borough }) => {
   );
 };
 
-const ViolationBadge = ({ openC, openAll, evictions }) => {
-  if (!openC && !openAll && !evictions) return null;
+const ViolationBadge = ({ openC, openAll, evictions, nhpdSubsidy, nhpdProgram, nhpdExpiration, subsidies }) => {
+  const hasSubsidy = Boolean(nhpdSubsidy || nhpdProgram || (subsidies && subsidies.length > 0));
+  const subProg = nhpdProgram || (subsidies && subsidies.length > 0 ? (subsidies[0].program_name || subsidies[0].subsidy_type) : 'Subsidized');
+  const subTitle = nhpdExpiration ? `NHPD Subsidy Program: ${subProg} (Expires: ${nhpdExpiration})` : `NHPD Subsidy Program: ${subProg}`;
+
+  if (!openC && !openAll && !evictions && !hasSubsidy) return null;
   return (
-    <div className="flex gap-1 flex-wrap">
+    <div className="flex gap-1 flex-wrap items-center">
+      {hasSubsidy && (
+        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-black bg-purple-100 text-purple-700 border border-purple-200" title={subTitle}>
+          <Building size={9} /> {subProg}
+        </span>
+      )}
       {openC > 0 && (
         <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-black bg-red-100 text-red-700" title={`${openC} open Class-C immediately hazardous HPD records`}>
           <TriangleAlert size={9} /> {openC}C
@@ -945,6 +954,58 @@ function BuildingDrawer({ p, networkName, onClose, config }) {
                     )}
                   </div>
                 )}
+              </div>
+            </div>
+          )}
+
+          {(p.nhpd_subsidy || p.nhpd_program || (p.subsidies && p.subsidies.length > 0)) && (
+            <div className="bg-white border border-purple-200 rounded-xl overflow-hidden shadow-sm">
+              <div className="px-4 py-2.5 bg-purple-50 border-b border-purple-100 text-[10px] font-black uppercase tracking-wider text-purple-900 flex items-center gap-1.5">
+                <Building size={12} className="text-purple-600" />
+                <span>Affordable Housing &amp; Subsidy Records</span>
+              </div>
+              <div className="p-4 space-y-3">
+                {p.nhpd_program && (
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <div className="text-xs font-bold text-purple-900">{p.nhpd_program}</div>
+                      <div className="text-[10px] text-purple-700 font-medium">National Housing Preservation Database (NHPD)</div>
+                    </div>
+                    {p.nhpd_expiration && (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-100 text-purple-800 border border-purple-200">
+                        Expires {p.nhpd_expiration}
+                      </span>
+                    )}
+                  </div>
+                )}
+                {p.subsidies && p.subsidies.length > 0 && (
+                  <div className="space-y-2 pt-1 border-t border-purple-100">
+                    {p.subsidies.map((sub, idx) => (
+                      <div key={idx} className="bg-purple-50/50 p-2.5 rounded-lg border border-purple-100 text-xs">
+                        <div className="flex justify-between items-center font-bold text-purple-900 mb-0.5">
+                          <span>{sub.program_name || sub.subsidy_type}</span>
+                          {sub.units_subsidized > 0 && (
+                            <span className="text-[10px] bg-purple-200 text-purple-900 px-1.5 py-0.5 rounded-full font-black">
+                              {sub.units_subsidized} Units
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex justify-between items-center text-[10px] text-purple-700">
+                          <span>{sub.subsidy_type}</span>
+                          {sub.expiry_date && <span>Expires {sub.expiry_date}</span>}
+                        </div>
+                        {sub.source_url && (
+                          <a href={sub.source_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-[10px] text-purple-700 underline font-bold mt-1">
+                            View NHPD Source Record <ExternalLink size={9} />
+                          </a>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="text-[10px] text-slate-400 italic">
+                  Data sourced from the National Housing Preservation Database (NHPD) &amp; HUD subsidy registries.
+                </div>
               </div>
             </div>
           )}
@@ -2296,7 +2357,17 @@ function NetworkDetail({ networkKey, onBack, onSearchTrigger, onMapSelected, api
                         <td className="px-3 py-2 text-right text-slate-400">{p.year_built??'—'}</td>
                         <td className="px-3 py-2 text-right">{(p.violations_open>0)?<span className="font-black text-amber-700">{p.violations_open}</span>:<span className="text-slate-300">—</span>}</td>
                         <td className="px-3 py-2 text-right">{(p.violations_open_c>0)?<span className="font-black text-red-600">{p.violations_open_c}</span>:<span className="text-slate-300">—</span>}</td>
-                        <td className="px-3 py-2"><ViolationBadge openC={p.violations_open_c} openAll={p.violations_open} evictions={p.evictions_total}/></td>
+                        <td className="px-3 py-2">
+                          <ViolationBadge 
+                            openC={p.violations_open_c} 
+                            openAll={p.violations_open} 
+                            evictions={p.evictions_total}
+                            nhpdSubsidy={p.nhpd_subsidy}
+                            nhpdProgram={p.nhpd_program}
+                            nhpdExpiration={p.nhpd_expiration}
+                            subsidies={p.subsidies}
+                          />
+                        </td>
                       </tr>
                     ))}
                     {sortedProps.length===0&&<tr><td colSpan={7} className="px-4 py-8 text-center text-slate-400 italic">No buildings match.</td></tr>}
@@ -2347,10 +2418,10 @@ export default function CityExplorer({ city = "nyc", onBack, onMapSelected }) {
 
     setLoadingTop(true);
     const topSort = cityKey === 'nyc' ? 'open_violations' : 'buildings';
-    fetch(`${apiBase}/networks?limit=12&min_buildings=5&sort_by=${topSort}`)
+    fetch(`${apiBase}/networks?limit=12&min_buildings=1&sort_by=${topSort}&include_institutional=true`)
       .then(r => r.ok ? r.json() : Promise.reject(new Error(`Top networks failed: ${r.status}`)))
       .catch(() => fetch(`${apiBase}/search?q=${config.defaultSearchQuery}&limit=12`).then(r => r.json()))
-      .then(data => setTopNetworks((Array.isArray(data) ? data : []).filter(r => r.type?.endsWith('_network') && r.building_count >= 5)))
+      .then(data => setTopNetworks((Array.isArray(data) ? data : []).filter(r => r.type?.endsWith('_network') && ((r.building_count || 0) >= 1 || (r.property_count || 0) >= 1))))
       .catch(console.error)
       .finally(() => setLoadingTop(false));
     return () => {

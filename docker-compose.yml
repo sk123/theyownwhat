@@ -14,6 +14,7 @@ services:
       - ./api:/app/api
       - ./reporter:/app/reporter
       - ./nyc:/app/nyc
+      - ./data:/app/data
     environment:
       - DATABASE_URL=postgresql://user:password@ctdata_db:5432/ctdata
       - OPENAI_API_KEY=${OPENAI_API_KEY}

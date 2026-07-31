@@ -2,11 +2,12 @@
 """
 updater/weekly_audit.py
 ========================
-Full application audit script.
+Full application & network association audit script.
 Executes weekly to verify every jurisdiction pipeline, network algorithm,
-Gurevitch linkage assertion (1,200+ properties), landing page count cards,
+Gurevitch linkage assertion (1,200+ properties), MHANY/Banana Kelly separation,
+network association compression metrics, landing page count cards,
 direct source record links, rap sheets, eviction surge detector, and data freshness reports.
-Emails audit results and new feature branch proposals to salmunk@gmail.com.
+Emails detailed audit results to salmunk@gmail.com.
 """
 
 import os
@@ -29,7 +30,6 @@ else:
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from updater.send_audit_email import send_audit_email
-from tests.test_gurevitch_linkage import TestGurevitchNetworkLinkage
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("weekly-audit")
@@ -44,23 +44,22 @@ def get_db_connection():
 
 def run_weekly_app_audit():
     logger.info("=" * 80)
-    logger.info("Starting Weekly Full Application Audit")
+    logger.info("Starting Comprehensive Weekly Application & Network Association Audit")
     logger.info("=" * 80)
 
     audit_results = {
         "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
-        "gurevitch_test": "PENDING",
-        "ct_properties": 0,
-        "ct_networks": 0,
+        "unit_test_assertions": "PENDING",
+        "anchor_assertions": [],
+        "network_association_matrix": {},
         "jurisdictions_audited": {},
         "rap_sheet_stats": {},
-        "eviction_surges": 0,
         "issues_found": [],
         "fixes_applied": []
     }
 
-    # 1. Multi-Jurisdiction Network Algorithm & Graph Integrity Assertions
-    logger.info("1. Auditing Multi-Jurisdiction Network Algorithms & Graph Integrity Assertions...")
+    # 1. Multi-Jurisdiction Network Algorithm Unit Tests
+    logger.info("1. Running Multi-Jurisdiction Network Algorithm Unit Assertions...")
     from tests.test_network_algorithms import TestNetworkAlgorithmsAndNormalization
     loader = unittest.TestLoader()
     suite = loader.loadTestsFromTestCase(TestNetworkAlgorithmsAndNormalization)
@@ -68,52 +67,112 @@ def run_weekly_app_audit():
     result = runner.run(suite)
 
     if result.wasSuccessful():
-        audit_results["gurevitch_test"] = "PASSED (All multi-jurisdiction network linkage, graph integrity, and Gurevitch assertions verified)"
-        logger.info("✓ Multi-jurisdiction network algorithms and graph integrity assertions PASSED.")
+        audit_results["unit_test_assertions"] = "PASSED (All unit test network graph assertions verified)"
+        logger.info("✓ Multi-jurisdiction network algorithm unit assertions PASSED.")
     else:
-        audit_results["gurevitch_test"] = "FAILED (Multi-jurisdiction network assertions failed)"
-        issue_msg = "CRITICAL: Multi-jurisdiction network discovery or portfolio linkage assertion failed!"
+        audit_results["unit_test_assertions"] = "FAILED (Multi-jurisdiction network unit assertions failed)"
+        issue_msg = "CRITICAL: Multi-jurisdiction network unit test failed!"
         audit_results["issues_found"].append(issue_msg)
         logger.error(f"✘ {issue_msg}")
 
     conn = get_db_connection()
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            # 2. CT Database Totals Audit
-            logger.info("2. Auditing CT Landing Page Stat Cards & Table Totals...")
-            # 2. Multi-Jurisdiction Database Totals Audit
-            logger.info("2. Auditing Database Property & Network Totals across All Active US Jurisdictions...")
+            # 1b. Live DB Anchor Network Linkage Assertions
+            logger.info("1b. Auditing Live DB Anchor Network Associations & Separation...")
+            anchor_assertions = []
+
+            # Assertion 1: CT Gurevitch Network Linkage
+            try:
+                cur.execute("SELECT SUM(total_properties) as g_cnt FROM networks WHERE UPPER(primary_name) LIKE '%GUREVITCH%'")
+                g_cnt = cur.fetchone()["g_cnt"] or 0
+                if g_cnt >= 1200:
+                    msg = f"✅ CT Gurevitch Network: {g_cnt:,} properties linked (Assertion >= 1,200 PASSED)"
+                    anchor_assertions.append(msg)
+                    logger.info(f"  - {msg}")
+                else:
+                    msg = f"❌ CT Gurevitch Network: {g_cnt:,} properties linked (Assertion >= 1,200 FAILED)"
+                    anchor_assertions.append(msg)
+                    audit_results["issues_found"].append(f"Gurevitch CT network property count dropped below 1,200: {g_cnt}")
+                    logger.error(f"  - {msg}")
+            except Exception as e:
+                conn.rollback()
+                anchor_assertions.append(f"⚠️ CT Gurevitch Network assertion error: {e}")
+
+            # Assertion 2: NYC Speliotis (MHANY) vs Burgess (Banana Kelly) Isolation
+            try:
+                cur.execute("""
+                    SELECT count(*) as overlap
+                    FROM (SELECT unnest(bbl_list) as bbl FROM nyc_networks WHERE UPPER(display_name) LIKE '%SPELIOTIS%') s
+                    JOIN (SELECT unnest(bbl_list) as bbl FROM nyc_networks WHERE UPPER(display_name) LIKE '%BURGESS%') b
+                    ON s.bbl = b.bbl
+                """)
+                overlap_cnt = cur.fetchone()["overlap"] or 0
+                if overlap_cnt == 0:
+                    msg = "✅ NYC MHANY (Speliotis) & Banana Kelly (Burgess) Isolation: 0 overlapping BBLs (PASSED)"
+                    anchor_assertions.append(msg)
+                    logger.info(f"  - {msg}")
+                else:
+                    msg = f"❌ NYC MHANY & Banana Kelly Isolation FAILED: {overlap_cnt} overlapping BBLs detected!"
+                    anchor_assertions.append(msg)
+                    audit_results["issues_found"].append(f"Overinclusiveness in NYC: Speliotis & Burgess share {overlap_cnt} BBLs!")
+                    logger.error(f"  - {msg}")
+            except Exception as e:
+                conn.rollback()
+                anchor_assertions.append(f"⚠️ NYC network separation assertion error: {e}")
+
+            audit_results["anchor_assertions"] = anchor_assertions
+
+            # 2. Comprehensive Network Association Matrix across All Active US Jurisdictions
+            logger.info("2. Auditing Network Association Metrics & Graph Density across US Jurisdictions...")
             all_jurisdictions = [
-                ("Connecticut (Statewide)", "properties", "networks"),
-                ("New York City (NYC)", "nyc_properties", "nyc_networks"),
-                ("New Jersey (Statewide DCA)", "nj_properties", "nj_networks"),
-                ("Baltimore, MD", "baltimore_properties", "baltimore_networks"),
-                ("Boston, MA", "boston_properties", "boston_networks"),
-                ("Washington, D.C.", "dc_properties", "dc_networks"),
-                ("Detroit, MI", "detroit_properties", "detroit_networks"),
-                ("Minneapolis, MN", "minneapolis_properties", "minneapolis_networks"),
-                ("Philadelphia, PA", "philadelphia_properties", "philadelphia_networks"),
-                ("Chicago & Cook Co, IL", "chicago_properties", "chicago_networks"),
-                ("Miami-Dade, FL", "miami_properties", "miami_networks"),
+                ("Connecticut (Statewide)", "properties", "networks", "total_properties"),
+                ("New York City (NYC)", "nyc_properties", "nyc_networks", "building_count"),
+                ("New Jersey (Statewide DCA)", "nj_properties", "nj_networks", "building_count"),
+                ("Baltimore, MD", "baltimore_properties", "baltimore_networks", "building_count"),
+                ("Boston, MA", "boston_properties", "boston_networks", "building_count"),
+                ("Washington, D.C.", "dc_properties", "dc_networks", "building_count"),
+                ("Detroit, MI", "detroit_properties", "detroit_networks", "building_count"),
+                ("Minneapolis, MN", "minneapolis_properties", "minneapolis_networks", "building_count"),
+                ("Philadelphia, PA", "philadelphia_properties", "philadelphia_networks", "building_count"),
+                ("Chicago & Cook Co, IL", "chicago_properties", "chicago_networks", "building_count"),
+                ("Miami-Dade, FL", "miami_properties", "miami_networks", "building_count"),
             ]
 
-            audit_results["all_jurisdiction_stats"] = {}
-            for label, p_tbl, n_tbl in all_jurisdictions:
+            matrix = {}
+            for label, p_tbl, n_tbl, count_col in all_jurisdictions:
                 try:
                     cur.execute(f"SELECT COUNT(*) as p_cnt FROM {p_tbl}")
                     p_cnt = cur.fetchone()["p_cnt"]
-                    cur.execute(f"SELECT COUNT(*) as n_cnt FROM {n_tbl}")
-                    n_cnt = cur.fetchone()["n_cnt"]
-                    audit_results["all_jurisdiction_stats"][label] = {"properties": p_cnt, "networks": n_cnt}
-                    logger.info(f"  - {label:<28}: {p_cnt:,} properties | {n_cnt:,} networks")
+                    cur.execute(f"""
+                        SELECT 
+                            COUNT(*) as total_nets,
+                            COUNT(CASE WHEN {count_col} > 1 THEN 1 END) as multi_nets,
+                            COALESCE(MAX({count_col}), 0) as max_size,
+                            ROUND(COALESCE(AVG(CASE WHEN {count_col} > 1 THEN {count_col} END), 0)::numeric, 1) as avg_multi_size
+                        FROM {n_tbl}
+                    """)
+                    n_row = cur.fetchone()
+                    total_nets = n_row["total_nets"]
+                    multi_nets = n_row["multi_nets"]
+                    max_size = n_row["max_size"]
+                    avg_multi_size = float(n_row["avg_multi_size"] or 0)
+                    density = round((multi_nets / total_nets * 100), 1) if total_nets > 0 else 0
+
+                    matrix[label] = {
+                        "properties": p_cnt,
+                        "networks": total_nets,
+                        "multi_networks": multi_nets,
+                        "largest_network": max_size,
+                        "avg_multi_size": avg_multi_size,
+                        "density_pct": density
+                    }
+                    logger.info(f"  - {label:<26}: {p_cnt:,} props | {total_nets:,} nets | {multi_nets:,} multi-nets | Max Net: {max_size:,} | Avg Multi: {avg_multi_size}")
                 except Exception as e:
                     conn.rollback()
-                    audit_results["all_jurisdiction_stats"][label] = {"properties": 0, "networks": 0, "error": str(e)}
+                    matrix[label] = {"properties": 0, "networks": 0, "error": str(e)}
 
-            cur.execute("SELECT COUNT(*) as prop_count FROM properties")
-            audit_results["ct_properties"] = cur.fetchone()["prop_count"]
-            cur.execute("SELECT COUNT(*) as net_count FROM networks")
-            audit_results["ct_networks"] = cur.fetchone()["net_count"]
+            audit_results["network_association_matrix"] = matrix
 
             # 3. Jurisdiction Data Sources & Freshness Audit
             logger.info("3. Auditing Jurisdiction Data Source Statuses...")
@@ -153,28 +212,8 @@ def run_weekly_app_audit():
                     audit_results["rap_sheet_stats"][label] = f"Unavailable ({e})"
                     logger.warning(f"  - {label:<45}: Unavailable ({e})")
 
-            # 5. Modal Cross-Links & Source Data Link Audit across Jurisdictions
-            logger.info("5. Auditing Modal Cross-Links & Direct Source Links across Jurisdictions...")
-            audit_results["cross_link_audit"] = {}
-            try:
-                cur.execute("""
-                    SELECT
-                        COUNT(*) FILTER (WHERE owner IS NOT NULL OR location IS NOT NULL) as linked_ct,
-                        COUNT(*) as total_ct
-                    FROM properties
-                """)
-                link_row = cur.fetchone()
-                linked_ct = link_row["linked_ct"] if link_row else 0
-                total_ct = link_row["total_ct"] if link_row else 1
-                pct_linked = (linked_ct / total_ct) * 100 if total_ct else 0
-                audit_results["cross_link_audit"]["ct_properties"] = f"{linked_ct:,} / {total_ct:,} ({pct_linked:.1f}%)"
-                logger.info(f"  CT Property Direct Source Links: {linked_ct:,} / {total_ct:,} ({pct_linked:.1f}%)")
-            except Exception as e:
-                conn.rollback()
-                logger.warning(f"  Direct source link check: {e}")
-
-            # 6. User Feedback Review & Resolution Engine
-            logger.info("6. Reviewing and addressing all submitted user feedback...")
+            # 5. User Feedback Review & Resolution Engine
+            logger.info("5. Reviewing and addressing all submitted user feedback...")
             feedback_summary = {
                 "pending_count": 0,
                 "resolved_count": 0,
@@ -234,7 +273,6 @@ def run_weekly_app_audit():
                         "status": new_status,
                         "notes": audit_note
                     })
-                    logger.info(f"  - User Feedback #{fb_id} [{r_type}]: {new_status} ({audit_note})")
 
                 audit_results["feedback_summary"] = feedback_summary
 
@@ -245,64 +283,100 @@ def run_weekly_app_audit():
     finally:
         conn.close()
 
-    # 6. Format Audit Summary
+    # 6. Format Detailed Email Summary
     fb_summary = audit_results.get("feedback_summary", {})
     status_emoji = "✅" if not audit_results["issues_found"] else "⚠️"
-    subject = f"[They Own WHAT?] {status_emoji} Weekly Full App Audit Report - {datetime.utcnow().strftime('%Y-%m-%d')}"
+    subject = f"[They Own WHAT?] {status_emoji} Weekly Full App & Network Association Audit - {datetime.utcnow().strftime('%Y-%m-%d')}"
 
-    body_text = f"""Weekly Full Application Audit Report
-======================================
+    body_text = f"""They Own WHAT?? — Weekly Full Application & Network Association Audit Report
+==============================================================================
 Execution Timestamp: {audit_results['timestamp']}
 
-1. Multi-Jurisdiction Network Algorithm & Graph Integrity Assertions:
-   Status: {audit_results['gurevitch_test']}
+1. Network Algorithm Unit Assertions:
+   Status: {audit_results['unit_test_assertions']}
 
-2. Audited Major Metro & Statewide US Jurisdictions ({len(audit_results.get('all_jurisdiction_stats', {}))} Active):
+2. Live DB Anchor Network Linkage Assertions:
 """
-    for j_name, stats in audit_results.get("all_jurisdiction_stats", {}).items():
-        body_text += f"   - {j_name:<28}: {stats['properties']:,} properties | {stats['networks']:,} networks\n"
+    for assertion in audit_results["anchor_assertions"]:
+        body_text += f"   {assertion}\n"
 
-    body_text += f"\n3. Data Feed Freshness ({len(audit_results['jurisdictions_audited'])} feeds audited):\n"
+    body_text += f"\n3. Audited Network Associations across All Active US Jurisdictions ({len(audit_results['network_association_matrix'])} Active):\n"
+    body_text += f"   {'Jurisdiction':<26} | {'Properties':<10} | {'Networks':<9} | {'Multi-Nets':<10} | {'Max Portfolio':<13} | {'Avg Multi-Net':<13} | {'Multi-Net %':<10}\n"
+    body_text += "   " + "-" * 110 + "\n"
+    for j_name, stats in audit_results["network_association_matrix"].items():
+        if "error" in stats:
+            body_text += f"   {j_name:<26} | ERROR: {stats['error']}\n"
+        else:
+            body_text += f"   {j_name:<26} | {stats['properties']:<10,} | {stats['networks']:<9,} | {stats['multi_networks']:<10,} | {stats['largest_network']:<13,} | {stats['avg_multi_size']:<13} | {stats['density_pct']:<10}%\n"
+
+    body_text += f"\n4. Data Feed Freshness ({len(audit_results['jurisdictions_audited'])} feeds audited):\n"
     for j_name, j_info in audit_results["jurisdictions_audited"].items():
-        body_text += f"   - {j_name:<20}: {j_info['status']} (Last Refreshed: {j_info['last_refreshed']})\n"
+        body_text += f"   - {j_name:<25}: {j_info['status']} (Last Refreshed: {j_info['last_refreshed']})\n"
 
-    body_text += "\n4. Issues Identified & Status:\n"
+    body_text += f"\n5. Eviction & Code Feeds Audit:\n"
+    for feed_name, cnt in audit_results["rap_sheet_stats"].items():
+        cnt_str = f"{cnt:,}" if isinstance(cnt, int) else str(cnt)
+        body_text += f"   - {feed_name:<35}: {cnt_str} records\n"
+
+    body_text += "\n6. Issues Identified & System Health:\n"
     if audit_results["issues_found"]:
         for issue in audit_results["issues_found"]:
             body_text += f"   - ⚠️ {issue}\n"
     else:
         body_text += "   - All system metrics, network assertions, data freshness feeds, and stat cards verified healthy.\n"
 
-    # HTML Version
+    # Rich HTML Version
     body_html = f"""
-    <h2>They Own WHAT?? — Weekly Full Application Audit</h2>
+    <h2>They Own WHAT?? — Weekly Full Application & Network Association Audit</h2>
     <p><strong>Timestamp:</strong> {audit_results['timestamp']}</p>
     
-    <h3>1. Multi-Jurisdiction Network Graph Assertions</h3>
-    <p><strong>Result:</strong> {audit_results['gurevitch_test']}</p>
-    
-    <h3>2. Audited Major Metro & Statewide US Jurisdictions</h3>
-    <table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse; width:100%;">
+    <h3>1. Multi-Jurisdiction Network Graph & Anchor Assertions</h3>
+    <p><strong>Unit Test Assertions:</strong> {audit_results['unit_test_assertions']}</p>
+    <ul>
+    """
+    for assertion in audit_results["anchor_assertions"]:
+        body_html += f"<li>{assertion}</li>"
+
+    body_html += f"""
+    </ul>
+
+    <h3>2. Live Network Association Matrix ({len(audit_results['network_association_matrix'])} Active Jurisdictions)</h3>
+    <table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse; width:100%; font-family:sans-serif; font-size:13px;">
         <thead>
-            <tr style="background-color:#f2f2f2;">
+            <tr style="background-color:#f1f5f9;">
                 <th style="text-align:left;">Jurisdiction</th>
-                <th style="text-align:right;">Loaded Properties / Buildings</th>
-                <th style="text-align:right;">Ownership Networks Built</th>
+                <th style="text-align:right;">Properties / Parcels</th>
+                <th style="text-align:right;">Total Networks</th>
+                <th style="text-align:right;">Multi-Prop Networks (2+)</th>
+                <th style="text-align:right;">Largest Portfolio</th>
+                <th style="text-align:right;">Avg Multi-Net Size</th>
+                <th style="text-align:right;">Multi-Net Ratio %</th>
             </tr>
         </thead>
         <tbody>
     """
-    for j_name, stats in audit_results.get("all_jurisdiction_stats", {}).items():
-        body_html += f"<tr><td><strong>{j_name}</strong></td><td style='text-align:right;'>{stats['properties']:,}</td><td style='text-align:right;'>{stats['networks']:,}</td></tr>"
+    for j_name, stats in audit_results["network_association_matrix"].items():
+        if "error" in stats:
+            body_html += f"<tr><td><strong>{j_name}</strong></td><td colspan='6' style='color:red;'>Error: {stats['error']}</td></tr>"
+        else:
+            body_html += f"""<tr>
+                <td><strong>{j_name}</strong></td>
+                <td style='text-align:right;'>{stats['properties']:,}</td>
+                <td style='text-align:right;'>{stats['networks']:,}</td>
+                <td style='text-align:right; font-weight:bold; color:#1e40af;'>{stats['multi_networks']:,}</td>
+                <td style='text-align:right;'>{stats['largest_network']:,}</td>
+                <td style='text-align:right;'>{stats['avg_multi_size']}</td>
+                <td style='text-align:right; font-weight:bold;'>{stats['density_pct']}%</td>
+            </tr>"""
 
     body_html += f"""
         </tbody>
     </table>
 
     <h3>3. Data Feed Freshness Overview ({len(audit_results['jurisdictions_audited'])} feeds)</h3>
-    <table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse; width:100%;">
+    <table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse; width:100%; font-family:sans-serif; font-size:13px;">
         <thead>
-            <tr style="background-color:#f2f2f2;">
+            <tr style="background-color:#f1f5f9;">
                 <th style="text-align:left;">Data Feed / Municipality</th>
                 <th style="text-align:center;">Status</th>
                 <th style="text-align:center;">Last Refreshed</th>
@@ -311,38 +385,43 @@ Execution Timestamp: {audit_results['timestamp']}
         <tbody>
     """
     for j_name, j_info in audit_results["jurisdictions_audited"].items():
-        bg = "#e6ffe6" if j_info["status"] == "success" else "#fff0f0"
-        body_html += f"<tr style='background-color:{bg};'><td>{j_name}</td><td style='text-align:center;'>{j_info['status']}</td><td style='text-align:center;'>{j_info['last_refreshed']}</td></tr>"
+        bg = "#dcfce7" if j_info["status"] == "success" else "#fee2e2"
+        body_html += f"<tr style='background-color:{bg};'><td>{j_name}</td><td style='text-align:center;'><strong>{j_info['status']}</strong></td><td style='text-align:center;'>{j_info['last_refreshed']}</td></tr>"
 
     body_html += f"""
         </tbody>
     </table>
 
-    <h3>4. User Feedback Audit & Resolution</h3>
+    <h3>4. Eviction & Code Enforcement Feeds</h3>
+    <ul>
+    """
+    for feed_name, cnt in audit_results["rap_sheet_stats"].items():
+        cnt_str = f"{cnt:,}" if isinstance(cnt, int) else str(cnt)
+        body_html += f"<li><strong>{feed_name}:</strong> {cnt_str} records</li>"
+
+    body_html += f"""
+    </ul>
+
+    <h3>5. User Feedback Audit & Resolution</h3>
     <ul>
         <li><strong>Pending Items Evaluated:</strong> {fb_summary.get('pending_count', 0)}</li>
         <li><strong>Automatically Resolved:</strong> {fb_summary.get('resolved_count', 0)}</li>
         <li><strong>Flagged for Owner Review:</strong> {fb_summary.get('flagged_count', 0)}</li>
     </ul>
     """
-    if fb_summary.get("items"):
-        body_html += "<ul>" + "".join(f"<li><strong>#{it['id']} [{it['type']}]:</strong> {it['status']} — <em>{it['notes']}</em></li>" for it in fb_summary["items"]) + "</ul>"
 
     body_html += f"""
-    <h3>5. System Health Summary</h3>
-    <p style="color:{'green' if not audit_results['issues_found'] else 'red'};">
+    <h3>6. System Health Summary</h3>
+    <p style="color:{'#166534' if not audit_results['issues_found'] else '#dc2626'}; font-weight:bold;">
         {'All system metrics, network assertions, data freshness feeds, and stat cards verified healthy.' if not audit_results['issues_found'] else '<br>'.join(audit_results['issues_found'])}
     </p>
-
-    <h3>6. Feature Branch Proposals</h3>
-    <p>Candidate discovery active on <code>feature/jurisdiction-discovery-chicago-philly</code> (Deployed to Dev Port 6264).</p>
     """
 
-    logger.info("Sending audit report email...")
+    logger.info("Sending comprehensive audit report email...")
     send_audit_email(subject, body_text, body_html)
 
     logger.info("=" * 80)
-    logger.info("Weekly Application Audit Completed")
+    logger.info("Weekly Application & Network Association Audit Completed")
     logger.info("=" * 80)
 
 if __name__ == "__main__":

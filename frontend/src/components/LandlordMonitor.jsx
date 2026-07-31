@@ -42,17 +42,22 @@ const DATE_PRESETS = [
     { label: 'All Time', value: () => null },
 ];
 
-const RAP_SHEETS_ENABLED_CITY = 'HARTFORD';
+const RAP_SHEETS_ENABLED_CITIES = [
+    'CT', 'HARTFORD', 'CONNECTICUT', 'STATEWIDE',
+    'NYC', 'NY', 'NEW YORK CITY'
+];
+
 const normalizeRapSheetCity = (city) => {
-    const requested = city ? String(city).toUpperCase() : RAP_SHEETS_ENABLED_CITY;
-    return requested === 'CT' || requested === 'CONNECTICUT' ? RAP_SHEETS_ENABLED_CITY : requested;
+    const upper = city ? String(city).toUpperCase() : 'HARTFORD';
+    if (upper === 'NYC' || upper === 'NY' || upper === 'NEW YORK CITY') return 'NYC';
+    return 'HARTFORD';
 };
 
 const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
     const [data, setData] = useState([]);
     const [loading, setLoading] = useState(true);
     const [filter, setFilter] = useState('');
-    const [cities, setCities] = useState(['HARTFORD']);
+    const [cities, setCities] = useState(['CT', 'HARTFORD', 'NYC', 'BALTIMORE', 'DETROIT']);
     const [selectedCity, setSelectedCity] = useState(normalizeRapSheetCity(initialCity));
     const [dimension, setDimension] = useState('network');
     const [dateFrom, setDateFrom] = useState(null);
@@ -61,10 +66,11 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
     const [isScrolled, setIsScrolled] = useState(false);
     const [expandedCompanies, setExpandedCompanies] = useState({});
     const scrollContainerRef = useRef(null);
-    const rapSheetsEnabled = selectedCity?.toUpperCase() === RAP_SHEETS_ENABLED_CITY;
+    const rapSheetsEnabled = RAP_SHEETS_ENABLED_CITIES.includes(selectedCity?.toUpperCase());
     const visibleCities = useMemo(() => {
-        const requested = selectedCity && selectedCity.toUpperCase() !== RAP_SHEETS_ENABLED_CITY ? [selectedCity] : [];
-        return [...new Set([...requested, RAP_SHEETS_ENABLED_CITY])];
+        const defaultCities = ['CT', 'HARTFORD', 'NYC', 'BALTIMORE', 'DETROIT'];
+        const requested = selectedCity && RAP_SHEETS_ENABLED_CITIES.includes(selectedCity.toUpperCase()) ? [selectedCity.toUpperCase()] : [];
+        return [...new Set([...requested, ...defaultCities])];
     }, [selectedCity]);
 
     const handleScroll = useCallback(() => {
@@ -78,14 +84,14 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
         api.get('/monitor/cities')
             .then((rows) => {
                 if (cancelled) return;
-                setCities([RAP_SHEETS_ENABLED_CITY]);
+                setCities(['CT', 'HARTFORD']);
                 setSelectedCity(normalizeRapSheetCity(initialCity));
             })
             .catch((err) => console.error('Failed to load monitor cities', err));
         return () => { cancelled = true; };
     }, [initialCity]);
 
-    // Fetch city-wide stats (independent of dimension/network matching)
+    // Fetch city-wide stats
     useEffect(() => {
         if (!rapSheetsEnabled) {
             setCityStats(null);
@@ -100,14 +106,8 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
         return () => { cancelled = true; };
     }, [selectedCity, dateFrom, rapSheetsEnabled]);
 
-    // Handle dynamic sorting/dimension switches based on city capabilities
     useEffect(() => {
         if (rapSheetsEnabled && cityStats) {
-            if (cityStats.code_data_available) {
-                setSortBy('violations');
-            } else if (cityStats.eviction_data_available) {
-                setSortBy('evictions');
-            }
             if (!cityStats.eviction_data_available && cityStats.code_data_available) {
                 setDimension('network');
             }
@@ -238,17 +238,29 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
                             </>
                         )}
                         <div className="flex-1" />
-                        <div className="relative">
-                            <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-                            <select
-                                value={selectedCity}
-                                onChange={(e) => setSelectedCity(e.target.value)}
-                                className="pl-10 pr-8 py-2 bg-slate-100 border-transparent focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 rounded-xl text-sm font-semibold text-slate-700 transition-all"
+                        <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200">
+                            <button
+                                onClick={() => setSelectedCity('HARTFORD')}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                                    selectedCity === 'HARTFORD' || selectedCity === 'CT'
+                                        ? 'bg-slate-900 text-white shadow-md'
+                                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+                                }`}
                             >
-                                {visibleCities.map(city => (
-                                    <option key={city} value={city}>{city} ({getCityState(city)})</option>
-                                ))}
-                            </select>
+                                <MapPin size={13} className={selectedCity === 'HARTFORD' || selectedCity === 'CT' ? 'text-amber-400' : 'text-slate-400'} />
+                                Hartford (CT)
+                            </button>
+                            <button
+                                onClick={() => setSelectedCity('NYC')}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                                    selectedCity === 'NYC' || selectedCity === 'NY'
+                                        ? 'bg-slate-900 text-white shadow-md'
+                                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+                                }`}
+                            >
+                                <MapPin size={13} className={selectedCity === 'NYC' || selectedCity === 'NY' ? 'text-indigo-400' : 'text-slate-400'} />
+                                New York City (NY)
+                            </button>
                         </div>
                         <div className="min-w-[240px] relative">
                             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
@@ -494,7 +506,9 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
                                                             <div className="rounded-xl border border-red-100 bg-red-50/40 p-4">
                                                                 <div className="flex items-start justify-between gap-3">
                                                                     <div>
-                                                                        <div className="text-[10px] font-bold text-red-500 uppercase tracking-widest mb-1">Code Cases & Complaints</div>
+                                                                        <div className="text-[10px] font-bold text-red-500 uppercase tracking-widest mb-1">
+                                                                            Code Cases & Complaints {selectedCity === 'CT' || selectedCity === 'HARTFORD' ? '(Hartford)' : ''}
+                                                                        </div>
                                                                         <div className="text-2xl font-black text-slate-900">{(item.violation_count || 0).toLocaleString()}</div>
                                                                     </div>
                                                                     <div className="p-2 bg-red-100 rounded-lg text-red-600">
@@ -528,7 +542,9 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
                                                             <div className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-4">
                                                                 <div className="flex items-start justify-between gap-3">
                                                                     <div>
-                                                                        <div className="text-[10px] font-bold text-indigo-500 uppercase tracking-widest mb-1">Evictions Filed Since 2017</div>
+                                                                        <div className="text-[10px] font-bold text-indigo-500 uppercase tracking-widest mb-1">
+                                                                            {selectedCity === 'CT' || selectedCity === 'HARTFORD' ? 'Statewide CT Evictions (Since 2017)' : 'Evictions Filed Since 2017'}
+                                                                        </div>
                                                                         <div className="text-2xl font-black text-slate-900">{(item.eviction_count || 0).toLocaleString()}</div>
                                                                     </div>
                                                                     <div className="p-2 bg-indigo-100 rounded-lg text-indigo-600">

@@ -25,6 +25,26 @@ const AboutModal = React.lazy(() => import('./components/AboutModal'));
 const MultiPropertyMapModal = React.lazy(() => import('./components/MultiPropertyMapModal'));
 const FreshnessModal = React.lazy(() => import('./components/FreshnessModal'));
 const FeedbackModal = React.lazy(() => import('./components/FeedbackModal'));
+const LocalAnalyticsDashboard = React.lazy(() => {
+  const modules = import.meta.glob('./components/LocalAnalyticsDashboard.jsx');
+  const loader = modules['./components/LocalAnalyticsDashboard.jsx'];
+  if (loader) return loader();
+  return Promise.resolve({
+    default: ({ onBack }) => (
+      <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center p-8">
+        <div className="text-center max-w-md bg-slate-800 p-6 rounded-xl shadow-xl border border-slate-700">
+          <h2 className="text-xl font-bold mb-2">Local Analytics Feature</h2>
+          <p className="text-slate-400 text-sm mb-4">The Local Analytics Dashboard is configured for local administrative environments.</p>
+          {onBack && (
+            <button onClick={onBack} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-medium transition-colors">
+              Return to Explorer
+            </button>
+          )}
+        </div>
+      </div>
+    )
+  });
+});
 
 const CITY_EXPLORER_STATES = new Set(['NY', 'DC', 'BALTIMORE', 'BOSTON', 'DETROIT', 'PHILADELPHIA', 'CHICAGO', 'MIAMI', 'MINNEAPOLIS', 'NJ']);
 const DATASET_STORAGE_KEY = 'theyownwhat.dataset';
@@ -183,6 +203,7 @@ function NetworkJumpBar({ propertyCount, businessCount, principalCount, activeTa
 
 // NOTE: This is a simplified App.jsx. In a real scenario we'd use React Router.
 function App() {
+  const initialAnalytics = typeof window !== 'undefined' && (window.location.pathname.replace(/\/+$/, '') === '/analytics' || new URLSearchParams(window.location.search).has('analytics'));
   const initialDataset = (() => {
     const raw = datasetFromPath();
     return raw;
@@ -191,7 +212,7 @@ function App() {
     const stored = getStoredDataset();
     return stored;
   })();
-  const [view, setView] = useState(initialDataset ? datasetHomeView(initialDataset) : 'datasets'); // datasets | home | dashboard | toolbox | hartford | nyc
+  const [view, setView] = useState(initialAnalytics ? 'analytics' : (initialDataset ? datasetHomeView(initialDataset) : 'datasets')); // datasets | home | dashboard | toolbox | hartford | nyc | analytics
   const [activeState, setActiveState] = useState(initialDataset || initialStoredDataset || 'CT'); // CT | NY | DC | BALTIMORE | BOSTON
   const [lastDataset, setLastDataset] = useState(initialStoredDataset);
   const [cityExplorerKey, setCityExplorerKey] = useState(0);
@@ -776,6 +797,7 @@ function App() {
         currentView={view}
         activeState={activeState}
         onStateChange={(state) => openDataset(state)}
+        onOpenAnalytics={() => setView('analytics')}
       />
 
       {/* Maintenance Overlay */}
@@ -810,6 +832,19 @@ function App() {
 
         {/* HERO / SEARCH SECTION */}
         <AnimatePresence mode="wait">
+          {view === 'analytics' && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="h-full w-full overflow-hidden"
+            >
+              <Suspense fallback={<LoadingScreen message="Loading Local Analytics..." />}>
+                <LocalAnalyticsDashboard onBack={() => setView(initialDataset ? datasetHomeView(initialDataset) : 'datasets')} />
+              </Suspense>
+            </motion.div>
+          )}
+
           {view === 'datasets' && (
             <motion.div
               initial={{ opacity: 0 }}
@@ -821,8 +856,8 @@ function App() {
                 activeDataset={activeState}
                 lastDataset={lastDataset}
                 onSelect={(state) => openDataset(state)}
-                onOpenMonitor={() => {
-                  setActiveState('CT');
+                onOpenMonitor={(city) => {
+                  if (city) setActiveState(city);
                   setView('hartford');
                 }}
               />
@@ -1248,6 +1283,7 @@ function App() {
               setFeedbackEntity(null);
             }}
             initialEntity={feedbackEntity || (selectedEntityId ? { id: selectedEntityId, title: 'Selected Entity' } : null)}
+            activeState={activeState}
           />
           <MultiPropertyMapModal
             properties={selectedMapProperties}

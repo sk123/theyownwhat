@@ -17,3 +17,5 @@ python-jose[cryptography]
 python-multipart
 starlette
 networkx>=3.0
+geoip2
+maxminddb

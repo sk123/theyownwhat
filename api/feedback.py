@@ -36,12 +36,19 @@ def _send_email_async(feedback_id: int, report_type: str, description: str, enti
         return  # silently skip if not configured
 
     try:
-        subject = f"[They Own WHAT?] New feedback: {report_type}"
+        raw_to = os.environ.get("ALERT_EMAIL_TO", "salmunk@gmail.com, me@salmun.net")
+        recipients = [addr.strip() for addr in raw_to.split(",") if addr.strip()]
+        if "me@salmun.net" not in recipients:
+            recipients.append("me@salmun.net")
+        if "salmunk@gmail.com" not in recipients:
+            recipients.append("salmunk@gmail.com")
+
+        subject = f"[They Own WHAT?] New feedback #{feedback_id}: {report_type}"
 
         entity_lines = ""
         if entities:
             entity_lines = "\n\nRelated entities:\n" + "\n".join(
-                f"  • {e.get('name', e.get('display_name', '?'))} [{e.get('type', '?')}]"
+                f"  • {e.get('name', e.get('label', e.get('title', '?')))} [{e.get('type', '?')}] (ID: {e.get('id', 'N/A')})"
                 for e in entities
             )
 
@@ -55,20 +62,20 @@ Description:
 {description}{entity_lines}
 
 ---
-View all feedback: https://theyownwhat.net/admin (or GET /api/feedback)
+View feedback: GET /api/feedback
 """
 
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
         msg["From"]    = ALERT_EMAIL_FROM
-        msg["To"]      = ALERT_EMAIL_TO
+        msg["To"]      = ", ".join(recipients)
         msg.attach(MIMEText(body, "plain"))
 
         with smtplib.SMTP("smtp.gmail.com", 587, timeout=15) as server:
             server.ehlo()
             server.starttls()
             server.login(ALERT_EMAIL_FROM, ALERT_EMAIL_PASS)
-            server.sendmail(ALERT_EMAIL_FROM, ALERT_EMAIL_TO, msg.as_string())
+            server.sendmail(ALERT_EMAIL_FROM, recipients, msg.as_string())
 
     except Exception as e:
         # Never let email failure surface to the user

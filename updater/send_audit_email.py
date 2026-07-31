@@ -30,9 +30,14 @@ ALERT_EMAIL_TO   = os.environ.get("ALERT_EMAIL_TO",   "salmunk@gmail.com")
 ALERT_EMAIL_FROM = os.environ.get("ALERT_EMAIL_FROM", "salmunk@gmail.com")
 ALERT_EMAIL_PASS = os.environ.get("ALERT_EMAIL_PASS", "")
 
-def send_audit_email(subject: str, body_text: str, body_html: str = None) -> bool:
-    """Send audit status email to salmunk@gmail.com."""
-    logger.info(f"Preparing audit email to {ALERT_EMAIL_TO}: {subject}")
+# Default recipient list
+DEFAULT_RECIPIENTS = ["salmunk@gmail.com", "me@salmun.net"]
+
+def send_audit_email(subject: str, body_text: str, body_html: str = None, recipients: list = None) -> bool:
+    """Send audit/report email. Supports multiple recipients."""
+    to_list = recipients or DEFAULT_RECIPIENTS
+    to_str = ", ".join(to_list)
+    logger.info(f"Preparing email to {to_str}: {subject}")
     
     if not ALERT_EMAIL_PASS:
         logger.warning("ALERT_EMAIL_PASS environment variable not set. Email body logged to console instead of SMTP dispatch.")
@@ -44,7 +49,7 @@ def send_audit_email(subject: str, body_text: str, body_html: str = None) -> boo
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
         msg["From"]    = ALERT_EMAIL_FROM
-        msg["To"]      = ALERT_EMAIL_TO
+        msg["To"]      = to_str
         
         msg.attach(MIMEText(body_text, "plain"))
         if body_html:
@@ -54,15 +59,16 @@ def send_audit_email(subject: str, body_text: str, body_html: str = None) -> boo
             server.ehlo()
             server.starttls()
             server.login(ALERT_EMAIL_FROM, ALERT_EMAIL_PASS)
-            server.sendmail(ALERT_EMAIL_FROM, ALERT_EMAIL_TO, msg.as_string())
+            server.sendmail(ALERT_EMAIL_FROM, to_list, msg.as_string())
         
-        logger.info("✓ Audit email sent successfully to " + ALERT_EMAIL_TO)
+        logger.info("✓ Email sent successfully to " + to_str)
         return True
     except Exception as e:
-        logger.error(f"Failed to send audit email: {e}")
+        logger.error(f"Failed to send email: {e}")
         return False
 
 if __name__ == "__main__":
     test_subject = f"[They Own WHAT?] Weekly Audit & System Status - {datetime.utcnow().strftime('%Y-%m-%d')}"
     test_body = "Weekly audit script executed successfully. All systems operational."
     send_audit_email(test_subject, test_body)
+

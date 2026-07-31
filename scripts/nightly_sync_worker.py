@@ -92,8 +92,8 @@ def get_outdated_sources(conn):
                 outdated.append(name)
                 continue
         
-        # Stale check: 30 days
-        if now - last_ref > timedelta(days=30):
+        # Stale check: 7 days to ensure parcel data stays as up-to-date as source portals allow
+        if now - last_ref > timedelta(days=7):
             outdated.append(name)
             
     return outdated
