@@ -45,6 +45,23 @@ DEFAULT_STATE = os.environ.get("DEFAULT_STATE", "CT")
 if genai and GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
 
+def get_latest_gemini_flash_model():
+    base_fallback = "gemini-3.6-flash"
+    try:
+        if genai and GEMINI_KEY:
+            for m in genai.list_models():
+                m_name = getattr(m, 'name', '').replace("models/", "")
+                methods = getattr(m, 'supported_generation_methods', [])
+                if "flash" in m_name and "generateContent" in methods:
+                    match = re.search(r'gemini[_-]v?(\d+(?:\.\d+)?)[_-]flash', m_name, re.IGNORECASE)
+                    if match:
+                        ver = tuple(map(int, match.group(1).split('.')))
+                        if ver >= (3, 6):
+                            return m_name
+    except Exception:
+        pass
+    return base_fallback
+
 
 app = FastAPI(title="they own WHAT?? API")
 app.add_middleware(
@@ -1414,7 +1431,7 @@ def get_ai_analysis(entity_name: str, entity_type: str):
                 )
                 user_msg = f"Entity: {entity_name}\nSnippets:\n" + "\n".join(snippets)
 
-                model = genai.GenerativeModel('gemini-3.5-flash', system_instruction=system_prompt)
+                model = genai.GenerativeModel(get_latest_gemini_flash_model(), system_instruction=system_prompt)
                 resp = model.generate_content(
                     user_msg,
                     generation_config=genai.types.GenerationConfig(
@@ -1496,8 +1513,9 @@ def autocomplete(q: str, type: str, state: Optional[str] = None, conn=Depends(ge
                 prms = []
                 for term in terms:
                     t_u = term.upper()
-                    conds.append(f"({col_name} LIKE %s OR {col_name} LIKE %s OR {col_name} ILIKE %s)")
-                    prms.extend([f"{t_u}%", f"% {t_u}%", f"%{t_u}%"])
+                    # Use prefix and word-boundary matching supported by text_pattern_ops indexes
+                    conds.append(f"({col_name} LIKE %s OR {col_name} LIKE %s)")
+                    prms.extend([f"{t_u}%", f"% {t_u}%"])
                 return " AND ".join(conds), prms
 
             def compute_rank(label: str) -> int:
@@ -1511,16 +1529,16 @@ def autocomplete(q: str, type: str, state: Optional[str] = None, conn=Depends(ge
                     return 3
                 return 4
 
-            # 1. Businesses
+            # 1. Businesses (CT & NY corporate registrations)
             if type in ("all", "business") or not type:
                 biz_where, biz_params = build_term_sql("name_norm")
-                if st_key == "NY" or st_key == "NYC":
+                if st_key in ("NY", "NYC"):
                     biz_where += " AND business_state = 'NY'"
-                elif st_key == "CT":
+                elif st_key == "CT" or not st_key:
                     biz_where += " AND (business_state != 'NY' OR business_state IS NULL)"
 
                 remaining = limit - len(results)
-                if remaining > 0 and normalized_query:
+                if remaining > 0 and normalized_query and (not st_key or st_key in ("CT", "NY", "NYC")):
                     max_fetch = limit if type == "business" else min(6, remaining)
                     cursor.execute(
                         f"""
@@ -1549,20 +1567,10 @@ def autocomplete(q: str, type: str, state: Optional[str] = None, conn=Depends(ge
             if type in ("all", "owner") or not type:
                 remaining = limit - len(results)
                 if remaining > 0 and not is_broad_owner_term:
-                    where_owner, params_owner = build_term_sql("owner_norm")
-                    where_co, params_co = build_term_sql("co_owner_norm")
-
-                    if st_key == "NY" or st_key == "NYC":
-                        where_owner += " AND source = 'NYS_OPEN_DATA'"
-                        where_co += " AND source = 'NYS_OPEN_DATA'"
-                    elif st_key == "CT":
-                        where_owner += " AND (source != 'NYS_OPEN_DATA' OR source IS NULL)"
-                        where_co += " AND (source != 'NYS_OPEN_DATA' OR source IS NULL)"
-
+                    city_tbl, city_label = city_tbl_info.get(st_key, (None, None))
                     max_fetch = limit * 2 if type == "owner" else min(8, remaining * 2)
 
                     # City property table if jurisdiction matches
-                    city_tbl, city_label = city_tbl_info.get(st_key, (None, None))
                     if city_tbl:
                         city_where_owner, city_params_owner = build_term_sql("owner_name_norm")
                         cursor.execute(
@@ -1581,8 +1589,17 @@ def autocomplete(q: str, type: str, state: Optional[str] = None, conn=Depends(ge
                                 "context": ctx,
                                 "rank": compute_rank(r["name"])
                             })
+                    elif not st_key or st_key == "CT" or st_key in ("NY", "NYC"):
+                        where_owner, params_owner = build_term_sql("owner_norm")
+                        where_co, params_co = build_term_sql("co_owner_norm")
 
-                    if len(results) < limit:
+                        if st_key in ("NY", "NYC"):
+                            where_owner += " AND source = 'NYS_OPEN_DATA'"
+                            where_co += " AND source = 'NYS_OPEN_DATA'"
+                        elif st_key == "CT" or not st_key:
+                            where_owner += " AND (source != 'NYS_OPEN_DATA' OR source IS NULL)"
+                            where_co += " AND (source != 'NYS_OPEN_DATA' OR source IS NULL)"
+
                         cursor.execute(
                             f"""
                             SELECT name, normalized_name, example_addr
@@ -1617,14 +1634,7 @@ def autocomplete(q: str, type: str, state: Optional[str] = None, conn=Depends(ge
             if type in ("all", "address") or not type:
                 remaining = limit - len(results)
                 if remaining > 0:
-                    addr_where, addr_params = build_term_sql("location")
-                    if st_key == "NY" or st_key == "NYC":
-                        addr_where += " AND source = 'NYS_OPEN_DATA'"
-                    elif st_key == "CT":
-                        addr_where += " AND (source != 'NYS_OPEN_DATA' OR source IS NULL)"
-
                     max_fetch = limit if type == "address" else min(4, remaining)
-
                     city_tbl, city_label = city_tbl_info.get(st_key, (None, None))
                     if city_tbl:
                         city_addr_where, city_addr_params = build_term_sql("address")
@@ -1645,8 +1655,13 @@ def autocomplete(q: str, type: str, state: Optional[str] = None, conn=Depends(ge
                                 "context": ctx, "owner": r.get("owner"),
                                 "rank": compute_rank(r["location"])
                             })
+                    elif not st_key or st_key == "CT" or st_key in ("NY", "NYC"):
+                        addr_where, addr_params = build_term_sql("location")
+                        if st_key in ("NY", "NYC"):
+                            addr_where += " AND source = 'NYS_OPEN_DATA'"
+                        elif st_key == "CT" or not st_key:
+                            addr_where += " AND (source != 'NYS_OPEN_DATA' OR source IS NULL)"
 
-                    if len(results) < limit:
                         cursor.execute(
                             f"""
                             SELECT location, property_city, owner, business_id
@@ -3307,7 +3322,7 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                                 direction = "unknown"
                                 transaction_scope = "unknown"
 
-                            if len(recent_transactions) < 10:
+                            if len(recent_transactions) < 200:
                                 recent_transactions.append({
                                     "date": txn_date.isoformat() if hasattr(txn_date, 'isoformat') else str(txn_date),
                                     "amount": txn_amount,
@@ -4292,6 +4307,7 @@ def get_insights(conn=Depends(get_db_connection)):
                        business_count, building_count, unit_count,
                        controlling_business, representative_entities, principals, {linked_business_select}
                 FROM cached_insights
+                WHERE rank <= 50
                 ORDER BY title, rank
             """)
             rows = cursor.fetchall()
@@ -4872,6 +4888,7 @@ def get_reports(conn=Depends(get_db_connection)):
 NON_CT_MONITOR_CITIES = {
     "NYC": {"db_prefix": "nyc", "name": "New York City", "state": "NY"},
     "NY": {"db_prefix": "nyc", "name": "New York City", "state": "NY"},
+    "DETROIT": {"db_prefix": "detroit", "name": "Detroit", "state": "MI"},
 }
 
 @app.get("/api/monitor")
@@ -4902,7 +4919,7 @@ def get_landlord_monitor(
                 SUM(COALESCE(s.violations_total, 0))::int AS violation_count,
                 SUM(COALESCE(s.violations_open, 0))::int AS active_violation_count,
                 (SUM(COALESCE(s.violations_total, 0)) - SUM(COALESCE(s.violations_open, 0)))::int AS closed_violation_count,
-                SUM(COALESCE(s.violations_open, 0))::int AS violations_last_365d,
+                SUM(COALESCE(s.violations_last_365d, 0))::int AS violations_last_365d,
                 MAX(s.last_violation_date) AS last_violation_date,
                 SUM(COALESCE(s.evictions_total, 0))::int AS eviction_count,
                 MAX(s.last_eviction_date) AS last_eviction_date
@@ -6767,6 +6784,35 @@ def _markdown_link(label: Any, url: Any) -> str:
     href = href.replace("<", "%3C").replace(">", "%3E").replace(" ", "%20")
     return f"[{text}](<{href}>)"
 
+def _sanitize_report_source_url(url: Optional[str]) -> Optional[str]:
+    if not url:
+        return None
+    url_clean = str(url).strip()
+    # Ensure CT_EVICTIONS and other eviction datasets link to the public portal landing page, NOT the raw .csv download file
+    if "evictions.ctfairhousing.com" in url_clean.lower():
+        return "https://evictions.ctfairhousing.com/"
+    if re.search(r'ct_evictions\.csv', url_clean, re.IGNORECASE):
+        return "https://evictions.ctfairhousing.com/"
+    return url_clean
+
+def _sanitize_report_content(content: str) -> str:
+    if not content:
+        return ""
+    # Strip any direct download links to CT_EVICTIONS csv files from report content
+    cleaned = re.sub(
+        r'https?://(?:www\.)?evictions\.ctfairhousing\.com/data/evictionlab/ct_evictions\.csv>?',
+        'https://evictions.ctfairhousing.com/',
+        content,
+        flags=re.IGNORECASE
+    )
+    cleaned = re.sub(
+        r'https?://[^\s)>]+/ct_evictions\.csv>?',
+        'https://evictions.ctfairhousing.com/',
+        cleaned,
+        flags=re.IGNORECASE
+    )
+    return cleaned
+
 def _report_source_update_text(row: Dict[str, Any]) -> str:
     external = row.get("external_last_updated")
     refreshed = row.get("last_refreshed_at")
@@ -6778,7 +6824,7 @@ def _report_source_update_text(row: Dict[str, Any]) -> str:
     return "; ".join(bits) or "date unavailable"
 
 def _report_source_label(row: Dict[str, Any]) -> str:
-    return _markdown_link(row.get("source_name") or "source unavailable", row.get("source_url"))
+    return _markdown_link(row.get("source_name") or "source unavailable", _sanitize_report_source_url(row.get("source_url")))
 
 def _report_source_status_packet(rows: List[Dict[str, Any]], limit: int = 30) -> List[Dict[str, Any]]:
     packet = []
@@ -6789,7 +6835,7 @@ def _report_source_status_packet(rows: List[Dict[str, Any]], limit: int = 30) ->
             "refresh_status": row.get("refresh_status"),
             "external_last_updated": row.get("external_last_updated"),
             "last_refreshed_at": row.get("last_refreshed_at"),
-            "source_url": row.get("source_url"),
+            "source_url": _sanitize_report_source_url(row.get("source_url")),
             "message": row.get("message"),
         })
     return packet
@@ -7262,7 +7308,7 @@ def _draft_ai_report_text(context: Dict[str, Any], length: Optional[str] = 'comp
         "4. Eviction discipline: Clearly distinguish plaintiff-name matched eviction filings from parcel-matched eviction filings; do not treat either as a judgment or tenant outcome unless the status field says so.\n"
         "5. Code-enforcement discipline: Treat code records as municipal records with status labels. Do not infer habitability conditions beyond the record names/statuses supplied.\n"
         "6. Analysis quality: Go beyond restating counts. Identify concentration, portfolio composition, geographic spread, mailing-state/offsite signals, largest assets, attorney patterns, enforcement concentrations, source gaps, and leads a reporter or legal-aid team could verify next.\n"
-        "7. Inline links: Put citations inline in the sentence where the claim appears, using markdown links around source titles, dataset names, or short claim phrases. Do not dump links only in a bibliography. Use only URLs present in the vetted external clippings or source_coverage packet.\n"
+        "7. Inline links: Put citations inline in the sentence where the claim appears, using markdown links around source titles, dataset names, or short claim phrases. Do not dump links only in a bibliography. Use only URLs present in the vetted external clippings or source_coverage packet. Never link directly to raw .csv download files (e.g., for CT Judicial Evictions / CT Fair Housing, link only to the landing page https://evictions.ctfairhousing.com/, never to .csv download files).\n"
         "8. Local source links: Local data can be described as source-loaded theyownwhat data, but when a source_coverage row includes source_url, link the dataset name inline the first time you discuss that source or refresh date.\n"
         "9. Format: Use clean professional Markdown with section headers, compact tables for metrics/source coverage, short evidence bullets, and readable paragraphs. Avoid giant unbroken text blocks.\n\n"
         f"--- LOCAL PORTFOLIO DATABASE CONTEXT ---\n"
@@ -7300,7 +7346,7 @@ def _draft_ai_report_text(context: Dict[str, Any], length: Optional[str] = 'comp
     )
 
     try:
-        model = genai.GenerativeModel('gemini-3.5-flash', system_instruction="You are a meticulous investigative analyst.")
+        model = genai.GenerativeModel(get_latest_gemini_flash_model(), system_instruction="You are a meticulous investigative analyst.")
         resp = model.generate_content(
             prompt,
             generation_config=genai.types.GenerationConfig(
@@ -7321,7 +7367,7 @@ def _draft_ai_report_text(context: Dict[str, Any], length: Optional[str] = 'comp
                 "The previous draft was too short for a comprehensive investigative deep dive. "
                 "Write the full six-section dossier now. Use the exact target entity name in the first sentence, "
                 "include portfolio/network analysis, evictions, code enforcement, external research, source caveats, "
-                "and a concrete verification checklist. Use inline markdown links wherever a vetted URL is supplied. Stay source-disciplined and do not invent unsupported facts."
+                "and a concrete verification checklist. Use inline markdown links wherever a vetted URL is supplied. Stay source-disciplined and do not invent unsupported facts. Never link to .csv files."
             )
             retry_resp = model.generate_content(
                 retry_prompt,
@@ -7333,6 +7379,7 @@ def _draft_ai_report_text(context: Dict[str, Any], length: Optional[str] = 'comp
             retry_content = retry_resp.text.strip()
             if len(retry_content) > len(content):
                 content = retry_content
+        content = _sanitize_report_content(content)
         quality_problem = _ai_report_quality_problem(content, entity)
         if not quality_problem and length != "concise" and len(content) < 900:
             quality_problem = "report was too short for the requested investigative deep dive"
@@ -7350,7 +7397,7 @@ def _draft_ai_report_text(context: Dict[str, Any], length: Optional[str] = 'comp
                     f"AI synthesis was discarded because the generated draft {quality_problem}."
                 )
             )
-        return (title, content)
+        return (title, _sanitize_report_content(content))
     except Exception as e:
         logger.exception("Failed to call Gemini inside _draft_ai_report_text")
         context["report_quality_fallback"] = "external AI synthesis unavailable"
@@ -7374,6 +7421,7 @@ def create_ai_report(req: AIReportRequest, conn=Depends(get_db_connection)):
             """, (req.entity, req.entity_type, today))
             existing = cursor.fetchone()
             if existing and _cached_ai_report_is_usable(existing, req.entity):
+                existing["content"] = _sanitize_report_content(existing.get("content", ""))
                 return existing
             if existing:
                 problem = _ai_report_quality_problem(existing.get("content"), req.entity)
@@ -7385,6 +7433,7 @@ def create_ai_report(req: AIReportRequest, conn=Depends(get_db_connection)):
         context = _compute_local_context(conn, req.entity, req.entity_type)
         context["requested_research_entities"] = req.research_entities or []
         title, content = _draft_ai_report_text(context, length=req.length, directive=req.directive)
+        content = _sanitize_report_content(content)
         cursor.execute("""
             INSERT INTO ai_reports (entity, entity_type, report_date, title, content, sources)
             VALUES (%s, %s, %s, %s, %s, %s)
@@ -7394,6 +7443,8 @@ def create_ai_report(req: AIReportRequest, conn=Depends(get_db_connection)):
         """, (req.entity, req.entity_type, today, title, content, json.dumps({"internal_stats": context})))
         row = cursor.fetchone()
         conn.commit()
+        if row:
+            row["content"] = _sanitize_report_content(row.get("content", ""))
         return row
 
 @app.get("/api/ai-report")
@@ -7419,6 +7470,7 @@ def get_ai_report(entity: str, entity_type: str, report_date: Optional[str] = No
             )
             context = _compute_local_context(conn, entity, entity_type)
             title, content = _draft_ai_report_text(context)
+            content = _sanitize_report_content(content)
             cursor.execute("""
                 INSERT INTO ai_reports (entity, entity_type, report_date, title, content, sources)
                 VALUES (%s, %s, %s, %s, %s, %s)
@@ -7428,6 +7480,8 @@ def get_ai_report(entity: str, entity_type: str, report_date: Optional[str] = No
             """, (entity, entity_type, the_date, title, content, json.dumps({"internal_stats": context})))
             row = cursor.fetchone()
             conn.commit()
+        if row:
+            row["content"] = _sanitize_report_content(row.get("content", ""))
         return row
 
 class AIReportSaveRequest(BaseModel):
@@ -7438,6 +7492,7 @@ class AIReportSaveRequest(BaseModel):
 @app.put("/api/ai-report")
 def save_ai_report(req: AIReportSaveRequest, conn=Depends(get_db_connection)):
     today = date.today()
+    sanitized_content = _sanitize_report_content(req.content)
     with conn.cursor(cursor_factory=RealDictCursor) as cursor:
         cursor.execute("""
             INSERT INTO ai_reports (entity, entity_type, report_date, title, content, sources)
@@ -7445,9 +7500,11 @@ def save_ai_report(req: AIReportSaveRequest, conn=Depends(get_db_connection)):
             ON CONFLICT (entity, entity_type, report_date)
             DO UPDATE SET content = EXCLUDED.content
             RETURNING *
-        """, (req.entity, req.entity_type, today, f"AI report — {req.entity}", req.content, json.dumps({"edited": True})))
+        """, (req.entity, req.entity_type, today, f"AI report — {req.entity}", sanitized_content, json.dumps({"edited": True})))
         row = cursor.fetchone()
         conn.commit()
+        if row:
+            row["content"] = _sanitize_report_content(row.get("content", ""))
         return row
 
 
@@ -7748,7 +7805,7 @@ def create_network_digest(req: NetworkDigestRequest, conn=Depends(get_db_connect
                 f"Web Search Data:\n{full_text_context}\n"
             )
             try:
-                model = genai.GenerativeModel('gemini-3.5-flash', system_instruction="You are a meticulous investigative analyst.")
+                model = genai.GenerativeModel(get_latest_gemini_flash_model(), system_instruction="You are a meticulous investigative analyst.")
                 resp = model.generate_content(
                     prompt,
                     generation_config=genai.types.GenerationConfig(

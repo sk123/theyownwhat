@@ -1,5 +1,5 @@
 import React from 'react';
-import { ArrowRight, Building2, ChevronDown, ChevronUp, CircleAlert, Clock, Database, ExternalLink, Factory, Heart, Home, Landmark, Layers, MapPinned, ShieldAlert } from 'lucide-react';
+import { ArrowRight, Building2, ChevronDown, ChevronUp, CircleAlert, Clock, Database, ExternalLink, Factory, Flame, Gavel, Heart, Home, Info, Landmark, Layers, MapPinned, ShieldAlert, TrendingUp } from 'lucide-react';
 import BackgroundGrid from './BackgroundGrid';
 
 const SPONSOR_URL = 'https://github.com/sponsors/sk123';
@@ -93,7 +93,7 @@ const DATASETS = [
     icon: Building2,
     endpoint: '/api/detroit/stats',
     sources: ['City parcels', 'BSEED rentals', 'Blight tickets', 'Owner networks', 'NHPD'],
-    rapSheets: null,
+    rapSheets: { type: 'bseed_enforcement', label: 'Detroit BSEED & Blight Rap Sheets' },
     networkLimit: {
       needed: 'Michigan business IDs, resident-agent/officer filings where available, deed-chain records, and any filings that name LLC members or managers',
       gap: 'Detroit and Wayne sources help with parcels, taxes, deeds, licenses, rentals, and enforcement. They do not consistently disclose the humans behind LLC owners.',
@@ -346,10 +346,138 @@ function updatedText(dataset, stats) {
   return 'Source status loaded';
 }
 
+const RAP_SHEET_PREVIEWS = [
+  { key: 'hartford', label: 'Hartford', datasetKey: 'CT', url: '/api/monitor?city=HARTFORD&sort_by=violations', tone: 'blue', icon: Gavel, subtitle: 'Violations & Evictions' },
+  { key: 'nyc', label: 'New York City', datasetKey: 'NY', url: '/api/monitor?city=NYC&sort_by=violations', tone: 'indigo', icon: Building2, subtitle: 'HPD Violations & Evictions' },
+  { key: 'detroit', label: 'Detroit', datasetKey: 'DETROIT', url: '/api/monitor?city=DETROIT&sort_by=violations', tone: 'rose', icon: Building2, subtitle: 'BSEED Blight & Enforcement' },
+];
+
+function RapSheetPreviewStrip({ previews, onOpenMonitor }) {
+  const hasAnyData = previews.hartford?.length > 0 || previews.nyc?.length > 0 || previews.detroit?.length > 0;
+  const [showTooltip, setShowTooltip] = React.useState(false);
+  if (!hasAnyData) return null;
+
+  return (
+    <div className="mb-4 md:mb-6">
+      {/* Section header */}
+      <div className="flex items-center gap-2 mb-2 md:mb-3">
+        <div className="flex h-6 w-6 md:h-7 md:w-7 shrink-0 items-center justify-center rounded-md bg-gradient-to-br from-red-500 to-orange-500 text-white shadow-sm">
+          <Flame className="h-3 w-3 md:h-3.5 md:w-3.5" />
+        </div>
+        <h3 className="text-[10px] md:text-xs font-black uppercase tracking-[0.18em] text-slate-400">Rap Sheet Previews</h3>
+        {/* Info tooltip */}
+        <div className="relative">
+          <button
+            onClick={(e) => { e.stopPropagation(); setShowTooltip(!showTooltip); }}
+            onMouseEnter={() => setShowTooltip(true)}
+            onMouseLeave={() => setShowTooltip(false)}
+            className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-100 text-slate-400 hover:bg-slate-200 hover:text-slate-600 transition-colors"
+            aria-label="About Rap Sheet data"
+          >
+            <Info className="h-3 w-3" />
+          </button>
+          {showTooltip && (
+            <div className="absolute left-1/2 -translate-x-1/2 top-7 z-50 w-72 rounded-lg border border-slate-200 bg-white p-3 shadow-xl text-[11px] leading-relaxed text-slate-600 font-medium">
+              <div className="absolute -top-1.5 left-1/2 -translate-x-1/2 w-3 h-3 rotate-45 bg-white border-l border-t border-slate-200" />
+              <p>Rap Sheets are <strong className="text-slate-800">compiled automatically on-the-fly</strong> from publicly available source data — property records, court filings, and code enforcement records. Rankings are recalculated on each page load.</p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-2 md:gap-3">
+        {RAP_SHEET_PREVIEWS.map((preview) => {
+          const items = previews[preview.key] || [];
+          if (items.length === 0) return null;
+          const PreviewIcon = preview.icon;
+          const toneClasses = TONE_CLASSES[preview.tone] || TONE_CLASSES.blue;
+          return (
+            <div key={preview.key} className="rounded-lg border border-slate-200 bg-white shadow-sm overflow-hidden">
+              {/* Card header */}
+              <div className="flex items-center justify-between px-3 md:px-4 py-2 md:py-2.5 border-b border-slate-100 bg-slate-50/60">
+                <div className="flex items-center gap-2">
+                  <div className={`flex h-5 w-5 md:h-6 md:w-6 items-center justify-center rounded-md ${toneClasses.icon}`}>
+                    <PreviewIcon className="h-2.5 w-2.5 md:h-3 md:w-3" />
+                  </div>
+                  <div>
+                    <span className="text-[11px] md:text-xs font-black text-slate-700">{preview.label}</span>
+                    <span className="ml-1 md:ml-1.5 text-[8px] md:text-[9px] font-bold text-slate-400 uppercase tracking-wider">{preview.subtitle || 'Violations & Evictions'}</span>
+                  </div>
+                </div>
+                <button
+                  onClick={() => onOpenMonitor && onOpenMonitor(preview.datasetKey)}
+                  className="flex items-center gap-1 text-[10px] font-bold text-blue-600 hover:text-blue-800 transition-colors"
+                >
+                  Full Rap Sheets <ArrowRight className="h-3 w-3" />
+                </button>
+              </div>
+
+              {/* Rows — 3 on mobile, 5 on desktop */}
+              <div className="divide-y divide-slate-50">
+                {items.map((item, idx) => {
+                  const principals = (item.principals || []).slice(0, 3);
+                  const principalNames = principals.map(p => p.name).join(', ');
+                  const extraPrincipals = (item.principals || []).length - 3;
+                  return (
+                    <div
+                      key={idx}
+                      className={`flex items-center gap-2 md:gap-3 px-3 md:px-4 py-1.5 md:py-2.5 hover:bg-slate-50/80 transition-colors cursor-pointer group ${idx >= 3 ? 'hidden md:flex' : ''}`}
+                      onClick={() => onOpenMonitor && onOpenMonitor(preview.datasetKey)}
+                    >
+                      {/* Rank badge */}
+                      <div className={`flex h-4 w-4 md:h-5 md:w-5 shrink-0 items-center justify-center rounded-full text-[8px] md:text-[9px] font-black ${
+                        idx === 0 ? 'bg-red-100 text-red-700' : idx === 1 ? 'bg-orange-100 text-orange-700' : 'bg-slate-100 text-slate-500'
+                      }`}>
+                        {idx + 1}
+                      </div>
+
+                      {/* Name + principals (principals hidden on mobile) */}
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[11px] md:text-xs font-bold text-slate-800 truncate group-hover:text-slate-950" title={item.entity_name}>
+                          {item.entity_name}
+                        </div>
+                        {principalNames && (
+                          <div className="hidden md:block text-[9px] font-medium text-slate-400 truncate mt-0.5" title={principalNames}>
+                            {principalNames}{extraPrincipals > 0 ? ` +${extraPrincipals} more` : ''}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Stats chips */}
+                      <div className="flex items-center gap-1 md:gap-1.5 shrink-0">
+                        {item.violation_count > 0 && (
+                          <span className="inline-flex items-center gap-0.5 rounded-full bg-red-50 border border-red-100 px-1 md:px-1.5 py-0.5 text-[8px] md:text-[9px] font-bold text-red-700" title="Code violations">
+                            <ShieldAlert className="h-2 w-2 md:h-2.5 md:w-2.5" /> {compactCount(item.violation_count)}
+                          </span>
+                        )}
+                        {item.eviction_count > 0 && (
+                          <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-50 border border-amber-100 px-1 md:px-1.5 py-0.5 text-[8px] md:text-[9px] font-bold text-amber-700" title="Eviction filings">
+                            <Gavel className="h-2 w-2 md:h-2.5 md:w-2.5" /> {compactCount(item.eviction_count)}
+                          </span>
+                        )}
+                        {item.property_count > 0 && (
+                          <span className="hidden md:inline-flex items-center gap-0.5 rounded-full bg-slate-100 border border-slate-200 px-1.5 py-0.5 text-[9px] font-bold text-slate-600" title="Properties linked">
+                            {compactCount(item.property_count)} props
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export default function DatasetLanding({ onSelect, onOpenMonitor, activeDataset = 'CT', lastDataset }) {
   const [statsByDataset, setStatsByDataset] = React.useState({});
   const [topNetworksByDataset, setTopNetworksByDataset] = React.useState({});
   const [expandedLimits, setExpandedLimits] = React.useState({});
+  const [rapSheetPreviews, setRapSheetPreviews] = React.useState({ hartford: [], nyc: [], detroit: [] });
 
   const toggleLimit = (key, event) => {
     event.stopPropagation();
@@ -362,6 +490,22 @@ export default function DatasetLanding({ onSelect, onOpenMonitor, activeDataset 
   const displayedDatasets = React.useMemo(() => {
     const isDevLanding = typeof window !== 'undefined' && window.location.port === '6264';
     return isDevLanding ? DATASETS : DATASETS.filter((dataset) => PRODUCTION_DATASET_KEYS.has(dataset.key));
+  }, []);
+
+  // Fetch Rap Sheet preview data (top 5 for Hartford and NYC)
+  React.useEffect(() => {
+    let cancelled = false;
+    RAP_SHEET_PREVIEWS.forEach((preview) => {
+      fetch(preview.url)
+        .then((res) => (res.ok ? res.json() : []))
+        .then((data) => {
+          if (!cancelled && Array.isArray(data)) {
+            setRapSheetPreviews((prev) => ({ ...prev, [preview.key]: data.slice(0, 5) }));
+          }
+        })
+        .catch(() => {});
+    });
+    return () => { cancelled = true; };
   }, []);
 
   React.useEffect(() => {
@@ -405,6 +549,9 @@ export default function DatasetLanding({ onSelect, onOpenMonitor, activeDataset 
     <div className="h-full overflow-y-auto w-full relative bg-slate-50">
       <BackgroundGrid />
       <div className="relative z-10 mx-auto w-full max-w-7xl px-4 py-6 md:py-8 pb-24">
+        {/* Rap Sheets Sneak Peek */}
+        <RapSheetPreviewStrip previews={rapSheetPreviews} onOpenMonitor={onOpenMonitor} />
+
         {/* Header Block */}
         <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
           <div className="flex items-start gap-4">
@@ -420,9 +567,6 @@ export default function DatasetLanding({ onSelect, onOpenMonitor, activeDataset 
             </div>
           </div>
         </div>
-
-
-
 
         {/* Datasets Grid */}
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">

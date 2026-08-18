@@ -281,7 +281,69 @@ SHARED_ADDRESS_IGNORE_VALUES = {
     '2389 MAIN STREET GLASTONBURY',
     '2 CORPORATE DRIVE SHELTON',
     '2 CORPORATE DR SHELTON',
+    '80 STATE STREET ALBANY',
+    '80 STATE STREET',
+    '7014 13TH AVENUE BROOKLYN',
+    '7014 13TH AVENUE',
+    '418 BROADWAY ALBANY',
+    '418 BROADWAY',
+    '28 LIBERTY STREET NEW YORK',
+    '28 LIBERTY STREET',
+    '54 STATE STREET ALBANY',
+    '54 STATE STREET',
+    '41 STATE STREET ALBANY',
+    '41 STATE STREET',
+    '1967 WEHRLE DRIVE BUFFALO',
+    '1967 WEHRLE DRIVE',
+    '90 STATE STREET ALBANY',
+    '90 STATE STREET',
+    '1 MAIDEN LANE NEW YORK',
+    '1 MAIDEN LANE',
+    '122 EAST 42ND STREET NEW YORK',
+    '122 EAST 42ND STREET',
+    '42 BROADWAY NEW YORK',
+    '42 BROADWAY',
+    '447 BROADWAY NEW YORK',
+    '447 BROADWAY',
+    '600 MAMARONECK AVENUE HARRISON',
+    '600 MAMARONECK AVENUE',
+    '99 WASHINGTON AVENUE ALBANY',
+    '99 WASHINGTON AVENUE',
+    '187 WOLF ROAD ALBANY',
+    '187 WOLF ROAD',
+    '251 LITTLE FALLS DRIVE WILMINGTON',
+    '251 LITTLE FALLS DRIVE',
+    '2711 CENTERVILLE ROAD WILMINGTON',
+    '2711 CENTERVILLE ROAD',
+    '1209 NORTH ORANGE STREET WILMINGTON',
+    '1209 NORTH ORANGE STREET',
+    '850 NEW BURTON ROAD DOVER',
+    '850 NEW BURTON ROAD',
+    '160 GREENTREE DRIVE DOVER',
+    '160 GREENTREE DRIVE',
+    '100 PEARL STREET HARTFORD',
+    '280 TRUMBULL STREET HARTFORD',
+    'ONE COMMERCIAL PLAZA HARTFORD',
 }
+
+SHARED_ADDRESS_IGNORE_REGEX = re.compile(
+    r'\b(?:80\s+STATE\s+ST(?:REET)?\b.*ALBANY|'
+    r'418\s+BROADWAY\b.*ALBANY|'
+    r'54\s+STATE\s+ST(?:REET)?\b.*ALBANY|'
+    r'41\s+STATE\s+ST(?:REET)?\b.*ALBANY|'
+    r'90\s+STATE\s+ST(?:REET)?\b.*ALBANY|'
+    r'28\s+LIBERTY\s+ST(?:REET)?\b.*(?:NEW\s+YORK|NY)|'
+    r'7014\s+13TH\s+AVE(?:NUE)?\b.*BROOKLYN|'
+    r'1967\s+WEHRLE\s+DR(?:IVE)?\b.*BUFFALO|'
+    r'251\s+LITTLE\s+FALLS\s+DR(?:IVE)?\b|'
+    r'2711\s+CENTERVILLE\s+R(?:OA)?D\b|'
+    r'1209\s+N(?:ORTH)?\s+ORANGE\s+ST(?:REET)?\b|'
+    r'850\s+NEW\s+BURTON\s+R(?:OA)?D\b|'
+    r'160\s+GREENTREE\s+DR(?:IVE)?\b|'
+    r'2389\s+MAIN\s+ST(?:REET)?\b.*GLASTONBURY|'
+    r'2\s+CORPORATE\s+DR(?:IVE)?\b.*SHELTON)\b',
+    re.IGNORECASE
+)
 
 
 def is_placeholder_address(address: str) -> bool:
@@ -420,8 +482,16 @@ def is_ignored_shared_address(address: str) -> bool:
     if not address:
         return True
     raw_norm = str(address).upper().strip()
+    if is_placeholder_address(raw_norm):
+        return True
+    if bool(SHARED_ADDRESS_IGNORE_REGEX.search(raw_norm)):
+        return True
     norm = normalize_mailing_address_coarse(address) or raw_norm
-    return is_placeholder_address(raw_norm) or norm in SHARED_ADDRESS_IGNORE_VALUES
+    if norm in SHARED_ADDRESS_IGNORE_VALUES:
+        return True
+    if bool(SHARED_ADDRESS_IGNORE_REGEX.search(norm)):
+        return True
+    return False
 
 def extract_base_address(address: str) -> str:
     """

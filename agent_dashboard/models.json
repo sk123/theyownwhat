@@ -1,0 +1,146 @@
+[
+  {
+    "id": "auto-latest-gemini-flash-high",
+    "name": "⚡ Auto-Latest Gemini Flash (High)",
+    "provider": "Google AI",
+    "badge": "Always Latest",
+    "description": "Automatically resolves to the newest Gemini Flash model with High reasoning.",
+    "recency": 0
+  },
+  {
+    "id": "gemini-3.7-flash-medium",
+    "name": "Gemini 3.7 Flash Medium",
+    "provider": "Google AI",
+    "badge": "Fast",
+    "description": "Gemini 3.7 flash with medium thinking reasoning mode.",
+    "recency": 1
+  },
+  {
+    "id": "gemini-3.7-flash-high",
+    "name": "Gemini 3.7 Flash High",
+    "provider": "Google AI",
+    "badge": "High Thinking",
+    "description": "Gemini 3.7 flash with high internal thinking mode.",
+    "recency": 2
+  },
+  {
+    "id": "gemini-3.7-flash-low",
+    "name": "Gemini 3.7 Flash Low",
+    "provider": "Google AI",
+    "badge": "Low Thinking",
+    "description": "Gemini 3.7 flash with lightweight thinking latency.",
+    "recency": 3
+  },
+  {
+    "id": "gemini-3.7-flash-off",
+    "name": "Gemini 3.7 Flash (Thinking Off)",
+    "provider": "Google AI",
+    "badge": "Instant",
+    "description": "Instant execution with zero thinking latency.",
+    "recency": 4
+  },
+  {
+    "id": "gemini-3.6-flash-medium",
+    "name": "Gemini 3.6 Flash Medium",
+    "provider": "Google AI",
+    "badge": "Fast",
+    "description": "Gemini 3.6 flash with medium thinking mode.",
+    "recency": 5
+  },
+  {
+    "id": "gemini-3.5-flash-medium",
+    "name": "Gemini 3.5 Flash Medium",
+    "provider": "Google AI",
+    "badge": "Fast",
+    "description": "Gemini 3.5 flash fast execution model.",
+    "recency": 6
+  },
+  {
+    "id": "gemini-3.1-pro-low",
+    "name": "Gemini 3.1 Pro Low",
+    "provider": "Google AI",
+    "badge": "Pro",
+    "description": "Gemini 3.1 pro deep reasoning model with low thinking budget.",
+    "recency": 7
+  },
+  {
+    "id": "claude-sonnet-4.6",
+    "name": "Claude Sonnet 4.6 (Thinking)",
+    "provider": "Anthropic",
+    "badge": "Thinking",
+    "description": "Claude 4.6 Sonnet state-of-the-art coding and system reasoning.",
+    "recency": 1
+  },
+  {
+    "id": "claude-opus-4.6",
+    "name": "Claude Opus 4.6 (Thinking)",
+    "provider": "Anthropic",
+    "badge": "Thinking",
+    "description": "Claude 4.6 Opus frontier deep reasoning and architecture model.",
+    "recency": 2
+  },
+  {
+    "id": "gpt-oss-120b",
+    "name": "GPT-OSS 120B (Medium)",
+    "provider": "Local",
+    "badge": "Open Weights",
+    "description": "Open-source 120B parameter reasoning model.",
+    "recency": 1
+  },
+  {
+    "id": "gpt-4.5",
+    "name": "GPT-4.5 (Frontier Knowledge)",
+    "provider": "OpenAI",
+    "badge": "Flagship",
+    "description": "Next-generation foundation model with vast world knowledge.",
+    "recency": 2
+  },
+  {
+    "id": "o3-mini",
+    "name": "o3-mini (High STEM)",
+    "provider": "OpenAI",
+    "badge": "STEM Reasoning",
+    "description": "Specialized reasoning model for complex algorithmic problems.",
+    "recency": 3
+  },
+  {
+    "id": "o1",
+    "name": "o1 (Full Reasoning)",
+    "provider": "OpenAI",
+    "badge": "Full Reasoning",
+    "description": "Deep reasoning model for math, logic, and system architecture.",
+    "recency": 4
+  },
+  {
+    "id": "gpt-4o",
+    "name": "GPT-4o",
+    "provider": "OpenAI",
+    "badge": "Flagship",
+    "description": "Omni-capable model for complex software engineering.",
+    "recency": 5
+  },
+  {
+    "id": "deepseek-r1",
+    "name": "DeepSeek R1 (Reasoning)",
+    "provider": "Local",
+    "badge": "Open Reasoning",
+    "description": "Open-weights reasoning model with explicit thought traces.",
+    "recency": 6
+  },
+  {
+    "id": "llama-3.3-70b",
+    "name": "Llama 3.3 70B",
+    "provider": "Local",
+    "badge": "Open Weights",
+    "description": "Meta Llama 3.3 70B parameter open foundation model.",
+    "recency": 7
+  },
+  {
+    "id": "ollama-local",
+    "name": "Local LLM (Ollama)",
+    "provider": "Local",
+    "badge": "Private",
+    "description": "Runs on local hardware via Ollama localhost endpoint.",
+    "recency": 8
+  }
+]

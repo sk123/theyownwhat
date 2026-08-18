@@ -147,6 +147,7 @@ CREATE TABLE IF NOT EXISTS nyc_bbl_stats (
     violations_class_b      INTEGER DEFAULT 0,   -- hazardous
     violations_class_a      INTEGER DEFAULT 0,   -- non-hazardous
     violations_open_c       INTEGER DEFAULT 0,   -- open Class C (most urgent)
+    violations_last_365d    INTEGER DEFAULT 0,   -- violations issued in past 365 days
     last_violation_date     DATE,
 
     -- HPD Litigations (housing court cases)

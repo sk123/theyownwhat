@@ -44,12 +44,14 @@ const DATE_PRESETS = [
 
 const RAP_SHEETS_ENABLED_CITIES = [
     'CT', 'HARTFORD', 'CONNECTICUT', 'STATEWIDE',
-    'NYC', 'NY', 'NEW YORK CITY'
+    'NYC', 'NY', 'NEW YORK CITY',
+    'DETROIT'
 ];
 
 const normalizeRapSheetCity = (city) => {
     const upper = city ? String(city).toUpperCase() : 'HARTFORD';
     if (upper === 'NYC' || upper === 'NY' || upper === 'NEW YORK CITY') return 'NYC';
+    if (upper === 'DETROIT' || upper === 'MI') return 'DETROIT';
     return 'HARTFORD';
 };
 
@@ -57,7 +59,7 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
     const [data, setData] = useState([]);
     const [loading, setLoading] = useState(true);
     const [filter, setFilter] = useState('');
-    const [cities, setCities] = useState(['CT', 'HARTFORD', 'NYC', 'BALTIMORE', 'DETROIT']);
+    const [cities, setCities] = useState(['CT', 'HARTFORD', 'NYC', 'DETROIT']);
     const [selectedCity, setSelectedCity] = useState(normalizeRapSheetCity(initialCity));
     const [dimension, setDimension] = useState('network');
     const [dateFrom, setDateFrom] = useState(null);
@@ -68,7 +70,7 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
     const scrollContainerRef = useRef(null);
     const rapSheetsEnabled = RAP_SHEETS_ENABLED_CITIES.includes(selectedCity?.toUpperCase());
     const visibleCities = useMemo(() => {
-        const defaultCities = ['CT', 'HARTFORD', 'NYC', 'BALTIMORE', 'DETROIT'];
+        const defaultCities = ['CT', 'HARTFORD', 'NYC', 'DETROIT'];
         const requested = selectedCity && RAP_SHEETS_ENABLED_CITIES.includes(selectedCity.toUpperCase()) ? [selectedCity.toUpperCase()] : [];
         return [...new Set([...requested, ...defaultCities])];
     }, [selectedCity]);
@@ -84,7 +86,7 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
         api.get('/monitor/cities')
             .then((rows) => {
                 if (cancelled) return;
-                setCities(['CT', 'HARTFORD']);
+                setCities(['CT', 'HARTFORD', 'NYC', 'DETROIT']);
                 setSelectedCity(normalizeRapSheetCity(initialCity));
             })
             .catch((err) => console.error('Failed to load monitor cities', err));
@@ -170,7 +172,7 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
     });
 
     return (
-        <div className="flex flex-col h-full min-h-0 overflow-y-auto md:overflow-hidden bg-slate-50/50 touch-pan-y">
+        <div className="flex flex-col h-full min-h-0 overflow-y-auto md:overflow-hidden bg-slate-50/50 touch-pan-y" style={{ WebkitOverflowScrolling: 'touch' }}>
             {/* Collapsible Hero Header — hides on scroll */}
             <div className={`transition-all duration-300 ease-out overflow-hidden shrink-0 ${isScrolled ? 'max-h-0 opacity-0' : 'max-h-[300px] opacity-100'}`}>
                 <div className="p-8 bg-gradient-to-r from-slate-900 to-slate-800 text-white relative overflow-hidden">
@@ -196,6 +198,14 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
                             <p className="text-sm font-medium text-slate-300">
                                 Hartford remains available while non-Hartford enforcement and eviction matching is audited.
                             </p>
+                        )}
+                        {rapSheetsEnabled && (
+                            <div className="flex items-start gap-2 mt-1 max-w-2xl">
+                                <Info size={14} className="text-slate-400 shrink-0 mt-0.5" />
+                                <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
+                                    Compiled automatically on-the-fly from publicly available property records, court filings, and code enforcement data. Rankings are recalculated on each page load.
+                                </p>
+                            </div>
                         )}
                     </div>
                 </div>
@@ -260,6 +270,17 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
                             >
                                 <MapPin size={13} className={selectedCity === 'NYC' || selectedCity === 'NY' ? 'text-indigo-400' : 'text-slate-400'} />
                                 New York City (NY)
+                            </button>
+                            <button
+                                onClick={() => setSelectedCity('DETROIT')}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                                    selectedCity === 'DETROIT'
+                                        ? 'bg-slate-900 text-white shadow-md'
+                                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+                                }`}
+                            >
+                                <MapPin size={13} className={selectedCity === 'DETROIT' ? 'text-rose-400' : 'text-slate-400'} />
+                                Detroit (MI)
                             </button>
                         </div>
                         <div className="min-w-[240px] relative">
@@ -345,11 +366,15 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
                             <span className="font-bold text-slate-700">Data Sources & Disclaimers: </span>
                             {!rapSheetsEnabled ? (
                                 <span>
-                                    Rap Sheets are temporarily available for Hartford only while non-Hartford code and eviction joins are audited.
+                                    Rap Sheets are temporarily available for Hartford, NYC, and Detroit only while other jurisdictions are audited.
                                 </span>
                             ) : selectedCity === 'NYC' ? (
                                 <span>
                                     NYC eviction statistics reflect marshal-executed evictions since 2017 (sourced from the NYC Department of Investigation), not court filings. Code enforcement records reflect housing violations registered with the NYC Department of Housing Preservation & Development (HPD).
+                                </span>
+                            ) : selectedCity === 'DETROIT' ? (
+                                <span>
+                                    Detroit code enforcement records reflect open and historic blight violations and compliance cases sourced from the City of Detroit Buildings, Safety Engineering, and Environmental Department (BSEED). Court eviction records are currently not loaded for Detroit.
                                 </span>
                             ) : ['HARTFORD', 'BRIDGEPORT', 'NEW HAVEN', 'STAMFORD', 'WATERBURY', 'MERIDEN'].includes(selectedCity) || selectedCity.includes(', CT') || (cityStats && !['NYC', 'DC', 'BALTIMORE', 'BOSTON', 'DETROIT'].includes(selectedCity)) ? (
                                 <span>
@@ -373,19 +398,19 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
             </div>
 
             {/* Results */}
-            <div className="flex-1 overflow-y-visible md:overflow-auto overscroll-contain min-h-0 p-4 md:p-8 pb-32 md:pb-8 touch-pan-y" ref={scrollContainerRef} onScroll={handleScroll} style={{ WebkitOverflowScrolling: 'touch' }}>
+            <div className="flex-1 overflow-y-visible md:overflow-auto overscroll-contain min-h-0 p-4 md:p-8 pb-40 md:pb-8 touch-pan-y" ref={scrollContainerRef} onScroll={handleScroll} style={{ WebkitOverflowScrolling: 'touch' }}>
                 <div className="max-w-6xl mx-auto space-y-4">
                     {!rapSheetsEnabled ? (
                         <div className="p-10 text-center bg-white rounded-3xl border border-amber-200 shadow-sm">
                             <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-50 text-amber-600">
                                 <ShieldAlert size={26} />
                             </div>
-                            <h3 className="text-xl font-black text-slate-900">Rap Sheets paused outside Hartford</h3>
+                            <h3 className="text-xl font-black text-slate-900">Rap Sheets paused outside Hartford, NYC, and Detroit</h3>
                             <p className="mx-auto mt-2 max-w-xl text-sm font-medium leading-6 text-slate-500">
-                                Non-Hartford rankings are in light maintenance while code, eviction, and network attribution are audited. Hartford Rap Sheets remain available.
+                                Additional city rankings are in light maintenance while code, eviction, and network attribution are audited. Hartford, NYC, and Detroit Rap Sheets remain available.
                             </p>
                             <button
-                                onClick={() => setSelectedCity(RAP_SHEETS_ENABLED_CITY)}
+                                onClick={() => setSelectedCity('HARTFORD')}
                                 className="mt-5 rounded-xl bg-slate-900 px-4 py-2 text-xs font-black text-white hover:bg-slate-700"
                             >
                                 Open Hartford Rap Sheets
@@ -509,7 +534,10 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
                                                                         <div className="text-[10px] font-bold text-red-500 uppercase tracking-widest mb-1">
                                                                             Code Cases & Complaints {selectedCity === 'CT' || selectedCity === 'HARTFORD' ? '(Hartford)' : ''}
                                                                         </div>
-                                                                        <div className="text-2xl font-black text-slate-900">{(item.violation_count || 0).toLocaleString()}</div>
+                                                                        <div className="flex items-baseline gap-2">
+                                                                            <span className="text-2xl font-black text-slate-900">{(item.violation_count || 0).toLocaleString()}</span>
+                                                                            <span className="text-[10px] font-semibold text-slate-400">lifetime total</span>
+                                                                        </div>
                                                                     </div>
                                                                     <div className="p-2 bg-red-100 rounded-lg text-red-600">
                                                                         <ShieldAlert size={18} />

@@ -262,7 +262,7 @@ def fetch_violations(limit: int = 0) -> dict[str, dict]:
     stats: dict[str, dict] = defaultdict(lambda: {
         "total": 0, "open": 0,
         "class_c": 0, "class_b": 0, "class_a": 0,
-        "open_c": 0, "last_date": None,
+        "open_c": 0, "last_365d": 0, "last_date": None,
     })
 
     base_params = {
@@ -313,6 +313,23 @@ def fetch_violations(limit: int = 0) -> dict[str, dict]:
         stats[bbl]["open"] += cnt
         if cls == "C":
             stats[bbl]["open_c"] += cnt
+
+    # Last 365 days counts
+    import datetime
+    cutoff_date = (datetime.date.today() - datetime.timedelta(days=365)).isoformat()
+    last_365d_params = {
+        "$select": "bbl, COUNT(*) AS cnt",
+        "$where":  f"bbl IS NOT NULL AND bbl != '0' AND approveddate >= '{cutoff_date}T00:00:00'",
+        "$group":  "bbl",
+    }
+    rows_365d = soql_get_all(VIOLATIONS_DS, last_365d_params, "bbl", limit)
+    logger.info(f"  Violations 365d rows: {len(rows_365d):,}")
+
+    for r in rows_365d:
+        bbl = (r.get("bbl") or "").strip()
+        cnt = int(float(r.get("cnt", 0)))
+        if is_valid_nyc_bbl(bbl):
+            stats[bbl]["last_365d"] = cnt
 
     if skipped_invalid or skipped_invalid_open:
         logger.warning(
@@ -425,6 +442,7 @@ def write_stats(conn, violations: Optional[dict], litigations: Optional[dict], e
             v.get("class_b", 0) if v is not None else None,
             v.get("class_a", 0) if v is not None else None,
             v.get("open_c", 0) if v is not None else None,
+            v.get("last_365d", 0) if v is not None else None,
             (v.get("last_date") or None) if v is not None else None,
             l.get("total", 0) if l is not None else None,
             l.get("open", 0) if l is not None else None,
@@ -442,7 +460,7 @@ def write_stats(conn, violations: Optional[dict], litigations: Optional[dict], e
             bbl,
             violations_total, violations_open,
             violations_class_c, violations_class_b, violations_class_a,
-            violations_open_c, last_violation_date,
+            violations_open_c, violations_last_365d, last_violation_date,
             litigations_total, litigations_open, litigations_harassment,
             last_litigation_date,
             evictions_total, last_eviction_date,
@@ -455,6 +473,7 @@ def write_stats(conn, violations: Optional[dict], litigations: Optional[dict], e
             violations_class_b  = COALESCE(EXCLUDED.violations_class_b, nyc_bbl_stats.violations_class_b),
             violations_class_a  = COALESCE(EXCLUDED.violations_class_a, nyc_bbl_stats.violations_class_a),
             violations_open_c   = COALESCE(EXCLUDED.violations_open_c, nyc_bbl_stats.violations_open_c),
+            violations_last_365d= COALESCE(EXCLUDED.violations_last_365d, nyc_bbl_stats.violations_last_365d),
             last_violation_date = COALESCE(EXCLUDED.last_violation_date, nyc_bbl_stats.last_violation_date),
             litigations_total   = COALESCE(EXCLUDED.litigations_total, nyc_bbl_stats.litigations_total),
             litigations_open    = COALESCE(EXCLUDED.litigations_open, nyc_bbl_stats.litigations_open),
@@ -466,7 +485,7 @@ def write_stats(conn, violations: Optional[dict], litigations: Optional[dict], e
     """
 
     # Inject NOW() as a value placeholder
-    template = "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())"
+    template = "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())"
 
     batch_size = 5_000
     total = 0

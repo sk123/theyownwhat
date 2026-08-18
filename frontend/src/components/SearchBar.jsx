@@ -1,13 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Search, MapPin, Briefcase, User, ArrowRight } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { getJurisdictionConfig } from '../utils/jurisdiction';
 
-export default function SearchBar({ onSearch, onSelect, isLoading, activeState }) {
+export default function SearchBar({ onSearch, onSelect, isLoading, activeState = 'CT' }) {
     const [term, setTerm] = useState('');
     const [suggestions, setSuggestions] = useState([]);
     const [showSuggestions, setShowSuggestions] = useState(false);
     const [loading, setLoading] = useState(false);
     const searchRef = useRef(null);
+    const jurConfig = getJurisdictionConfig(activeState);
 
     // Debounced Autocomplete
     useEffect(() => {
@@ -40,7 +42,7 @@ export default function SearchBar({ onSearch, onSelect, isLoading, activeState }
             }
         };
 
-        const timeoutId = setTimeout(fetchSuggestions, 100);
+        const timeoutId = setTimeout(fetchSuggestions, 80);
         return () => {
             clearTimeout(timeoutId);
             controller.abort();
@@ -60,7 +62,7 @@ export default function SearchBar({ onSearch, onSelect, isLoading, activeState }
     }, []);
 
     const handleSearch = () => {
-        if (term.length >= 3) {
+        if (term.length >= 2) {
             onSearch('all', term);
             setShowSuggestions(false);
         }
@@ -94,7 +96,7 @@ export default function SearchBar({ onSearch, onSelect, isLoading, activeState }
                             onChange={(e) => { setTerm(e.target.value); setShowSuggestions(true); }}
                             onFocus={() => setShowSuggestions(true)}
                             onKeyDown={handleKeyDown}
-                            placeholder={activeState === 'CT' ? "Search by business, owner, or address..." : "Search by business, owner, or address in NY (WIP)..."}
+                            placeholder={`Search by landlord, network, or address in ${jurConfig.localLabel}...`}
                             className="w-full pl-12 pr-4 py-4 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-medium text-slate-900 placeholder:text-slate-400 text-lg shadow-inner"
                             autoFocus
                             aria-label="Search by business, owner, or address"

@@ -142,8 +142,9 @@ def run_weekly_app_audit():
             matrix = {}
             for label, p_tbl, n_tbl, count_col in all_jurisdictions:
                 try:
-                    cur.execute(f"SELECT COUNT(*) as p_cnt FROM {p_tbl}")
-                    p_cnt = cur.fetchone()["p_cnt"]
+                    cur.execute("SELECT COALESCE(NULLIF(reltuples, -1)::bigint, (SELECT COUNT(*) FROM " + p_tbl + ")) as p_cnt FROM pg_class WHERE relname = %s", (p_tbl,))
+                    p_cnt_row = cur.fetchone()
+                    p_cnt = p_cnt_row["p_cnt"] if p_cnt_row else 0
                     cur.execute(f"""
                         SELECT 
                             COUNT(*) as total_nets,

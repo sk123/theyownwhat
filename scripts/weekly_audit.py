@@ -27,13 +27,13 @@ def perform_theyownwhat_audit():
     })
 
     # 2. Syntax & Module Audit
-    py_check = run_command(f"python3 -m py_compile {os.path.join(repo_dir, 'app', 'main.py')} {os.path.join(repo_dir, 'api', 'index.py')}")
+    py_check = run_command(f"python3 -m py_compile {os.path.join(repo_dir, 'api', 'main.py')}")
     if py_check["success"]:
         steps.append({
             "step": 2,
             "name": "Python Syntax & Entrypoint Verification",
             "status": "PASS",
-            "details": "Compiled app/main.py and api/index.py cleanly without syntax errors."
+            "details": "Compiled api/main.py cleanly without syntax errors."
         })
     else:
         steps.append({
@@ -53,9 +53,9 @@ def perform_theyownwhat_audit():
             conn = psycopg2.connect(db_url, connect_timeout=5)
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute("""
-                    SELECT town, count(*) as property_count, max(last_updated) as latest_record
+                    SELECT property_city as town, count(*) as property_count, max(sale_date) as latest_record
                     FROM properties
-                    GROUP BY town
+                    GROUP BY property_city
                     ORDER BY property_count DESC
                     LIMIT 15;
                 """)

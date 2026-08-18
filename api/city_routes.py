@@ -229,7 +229,7 @@ def _nyc_open_data_url(params: dict) -> str:
 def _hpd_profile_url(registration_id: Optional[str]) -> Optional[str]:
     if not registration_id:
         return None
-    return f"https://hpdonline.nyc.gov/hpdonline/building-profile?registrationId={registration_id}"
+    return f"https://hpdonline.nyc.gov/hpdonline/building/{registration_id}"
 
 
 def _shorten_complaint_type(value: Optional[str], max_len: int = 180) -> str:

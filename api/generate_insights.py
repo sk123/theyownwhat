@@ -669,19 +669,19 @@ def rebuild_cached_insights(db_conn=None):
                     WITH property_networks AS (
                         SELECT p.id as property_id, p.assessed_value, p.location, p.number_of_units, p.property_type, en.network_id
                         FROM {SCHEMA}.properties p
-                        JOIN {SCHEMA}.entity_networks en ON en.entity_type = 'business' AND p.business_id::text = en.entity_id
-                        
-                        UNION
-                        
-                        SELECT p.id as property_id, p.assessed_value, p.location, p.number_of_units, p.property_type, en.network_id
-                        FROM {SCHEMA}.properties p
-                        JOIN {SCHEMA}.entity_networks en ON en.entity_type = 'principal' AND p.principal_id::text = en.entity_id
+                        JOIN {SCHEMA}.entity_networks en ON (
+                            (en.entity_type = 'business' AND p.business_id::text = en.entity_id)
+                            OR (en.entity_type = 'business' AND p.owner_norm = en.normalized_name)
+                            OR (en.entity_type = 'principal' AND p.principal_id::text = en.entity_id)
+                            OR (en.entity_type = 'principal' AND p.owner_norm = en.entity_id)
+                            OR (en.entity_type = 'principal' AND p.owner_norm = en.normalized_name)
+                        )
                     )
                     SELECT 
                         network_id AS id,
                         COUNT(DISTINCT property_id) AS total_properties,
                         SUM(assessed_value) AS total_assessed_value,
-                        COUNT(DISTINCT regexp_replace(UPPER(location), '\s*(?:UNIT|APT|#|STE|SUITE|FL|RM|BLDG|BUILDING|DEPT|DEPARTMENT|OFFICE|LOT).*$', '', 'g')) as building_count,
+                        COUNT(DISTINCT regexp_replace(UPPER(location), '\\s*(?:UNIT|APT|#|STE|SUITE|FL|RM|BLDG|BUILDING|DEPT|DEPARTMENT|OFFICE|LOT).*$', '', 'g')) as building_count,
                         COALESCE(SUM(CASE WHEN NOT (property_type ILIKE ANY(%s)) THEN number_of_units ELSE 0 END), 0) as unit_count,
                         COALESCE(SUM(CASE WHEN NOT (property_type ILIKE ANY(%s)) THEN assessed_value ELSE 0 END), 0) as residential_assessed_value
                     FROM property_networks
@@ -703,15 +703,13 @@ def rebuild_cached_insights(db_conn=None):
                         WITH property_networks AS (
                             SELECT p.id as property_id, p.assessed_value, p.location, p.number_of_units, p.property_type, UPPER(p.{town_col}) as town, en.network_id
                             FROM {SCHEMA}.properties p
-                            JOIN {SCHEMA}.entity_networks en ON en.entity_type = 'business' AND p.business_id::text = en.entity_id
-                            WHERE p.{town_col} IS NOT NULL AND p.{town_col} <> ''
-                              AND COALESCE(p.source, '') <> 'NYS_OPEN_DATA'
-                            
-                            UNION
-                            
-                            SELECT p.id as property_id, p.assessed_value, p.location, p.number_of_units, p.property_type, UPPER(p.{town_col}) as town, en.network_id
-                            FROM {SCHEMA}.properties p
-                            JOIN {SCHEMA}.entity_networks en ON en.entity_type = 'principal' AND p.principal_id::text = en.entity_id
+                            JOIN {SCHEMA}.entity_networks en ON (
+                                (en.entity_type = 'business' AND p.business_id::text = en.entity_id)
+                                OR (en.entity_type = 'business' AND p.owner_norm = en.normalized_name)
+                                OR (en.entity_type = 'principal' AND p.principal_id::text = en.entity_id)
+                                OR (en.entity_type = 'principal' AND p.owner_norm = en.entity_id)
+                                OR (en.entity_type = 'principal' AND p.owner_norm = en.normalized_name)
+                            )
                             WHERE p.{town_col} IS NOT NULL AND p.{town_col} <> ''
                               AND COALESCE(p.source, '') <> 'NYS_OPEN_DATA'
                         )
@@ -799,7 +797,21 @@ def rebuild_cached_insights(db_conn=None):
                 # PROMOTE IMMEDIATELY so frontend is happy
                 log.info(f"Promoting initial statewide results to {final_table}")
                 cur.execute(f"DELETE FROM {final_table} WHERE title LIKE 'Statewide%'")
-                cur.execute(f"INSERT INTO {final_table} SELECT * FROM {staging_table}")
+                cur.execute(f"""
+                    INSERT INTO {final_table} (
+                        title, rank, network_id, network_name, property_count, principal_count, linked_business_count,
+                        total_assessed_value, total_appraised_value, residential_assessed_value, primary_entity_id,
+                        primary_entity_name, primary_entity_type, business_count, building_count, unit_count,
+                        controlling_business, representative_entities, principals
+                    )
+                    SELECT 
+                        title, rank, network_id, network_name, property_count, principal_count, linked_business_count,
+                        total_assessed_value, total_appraised_value, residential_assessed_value, primary_entity_id,
+                        primary_entity_name, primary_entity_type, business_count, building_count, unit_count,
+                        controlling_business, representative_entities, principals
+                    FROM {staging_table}
+                    WHERE title LIKE 'Statewide%'
+                """)
                 conn.commit()
 
                 # ---------- Per-town ----------

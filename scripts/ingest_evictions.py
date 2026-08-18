@@ -343,7 +343,8 @@ def ingest_evictions():
     linked_count = sum(1 for row in ingest_data if row[4] is not None)
     filing_dates = [d for d in df_clean['filing_date'].tolist() if pd.notna(d)]
     update_status(conn, "success", {
-        "source_url": EVICTIONS_URL,
+        "source_url": "https://evictions.ctfairhousing.com/",
+        "feed_url": EVICTIONS_URL,
         "source_records": len(ingest_data),
         "matched_records": linked_count,
         "records_without_local_property": len(ingest_data) - linked_count,

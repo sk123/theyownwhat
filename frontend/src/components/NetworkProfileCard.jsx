@@ -493,22 +493,50 @@ export default function NetworkProfileCard({
 
     const txSummary = networkData.transactionSummary;
     const allTxns = useMemo(() => {
-        if (txSummary?.recent_transactions && txSummary.recent_transactions.length > 0) {
-            return txSummary.recent_transactions;
+        const list = [];
+        const seen = new Set();
+
+        // 1. Ingest backend classified deed transactions
+        if (txSummary?.recent_transactions && Array.isArray(txSummary.recent_transactions)) {
+            txSummary.recent_transactions.forEach(t => {
+                const dateKey = (t.date || '').slice(0, 10);
+                const locKey = (t.location || '').toUpperCase().trim();
+                const key = `${locKey}_${dateKey}_${t.direction}`;
+                if (!seen.has(key)) {
+                    seen.add(key);
+                    list.push({ ...t });
+                }
+            });
         }
-        return propertyAcquisitions.map(p => ({
-            date: p.date,
-            amount: p.amount,
-            location: p.location,
-            city: p.city,
-            direction: 'acquired',
-            scope: 'inter_network',
-            scope_label: 'Inter-network',
-            scope_note: 'Acquired property',
-            buyer_name: p.owner || managerName,
-            seller_name: p.property?.prior_owner || 'Prior Owner',
-            property: p.property
-        }));
+
+        // 2. Ingest assessment acquisitions from properties with last_sale_date
+        propertyAcquisitions.forEach(p => {
+            const dateStr = p.date instanceof Date ? p.date.toISOString().slice(0, 10) : String(p.date || '').slice(0, 10);
+            const locKey = (p.location || '').toUpperCase().trim();
+            const keyAcq = `${locKey}_${dateStr}_acquired`;
+            const keyDisp = `${locKey}_${dateStr}_disposed`;
+            const keyReshuffle = `${locKey}_${dateStr}_reshuffle`;
+
+            // Only add if not already captured in deed transactions for that date/location
+            if (!seen.has(keyAcq) && !seen.has(keyDisp) && !seen.has(keyReshuffle)) {
+                seen.add(keyAcq);
+                list.push({
+                    date: p.date instanceof Date ? p.date.toISOString() : p.date,
+                    amount: p.amount,
+                    location: p.location,
+                    city: p.city,
+                    direction: 'acquired',
+                    scope: 'inter_network',
+                    scope_label: 'Inter-network',
+                    scope_note: 'Acquired property',
+                    buyer_name: p.owner || managerName,
+                    seller_name: p.property?.prior_owner || 'Prior Owner',
+                    property: p.property
+                });
+            }
+        });
+
+        return list.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
     }, [txSummary, propertyAcquisitions, managerName]);
 
     const handlePropertyClick = (txn) => {
@@ -821,7 +849,12 @@ export default function NetworkProfileCard({
                                                     </div>
 
                                                     <div className="space-y-1 max-h-[90px] overflow-y-auto pr-1">
-                                                        {filteredInCardTxns.slice(0, 3).map((txn, i) => {
+                                                        {filteredInCardTxns.length === 0 ? (
+                                                            <div className="text-[9px] text-slate-400 py-1 italic">
+                                                                No {txFilter === 'acquired' ? 'acquisitions' : txFilter === 'disposed' ? 'dispositions' : 'transactions'} found.
+                                                            </div>
+                                                        ) : (
+                                                            filteredInCardTxns.slice(0, 3).map((txn, i) => {
                                                             const isAcq = txn.direction === 'acquired';
                                                             const isDisp = txn.direction === 'disposed';
                                                             const isIntra = txn.scope === 'intra_network' || txn.direction === 'reshuffle';
@@ -880,7 +913,7 @@ export default function NetworkProfileCard({
                                                                     </div>
                                                                 </div>
                                                             );
-                                                        })}
+                                                        }))}
                                                     </div>
                                                 </div>
                                             )}
@@ -1084,62 +1117,62 @@ export default function NetworkProfileCard({
 
             {/* AI Report Modal */}
             {showReport && (
-                <div className="fixed inset-0 z-[200] bg-slate-900/60 backdrop-blur-md p-4 flex justify-center items-center">
-                    <div className="bg-white text-slate-900 rounded-3xl w-full max-w-6xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden border border-slate-200">
-                        <div className="p-6 md:p-8 shrink-0 flex items-center justify-between border-b border-slate-100">
+                <div className="fixed inset-0 z-[200] bg-slate-900/70 backdrop-blur-md p-2 sm:p-4 md:p-6 flex justify-center items-center overscroll-contain">
+                    <div className="bg-white text-slate-900 rounded-2xl sm:rounded-3xl w-full max-w-6xl shadow-2xl flex flex-col h-[92dvh] sm:h-auto sm:max-h-[88dvh] overflow-hidden border border-slate-200">
+                        <div className="p-4 sm:p-6 md:p-8 shrink-0 flex items-center justify-between border-b border-slate-100 bg-white">
                             <div className="flex items-center gap-3">
                                 <div className="p-2 bg-amber-100 text-amber-600 rounded-xl">
-                                        <Sparkles size={24} />
-                                    </div>
-                                    <div>
-                                        <h3 className="text-xl md:text-2xl font-black tracking-tight leading-tight">Investigative Report</h3>
-                                        <p className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-widest">{managerName}</p>
-                                    </div>
+                                    <Sparkles size={24} />
                                 </div>
-                                <div className="flex items-center gap-2">
-                                    {!reportConfig && !reportLoading && reportContent && (
-                                        <>
-                                            {isEditing ? (
-                                                <button
-                                                    onClick={handleSaveEdit}
-                                                    disabled={saveStatus === 'saving'}
-                                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold rounded-lg transition-colors disabled:opacity-50"
-                                                >
-                                                    {saveStatus === 'saving' ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-                                                    {saveStatus === 'saving' ? 'Saving...' : 'Save Changes'}
-                                                </button>
-                                            ) : (
-                                                <button
-                                                    onClick={() => setIsEditing(true)}
-                                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-bold rounded-lg transition-colors"
-                                                >
-                                                    <Edit3 size={16} />
-                                                    Edit
-                                                </button>
-                                            )}
-                                            {saveStatus === 'saved' && (
-                                                <span className="flex items-center gap-1 text-xs font-bold text-emerald-600">
-                                                    <CheckCircle size={14} /> Saved
-                                                </span>
-                                            )}
-                                        </>
-                                    )}
-                                    <button
-                                        onClick={() => setShowReport(false)}
-                                        className="p-2 hover:bg-slate-100 rounded-full transition-colors ml-2"
-                                    >
-                                        <X size={24} className="text-slate-400" />
-                                    </button>
+                                <div>
+                                    <h3 className="text-xl md:text-2xl font-black tracking-tight leading-tight">Investigative Report</h3>
+                                    <p className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-widest">{managerName}</p>
                                 </div>
                             </div>
+                            <div className="flex items-center gap-2">
+                                {!reportConfig && !reportLoading && reportContent && (
+                                    <>
+                                        {isEditing ? (
+                                            <button
+                                                onClick={handleSaveEdit}
+                                                disabled={saveStatus === 'saving'}
+                                                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold rounded-lg transition-colors disabled:opacity-50"
+                                            >
+                                                {saveStatus === 'saving' ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                                                {saveStatus === 'saving' ? 'Saving...' : 'Save Changes'}
+                                            </button>
+                                        ) : (
+                                            <button
+                                                onClick={() => setIsEditing(true)}
+                                                className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-bold rounded-lg transition-colors"
+                                            >
+                                                <Edit3 size={16} />
+                                                Edit
+                                            </button>
+                                        )}
+                                        {saveStatus === 'saved' && (
+                                            <span className="flex items-center gap-1 text-xs font-bold text-emerald-600">
+                                                <CheckCircle size={14} /> Saved
+                                            </span>
+                                        )}
+                                    </>
+                                )}
+                                <button
+                                    onClick={() => setShowReport(false)}
+                                    className="p-2 hover:bg-slate-100 rounded-full transition-colors ml-2 shrink-0"
+                                >
+                                    <X size={24} className="text-slate-400" />
+                                </button>
+                            </div>
+                        </div>
 
-                            <div className="p-6 md:p-8 overflow-y-auto flex-1 bg-slate-50/50">
-                                {reportConfig ? (
-                                    <div className="max-w-xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                                        <div className="text-center space-y-2 mb-8">
-                                            <div className="inline-flex items-center justify-center p-3 bg-blue-50 text-blue-600 rounded-2xl mb-2">
-                                                <Settings size={28} />
-                                            </div>
+                        <div className="p-4 sm:p-6 md:p-8 overflow-y-auto overscroll-contain flex-1 bg-slate-50/50 -webkit-overflow-scrolling-touch">
+                            {reportConfig ? (
+                                <div className="max-w-xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                                    <div className="text-center space-y-2 mb-8">
+                                        <div className="inline-flex items-center justify-center p-3 bg-blue-50 text-blue-600 rounded-2xl mb-2">
+                                            <Settings size={28} />
+                                        </div>
                                             <h4 className="text-xl font-black text-slate-900">Configure Your Report</h4>
                                             <p className="text-sm text-slate-500">Customize how the AI analyzes the {managerName} network.</p>
                                         </div>
@@ -1242,29 +1275,29 @@ export default function NetworkProfileCard({
 
             {/* Recent Transactions Full Modal */}
             {showTxModal && (
-                <div className="fixed inset-0 z-[250] bg-slate-900/60 backdrop-blur-sm p-4 flex justify-center items-center">
-                    <div className="bg-white text-slate-900 rounded-3xl w-full max-w-4xl shadow-2xl flex flex-col max-h-[85vh] overflow-hidden border border-slate-200">
+                <div className="fixed inset-0 z-[250] bg-slate-900/70 backdrop-blur-sm p-2 sm:p-4 md:p-6 flex justify-center items-center overscroll-contain">
+                    <div className="bg-white text-slate-900 rounded-2xl sm:rounded-3xl w-full max-w-4xl shadow-2xl flex flex-col h-[90dvh] sm:h-auto sm:max-h-[85dvh] overflow-hidden border border-slate-200">
                         {/* Modal Header */}
-                        <div className="p-5 md:p-6 shrink-0 flex items-center justify-between border-b border-slate-100 bg-slate-50/50">
+                        <div className="p-4 sm:p-6 shrink-0 flex items-center justify-between border-b border-slate-100 bg-slate-50/50">
                             <div className="flex items-center gap-3">
-                                <div className="p-2.5 bg-amber-100 text-amber-700 rounded-xl">
+                                <div className="p-2 sm:p-2.5 bg-amber-100 text-amber-700 rounded-xl">
                                     <TrendingUp size={22} />
                                 </div>
                                 <div>
-                                    <h3 className="text-xl font-black tracking-tight text-slate-900">Network Recent Transactions</h3>
-                                    <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mt-0.5">{managerName}</p>
+                                    <h3 className="text-lg sm:text-xl font-black tracking-tight text-slate-900">Network Recent Transactions</h3>
+                                    <p className="text-[10px] sm:text-xs font-bold text-slate-400 uppercase tracking-widest mt-0.5">{managerName}</p>
                                 </div>
                             </div>
                             <button
                                 onClick={() => setShowTxModal(false)}
-                                className="p-2 hover:bg-slate-200/60 rounded-full transition-colors"
+                                className="p-2 hover:bg-slate-200/60 rounded-full transition-colors shrink-0"
                             >
                                 <X size={20} className="text-slate-500" />
                             </button>
                         </div>
 
                         {/* Modal Controls Bar */}
-                        <div className="p-4 bg-white border-b border-slate-100 flex flex-wrap items-center justify-between gap-3 shrink-0">
+                        <div className="p-3 sm:p-4 bg-white border-b border-slate-100 flex flex-wrap items-center justify-between gap-2.5 shrink-0">
                             {/* Search Filter */}
                             <input
                                 type="text"
@@ -1287,32 +1320,32 @@ export default function NetworkProfileCard({
                                 <button
                                     onClick={() => setTxModalFilter('acquired')}
                                     className={`px-2.5 py-1 text-[10px] font-extrabold uppercase rounded-md transition-all ${
-                                        txModalFilter === 'acquired' ? 'bg-emerald-600 text-white shadow-sm' : 'text-emerald-700 hover:bg-emerald-50'
+                                        txModalFilter === 'acquired' ? 'bg-emerald-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'
                                     }`}
                                 >
-                                    Acquired ({allTxns.filter(t => t.direction === 'acquired').length})
+                                    +Acq ({allTxns.filter(t => t.direction === 'acquired').length})
                                 </button>
                                 <button
                                     onClick={() => setTxModalFilter('disposed')}
                                     className={`px-2.5 py-1 text-[10px] font-extrabold uppercase rounded-md transition-all ${
-                                        txModalFilter === 'disposed' ? 'bg-rose-600 text-white shadow-sm' : 'text-rose-700 hover:bg-rose-50'
+                                        txModalFilter === 'disposed' ? 'bg-rose-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'
                                     }`}
                                 >
-                                    Disposed ({allTxns.filter(t => t.direction === 'disposed').length})
+                                    -Disp ({allTxns.filter(t => t.direction === 'disposed').length})
                                 </button>
                                 <button
-                                    onClick={() => setTxModalFilter('intra')}
+                                    onClick={() => setTxModalFilter('reshuffle')}
                                     className={`px-2.5 py-1 text-[10px] font-extrabold uppercase rounded-md transition-all ${
-                                        txModalFilter === 'intra' ? 'bg-amber-600 text-white shadow-sm' : 'text-amber-700 hover:bg-amber-50'
+                                        txModalFilter === 'reshuffle' ? 'bg-amber-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'
                                     }`}
                                 >
-                                    Intra-Network ({allTxns.filter(t => t.scope === 'intra_network' || t.direction === 'reshuffle').length})
+                                    Reshuffle ({allTxns.filter(t => t.scope === 'intra_network' || t.direction === 'reshuffle').length})
                                 </button>
                             </div>
                         </div>
 
-                        {/* Modal Transactions Scroll List */}
-                        <div className="p-4 md:p-6 overflow-y-auto space-y-2 flex-1">
+                        {/* Modal Transactions List */}
+                        <div className="p-3 sm:p-6 overflow-y-auto overscroll-contain flex-1 space-y-2.5 bg-slate-50/30 -webkit-overflow-scrolling-touch">
                             {filteredModalTxns.length === 0 ? (
                                 <div className="text-center py-12 text-slate-400 text-sm font-medium">
                                     No transactions match your current search or filter criteria.

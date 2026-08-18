@@ -1,7 +1,8 @@
 import React from 'react';
-import { X, Building2, MapPin, DollarSign, User, ExternalLink, Link as LinkIcon, Copy, Check, FolderPlus, Loader2, List as ListIcon, AlertCircle, Gavel, Image as ImageIcon, Navigation } from 'lucide-react';
+import { X, Building2, MapPin, DollarSign, User, ExternalLink, Link as LinkIcon, Copy, Check, FolderPlus, Loader2, List as ListIcon, AlertCircle, Gavel, Image as ImageIcon, Navigation, Receipt, Search } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import PropertyPublicDetails from './property_public_details.jsx';
+import { getTaxPortalUrl } from '../utils/taxPortal.js';
 
 // Helper to safely render a detail field
 function DetailItem({ icon: Icon, label, value }) {
@@ -734,6 +735,36 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
                             </div>
                         )}
 
+                        {/* Attorney & Investigative Tip: Municipal Tax / Trade Name Discovery */}
+                        {cityName && getTaxPortalUrl(cityName) && (
+                            <div className="mt-6 p-4 bg-amber-50/80 rounded-2xl border border-amber-200/80">
+                                <div className="flex items-start gap-3">
+                                    <div className="p-2 bg-amber-100 text-amber-700 rounded-xl shrink-0 mt-0.5">
+                                        <Receipt size={18} />
+                                    </div>
+                                    <div className="space-y-1">
+                                        <div className="text-xs font-bold text-amber-900 uppercase tracking-wider flex items-center gap-1.5">
+                                            <span>Investigative Tool: Municipal Personal Property Tax Lookup</span>
+                                        </div>
+                                        <p className="text-xs text-amber-800 leading-relaxed">
+                                            Operating businesses, franchises (e.g. Dunkin', McDonald's, local restaurants), and tenants paying personal property taxes on commercial fixtures/equipment register separately from real estate deed owners. Use the municipal tax portal below to look up this address under <strong>Personal Property Tax</strong> to uncover trade names (DBAs) and operating corporate entities.
+                                        </p>
+                                        <div className="pt-1">
+                                            <a
+                                                href={getTaxPortalUrl(cityName)}
+                                                target="_blank"
+                                                rel="noreferrer"
+                                                className="inline-flex items-center gap-1.5 text-xs font-bold text-amber-900 hover:text-amber-950 underline"
+                                            >
+                                                <span>Open {cityName} Tax Collector Portal ({getTaxPortalUrl(cityName).replace('https://www.', '')})</span>
+                                                <ExternalLink size={12} />
+                                            </a>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
                         {/* Metadata / Debug */}
                         <div className="pt-4 border-t border-gray-100 mt-6">
                             <div className="grid grid-cols-2 gap-4 text-[10px] text-gray-400 font-mono">
@@ -744,7 +775,19 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
                     </div>
 
                     {/* Footer Action */}
-                    <div className="p-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-2 shrink-0">
+                    <div className="p-4 border-t border-gray-100 bg-gray-50 flex flex-wrap justify-end gap-2 shrink-0">
+                        {cityName && getTaxPortalUrl(cityName) && (
+                            <a
+                                href={getTaxPortalUrl(cityName)}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="px-4 py-2 bg-emerald-50 border border-emerald-300 hover:bg-emerald-100 text-emerald-800 text-sm font-bold rounded-lg shadow-sm transition-colors flex items-center gap-2"
+                                title="Look up Personal Property Tax records by address to find trade names, operating entities, and equipment tax filers"
+                            >
+                                <Receipt size={16} className="text-emerald-600" />
+                                <span>Pay My Tax Bill (Trade Names & Tenants)</span>
+                            </a>
+                        )}
                         {gisUrl && (
                             <a
                                 href={gisUrl}

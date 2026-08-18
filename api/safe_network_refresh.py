@@ -21,6 +21,7 @@ def setup_shadow_tables(conn):
     """Creates shadow tables for safe writing."""
     logger.info("Setting up shadow tables...")
     with conn.cursor() as cursor:
+        cursor.execute("DROP TABLE IF EXISTS networks_shadow, entity_networks_shadow, ownership_links_shadow CASCADE;")
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS networks_shadow (
                 id SERIAL PRIMARY KEY, primary_name TEXT, total_properties INTEGER DEFAULT 0,

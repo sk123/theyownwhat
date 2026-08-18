@@ -1,8 +1,17 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { X, User, Building, MapPin, Calendar, Hash, Link as LinkIcon, AlertCircle, Info } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 export default function EntityDetailsModal({ entity, type, networkData, onNavigate, onViewProperty, onClose, onOpenFeedback }) {
+    useEffect(() => {
+        if (!entity) return;
+        const prevOverflow = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+        return () => {
+            document.body.style.overflow = prevOverflow;
+        };
+    }, [entity]);
+
     if (!entity) return null;
 
     const d = entity.details || {};
@@ -28,7 +37,7 @@ export default function EntityDetailsModal({ entity, type, networkData, onNaviga
 
     return (
         <AnimatePresence>
-            <div className="fixed inset-0 z-[200] p-4 flex justify-center items-center">
+            <div className="fixed inset-0 z-[200] p-2 sm:p-4 md:p-6 flex justify-center items-center overscroll-contain">
                 {/* Backdrop */}
                 <motion.div
                     initial={{ opacity: 0 }}
@@ -40,13 +49,13 @@ export default function EntityDetailsModal({ entity, type, networkData, onNaviga
 
                 {/* Modal Container */}
                 <motion.div
-                    initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                    initial={{ opacity: 0, scale: 0.95, y: 16 }}
                     animate={{ opacity: 1, scale: 1, y: 0 }}
-                    exit={{ opacity: 0, scale: 0.95, y: 20 }}
-                    className="relative bg-white rounded-2xl shadow-2xl border border-gray-100 w-full max-w-2xl max-h-[85vh] overflow-hidden flex flex-col z-10"
+                    exit={{ opacity: 0, scale: 0.95, y: 16 }}
+                    className="relative bg-white rounded-2xl shadow-2xl border border-gray-100 w-full max-w-2xl h-[90dvh] sm:h-auto sm:max-h-[88dvh] overflow-hidden flex flex-col z-10"
                 >
                     {/* Header */}
-                    <div className="p-6 border-b border-gray-100 flex items-start justify-between bg-gradient-to-r from-gray-50 to-white">
+                    <div className="p-4 sm:p-6 border-b border-gray-100 flex items-start justify-between bg-gradient-to-r from-gray-50 to-white shrink-0">
                         <div className="flex items-center gap-3">
                             <div className={`p-3 rounded-xl ${isPrincipal ? 'bg-indigo-50 text-indigo-600' : 'bg-blue-50 text-blue-600'}`}>
                                 {isPrincipal ? <User size={24} /> : <Building size={24} />}

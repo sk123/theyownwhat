@@ -315,29 +315,40 @@ const FreshnessModal = ({ isOpen, onClose }) => {
         return sortAsc ? <ArrowUp className="h-3.5 w-3.5" /> : <ArrowDown className="h-3.5 w-3.5" />;
     };
 
-    const jumpToDataset = (key) => {
-        document.getElementById(`freshness-section-${key}`)?.scrollIntoView({
+    useEffect(() => {
+        if (!isOpen) return;
+        const prevOverflow = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+        return () => {
+            document.body.style.overflow = prevOverflow;
+        };
+    }, [isOpen]);
+
+    const scrollToSection = (datasetKey) => {
+        const element = sectionRefs.current[datasetKey];
+        if (!element) return;
+        element.scrollIntoView({
             behavior: 'smooth',
             block: 'start',
         });
     };
 
     return (
-        <div className="fixed inset-0 z-[200] overflow-y-auto bg-slate-950/60 px-3 pt-16 pb-3 backdrop-blur-sm md:p-5 flex justify-center items-start md:items-center" onClick={onClose}>
+        <div className="fixed inset-0 z-[200] bg-slate-950/70 p-2 sm:p-4 md:p-6 backdrop-blur-sm flex justify-center items-center overscroll-contain" onClick={onClose}>
             <div
-                className="flex w-full max-w-7xl flex-col rounded-2xl border border-slate-200 bg-slate-50 shadow-2xl my-auto max-h-[90vh] overflow-hidden"
+                className="flex w-full max-w-7xl flex-col rounded-2xl border border-slate-200 bg-slate-50 shadow-2xl h-[92dvh] sm:h-[88dvh] max-h-[92dvh] sm:max-h-[88dvh] overflow-hidden"
                 onClick={(event) => event.stopPropagation()}
             >
                 {/* Header: Compact, Title + Search + Close */}
-                <div className="border-b border-slate-200 bg-white px-4 py-4 md:px-6">
-                    <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                <div className="border-b border-slate-200 bg-white px-4 py-3.5 md:px-6 shrink-0">
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                         <div className="flex items-start gap-3">
-                            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-slate-900 text-white shadow-sm">
+                            <div className="flex h-10 w-10 sm:h-11 sm:w-11 shrink-0 items-center justify-center rounded-xl bg-slate-900 text-white shadow-sm">
                                 <Database className="h-5 w-5" />
                             </div>
                             <div>
-                                <h2 className="text-2xl font-black tracking-tight text-slate-950">Data Completeness</h2>
-                                <p className="mt-1 text-sm font-medium text-slate-500">
+                                <h2 className="text-xl sm:text-2xl font-black tracking-tight text-slate-950">Data Completeness</h2>
+                                <p className="mt-0.5 text-xs sm:text-sm font-medium text-slate-500">
                                     Source inventory, refresh dates, and field coverage from the live cache.
                                 </p>
                             </div>
@@ -351,10 +362,10 @@ const FreshnessModal = ({ isOpen, onClose }) => {
                                     placeholder="Search sources, towns, layers..."
                                     value={searchTerm}
                                     onChange={(event) => setSearchTerm(event.target.value)}
-                                    className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-9 pr-3 text-sm font-medium text-slate-800 outline-none transition focus:border-blue-300 focus:bg-white focus:ring-4 focus:ring-blue-50"
+                                    className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-9 pr-3 text-sm font-medium text-slate-800 outline-none transition focus:border-blue-300 focus:bg-white focus:ring-4 focus:ring-blue-50"
                                 />
                             </div>
-                            <button onClick={onClose} className="rounded-xl p-2.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700">
+                            <button onClick={onClose} className="rounded-xl p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 shrink-0">
                                 <X className="h-5 w-5" />
                             </button>
                         </div>
@@ -362,8 +373,8 @@ const FreshnessModal = ({ isOpen, onClose }) => {
                 </div>
 
                 {/* Scrollable Body */}
-                <div className="flex-1 overflow-y-auto p-4 md:p-5">
-                    {/* Dashboard controls and stats (moved here from header for mobile friendliness) */}
+                <div className="flex-1 overflow-y-auto overscroll-contain p-3.5 sm:p-5 -webkit-overflow-scrolling-touch">
+                    {/* Dashboard controls and stats */}
                     <div className="mb-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                         <SummaryCard label="Source rows" value={formatCount(summary.sourceRows) || '0'} icon={Layers} />
                         <SummaryCard label="Property rows" value={compactCount(summary.totalProperties)} icon={Building2} />

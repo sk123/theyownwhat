@@ -269,9 +269,17 @@ export default function MultiPropertyMapModal({ properties, onClose }) {
         ? [firstValidCoords.lat, firstValidCoords.lon] 
         : [41.5623, -72.8252];
 
+    useEffect(() => {
+        const prevOverflow = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+        return () => {
+            document.body.style.overflow = prevOverflow;
+        };
+    }, []);
+
     return (
         <AnimatePresence>
-            <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+            <div className="fixed inset-0 z-[200] flex items-center justify-center p-2 sm:p-4 md:p-6 overscroll-contain">
                 <motion.div
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
@@ -284,21 +292,21 @@ export default function MultiPropertyMapModal({ properties, onClose }) {
                     initial={{ opacity: 0, scale: 0.95 }}
                     animate={{ opacity: 1, scale: 1 }}
                     exit={{ opacity: 0, scale: 0.95 }}
-                    className="relative bg-white rounded-2xl shadow-2xl w-full max-w-6xl h-[85vh] flex flex-col overflow-hidden border border-slate-100"
+                    className="relative bg-white rounded-2xl shadow-2xl w-full max-w-6xl h-[92dvh] sm:h-[88dvh] max-h-[92dvh] sm:max-h-[88dvh] flex flex-col overflow-hidden border border-slate-100"
                 >
                     {/* Header */}
-                    <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50 shrink-0">
+                    <div className="p-3.5 sm:p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50 shrink-0">
                         <div>
-                            <h2 className="text-lg font-black text-slate-900 flex items-center gap-2">
-                                <MapIcon size={20} className="text-blue-600" />
-                                Interactive Network Portfolio Map
+                            <h2 className="text-base sm:text-lg font-black text-slate-900 flex items-center gap-2">
+                                <MapIcon size={20} className="text-blue-600 shrink-0" />
+                                <span>Interactive Network Portfolio Map</span>
                             </h2>
-                            <p className="text-xs text-slate-500 font-semibold uppercase tracking-wider mt-0.5">
+                            <p className="text-[10px] sm:text-xs text-slate-500 font-semibold uppercase tracking-wider mt-0.5">
                                 Showing {filteredMarkers.length} of {markers.length} properties
                                 {loading && ` • Geocoding ${geoStatus.current}/${geoStatus.total}...`}
                             </p>
                         </div>
-                        <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full text-slate-400 hover:text-slate-600 transition-colors">
+                        <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full text-slate-400 hover:text-slate-600 transition-colors shrink-0">
                             <X size={20} />
                         </button>
                     </div>
@@ -307,7 +315,7 @@ export default function MultiPropertyMapModal({ properties, onClose }) {
                     <div className="flex-1 flex flex-col md:flex-row overflow-hidden relative">
                         
                         {/* Left Customization and Filter Control Sidebar */}
-                        <div className="w-full md:w-80 border-r border-slate-100 flex flex-col bg-slate-50 overflow-y-auto p-4 shrink-0 space-y-5">
+                        <div className="w-full md:w-80 border-b md:border-b-0 md:border-r border-slate-100 flex flex-col bg-slate-50 max-h-[32vh] md:max-h-none overflow-y-auto overscroll-contain p-3.5 sm:p-4 shrink-0 space-y-4 -webkit-overflow-scrolling-touch">
                             
                             {/* Search Box */}
                             <div className="space-y-1.5">

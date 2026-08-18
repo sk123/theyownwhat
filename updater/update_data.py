@@ -927,7 +927,7 @@ def scrape_mapxpress_property(session, base_url_template, row):
         # Reduced sleep time for parallel execution (random jitter 0.1s - 0.5s)
         time.sleep(random.uniform(0.1, 0.5))
 
-        resp = session.get(target_url, timeout=15)
+        resp = session.get(target_url, timeout=15, verify=False)
         if resp.status_code == 200:
             scraped_data = parse_mapxpress_html(resp.text)
 
@@ -1859,7 +1859,10 @@ def scrape_all_properties_by_address(municipality_url, municipality_name):
 
 def get_session(pool_size=50):
     """Returns a requests session with optimized connection pooling."""
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
     session = requests.Session()
+    session.verify = False
     adapter = HTTPAdapter(
         pool_connections=pool_size,
         pool_maxsize=pool_size,

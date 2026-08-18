@@ -265,14 +265,23 @@ const FeedbackModal = ({ isOpen, onClose, initialEntity = null, activeState = nu
         }
     };
 
+    useEffect(() => {
+        if (!isOpen) return;
+        const prevOverflow = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+        return () => {
+            document.body.style.overflow = prevOverflow;
+        };
+    }, [isOpen]);
+
     if (!isOpen) return null;
 
     return (
-        <div className="fixed inset-0 z-[200] overflow-y-auto bg-black/60 backdrop-blur-sm px-4 pt-16 pb-4 flex justify-center items-start md:items-center md:p-4" onClick={onClose}>
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg flex flex-col my-auto h-auto max-h-none md:max-h-[90vh] overflow-visible" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 z-[200] bg-black/60 backdrop-blur-sm p-2 sm:p-4 md:p-6 flex justify-center items-center overscroll-contain" onClick={onClose}>
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg flex flex-col h-[90dvh] sm:h-auto sm:max-h-[88dvh] overflow-hidden border border-slate-100" onClick={e => e.stopPropagation()}>
 
                 {/* Header */}
-                <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50 rounded-t-2xl">
+                <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50 shrink-0">
                     <h3 className="font-bold text-gray-900 flex items-center gap-2">
                         {flow === 'menu' && <MessageSquare className="w-5 h-5 text-gray-600" />}
                         {flow === 'link' && <Link className="w-5 h-5 text-blue-600" />}
@@ -300,7 +309,7 @@ const FeedbackModal = ({ isOpen, onClose, initialEntity = null, activeState = nu
                         <p className="text-gray-500">Thank you for helping us improve the data.</p>
                     </div>
                 ) : (
-                    <div className="flex-1 overflow-y-visible p-6">
+                    <div className="flex-1 overflow-y-auto overscroll-contain p-4 sm:p-6 -webkit-overflow-scrolling-touch">
 
                         {/* MENU VIEW */}
                         {flow === 'menu' && (

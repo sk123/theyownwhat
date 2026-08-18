@@ -3,7 +3,8 @@ import {
   Building, Building2, Users, MapPin, ChevronRight, Search, X,
   ArrowLeft, ExternalLink, Home, TrendingUp, Loader2,
   Info, Scale, Gavel, TriangleAlert, GitMerge,
-  Hash, Calendar, DollarSign, Layers, ArrowUpDown, Filter, Map as MapIcon
+  Hash, Calendar, DollarSign, Layers, ArrowUpDown, Filter, Map as MapIcon,
+  Copy, Check, Share2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -113,7 +114,7 @@ const CITY_CONFIG = {
       {
         label: 'HPD Building Profile',
         desc: 'Building and code records',
-        getUrl: (p) => p.registration_id ? `https://hpdonline.nyc.gov/hpdonline/building-profile?registrationId=${p.registration_id}` : 'https://hpdonline.nyc.gov/hpdonline/',
+        getUrl: (p) => p.registration_id ? `https://hpdonline.nyc.gov/hpdonline/building/${p.registration_id}` : 'https://hpdonline.nyc.gov/hpdonline/',
       },
       {
         label: 'ACRIS Deed Records',
@@ -665,22 +666,22 @@ function OfficialCodeLinksModal({ apiBase, networkKey, onClose }) {
   };
 
   return (
-    <div className="fixed inset-0 z-[90] bg-slate-950/40 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="w-full max-w-5xl max-h-[88vh] overflow-hidden rounded-xl bg-white shadow-2xl border border-slate-200 flex flex-col">
-        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+    <div className="fixed inset-0 z-[190] bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 md:p-6 overscroll-contain">
+      <div className="w-full max-w-5xl h-[92dvh] sm:h-auto sm:max-h-[88dvh] overflow-hidden rounded-2xl bg-white shadow-2xl border border-slate-200 flex flex-col">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-4 py-3.5 sm:px-5 sm:py-4 shrink-0 bg-white">
           <div>
             <div className="text-[10px] font-black uppercase tracking-[0.18em] text-red-500">Official HPD Source Links</div>
-            <h3 className="mt-1 text-lg font-black text-slate-900">Open violation records by building and type</h3>
-            <p className="mt-1 max-w-3xl text-xs font-medium leading-5 text-slate-500">
+            <h3 className="mt-1 text-base sm:text-lg font-black text-slate-900">Open violation records by building and type</h3>
+            <p className="mt-0.5 max-w-3xl text-xs font-medium leading-5 text-slate-500">
               These are NYC Open Data Housing Maintenance Code violation records grouped by building, HPD class, and complaint text. Counts are records, not unique buildings or court cases.
             </p>
           </div>
-          <button onClick={onClose} className="rounded-lg border border-slate-200 p-2 text-slate-400 hover:bg-slate-50 hover:text-slate-700">
+          <button onClick={onClose} className="rounded-lg border border-slate-200 p-2 text-slate-400 hover:bg-slate-50 hover:text-slate-700 shrink-0">
             <X size={16} />
           </button>
         </div>
 
-        <div className="border-b border-slate-100 bg-slate-50 px-5 py-3">
+        <div className="border-b border-slate-100 bg-slate-50 px-4 py-2.5 sm:px-5 sm:py-3 shrink-0">
           {loading ? (
             <div className="flex items-center gap-2 text-sm font-bold text-slate-500">
               <Loader2 size={16} className="animate-spin" /> Loading official HPD groups...
@@ -860,7 +861,7 @@ function OfficialRecordPreview({ p, config }) {
 // ---------------------------------------------------------------------------
 function BuildingDrawer({ p, networkName, onClose, config }) {
   useEffect(() => {
-    const h = e => e.key === 'Escape' && onClose();
+    const h = (e) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
   }, [onClose]);
@@ -869,10 +870,10 @@ function BuildingDrawer({ p, networkName, onClose, config }) {
 
   return (
     <>
-      <div className="fixed inset-0 bg-black/30 backdrop-blur-[2px] z-[150]" onClick={onClose}/>
+      <div className="fixed inset-0 bg-black/40 backdrop-blur-[2px] z-[150] overscroll-contain" onClick={onClose}/>
       <motion.div initial={{x:'100%'}} animate={{x:0}} exit={{x:'100%'}} transition={{type:'spring',damping:30,stiffness:300}}
-        className="fixed top-0 right-0 h-full w-full max-w-md bg-white shadow-2xl z-[200] flex flex-col overflow-y-auto">
-        <div className="sticky top-0 bg-white border-b border-slate-100 px-5 py-4 flex items-start justify-between gap-3 z-10">
+        className="fixed top-0 right-0 h-full w-full max-w-md bg-white shadow-2xl z-[200] flex flex-col overflow-hidden">
+        <div className="sticky top-0 bg-white border-b border-slate-100 px-4 py-3.5 sm:px-5 sm:py-4 flex items-start justify-between gap-3 z-10 shrink-0">
           <div className="min-w-0">
             <div className="flex items-center gap-2 mb-1 flex-wrap">
               {p.borough && <BoroughBadge borough={p.borough}/>}
@@ -887,7 +888,7 @@ function BuildingDrawer({ p, networkName, onClose, config }) {
           </div>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 shrink-0"><X size={18}/></button>
         </div>
-        <div className="p-5 space-y-4 flex-1">
+        <div className="p-4 sm:p-5 space-y-4 flex-1 overflow-y-auto overscroll-contain -webkit-overflow-scrolling-touch">
           <div className="grid grid-cols-2 gap-2.5">
             {[
               ...(config.reliableUnits && p.units_res != null ? [['Residential Units', fmt(p.units_res), Home, 'text-violet-600']] : []),
@@ -1914,6 +1915,34 @@ function NetworkDetail({ networkKey, onBack, onSearchTrigger, onMapSelected, api
   const [evictFilter, setEvictFilter]     = useState(false);
   const [subsidyFilter, setSubsidyFilter] = useState(false);
   const [expandedSigs, setExpandedSigs]   = useState({ people: false, corps: false });
+  const [copiedDossier, setCopiedDossier] = useState(false);
+
+  const handleCopyDossier = () => {
+    if (!data) return;
+    const ps = data.portfolio_stats || {};
+    const text = [
+      `=============================================================`,
+      `INVESTIGATIVE DOSSIER: ${data.primary_human_name || data.display_name}`,
+      `Jurisdiction: ${config.title || config.name}`,
+      data.registered_entity_name ? `Registered Entity: ${data.registered_entity_name}` : null,
+      `Buildings / Parcels: ${(data.building_count || 0).toLocaleString()}${config.reliableUnits ? ` | Residential Units: ${(data.unit_count || 0).toLocaleString()}` : ''}`,
+      `Open Violations / Code Cases: ${(ps.open_violations || 0).toLocaleString()}${ps.open_violations_c ? ` (${(ps.open_violations_c).toLocaleString()} Class C Immediately Hazardous)` : ''}`,
+      `Litigations / Agency Cases: ${(ps.open_litigations || 0).toLocaleString()}`,
+      `Eviction Records: ${(ps.evictions || 0).toLocaleString()}`,
+      `-------------------------------------------------------------`,
+      `Properties Sample (${Math.min(10, (data.properties || []).length)} of ${data.building_count || 0}):`,
+      ...(data.properties || []).slice(0, 10).map(p => `  - ${p.address || p.bbl} (${p.borough || ''}): ${(p.violations_open || 0)} open violations`),
+      `-------------------------------------------------------------`,
+      `Investigated via: https://theyownwhat.net/${config.name.toLowerCase()}`
+    ].filter(Boolean).join('\n');
+
+    if (navigator?.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(() => {
+        setCopiedDossier(true);
+        setTimeout(() => setCopiedDossier(false), 2500);
+      }).catch(() => {});
+    }
+  };
 
   useEffect(() => {
     setLoading(true);
@@ -2086,6 +2115,30 @@ function NetworkDetail({ networkKey, onBack, onSearchTrigger, onMapSelected, api
               </div>
             )}
           </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleCopyDossier}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg border transition-all shadow-sm ${
+              copiedDossier
+                ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
+                : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200'
+            }`}
+            title="Copy investigative dossier to clipboard"
+          >
+            {copiedDossier ? (
+              <>
+                <Check size={14} className="text-emerald-600" />
+                <span>Copied Dossier</span>
+              </>
+            ) : (
+              <>
+                <Copy size={14} className="text-slate-500" />
+                <span>Export Dossier</span>
+              </>
+            )}
+          </button>
         </div>
       </section>
 
