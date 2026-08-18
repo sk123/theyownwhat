@@ -7,6 +7,13 @@ frontend/src/components/LocalAnalyticsDashboard.jsx
 updater/daily_usage_report.py
 weekly_audit_report.json
 
+# Local Developer Tools & Dashboards (Kept Local)
+agent_dashboard/
+scripts/update_antigravity_ide.sh
+scripts/antigravity-sudoers
+refresh_output.txt
+implementation_plan.md
+
 # Python
 __pycache__/
 *.pyc

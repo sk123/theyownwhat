@@ -1,6 +1,0 @@
-# Allow user sk to run apt-get update and apt-get install for antigravity without a password
-# This is scoped to only the specific commands needed for the nightly auto-updater
-sk ALL=(root) NOPASSWD: /usr/bin/apt-get update -o Dir\:Etc\:sourcelist=sources.list.d/antigravity.list *
-sk ALL=(root) NOPASSWD: /usr/bin/apt-get update -qq
-sk ALL=(root) NOPASSWD: /usr/bin/apt-get install --only-upgrade -y antigravity
-sk ALL=(root) NOPASSWD: /usr/bin/apt-get install -y -qq antigravity
