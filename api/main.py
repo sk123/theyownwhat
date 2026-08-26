@@ -13,6 +13,12 @@ from urllib.parse import urlparse
 from typing import Any, Dict, List, Optional, Set, Tuple
 from collections import defaultdict
 
+from api.analytics_service import (
+    get_theyownwhat_analytics,
+    get_renter_help_analytics,
+    get_unified_analytics,
+    log_custom_event,
+)
 from api.shared_utils import normalize_business_name, normalize_person_name, get_name_variations, BUSINESS_SUFFIX_PATTERNS, canonicalize_person_name, canonicalize_business_name
 
 import psycopg2
@@ -126,7 +132,26 @@ def _async_log_analytic(path: str, query_params: dict, headers: dict, client_ip:
 
         user_agent = headers.get("user-agent", "")
         ua_lower = user_agent.lower()
-        is_bot = any(bot in ua_lower for bot in ["bot", "spider", "crawler", "curl", "wget", "headless"])
+        
+        # Detect automated scripts & CLI tools
+        is_script_tool = any(tool in ua_lower for tool in [
+            "python", "urllib", "requests", "aiohttp", "httpx", "curl", "wget", 
+            "testclient", "pytest", "postman", "insomnia", "k6", "locust", "wrk", "ab"
+        ])
+        # Detect crawlers & headless bots
+        is_crawler_bot = any(bot in ua_lower for bot in [
+            "bot", "spider", "crawler", "headless", "playwright", "puppeteer", "selenium", 
+            "lighthouse", "ahrefs", "semrush", "bingbot", "googlebot", "yandex", "duckduckgo"
+        ])
+        is_local_ip = (
+            client_ip in ("127.0.0.1", "::1", "localhost") 
+            or client_ip.startswith("172.18.") 
+            or client_ip.startswith("172.17.") 
+            or client_ip.startswith("10.") 
+            or client_ip.startswith("192.168.")
+        )
+        
+        is_bot = is_crawler_bot or is_script_tool or (is_local_ip and not any(br in ua_lower for br in ["mozilla", "chrome", "safari", "firefox", "edge"]))
         is_mobile = any(mob in ua_lower for mob in ["mobile", "android", "iphone", "ipad"])
 
         # Determine City / Jurisdiction (dataset being viewed)
@@ -177,11 +202,11 @@ def _async_log_analytic(path: str, query_params: dict, headers: dict, client_ip:
                     INSERT INTO local_analytics (
                         session_hash, city, event_type, path, search_query, entity_target,
                         user_agent, is_mobile, is_bot,
-                        visitor_ip, visitor_city, visitor_region, visitor_country
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        visitor_ip, visitor_city, visitor_region, visitor_country, app
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (session_hash, raw_city, event_type, path, search_query, entity_target,
                       user_agent, is_mobile, is_bot,
-                      client_ip, visitor_city, visitor_region, visitor_country))
+                      client_ip, visitor_city, visitor_region, visitor_country, "theyownwhat"))
                 conn.commit()
         finally:
             conn.close()
@@ -234,268 +259,51 @@ def features():
 # Analytics Platform API (Protected by Cloudflare OAuth / Localhost)
 # ------------------------------------------------------------
 @app.get("/api/analytics/realtime")
-def get_realtime_analytics(request: Request, minutes: int = Query(60, ge=1, le=525600)):
-    
+def get_realtime_analytics(
+    request: Request,
+    minutes: int = Query(60, ge=1, le=525600),
+    app: str = Query("theyownwhat", description="theyownwhat, renter_help, or all")
+):
     db_url = os.environ.get("DATABASE_URL", "postgresql://user:password@ctdata_db:5432/ctdata")
     conn = psycopg2.connect(db_url)
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            # Active sessions in last 5 minutes (Realtime now)
-            cur.execute("""
-                SELECT COUNT(DISTINCT session_hash) as active_now, COUNT(*) as requests_now
-                FROM local_analytics
-                WHERE timestamp >= NOW() - INTERVAL '5 minutes' 
-                  AND is_bot = false
-                  AND path NOT LIKE '%%analytics%%'
-            """)
-            active_now_row = cur.fetchone() or {}
-
-            # Active sessions in last 30 minutes
-            cur.execute("""
-                SELECT COUNT(DISTINCT session_hash) as active_30m
-                FROM local_analytics
-                WHERE timestamp >= NOW() - INTERVAL '30 minutes' 
-                  AND is_bot = false
-                  AND path NOT LIKE '%%analytics%%'
-            """)
-            active_30m_row = cur.fetchone() or {}
-
-            # Overview stats for selected timeframe
-            cur.execute("""
-                SELECT 
-                    COUNT(*) as total_requests,
-                    COUNT(DISTINCT session_hash) as unique_sessions,
-                    COUNT(DISTINCT CASE WHEN is_bot = false THEN session_hash END) as unique_human_users,
-                    COUNT(CASE WHEN is_bot = true THEN 1 END) as bot_requests,
-                    COUNT(CASE WHEN is_mobile = true THEN 1 END) as mobile_requests,
-                    COUNT(CASE WHEN (event_type = 'search' OR path LIKE '%%search%%' OR path LIKE '%%autocomplete%%') THEN 1 END) as search_count,
-                    COUNT(CASE WHEN event_type = 'property_view' THEN 1 END) as property_views,
-                    COUNT(CASE WHEN event_type = 'network_view' THEN 1 END) as network_views
-                FROM local_analytics
-                WHERE timestamp >= NOW() - INTERVAL '%s minutes'
-                  AND path NOT LIKE '%%analytics%%'
-            """, (minutes,))
-            summary_row = cur.fetchone() or {}
-
-            # Live Event Feed (Last 100 events, excluding analytics self-calls)
-            cur.execute("""
-                SELECT 
-                    id,
-                    timestamp,
-                    session_hash,
-                    city,
-                    event_type,
-                    path,
-                    search_query,
-                    entity_target,
-                    user_agent,
-                    is_mobile,
-                    is_bot,
-                    visitor_ip,
-                    COALESCE(visitor_city, '(Unknown)') as visitor_city,
-                    COALESCE(visitor_region, '') as visitor_region,
-                    COALESCE(visitor_country, '') as visitor_country
-                FROM local_analytics
-                WHERE path NOT LIKE '%%analytics%%'
-                ORDER BY timestamp DESC
-                LIMIT 100
-            """)
-            events = cur.fetchall()
-
-            formatted_events = []
-            for ev in events:
-                ua = ev.get("user_agent") or ""
-                ua_lower = ua.lower()
-                
-                bot_name = None
-                if ev.get("is_bot"):
-                    if "googlebot" in ua_lower: bot_name = "Googlebot"
-                    elif "bingbot" in ua_lower: bot_name = "Bingbot"
-                    elif "yandex" in ua_lower: bot_name = "YandexBot"
-                    elif "duckduckgo" in ua_lower: bot_name = "DuckDuckBot"
-                    elif "ahrefs" in ua_lower: bot_name = "AhrefsBot"
-                    elif "semrush" in ua_lower: bot_name = "SemrushBot"
-                    elif "curl" in ua_lower: bot_name = "curl CLI"
-                    elif "wget" in ua_lower: bot_name = "wget CLI"
-                    elif "python" in ua_lower: bot_name = "Python script"
-                    elif "headless" in ua_lower: bot_name = "Headless Chrome"
-                    else: bot_name = "Bot / Automated"
-
-                formatted_events.append({
-                    "id": ev["id"],
-                    "timestamp": ev["timestamp"].isoformat() if ev["timestamp"] else None,
-                    "session_hash": ev["session_hash"],
-                    "city": ev["city"],
-                    "event_type": ev["event_type"],
-                    "path": ev["path"],
-                    "search_query": ev["search_query"],
-                    "entity_target": ev["entity_target"],
-                    "user_agent": ua,
-                    "is_mobile": ev["is_mobile"],
-                    "is_bot": ev["is_bot"],
-                    "bot_name": bot_name,
-                    "visitor_ip": ev["visitor_ip"],
-                    "visitor_city": ev["visitor_city"],
-                    "visitor_region": ev["visitor_region"],
-                    "visitor_country": ev["visitor_country"],
-                })
-
-            # Geographic Location Breakdown
-            cur.execute("""
-                SELECT 
-                    COALESCE(visitor_city, '(Unknown)') as city,
-                    COALESCE(visitor_region, '') as region,
-                    COALESCE(visitor_country, '') as country,
-                    COUNT(DISTINCT session_hash) as unique_sessions,
-                    COUNT(*) as total_requests
-                FROM local_analytics
-                WHERE timestamp >= NOW() - INTERVAL '%s minutes'
-                  AND is_bot = false
-                  AND path NOT LIKE '%%analytics%%'
-                GROUP BY visitor_city, visitor_region, visitor_country
-                ORDER BY unique_sessions DESC, total_requests DESC
-                LIMIT 25
-            """, (minutes,))
-            geo_locations = cur.fetchall()
-
-            # Dataset Breakdown
-            cur.execute("""
-                SELECT 
-                    city as dataset,
-                    COUNT(DISTINCT session_hash) as unique_sessions,
-                    COUNT(*) as total_requests,
-                    COUNT(CASE WHEN (event_type = 'search' OR path LIKE '%%search%%' OR path LIKE '%%autocomplete%%') THEN 1 END) as searches
-                FROM local_analytics
-                WHERE timestamp >= NOW() - INTERVAL '%s minutes'
-                  AND path NOT LIKE '%%analytics%%'
-                GROUP BY city
-                ORDER BY unique_sessions DESC, total_requests DESC
-            """, (minutes,))
-            dataset_rows = cur.fetchall()
-
-            # Top Search Queries
-            cur.execute("""
-                SELECT 
-                    TRIM(search_query) as query,
-                    city,
-                    COUNT(*) as count
-                FROM local_analytics
-                WHERE timestamp >= NOW() - INTERVAL '%s minutes'
-                  AND search_query IS NOT NULL
-                  AND LENGTH(TRIM(search_query)) > 0
-                  AND path NOT LIKE '%%analytics%%'
-                GROUP BY TRIM(search_query), city
-                ORDER BY count DESC
-                LIMIT 20
-            """, (minutes,))
-            top_searches = cur.fetchall()
-
-            # Bot Breakdown (Top Bot User Agents)
-            cur.execute("""
-                SELECT 
-                    user_agent,
-                    COUNT(*) as count,
-                    MAX(timestamp) as last_seen
-                FROM local_analytics
-                WHERE timestamp >= NOW() - INTERVAL '%s minutes'
-                  AND is_bot = true
-                  AND path NOT LIKE '%%analytics%%'
-                GROUP BY user_agent
-                ORDER BY count DESC
-                LIMIT 20
-            """, (minutes,))
-            bot_breakdown_raw = cur.fetchall()
-
-            bot_breakdown = [{
-                "user_agent": b["user_agent"],
-                "count": b["count"],
-                "last_seen": b["last_seen"].isoformat() if b["last_seen"] else None
-            } for b in bot_breakdown_raw]
-
-            # Device Type Breakdown
-            cur.execute("""
-                SELECT 
-                    CASE 
-                        WHEN is_bot = true THEN 'Bot / CLI'
-                        WHEN is_mobile = true THEN 'Mobile'
-                        WHEN user_agent LIKE '%%iPad%%' OR user_agent LIKE '%%Tablet%%' THEN 'Tablet'
-                        ELSE 'Desktop'
-                    END as device_type,
-                    COUNT(DISTINCT session_hash) as unique_sessions,
-                    COUNT(*) as total_requests
-                FROM local_analytics
-                WHERE timestamp >= NOW() - INTERVAL '%s minutes'
-                  AND path NOT LIKE '%%analytics%%'
-                GROUP BY 1
-                ORDER BY total_requests DESC
-            """, (minutes,))
-            device_rows = cur.fetchall()
-
-            # Browser Breakdown
-            cur.execute("""
-                SELECT 
-                    CASE 
-                        WHEN user_agent LIKE '%%Chrome%%' AND user_agent NOT LIKE '%%Edg%%' AND user_agent NOT LIKE '%%OPR%%' THEN 'Chrome'
-                        WHEN user_agent LIKE '%%Safari%%' AND user_agent NOT LIKE '%%Chrome%%' THEN 'Safari'
-                        WHEN user_agent LIKE '%%Firefox%%' THEN 'Firefox'
-                        WHEN user_agent LIKE '%%Edg%%' THEN 'Edge'
-                        WHEN user_agent LIKE '%%curl%%' THEN 'curl CLI'
-                        WHEN is_bot = true THEN 'Bot Crawler'
-                        ELSE 'Other'
-                    END as browser,
-                    COUNT(DISTINCT session_hash) as unique_sessions,
-                    COUNT(*) as count
-                FROM local_analytics
-                WHERE timestamp >= NOW() - INTERVAL '%s minutes'
-                  AND path NOT LIKE '%%analytics%%'
-                GROUP BY 1
-                ORDER BY count DESC
-            """, (minutes,))
-            browser_rows = cur.fetchall()
-
-            # Top Endpoints / Pages Visited
-            cur.execute("""
-                SELECT 
-                    path,
-                    COUNT(*) as hits,
-                    COUNT(DISTINCT session_hash) as unique_sessions
-                FROM local_analytics
-                WHERE timestamp >= NOW() - INTERVAL '%s minutes'
-                  AND path NOT LIKE '%%analytics%%'
-                GROUP BY path
-                ORDER BY hits DESC
-                LIMIT 15
-            """, (minutes,))
-            top_pages = cur.fetchall()
-
-            return {
-                "server_time": datetime.utcnow().isoformat(),
-                "realtime": {
-                    "active_now": active_now_row.get("active_now", 0),
-                    "requests_now": active_now_row.get("requests_now", 0),
-                    "active_30m": active_30m_row.get("active_30m", 0),
-                },
-                "summary": {
-                    "total_requests": summary_row.get("total_requests", 0),
-                    "unique_sessions": summary_row.get("unique_sessions", 0),
-                    "unique_human_users": summary_row.get("unique_human_users", 0),
-                    "bot_requests": summary_row.get("bot_requests", 0),
-                    "mobile_requests": summary_row.get("mobile_requests", 0),
-                    "search_count": summary_row.get("search_count", 0),
-                    "property_views": summary_row.get("property_views", 0),
-                    "network_views": summary_row.get("network_views", 0),
-                },
-                "live_feed": formatted_events,
-                "geo_locations": [dict(r) for r in geo_locations],
-                "datasets": [dict(r) for r in dataset_rows],
-                "top_searches": [dict(r) for r in top_searches],
-                "bot_breakdown": bot_breakdown,
-                "devices": [dict(r) for r in device_rows],
-                "browsers": [dict(r) for r in browser_rows],
-                "top_pages": [dict(r) for r in top_pages],
-            }
+            app_clean = (app or "theyownwhat").lower().strip()
+            if app_clean in ["renter_help", "renter.help", "tenant_toolkit", "tenanttoolkit"]:
+                data = get_renter_help_analytics(cur, minutes)
+            elif app_clean in ["all", "unified", "both"]:
+                data = get_unified_analytics(cur, minutes)
+            else:
+                data = get_theyownwhat_analytics(cur, minutes)
+            
+            data["server_time"] = datetime.utcnow().isoformat()
+            data["available_apps"] = [
+                {"id": "theyownwhat", "name": "They Own WHAT??", "domain": "theyownwhat.net", "icon": "Building2"},
+                {"id": "renter_help", "name": "Tenant Toolkit (renter.help)", "domain": "renter.help", "icon": "Wrench"},
+                {"id": "all", "name": "All Platforms (Unified)", "domain": "theyownwhat.net & renter.help", "icon": "Layers"}
+            ]
+            data["active_app"] = app_clean if app_clean in ["renter_help", "all"] else "theyownwhat"
+            return data
     finally:
         conn.close()
+
+@app.post("/api/analytics/event")
+@app.post("/api/analytics/ingest")
+async def ingest_analytics_event(request: Request):
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    
+    cf_ip = request.headers.get("cf-connecting-ip")
+    if cf_ip and cf_ip.strip():
+        client_ip = cf_ip.strip()
+    else:
+        forwarded = request.headers.get("x-forwarded-for") or request.headers.get("x-real-ip")
+        client_ip = forwarded.split(",")[0].strip() if forwarded else (request.client.host if request.client else "127.0.0.1")
+    
+    user_agent = request.headers.get("user-agent", "")
+    return log_custom_event(payload, client_ip, user_agent)
 
 from api.feedback import router as feedback_router
 app.include_router(feedback_router)

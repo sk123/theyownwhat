@@ -1,5 +1,5 @@
 import React from 'react';
-import { Home, BookOpen, AlertCircle, RefreshCw, Toolbox, LogIn, LayoutDashboard, Database, MessageSquare, Heart, Building2, TrendingUp, ShieldAlert, Menu } from 'lucide-react';
+import { Activity, Home, BookOpen, AlertCircle, RefreshCw, Toolbox, LogIn, LayoutDashboard, Database, MessageSquare, Heart, Building2, TrendingUp, ShieldAlert, Menu } from 'lucide-react';
 
 export default function Header({ onHome, onDatasets, onReset, onAbout, OnOpenToolbox, toolboxEnabled, onShowFreshness, onReportIssue, onHartfordPlayground, onBurstDetector, evictionToolsEnabled, currentView, activeState, onStateChange, onOpenAnalytics }) {
     const [user, setUser] = React.useState(null);
@@ -184,6 +184,17 @@ export default function Header({ onHome, onDatasets, onReset, onAbout, OnOpenToo
                             >
                                 <ShieldAlert className="w-3.5 h-3.5 text-red-500" />
                                 <span>Rap Sheets</span>
+                            </button>
+                        )}
+
+                        {onOpenAnalytics && (
+                            <button
+                                onClick={onOpenAnalytics}
+                                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg transition-colors border ${currentView === "analytics" ? "text-emerald-700 bg-emerald-50 border-emerald-200" : "text-slate-600 bg-white hover:bg-slate-50 border-slate-200"}`}
+                                title="Local Analytics Engine (Port 6262)"
+                            >
+                                <Activity className="w-3.5 h-3.5 text-emerald-500" />
+                                <span>Analytics</span>
                             </button>
                         )}
 

@@ -3,7 +3,6 @@ data/
 .env
 
 # Local Analytics Features & Internal Reports (Kept Local)
-frontend/src/components/LocalAnalyticsDashboard.jsx
 updater/daily_usage_report.py
 weekly_audit_report.json
 
