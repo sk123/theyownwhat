@@ -1,0 +1,66 @@
+[
+  {
+    "id": "gemini-3.7-flash-high",
+    "name": "⚡ Gemini 3.7 Flash (High Thinking)",
+    "provider": "Antigravity Native",
+    "badge": "Flagship Thinking",
+    "description": "Google's newest reasoning flagship with deep internal thinking budget.",
+    "recency": 0
+  },
+  {
+    "id": "gemini-3.7-flash-medium",
+    "name": "Gemini 3.7 Flash (Medium Reasoning)",
+    "provider": "Antigravity Native",
+    "badge": "Fast & Smart",
+    "description": "Optimal balance of high-speed execution and deep chain-of-thought.",
+    "recency": 1
+  },
+  {
+    "id": "gemini-3.7-flash-low",
+    "name": "Gemini 3.7 Flash (Low / Instant)",
+    "provider": "Antigravity Native",
+    "badge": "Instant",
+    "description": "Rapid reasoning response for interactive prompts and quick inspections.",
+    "recency": 2
+  },
+  {
+    "id": "gemini-3.1-pro-high",
+    "name": "Gemini 3.1 Pro (High Thinking)",
+    "provider": "Antigravity Native",
+    "badge": "Pro",
+    "description": "Deep architecture, multi-file reasoning, and complex software tasks.",
+    "recency": 3
+  },
+  {
+    "id": "gemini-3.6-flash-high",
+    "name": "Gemini 3.6 Flash (High Reasoning)",
+    "provider": "Antigravity Native",
+    "badge": "Thinking",
+    "description": "Proven high-reasoning workhorse model.",
+    "recency": 4
+  },
+  {
+    "id": "claude-sonnet-4-6",
+    "name": "Claude Sonnet 4.6 (Thinking)",
+    "provider": "Antigravity Native",
+    "badge": "Frontier",
+    "description": "Claude 4.6 Sonnet state-of-the-art coding and reasoning via Antigravity.",
+    "recency": 5
+  },
+  {
+    "id": "claude-opus-4-6-thinking",
+    "name": "Claude Opus 4.6 (Thinking)",
+    "provider": "Antigravity Native",
+    "badge": "Deep Reasoning",
+    "description": "Claude 4.6 Opus frontier system architecture model.",
+    "recency": 6
+  },
+  {
+    "id": "gpt-oss-120b-medium",
+    "name": "GPT-OSS 120B (Medium)",
+    "provider": "Antigravity Native",
+    "badge": "Open Weights",
+    "description": "Open-source 120B parameter reasoning model via Antigravity runtime.",
+    "recency": 7
+  }
+]

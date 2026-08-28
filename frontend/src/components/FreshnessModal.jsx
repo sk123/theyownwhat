@@ -263,25 +263,40 @@ const FreshnessModal = ({ isOpen, onClose }) => {
 
     const groupedRows = useMemo(() => {
         const groups = filteredRows.reduce((acc, row) => {
-            if (!acc[row.datasetKey]) acc[row.datasetKey] = [];
-            acc[row.datasetKey].push(row);
+            const key = row.datasetKey || 'OTHER';
+            if (!acc[key]) acc[key] = [];
+            acc[key].push(row);
             return acc;
         }, {});
-        return [...DATASET_ORDER, 'OTHER']
-            .filter((key) => groups[key]?.length)
-            .map((key) => ({ key, rows: groups[key], meta: DATASET_META[key] || DATASET_META.OTHER }));
+
+        const presentKeys = Object.keys(groups);
+        const orderedKeys = [
+            ...DATASET_ORDER.filter((key) => groups[key]?.length),
+            ...presentKeys.filter((key) => !DATASET_ORDER.includes(key) && key !== 'OTHER' && groups[key]?.length),
+            ...(groups.OTHER?.length ? ['OTHER'] : [])
+        ];
+
+        return orderedKeys.map((key) => ({
+            key,
+            rows: groups[key] || [],
+            meta: DATASET_META[key] || { label: key, short: key, accent: 'slate' }
+        }));
     }, [filteredRows]);
 
     const datasetOptions = useMemo(() => {
-        const present = new Set(allRows.map((row) => row.datasetKey));
-        return ['ALL', ...DATASET_ORDER.filter((key) => present.has(key)), ...(present.has('OTHER') ? ['OTHER'] : [])];
+        const present = new Set(allRows.map((row) => row.datasetKey || 'OTHER'));
+        const ordered = ['ALL', ...DATASET_ORDER.filter((key) => present.has(key))];
+        Array.from(present).forEach(k => {
+            if (!ordered.includes(k)) ordered.push(k);
+        });
+        return ordered;
     }, [allRows]);
 
     const summary = useMemo(() => {
         const totalProperties = allRows.reduce((sum, row) => sum + Number(row.total_properties || 0), 0);
         const cityRows = allRows.filter((row) => row.type === 'city').length;
         const townRows = allRows.filter((row) => row.datasetKey === 'CT').length;
-        const datasetRows = allRows.reduce((sum, row) => sum + (row.datasets?.length || 0), 0);
+        const datasetRows = allRows.reduce((sum, row) => sum + (Array.isArray(row.datasets) ? row.datasets.length : 0), 0);
         const attentionRows = allRows.filter((row) => {
             const status = String(row.status || '').toLowerCase();
             return status && status !== 'success';
@@ -299,8 +314,6 @@ const FreshnessModal = ({ isOpen, onClose }) => {
 
     const systemFreshness = data?.system_freshness || {};
 
-    if (!isOpen) return null;
-
     const handleSort = (field) => {
         if (sortField === field) {
             setSortAsc((value) => !value);
@@ -315,12 +328,44 @@ const FreshnessModal = ({ isOpen, onClose }) => {
         return sortAsc ? <ArrowUp className="h-3.5 w-3.5" /> : <ArrowDown className="h-3.5 w-3.5" />;
     };
 
+<<<<<<< Updated upstream
     const jumpToDataset = (key) => {
         document.getElementById(`freshness-section-${key}`)?.scrollIntoView({
             behavior: 'smooth',
             block: 'start',
         });
+=======
+    useEffect(() => {
+        if (!isOpen) return;
+        const prevOverflow = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+        return () => {
+            document.body.style.overflow = prevOverflow;
+        };
+    }, [isOpen]);
+
+    const jumpToDataset = (key) => {
+        setDatasetFilter(key);
+        setTimeout(() => {
+            const el = document.getElementById(`freshness-section-${key}`);
+            if (el) {
+                el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+        }, 50);
+>>>>>>> Stashed changes
     };
+
+    const scrollToSection = (datasetKey) => {
+        const el = document.getElementById(`freshness-section-${datasetKey}`);
+        if (el) {
+            el.scrollIntoView({
+                behavior: 'smooth',
+                block: 'start',
+            });
+        }
+    };
+
+    if (!isOpen) return null;
 
     return (
         <div className="fixed inset-0 z-[200] overflow-y-auto bg-slate-950/60 px-3 pt-16 pb-3 backdrop-blur-sm md:p-5 flex justify-center items-start md:items-center" onClick={onClose}>
