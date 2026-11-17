@@ -20,8 +20,22 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from api.feedback import ALERT_EMAIL_TO, ALERT_EMAIL_FROM
 from api.db import get_db_connection
 
+def _resolve_api_base_url() -> str:
+    env_url = os.environ.get("API_BASE_URL")
+    if env_url:
+        return env_url.rstrip("/")
+    for candidate in ("http://localhost:6262", "http://ctdata_api:8000", "http://localhost:8000"):
+        try:
+            with urllib.request.urlopen(f"{candidate}/api/health", timeout=2) as resp:
+                if resp.status == 200:
+                    return candidate
+        except Exception:
+            continue
+    return "http://localhost:6262"
+
+
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://user:password@localhost:5432/ctdata")
-API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:6262")
+API_BASE_URL = _resolve_api_base_url()
 
 
 class TestFeedbackAndAutocomplete(unittest.TestCase):
@@ -69,19 +83,24 @@ class TestFeedbackAndAutocomplete(unittest.TestCase):
             self.assertIn("id", res_data)
             feedback_id = res_data["id"]
 
-        # Verify DB save
-        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("SELECT id, report_type, description, related_entities FROM user_feedback WHERE id = %s", (feedback_id,))
-            row = cur.fetchone()
-            self.assertIsNotNone(row, f"Feedback #{feedback_id} not found in database!")
-            self.assertEqual(row["report_type"], "link_request")
-            self.assertEqual(row["description"], "Test automated feedback submission verification")
+        try:
+            # Verify DB save
+            with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT id, report_type, description, related_entities FROM user_feedback WHERE id = %s", (feedback_id,))
+                row = cur.fetchone()
+                self.assertIsNotNone(row, f"Feedback #{feedback_id} not found in database!")
+                self.assertEqual(row["report_type"], "link_request")
+                self.assertEqual(row["description"], "Test automated feedback submission verification")
 
-            entities = row["related_entities"]
-            if isinstance(entities, str):
-                entities = json.loads(entities)
-            self.assertEqual(len(entities), 2)
-            self.assertEqual(entities[0]["name"], "Entity A Test")
+                entities = row["related_entities"]
+                if isinstance(entities, str):
+                    entities = json.loads(entities)
+                self.assertEqual(len(entities), 2)
+                self.assertEqual(entities[0]["name"], "Entity A Test")
+        finally:
+            with self.conn.cursor() as cur:
+                cur.execute("DELETE FROM user_feedback WHERE id = %s", (feedback_id,))
+            self.conn.commit()
 
     def test_get_feedback_endpoint(self):
         """Verify GET /api/feedback returns list of feedback entries."""
@@ -111,13 +130,15 @@ class TestFeedbackAndAutocomplete(unittest.TestCase):
             self.assertIn("context", item)
 
     def test_autocomplete_multi_jurisdiction_states(self):
-        """Verify autocomplete is functional across multiple jurisdictions (CT, NY, DC, BALTIMORE, CHICAGO)."""
+        """Verify autocomplete is functional across multiple jurisdictions including MIAMI and MINNEAPOLIS."""
         jurisdictions = [
             ("CT", "hartford"),
             ("NY", "park"),
             ("DC", "street"),
             ("BALTIMORE", "baltimore"),
             ("CHICAGO", "main"),
+            ("MIAMI", "flagler"),
+            ("MINNEAPOLIS", "hennepin"),
         ]
 
         for state, term in jurisdictions:
@@ -127,6 +148,35 @@ class TestFeedbackAndAutocomplete(unittest.TestCase):
                 self.assertEqual(resp.status, 200, f"Autocomplete failed for state={state}")
                 results = json.loads(resp.read().decode("utf-8"))
                 self.assertIsInstance(results, list, f"Non-list returned for state={state}")
+
+    def test_rap_sheets_monitor_hartford_and_non_ct(self):
+        """Verify Hartford Rap Sheets (network, llc, attorney) and non-CT Rap Sheets (NYC, DETROIT)."""
+        # 1. Hartford network dimension
+        with urllib.request.urlopen(f"{API_BASE_URL}/api/monitor?city=HARTFORD&dimension=network&sort_by=violations") as resp:
+            self.assertEqual(resp.status, 200)
+            payload = json.loads(resp.read().decode("utf-8"))
+            rows = payload.get("results", payload) if isinstance(payload, dict) else payload
+            self.assertTrue(len(rows) > 0, "Hartford Rap Sheets returned 0 networks!")
+            self.assertGreater(rows[0].get("violation_count", 0), 0)
+
+        # 2. Hartford LLC dimension (must be Hartford-scoped)
+        with urllib.request.urlopen(f"{API_BASE_URL}/api/monitor?city=HARTFORD&dimension=llc&sort_by=evictions") as resp:
+            self.assertEqual(resp.status, 200)
+            payload = json.loads(resp.read().decode("utf-8"))
+            rows = payload.get("results", payload) if isinstance(payload, dict) else payload
+            self.assertTrue(len(rows) > 0, "Hartford LLC Rap Sheets returned 0 rows!")
+
+        # 3. NYC & Detroit non-CT Rap Sheets exclude government/land-bank entities
+        for city in ("NYC", "DETROIT"):
+            with urllib.request.urlopen(f"{API_BASE_URL}/api/monitor?city={city}&dimension=network&sort_by=violations") as resp:
+                self.assertEqual(resp.status, 200)
+                payload = json.loads(resp.read().decode("utf-8"))
+                rows = payload.get("results", payload) if isinstance(payload, dict) else payload
+                self.assertTrue(len(rows) > 0, f"{city} Rap Sheets returned 0 rows!")
+                for r in rows[:20]:
+                    name_up = (r.get("entity_name") or r.get("name") or "").upper()
+                    self.assertNotIn("LAND BANK", name_up, f"Institutional entity leaked into {city} Rap Sheets: {name_up}")
+                    self.assertNotIn("CITY OF NEW YORK", name_up, f"Institutional entity leaked into {city} Rap Sheets: {name_up}")
 
     def test_autocomplete_word_boundary_matching(self):
         """Verify searching 'salmun' matches 'KAZEROUNIAN SALMUN' via word boundary matching."""

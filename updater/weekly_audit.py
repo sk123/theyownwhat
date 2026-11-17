@@ -251,14 +251,14 @@ def run_weekly_app_audit():
                     r_type = (item["report_type"] or "other").lower()
                     desc = item["description"] or ""
                     
-                    if r_type in ("link_request", "unlink_request", "overbroad", "underbroad"):
+                    if r_type in ("link_request", "unlink_request", "overbroad", "underbroad", "data_correction", "missing_data", "other"):
                         new_status = "flagged_for_manual_review"
-                        audit_note = f"Structural portfolio relationship feedback #{fb_id} ({r_type}) requires user approval. Flagged for review."
+                        audit_note = f"User feedback #{fb_id} ({r_type}) queued for source-backed verification; never auto-resolved without source check."
                         feedback_summary["flagged_count"] += 1
                     else:
-                        new_status = "resolved"
-                        audit_note = f"Automated audit verified source data pointers for feedback #{fb_id} ({r_type}). Resolved."
-                        feedback_summary["resolved_count"] += 1
+                        new_status = "flagged_for_manual_review"
+                        audit_note = f"Feedback #{fb_id} ({r_type}) preserved for manual review."
+                        feedback_summary["flagged_count"] += 1
 
                     cur.execute("""
                         UPDATE user_feedback

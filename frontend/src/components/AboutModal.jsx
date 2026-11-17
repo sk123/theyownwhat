@@ -18,20 +18,34 @@ const SECTIONS = [
         ),
     },
     {
-        title: 'Supported Jurisdictions',
+        title: 'Supported Jurisdictions (20 Live)',
         defaultOpen: true,
         content: (
             <div className="space-y-3">
                 {[
-                    { name: 'Connecticut', desc: 'Statewide ownership networks from CT business registry, 169 municipal assessor sources, Hartford code enforcement, CT Judicial eviction filings, and NHPD subsidy records.', accent: 'blue' },
-                    { name: 'New York City', desc: 'HPD registration networks, PLUTO parcels, HPD violations & housing litigation, DOI eviction data, and NHPD subsidy enrichment.', accent: 'indigo' },
-                    { name: 'Washington, D.C.', desc: 'District property assessment/CAMA records, DOB code enforcement violations, ownership networks, and NHPD subsidy enrichment.', accent: 'cyan' },
-                    { name: 'Baltimore', desc: 'City GIS properties, source-backed code enforcement, vacant-building layers, Maryland court event data, and NHPD subsidy enrichment.', accent: 'amber' },
-                    { name: 'Boston', desc: 'Property assessment data, public building-code cases, property violations, and NHPD subsidy enrichment.', accent: 'emerald' },
-                    { name: 'Detroit', desc: 'City GIS, property assessment records, code enforcement violations, ownership networks, and NHPD subsidy enrichment.', accent: 'rose' },
+                    { name: 'Connecticut (Statewide)', desc: 'CT SOTS business & principal filings, OpenCorporates cross-state parent/branch links, 169 municipal assessor/CAMA sources, Hartford code enforcement, CT Judicial eviction filings, recent parcel transactions, and NHPD subsidy records.', dot: 'bg-blue-500' },
+                    { name: 'New York City', desc: 'HPD Multiple Dwelling Registrations & contacts, NY DOS & 61-jurisdiction OpenCorporates corporate/foreign-branch officer piercing, PLUTO parcels, HPD violations & housing litigation, DOI marshal evictions, and NHPD subsidies.', dot: 'bg-indigo-500' },
+                    { name: 'New York State (33 Participating Counties)', desc: 'NYS ITS Public Tax Parcels across 33 non-NYC counties, NY DOS & OpenCorporates officer/foreign-branch piercing, Buffalo Rental Registry, Buffalo code violations & Housing Court cases, and NHPD subsidies.', dot: 'bg-blue-600' },
+                    { name: 'Massachusetts (Statewide — 351 Municipalities)', desc: 'All 351 towns & cities via MassGIS Level 3 Property Tax Parcels (including sale dates & prices), MA Sec. / OpenCorporates corporate & LLC officer/foreign-branch untangling, and NHPD subsidy enrichment.', dot: 'bg-emerald-600' },
+                    { name: 'Florida (Statewide — 67 Counties)', desc: 'FloridaGIO statewide residential & multifamily parcels across all 67 counties (including sale dates & prices), FL Sunbiz & OpenCorporates Officers/LLC Managers, FL DBPR Ch. 509 Apartment Licenses, and NHPD subsidies.', dot: 'bg-teal-600' },
+                    { name: 'North Carolina (Statewide — 100 Counties)', desc: 'NC OneMap statewide residential & improved parcels across all 100 counties (with recorded sale dates), NC SOS & OpenCorporates corporate/LLC officer & foreign-branch piercing, and NHPD subsidy enrichment.', dot: 'bg-indigo-600' },
+                    { name: 'Virginia (Statewide — ~88 Counties & Cities)', desc: 'VGIN 2026 Q3 Local Schema Tables, Hampton Roads HRGeo, Henrico & Prince William CAMA rolls, VA SCC & OpenCorporates corporate/officer & foreign-branch piercing, recent parcel sales, and NHPD subsidy enrichment (Fairfax, Arlington & Loudoun withhold bulk owner rolls).', dot: 'bg-violet-600' },
+                    { name: 'Arkansas (Statewide — 75 Counties)', desc: 'Arkansas GIS Office statewide parcels across all 75 counties, AR SOS & OpenCorporates corporate/LLC officer & foreign-branch piercing, and NHPD subsidy enrichment.', dot: 'bg-amber-600' },
+                    { name: 'Wisconsin (Statewide — 72 Counties)', desc: 'Wisconsin SCO/DOA V11 Statewide Parcels across all 72 counties, WI DFI & OpenCorporates cross-state foreign-branch links, guarded owner/mailing networks, and NHPD subsidy enrichment.', dot: 'bg-red-500' },
+                    { name: 'Colorado (Statewide)', desc: 'Colorado OIT Public Parcels (including sale dates & prices), CO SOS Business Entities & Statement of True Name principals, OpenCorporates cross-state foreign-branch links, Denver Active Residential Rental Licenses, and NHPD subsidies.', dot: 'bg-sky-600' },
+                    { name: 'Vermont (Statewide — 250+ Municipalities)', desc: 'Vermont VCGI Standardized Parcels & Statewide Grand List owner/mailing roll, VT SOS & OpenCorporates corporate/LLC member & manager piercing, and NHPD subsidy enrichment.', dot: 'bg-lime-600' },
+                    { name: 'New Jersey (Statewide)', desc: 'NJ DCA Bureau of Housing Inspection (BHI) active multi-family registrations, registered primary owner & OpenCorporates cross-state corporate networks, and NHPD subsidy enrichment.', dot: 'bg-cyan-500' },
+                    { name: 'Chicago, IL', desc: 'Cook County Assessor property parcels, IL SOS & OpenCorporates corporate/LLC manager & foreign-branch piercing, guarded mailing networks, and NHPD subsidy enrichment.', dot: 'bg-blue-700' },
+                    { name: 'Philadelphia, PA', desc: 'OPA property assessments (with recorded sale dates & prices), active L&I Rental Licenses, PA DOS & OpenCorporates Governor/Officer corporate piercing, L&I code violations, and NHPD subsidies.', dot: 'bg-orange-500' },
+                    { name: 'Washington, D.C.', desc: 'District CAMA property assessments, DLCP Basic Business Rental Housing Licenses, D.C. OpenCorporates beneficial-owner & officer piercing, DOB code enforcement cases, and NHPD subsidy enrichment.', dot: 'bg-cyan-600' },
+                    { name: 'Baltimore, MD', desc: 'City GIS properties, DHCD rental registrations & multi-family licenses, MD & OpenCorporates cross-state corporate/HQ & foreign-branch links, code & vacant-building layers, court eviction events, and NHPD subsidy enrichment.', dot: 'bg-amber-500' },
+                    { name: 'Boston, MA', desc: 'Property assessment roll, ISD/PW public building & property violations via SAM parcel crosswalk, MA Sec. & OpenCorporates corporate/LLC officer piercing, recent parcel sales, and NHPD subsidies.', dot: 'bg-emerald-500' },
+                    { name: 'Detroit, MI', desc: 'City parcel assessments, BSEED Certificates of Compliance & rental registrations, MI LARA & OpenCorporates officer & foreign-branch piercing, DAH blight tickets, and NHPD subsidy enrichment.', dot: 'bg-rose-500' },
+                    { name: 'Miami-Dade, FL', desc: 'County parcel ownership & sale roll enriched with FL Sunbiz/OpenCorporates Officers & LLC Managers, FL DBPR Ch. 509 Apartment Licenses, and NHPD subsidies.', dot: 'bg-teal-500' },
+                    { name: 'Minneapolis, MN', desc: 'Active rental licenses clustered by owner/applicant contacts, MN SOS & OpenCorporates officer & foreign-branch links, Regulatory Services code violations, and NHPD subsidy enrichment.', dot: 'bg-violet-500' },
                 ].map(city => (
                     <div key={city.name} className="flex items-start gap-3 rounded-lg border border-slate-100 bg-slate-50 p-3">
-                        <div className={`mt-0.5 h-2 w-2 shrink-0 rounded-full bg-${city.accent}-500`} />
+                        <div className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${city.dot}`} />
                         <div>
                             <span className="text-sm font-black text-slate-900">{city.name}</span>
                             <span className="ml-1.5 text-sm text-slate-500">{city.desc}</span>
@@ -60,21 +74,24 @@ const SECTIONS = [
             <div className="space-y-1.5 text-sm text-slate-600">
                 <p className="mb-2 font-medium">Primary sources include:</p>
                 {[
-                    ['CT Business Registry', 'https://data.ct.gov/Business/Connecticut-Business-Registry-Business-Master/n7gp-d28j/about_data'],
-                    ['CT CAMA & Parcel Layer', 'https://geodata.ct.gov/datasets/ctmaps::connecticut-cama-and-parcel-layer/about'],
-                    ['Municipal assessor systems', null],
-                    ['Hartford Open Data code enforcement', null],
-                    ['NYC HPD registrations & contacts', null],
-                    ['NYC PLUTO/MapPLUTO', null],
-                    ['NYC HPD violations & litigation', null],
-                    ['NYC DOI eviction dataset', null],
-                    ['D.C. property assessment data', null],
-                    ['D.C. DOB code enforcement', null],
-                    ['Baltimore City GIS & code layers', null],
-                    ['Maryland court event datasets', null],
-                    ['Boston assessment & violation datasets', null],
-                    ['Detroit GIS & code enforcement', null],
-                    ['National Housing Preservation Database', null],
+                    ['CT Business Registry (SOTS)', 'https://data.ct.gov/Business/Connecticut-Business-Registry-Business-Master/n7gp-d28j/about_data'],
+                    ['CT CAMA & Parcel Layer + 169 Municipal Assessors', 'https://geodata.ct.gov/datasets/ctmaps::connecticut-cama-and-parcel-layer/about'],
+                    ['CT Judicial Branch Summary Process (Eviction) Filings & Hartford Code Enforcement', null],
+                    ['NYC HPD Registrations, Contacts, Violations & Housing Litigation', null],
+                    ['NY DOS Active Corporations (n9v6-gdp6) & NYC PLUTO / DOI Evictions', 'https://data.ny.gov/Economic-Development/Active-Corporations-Beginning-1800/n9v6-gdp6'],
+                    ['NJ DCA Bureau of Housing Inspection (BHI) Active Building Records', null],
+                    ['D.C. OTR/CAMA Assessments, DLCP Rental Housing Licenses & DOB Code Cases', null],
+                    ['Baltimore City GIS, DHCD Rental Licenses, Code Layers & Court Eviction Events', null],
+                    ['Boston Property Assessment Roll, CKAN Violations & MassGIS Level 3 Statewide Parcels (351 Towns)', null],
+                    ['FloridaGIO Statewide Parcels (67 Counties), FL DOS Sunbiz Corporate/LLC Master & FL DBPR Ch. 509 Licenses', 'https://dos.fl.gov/sunbiz/other-services/data-downloads/'],
+                    ['NYS ITS Public Tax Parcels (33 Non-NYC Counties) & Buffalo Rental Registry / Code / Housing Court', 'https://data.gis.ny.gov/'],
+                    ['Philadelphia OPA Parcels, L&I Rental Licenses / Violations & PA DOS Registered Businesses (xvd7-5r2c)', 'https://data.pa.gov/Businesses/Registered-Businesses-in-PA-Current-by-County/xvd7-5r2c'],
+                    ['Colorado OIT Public Parcels, CO SOS Entities / True Names & Denver Active Rental Licenses', 'https://data.colorado.gov/Business/Business-Entities-in-Colorado/4ykn-tg5h'],
+                    ['NC OneMap Statewide Parcels (100 Counties), Arkansas GIS Statewide Parcels (75 Counties), Wisconsin SCO/DOA V11 (72 Counties) & Vermont VCGI Grand List', null],
+                    ['Cook County Assessor Parcels (Chicago), Detroit Assessment Roll / BSEED Rentals & Blight Tickets', null],
+                    ['Miami-Dade County Parcel Roll & Minneapolis Active Rental Licenses / Code Cases', null],
+                    ['Corporate Registry, Officer, Alternative-Name & Foreign-Branch Data — from OpenCorporates (ODbL v1.0)', 'https://opencorporates.com'],
+                    ['National Housing Preservation Database (NHPD)', null],
                 ].map(([label, url]) => (
                     <div key={label} className="flex items-center gap-2 py-1">
                         <span className="h-1 w-1 shrink-0 rounded-full bg-slate-300" />
@@ -87,8 +104,16 @@ const SECTIONS = [
                         )}
                     </div>
                 ))}
-                <p className="mt-3 text-xs text-slate-400 font-medium">
-                    Exact availability varies by jurisdiction. The Data Completeness report is the best place to confirm what is loaded.
+                <p className="mt-3 text-xs text-slate-500 font-medium leading-relaxed">
+                    Corporate registry and officer records incorporate bulk public-benefit data{' '}
+                    <a href="https://opencorporates.com" target="_blank" rel="noopener noreferrer" className="font-bold text-blue-600 underline hover:text-blue-800">
+                        from OpenCorporates
+                    </a>{' '}
+                    under the{' '}
+                    <a href="https://opendatacommons.org/licenses/odbl/1-0/" target="_blank" rel="noopener noreferrer" className="font-semibold text-blue-600 underline hover:text-blue-800">
+                        Open Database License (ODbL v1.0 Attribution Share-Alike)
+                    </a>
+                    . Derived corporate-ownership network datasets incorporating OpenCorporates records are made available under the same ODbL v1.0 terms. Exact availability varies by jurisdiction; see Data Completeness to confirm what is loaded.
                 </p>
             </div>
         ),
@@ -100,9 +125,9 @@ const SECTIONS = [
             <ul className="space-y-2 text-sm leading-relaxed text-slate-600">
                 <li><span className="font-bold text-slate-700">Frontend:</span> React, Vite, Tailwind, Leaflet, Framer Motion.</li>
                 <li><span className="font-bold text-slate-700">API:</span> FastAPI with PostgreSQL-backed property, network, enforcement, subsidy, report, and freshness endpoints.</li>
-                <li><span className="font-bold text-slate-700">Ingestion:</span> Python importers for CT municipal data, NYC HPD/PLUTO, D.C., Baltimore, Boston, Detroit, Hartford enforcement, subsidy enrichment, and source-status tracking.</li>
-                <li><span className="font-bold text-slate-700">Network building:</span> Name normalization and graph-style linking across businesses, principals, properties, addresses, and locally loaded relationship records.</li>
-                <li><span className="font-bold text-slate-700">Scheduling:</span> Nightly and weekly jobs refresh source data, rebuild networks, and update source freshness metadata.</li>
+                <li><span className="font-bold text-slate-700">Ingestion:</span> Python importers for CT municipal data, NYC HPD/NY DOS/PLUTO, NJ DCA BHI, D.C. CAMA/DLCP, Baltimore GIS/DHCD, Boston, Detroit, Miami-Dade, Minneapolis, NHPD subsidy enrichment, and source-status tracking.</li>
+                <li><span className="font-bold text-slate-700">Network building:</span> Name/address canonicalization, second-stage registry &amp; license joins, and commercial-agent / managing-agent / HDFC firewalls preventing false merges.</li>
+                <li><span className="font-bold text-slate-700">Scheduling:</span> Nightly and weekly jobs refresh source data, rebuild networks, run regression checks, and update source freshness metadata.</li>
             </ul>
         ),
     },
@@ -166,9 +191,10 @@ export default function AboutModal({ isOpen, onClose, onShowFreshness }) {
                         </div>
                         <button
                             onClick={onClose}
+                            aria-label="Close about dialog"
                             className="p-2 hover:bg-gray-200 rounded-full transition-colors"
                         >
-                            <X size={20} className="text-gray-400" />
+                            <X size={20} className="text-gray-400" aria-hidden="true" />
                         </button>
                     </div>
 

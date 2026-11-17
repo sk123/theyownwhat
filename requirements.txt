@@ -19,3 +19,6 @@ starlette
 networkx>=3.0
 geoip2
 maxminddb
+numpy
+shapely
+pyogrio

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState, useRef, useCallback } from 'react'
 import { api } from '../api';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Building2, Gavel, Users, ArrowRight, Search, ShieldAlert, MapPin, Scale, Briefcase, Calendar, Info } from 'lucide-react';
+import { formatDisplayName } from '../utils/formatName';
 
 const formatDate = (value) => {
     if (!value) return '—';
@@ -42,15 +43,19 @@ const DATE_PRESETS = [
     { label: 'All Time', value: () => null },
 ];
 
+const RAP_SHEETS_DEFAULT_CITY = 'HARTFORD';
 const RAP_SHEETS_ENABLED_CITIES = [
     'CT', 'HARTFORD', 'CONNECTICUT', 'STATEWIDE',
-    'NYC', 'NY', 'NEW YORK CITY'
+    'NYC', 'NY', 'NEW YORK CITY',
+    'DETROIT'
 ];
+const NON_CT_RAP_SHEET_CITIES = new Set(['NYC', 'NY', 'NEW YORK CITY', 'DETROIT']);
 
 const normalizeRapSheetCity = (city) => {
-    const upper = city ? String(city).toUpperCase() : 'HARTFORD';
+    const upper = city ? String(city).toUpperCase().trim() : RAP_SHEETS_DEFAULT_CITY;
     if (upper === 'NYC' || upper === 'NY' || upper === 'NEW YORK CITY') return 'NYC';
-    return 'HARTFORD';
+    if (upper === 'DETROIT' || upper === 'MI') return 'DETROIT';
+    return RAP_SHEETS_DEFAULT_CITY;
 };
 
 const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
@@ -106,13 +111,28 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
         return () => { cancelled = true; };
     }, [selectedCity, dateFrom, rapSheetsEnabled]);
 
+    const isNonCtCity = NON_CT_RAP_SHEET_CITIES.has((selectedCity || '').toUpperCase());
+
     useEffect(() => {
-        if (rapSheetsEnabled && cityStats) {
-            if (!cityStats.eviction_data_available && cityStats.code_data_available) {
-                setDimension('network');
-            }
+        if (isNonCtCity) {
+            if (dimension !== 'network') setDimension('network');
+            if (dateFrom !== null) setDateFrom(null);
+        } else if (dimension !== 'network' && sortBy === 'violations') {
+            setSortBy('evictions');
         }
-    }, [cityStats, rapSheetsEnabled]);
+    }, [isNonCtCity, dimension, dateFrom, sortBy]);
+
+    useEffect(() => {
+        if (!rapSheetsEnabled || !cityStats) return;
+        const codeAvail = !!cityStats.code_data_available && dimension === 'network';
+        const evicAvail = !!cityStats.eviction_data_available;
+        if (!evicAvail && cityStats.code_data_available) {
+            if (dimension !== 'network') setDimension('network');
+            if (sortBy !== 'violations') setSortBy('violations');
+        } else if (!codeAvail && evicAvail && sortBy === 'violations') {
+            setSortBy('evictions');
+        }
+    }, [cityStats, dimension, sortBy, rapSheetsEnabled]);
 
 
     useEffect(() => {
@@ -216,7 +236,7 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
                     )}
                     {/* Row 1: Dimension toggle + City + Search */}
                     <div className="flex flex-wrap items-center gap-3">
-                        {rapSheetsEnabled && cityStats?.eviction_data_available && (
+                        {rapSheetsEnabled && !isNonCtCity && cityStats?.eviction_data_available && (
                             <>
                                 <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mr-1">Analyze by</div>
                                 {DIMENSIONS.map(d => {
@@ -224,13 +244,14 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
                                     return (
                                         <button
                                             key={d.key}
+                                            type="button"
                                             onClick={() => setDimension(d.key)}
                                             className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${dimension === d.key
                                                 ? 'bg-slate-900 text-white shadow-lg'
                                                 : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                                                 }`}
                                         >
-                                            <Icon size={14} />
+                                            <Icon size={14} aria-hidden="true" />
                                             {d.label}
                                         </button>
                                     );
@@ -240,6 +261,7 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
                         <div className="flex-1" />
                         <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200">
                             <button
+                                type="button"
                                 onClick={() => setSelectedCity('HARTFORD')}
                                 className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
                                     selectedCity === 'HARTFORD' || selectedCity === 'CT'
@@ -247,10 +269,11 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
                                         : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
                                 }`}
                             >
-                                <MapPin size={13} className={selectedCity === 'HARTFORD' || selectedCity === 'CT' ? 'text-amber-400' : 'text-slate-400'} />
+                                <MapPin size={13} aria-hidden="true" className={selectedCity === 'HARTFORD' || selectedCity === 'CT' ? 'text-amber-400' : 'text-slate-400'} />
                                 Hartford (CT)
                             </button>
                             <button
+                                type="button"
                                 onClick={() => setSelectedCity('NYC')}
                                 className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
                                     selectedCity === 'NYC' || selectedCity === 'NY'
@@ -258,45 +281,64 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
                                         : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
                                 }`}
                             >
-                                <MapPin size={13} className={selectedCity === 'NYC' || selectedCity === 'NY' ? 'text-indigo-400' : 'text-slate-400'} />
+                                <MapPin size={13} aria-hidden="true" className={selectedCity === 'NYC' || selectedCity === 'NY' ? 'text-indigo-400' : 'text-slate-400'} />
                                 New York City (NY)
                             </button>
+                            <button
+                                type="button"
+                                onClick={() => setSelectedCity('DETROIT')}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                                    selectedCity === 'DETROIT'
+                                        ? 'bg-slate-900 text-white shadow-md'
+                                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+                                }`}
+                            >
+                                <MapPin size={13} aria-hidden="true" className={selectedCity === 'DETROIT' ? 'text-emerald-400' : 'text-slate-400'} />
+                                Detroit (MI)
+                            </button>
                         </div>
-                        <div className="min-w-[240px] relative">
-                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                        <search className="min-w-[240px] relative">
+                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} aria-hidden="true" />
                             <input
-                                type="text"
+                                type="search"
+                                aria-label="Filter landlords by name"
                                 placeholder="Filter by name..."
                                 className="w-full pl-10 pr-4 py-2 bg-slate-100 border-transparent focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 rounded-xl text-sm transition-all"
                                 value={filter}
                                 onChange={(e) => setFilter(e.target.value)}
                             />
-                        </div>
+                        </search>
                     </div>
 
                     {/* Row 2: Date presets + Sort */}
                     {rapSheetsEnabled && <div className="flex flex-wrap items-center gap-3">
-                        <div className="flex items-center gap-1">
-                            <Calendar size={14} className="text-slate-400" />
-                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mr-1">Time Range</span>
-                        </div>
-                        {DATE_PRESETS.map((p, i) => (
-                            <button
-                                key={i}
-                                onClick={() => setDateFrom(p.value())}
-                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${activePreset === i
-                                    ? 'bg-indigo-600 text-white shadow-md'
-                                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                                    }`}
-                            >
-                                {p.label}
-                            </button>
-                        ))}
+                        {!isNonCtCity && (
+                            <>
+                                <div className="flex items-center gap-1">
+                                    <Calendar size={14} className="text-slate-400" aria-hidden="true" />
+                                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mr-1">Time Range</span>
+                                </div>
+                                {DATE_PRESETS.map((p, i) => (
+                                    <button
+                                        key={i}
+                                        type="button"
+                                        onClick={() => setDateFrom(p.value())}
+                                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${activePreset === i
+                                            ? 'bg-indigo-600 text-white shadow-md'
+                                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                            }`}
+                                    >
+                                        {p.label}
+                                    </button>
+                                ))}
+                            </>
+                        )}
                         <div className="flex-1" />
                         <div className="flex items-center gap-2">
                             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Sort</span>
                             {cityStats?.eviction_data_available && (
                                 <button
+                                    type="button"
                                     onClick={() => setSortBy('evictions')}
                                     className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${sortBy === 'evictions' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
                                 >
@@ -305,6 +347,7 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
                             )}
                             {codeDataAvailable && (
                                 <button
+                                    type="button"
                                     onClick={() => setSortBy('violations')}
                                     className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${sortBy === 'violations' ? 'bg-red-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
                                 >
@@ -385,7 +428,8 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
                                 Non-Hartford rankings are in light maintenance while code, eviction, and network attribution are audited. Hartford Rap Sheets remain available.
                             </p>
                             <button
-                                onClick={() => setSelectedCity(RAP_SHEETS_ENABLED_CITY)}
+                                type="button"
+                                onClick={() => setSelectedCity(RAP_SHEETS_DEFAULT_CITY)}
                                 className="mt-5 rounded-xl bg-slate-900 px-4 py-2 text-xs font-black text-white hover:bg-slate-700"
                             >
                                 Open Hartford Rap Sheets
@@ -437,11 +481,11 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
                                                     {/* Header row */}
                                                     <div className="flex items-start justify-between mb-4">
                                                         <div>
-                                                            <h3 className="text-xl font-black text-slate-900 group-hover:text-blue-600 transition-colors">{label}</h3>
+                                                            <h3 className="text-xl font-black text-slate-900 group-hover:text-blue-600 transition-colors">{formatDisplayName(label)}</h3>
                                                             {hasPrincipals && (item.dimension_label || item.entity_name) && (
                                                                 <div className="text-xs font-bold text-slate-500 mt-1 flex items-center gap-1.5">
                                                                     <Building2 size={12} className="text-slate-400" />
-                                                                    <span>{item.dimension_label || item.entity_name}</span>
+                                                                    <span>{formatDisplayName(item.dimension_label || item.entity_name)}</span>
                                                                 </div>
                                                             )}
                                                             <div className="flex items-center gap-3 mt-1.5 flex-wrap">

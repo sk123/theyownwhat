@@ -5,7 +5,7 @@
 
 **Published at:** [https://theyownwhat.net](https://theyownwhat.net)  
 **Source code:** [https://github.com/sk123/theyownwhat](https://github.com/sk123/theyownwhat)  
-**Current app build:** `v0.1.5`
+**Current app build:** `v0.2.0`
 
 ## Purpose
 
@@ -34,33 +34,12 @@ My other side project, a phone app designed with both renters and their advocate
 - Show source freshness and data coverage so users can see which datasets were relied on and when they were last refreshed.
 - Export records for follow-up analysis.
 
-## Supported Jurisdictions
+## Supported Jurisdictions (20 Live)
 
-### Connecticut
-
-The Connecticut mode remains the core statewide workflow. It combines CT business registry records, municipal parcel and assessment data, CAMA/GIS sources, municipal assessor records, property photos where available, Hartford code-enforcement data, and subsidy records.
-
-The CT dashboard now includes statewide source totals, ranked ownership-network cards, city/town filters, jurisdiction badges, and controls for hiding or including non-CT properties in a network.
-
-### New York City
-
-NYC support uses HPD multiple-dwelling registrations, HPD contact records, PLUTO/MapPLUTO parcel data, HPD housing maintenance and litigation datasets, DOI marshal-executed eviction data, and NHPD subsidy enrichment where configured.
-
-### Washington, D.C.
-
-D.C. support adds property and network exploration from District property assessment/CAMA-style source data.
-
-### Baltimore
-
-Baltimore support adds property ownership, official-record views, source-backed code-enforcement and vacant-building layers, and official Maryland court event data at the city/ZIP level where parcel-level joins are not published.
-
-### Boston
-
-Boston support adds property assessment data and source-backed code/property violation enrichment from public Boston datasets.
-
-### Detroit
-
-Detroit support adds City GIS property records, property assessment data, code enforcement violations, and ownership networks.
+- **Statewide Registries & Cadastres (11):** Connecticut (`169` municipalities + CT SOTS + OpenCorporates branches + Judicial Evictions + Hartford Code), Massachusetts (`351` municipalities via MassGIS Level 3 + MA Sec./OpenCorporates corporate untangling), Florida (`67` counties via FloridaGIO + FL Sunbiz/OpenCorporates Officers & LLC Managers + FL DBPR Ch. 509 Apartment Licenses), New York State (`33` participating non-NYC counties via NYS ITS + NY DOS/OpenCorporates + Buffalo Rental Registry, Code Violations & Housing Court), Virginia (`~88` owner-releasing counties & independent cities via VGIN 2026 Q3 Local Schema Tables, Hampton Roads HRGeo, Henrico & Prince William CAMA + VA SCC/OpenCorporates; Fairfax, Arlington & Loudoun withhold bulk owner rolls), Arkansas (`75` counties via Arkansas GIS Office + AR SOS/OpenCorporates), North Carolina (`100` counties via NC OneMap + NC SOS/OpenCorporates), Wisconsin (`72` counties via SCO/DOA V11 + WI DFI/OpenCorporates), Colorado (Colorado OIT Public Parcels + CO SOS & True Names + OpenCorporates + Denver Active Rental Licenses), Vermont (`250+` municipalities via VCGI Grand List + VT SOS/OpenCorporates), and New Jersey (NJ DCA Bureau of Housing Inspection multi-family registrations + OpenCorporates).
+- **Major Metro & Municipal Explorers (9):** New York City (HPD registrations/contacts, NY DOS & OpenCorporates, PLUTO, HPD violations & housing litigation, DOI marshal evictions), Chicago (Cook County Assessor parcels + IL SOS/OpenCorporates officer & LLC manager piercing), Philadelphia (OPA parcels, L&I Rental Licenses & Violations, PA DOS & OpenCorporates Governors/Officers), Washington, D.C. (CAMA assessments, DLCP Rental Housing Licenses, D.C. OpenCorporates beneficial owners, DOB code cases), Baltimore (baltegis Ownership, DHCD Rental Registrations & Licenses, MD & OpenCorporates corporate/HQ links, 12 code/vacant layers, MD District Court evictions), Boston (Property Assessments, MA Sec./OpenCorporates officers, ISD/PW violations via SAM parcel crosswalk), Detroit (City GIS parcels, BSEED Compliance & Rental Registrations, MI LARA/OpenCorporates, DAH blight tickets), Miami-Dade (County Folio GIS + FL Sunbiz/OpenCorporates + FL DBPR Ch. 509), and Minneapolis (Active Rental Licenses + MN SOS/OpenCorporates + Regulatory Services code violations).
+- **Cross-State Corporate Registry Spine:** Multi-hop domestic & foreign-branch corporate entity, officer, HQ-address, and alternative-name data from [OpenCorporates](https://opencorporates.com) (licensed under ODbL v1.0).
+- **Federal Housing Subsidies:** National Housing Preservation Database (NHPD) active & inconclusive subsidy records cross-linked across all 20 live jurisdictions.
 
 ## Source-Only Data Policy
 

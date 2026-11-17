@@ -77,14 +77,12 @@ def fetch_cama_table(table_id: int, fields: str) -> Dict[str, Tuple[Optional[int
             ayb = attrs.get('AYB')
             year_built = int(ayb) if ayb and float(ayb) > 1000 else None
             
-            # Extract units
+            # Extract units strictly from source NUM_UNITS (never fabricate a default condo unit count)
             units = None
             if 'NUM_UNITS' in attrs:
                 num_units = attrs.get('NUM_UNITS')
                 if num_units is not None:
                     units = float(num_units)
-            elif table_id == 24: # Condominiums are single units
-                units = 1.0
                 
             mapping[norm_ssl] = (year_built, units)
             

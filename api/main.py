@@ -13,7 +13,16 @@ from urllib.parse import urlparse
 from typing import Any, Dict, List, Optional, Set, Tuple
 from collections import defaultdict
 
-from api.shared_utils import normalize_business_name, normalize_person_name, get_name_variations, BUSINESS_SUFFIX_PATTERNS, canonicalize_person_name, canonicalize_business_name
+from api.shared_utils import (
+    BUSINESS_SUFFIX_PATTERNS,
+    THIRD_PARTY_INSTITUTIONAL_SQL_PATTERN,
+    canonicalize_business_name,
+    canonicalize_person_name,
+    get_name_variations,
+    is_excluded_third_party_entity,
+    normalize_business_name,
+    normalize_person_name,
+)
 
 import psycopg2
 from psycopg2 import pool
@@ -485,6 +494,9 @@ app.include_router(feedback_router)
 
 from api.city_routes import router as city_router
 app.include_router(city_router)
+
+from api.audit_review_routes import router as audit_review_router
+app.include_router(audit_review_router)
 
 import api.db as db_module
 from api.db import init_db_pool, get_db_connection
@@ -1447,6 +1459,13 @@ def get_ai_analysis(entity_name: str, entity_type: str):
 # AUTOCOMPLETE
 # ------------------------------------------------------------
 # ------------------------------------------------------------
+# Global in-memory cache for fast autocomplete and cities
+_AUTOCOMPLETE_CACHE: Dict[str, Tuple[float, Any]] = {}
+_AUTOCOMPLETE_CACHE_MAX = 3000
+_AUTOCOMPLETE_CACHE_TTL = 300  # 5 minutes
+
+_MONITOR_CITIES_CACHE: Dict[str, Tuple[float, List[str]]] = {}
+
 # AUTOCOMPLETE
 # ------------------------------------------------------------
 @app.get("/api/autocomplete")
@@ -1458,6 +1477,13 @@ def autocomplete(q: str, type: str, state: Optional[str] = None, conn=Depends(ge
     if not q: return []
     q_clean = q.strip().lower()
     if len(q_clean) < 2: return []
+
+    cache_key = f"{q_clean}::{type}::{state or ''}"
+    now = time.time()
+    if cache_key in _AUTOCOMPLETE_CACHE:
+        ts, cached_res = _AUTOCOMPLETE_CACHE[cache_key]
+        if now - ts < _AUTOCOMPLETE_CACHE_TTL:
+            return cached_res
 
     limit = 15
     results = []
@@ -1476,28 +1502,45 @@ def autocomplete(q: str, type: str, state: Optional[str] = None, conn=Depends(ge
             city_tbl_info = {
                 'NY': ('nyc_properties', 'NYC'),
                 'NYC': ('nyc_properties', 'NYC'),
+                'NYS': ('ny_properties', 'New York State'),
                 'DC': ('dc_properties', 'D.C.'),
                 'BALTIMORE': ('baltimore_properties', 'Baltimore'),
                 'MD': ('baltimore_properties', 'Baltimore'),
                 'CHICAGO': ('chicago_properties', 'Chicago'),
                 'IL': ('chicago_properties', 'Chicago'),
                 'BOSTON': ('boston_properties', 'Boston'),
-                'MA': ('boston_properties', 'Boston'),
+                'MA': ('ma_properties', 'Massachusetts'),
                 'DETROIT': ('detroit_properties', 'Detroit'),
                 'MI': ('detroit_properties', 'Detroit'),
                 'PHILADELPHIA': ('philadelphia_properties', 'Philadelphia'),
                 'PA': ('philadelphia_properties', 'Philadelphia'),
+                'MIAMI': ('miami_properties', 'Miami'),
+                'FL': ('fl_properties', 'Florida'),
+                'MINNEAPOLIS': ('minneapolis_properties', 'Minneapolis'),
+                'MN': ('minneapolis_properties', 'Minneapolis'),
                 'NJ': ('nj_properties', 'NJ'),
+                'CO': ('co_properties', 'Colorado'),
+                'VT': ('vt_properties', 'Vermont'),
+                'WI': ('wi_properties', 'Wisconsin'),
+                'NC': ('nc_properties', 'North Carolina'),
+                'AR': ('ar_properties', 'Arkansas'),
+                'VA': ('va_properties', 'Virginia'),
             }
             st_key = (state or "").strip().upper()
 
-            def build_term_sql(col_name: str) -> Tuple[str, list]:
+            def build_term_sql(col_name: str, prefix_only: bool = False) -> Tuple[str, list]:
                 conds = []
                 prms = []
                 for term in terms:
                     t_u = term.upper()
-                    conds.append(f"({col_name} LIKE %s OR {col_name} LIKE %s OR {col_name} ILIKE %s)")
-                    prms.extend([f"{t_u}%", f"% {t_u}%", f"%{t_u}%"])
+                    # pg_trgm GIN indexes require >=3 characters to accelerate '% TERM%';
+                    # for 1-2 char tokens use prefix-only to avoid sequential scans.
+                    if prefix_only or len(t_u) < 3:
+                        conds.append(f"{col_name} LIKE %s")
+                        prms.append(f"{t_u}%")
+                    else:
+                        conds.append(f"({col_name} LIKE %s OR {col_name} LIKE %s)")
+                        prms.extend([f"{t_u}%", f"% {t_u}%"])
                 return " AND ".join(conds), prms
 
             def compute_rank(label: str) -> int:
@@ -1532,6 +1575,8 @@ def autocomplete(q: str, type: str, state: Optional[str] = None, conn=Depends(ge
                         biz_params + [max_fetch * 2]
                     )
                     for r in cursor.fetchall():
+                        if is_excluded_third_party_entity(r.get("name")):
+                            continue
                         bad_vals = {"", "NO INFORMATION PROVIDED", "NOT PROVIDED", "NONE", "N/A", "UNKNOWN", "NULL"}
                         loc_bits = [bit for bit in [r.get("business_city"), r.get("business_state")] if str(bit or "").strip().upper() not in bad_vals]
                         location = ", ".join([bit for bit in loc_bits if bit])
@@ -1564,6 +1609,11 @@ def autocomplete(q: str, type: str, state: Optional[str] = None, conn=Depends(ge
                     # City property table if jurisdiction matches
                     city_tbl, city_label = city_tbl_info.get(st_key, (None, None))
                     if city_tbl:
+                        cursor.execute("SELECT to_regclass(%s) IS NOT NULL AS exists", (f"public.{city_tbl}",))
+                        tbl_exists = (cursor.fetchone() or {}).get("exists")
+                    else:
+                        tbl_exists = False
+                    if city_tbl and tbl_exists:
                         city_where_owner, city_params_owner = build_term_sql("owner_name_norm")
                         cursor.execute(
                             f"""
@@ -1727,13 +1777,21 @@ def autocomplete(q: str, type: str, state: Optional[str] = None, conn=Depends(ge
                 if key not in seen:
                     final_results.append(item)
                     seen.add(key)
-            return final_results[:limit]
+            out = final_results[:limit]
+            if len(_AUTOCOMPLETE_CACHE) >= _AUTOCOMPLETE_CACHE_MAX:
+                _AUTOCOMPLETE_CACHE.clear()
+            _AUTOCOMPLETE_CACHE[cache_key] = (now, out)
+            return out
 
     except Exception as e:
         logger.error(f"Autocomplete Error: {e}")
         return []
 
-    return results[:limit]
+    out = results[:limit]
+    if len(_AUTOCOMPLETE_CACHE) >= _AUTOCOMPLETE_CACHE_MAX:
+        _AUTOCOMPLETE_CACHE.clear()
+    _AUTOCOMPLETE_CACHE[cache_key] = (now, out)
+    return out
 
 
 # ------------------------------------------------------------
@@ -1775,114 +1833,116 @@ def search_entities(type: str, term: str, state: Optional[str] = None, conn=Depe
                     fallback_value = ""
                 return ", ".join(cleaned) or fallback_value or "Record"
 
-            # 1. Unified Search (type="all")
-            # ---------------------------
-            if type == "all" or not type:
-                # A. Businesses: prefix-first, no per-row principal aggregation.
-                if normalized_query:
-                    biz_where = " AND ".join(["name_norm ILIKE %s" for _ in terms])
-                    if state == "NY":
-                        biz_where += " AND business_state = 'NY'"
-                    elif state == "CT":
-                        biz_where += " AND (business_state != 'NY' OR business_state IS NULL)"
+            # Unified + Type-Filtered Search ('all' | 'business' | 'principal' | 'owner' | 'address')
+            req_type = (type or "all").strip().lower()
 
-                    cursor.execute(
-                        f"""
-                        SELECT b.id, b.name, b.business_address, b.business_city, b.business_state
-                        FROM businesses b
-                        WHERE {biz_where}
-                        ORDER BY CASE WHEN name_norm LIKE %s THEN 0 ELSE 1 END, b.name
-                        LIMIT 20
-                        """,
-                        [f"%{word}%" for word in terms] + [t_norm_prefix]
+            # A. Businesses: prefix-first, no per-row principal aggregation.
+            if req_type in ("all", "business") and normalized_query:
+                biz_where = " AND ".join(["name_norm ILIKE %s" for _ in terms])
+                if state == "NY":
+                    biz_where += " AND business_state = 'NY'"
+                elif state == "CT":
+                    biz_where += " AND (business_state != 'NY' OR business_state IS NULL)"
+
+                cursor.execute(
+                    f"""
+                    SELECT b.id, b.name, b.business_address, b.business_city, b.business_state
+                    FROM businesses b
+                    WHERE {biz_where}
+                    ORDER BY CASE WHEN name_norm LIKE %s THEN 0 ELSE 1 END, b.name
+                    LIMIT %s
+                    """,
+                    [f"%{word}%" for word in terms] + [t_norm_prefix, 50 if req_type == "business" else 20]
+                )
+                for r in cursor.fetchall():
+                    ctx = clean_context(
+                        r.get("business_city"),
+                        r.get("business_state"),
+                        r.get("business_address"),
+                        fallback="Business",
                     )
-                    for r in cursor.fetchall():
-                        ctx = clean_context(
-                            r.get("business_city"),
-                            r.get("business_state"),
-                            r.get("business_address"),
-                            fallback="Business",
-                        )
-                        results.append(SearchResult(id=str(r["id"]), name=r["name"], type="business", context=ctx))
+                    results.append(SearchResult(id=str(r["id"]), name=r["name"], type="business", context=ctx))
 
-                # B. Principals. Keep hidden/person matching small and separate.
-                if not is_broad_search_term and len(results) < 40:
-                    where_clauses_prin = " AND ".join(["name_c ILIKE %s" for _ in terms])
-                    if state == "NY":
-                        where_clauses_prin += " AND EXISTS (SELECT 1 FROM businesses b_state WHERE b_state.id = p.business_id AND b_state.business_state = 'NY')"
-                    elif state == "CT":
-                        where_clauses_prin += " AND EXISTS (SELECT 1 FROM businesses b_state WHERE b_state.id = p.business_id AND (b_state.business_state != 'NY' OR b_state.business_state IS NULL))"
+            # B. Principals. Keep hidden/person matching small and separate.
+            if req_type in ("all", "principal") and (req_type == "principal" or (not is_broad_search_term and len(results) < 40)):
+                where_clauses_prin = " AND ".join(["name_c ILIKE %s" for _ in terms])
+                if state == "NY":
+                    where_clauses_prin += " AND EXISTS (SELECT 1 FROM businesses b_state WHERE b_state.id = p.business_id AND b_state.business_state = 'NY')"
+                elif state == "CT":
+                    where_clauses_prin += " AND EXISTS (SELECT 1 FROM businesses b_state WHERE b_state.id = p.business_id AND (b_state.business_state != 'NY' OR b_state.business_state IS NULL))"
 
-                    cursor.execute(
-                        f"""
-                        SELECT DISTINCT ON (name_c_norm) name_c AS name, name_c_norm AS normalized_name
-                        FROM principals p
-                        WHERE {where_clauses_prin}
-                        LIMIT %s
-                        """,
-                        [f"%{word}%" for word in terms] + [min(12, 50 - len(results))]
-                    )
-                    for r in cursor.fetchall():
-                        results.append(SearchResult(
-                            id=r["normalized_name"] or r["name"],
-                            name=r["name"],
-                            type="principal",
-                            context="Business Principal"
-                        ))
+                cursor.execute(
+                    f"""
+                    SELECT DISTINCT ON (name_c_norm) name_c AS name, name_c_norm AS normalized_name
+                    FROM principals p
+                    WHERE {where_clauses_prin}
+                    LIMIT %s
+                    """,
+                    [f"%{word}%" for word in terms] + [50 if req_type == "principal" else min(12, 50 - len(results))]
+                )
+                for r in cursor.fetchall():
+                    results.append(SearchResult(
+                        id=r["normalized_name"] or r["name"],
+                        name=r["name"],
+                        type="principal",
+                        context="Business Principal"
+                    ))
 
-                # C. Property Owners / Co-Owners + Location Hint
-                if not is_broad_search_term and len(results) < 45:
-                    where_clauses_owner = " AND ".join(["owner_norm ILIKE %s" for _ in terms])
-                    where_clauses_co = " AND ".join(["co_owner_norm ILIKE %s" for _ in terms])
-                    if state == "NY":
-                        where_clauses_owner += " AND source = 'NYS_OPEN_DATA'"
-                        where_clauses_co += " AND source = 'NYS_OPEN_DATA'"
-                    elif state == "CT":
-                        where_clauses_owner += " AND (source != 'NYS_OPEN_DATA' OR source IS NULL)"
-                        where_clauses_co += " AND (source != 'NYS_OPEN_DATA' OR source IS NULL)"
+            # C. Property Owners / Co-Owners + Location Hint
+            if req_type in ("all", "owner") and (req_type == "owner" or (not is_broad_search_term and len(results) < 45)):
+                where_clauses_owner = " AND ".join(["owner_norm ILIKE %s" for _ in terms])
+                where_clauses_co = " AND ".join(["co_owner_norm ILIKE %s" for _ in terms])
+                if state == "NY":
+                    where_clauses_owner += " AND source = 'NYS_OPEN_DATA'"
+                    where_clauses_co += " AND source = 'NYS_OPEN_DATA'"
+                elif state == "CT":
+                    where_clauses_owner += " AND (source != 'NYS_OPEN_DATA' OR source IS NULL)"
+                    where_clauses_co += " AND (source != 'NYS_OPEN_DATA' OR source IS NULL)"
 
-                    cursor.execute(
-                        f"""
-                        SELECT name, normalized_name, context_hint
-                        FROM (
-                            SELECT owner AS name, owner_norm AS normalized_name, location AS context_hint,
-                                   CASE WHEN owner_norm LIKE %s THEN 0 ELSE 1 END AS sort_rank
-                            FROM properties
-                            WHERE ({where_clauses_owner})
-                              AND owner IS NOT NULL
-                              AND owner_norm IS NOT NULL
-                            UNION ALL
-                            SELECT co_owner AS name, co_owner_norm AS normalized_name, location AS context_hint,
-                                   CASE WHEN co_owner_norm LIKE %s THEN 0 ELSE 1 END AS sort_rank
-                            FROM properties
-                            WHERE ({where_clauses_co})
-                              AND co_owner IS NOT NULL
-                              AND co_owner_norm IS NOT NULL
-                        ) sub
-                        ORDER BY sort_rank, name
-                        LIMIT %s
-                        """,
-                        [t_norm_prefix] + [f"%{word}%" for word in terms] +
-                        [t_norm_prefix] + [f"%{word}%" for word in terms] +
-                        [min(24, (50 - len(results)) * 2)]
-                    )
-                    seen_owner_norms = set()
-                    for r in cursor.fetchall():
-                        norm = r["normalized_name"] or r["name"]
-                        if norm in seen_owner_norms:
-                            continue
-                        seen_owner_norms.add(norm)
-                        ctx = f"Property Owner (e.g. {r['context_hint']})" if r["context_hint"] else "Property Owner"
-                        results.append(SearchResult(
-                            id=norm,
-                            name=r["name"],
-                            type="owner",
-                            context=ctx
-                        ))
-                        if len(results) >= 45:
-                            break
+                owner_limit = 50 if req_type == "owner" else min(24, (50 - len(results)) * 2)
+                cursor.execute(
+                    f"""
+                    SELECT name, normalized_name, context_hint
+                    FROM (
+                        SELECT owner AS name, owner_norm AS normalized_name, location AS context_hint,
+                               CASE WHEN owner_norm LIKE %s THEN 0 ELSE 1 END AS sort_rank
+                        FROM properties
+                        WHERE ({where_clauses_owner})
+                          AND owner IS NOT NULL
+                          AND owner_norm IS NOT NULL
+                        UNION ALL
+                        SELECT co_owner AS name, co_owner_norm AS normalized_name, location AS context_hint,
+                               CASE WHEN co_owner_norm LIKE %s THEN 0 ELSE 1 END AS sort_rank
+                        FROM properties
+                        WHERE ({where_clauses_co})
+                          AND co_owner IS NOT NULL
+                          AND co_owner_norm IS NOT NULL
+                    ) sub
+                    ORDER BY sort_rank, name
+                    LIMIT %s
+                    """,
+                    [t_norm_prefix] + [f"%{word}%" for word in terms] +
+                    [t_norm_prefix] + [f"%{word}%" for word in terms] +
+                    [owner_limit]
+                )
+                seen_owner_norms = set()
+                for r in cursor.fetchall():
+                    norm = r["normalized_name"] or r["name"]
+                    if norm in seen_owner_norms:
+                        continue
+                    seen_owner_norms.add(norm)
+                    ctx = f"Property Owner (e.g. {r['context_hint']})" if r["context_hint"] else "Property Owner"
+                    results.append(SearchResult(
+                        id=norm,
+                        name=r["name"],
+                        type="owner",
+                        context=ctx
+                    ))
+                    if len(results) >= (50 if req_type == "owner" else 45):
+                        break
 
-                # D. Addresses
+            # D. Addresses
+            if req_type in ("all", "address", "property") and len(results) < 50:
                 addr_where = " AND ".join(["location ILIKE %s" for _ in terms])
                 if state == "NY":
                     addr_where += " AND source = 'NYS_OPEN_DATA'"
@@ -1891,7 +1951,7 @@ def search_entities(type: str, term: str, state: Optional[str] = None, conn=Depe
 
                 cursor.execute(
                     f"SELECT DISTINCT ON (location) location, property_city, owner FROM properties WHERE {addr_where} LIMIT %s",
-                    [f"%{word}%" for word in terms] + [min(15, 50 - len(results))]
+                    [f"%{word}%" for word in terms] + [50 if req_type in ("address", "property") else min(15, 50 - len(results))]
                 )
                 for r in cursor.fetchall():
                     ctx = f"Owned by {r['owner']}" if r['owner'] else f"{r.get('property_city', '')}, {state or DEFAULT_STATE}"
@@ -1899,12 +1959,6 @@ def search_entities(type: str, term: str, state: Optional[str] = None, conn=Depe
                         id=r["location"], name=r["location"],
                         type="address", context=ctx
                     ))
-
-            # 2. Specific Search (Legacy - can be updated similarly if needed)
-            else:
-                # Fallback to a simplified version of the above based on type
-                # (Staying as-is for now or consolidating into one logic)
-                pass
 
             # Ranking: StartsWith > Infix
             def rank_res(res):
@@ -1916,11 +1970,6 @@ def search_entities(type: str, term: str, state: Optional[str] = None, conn=Depe
 
             results.sort(key=rank_res)
             return results[:50]
-
-    except Exception as e:
-        logger.error(f"Search Error: {e}")
-        if isinstance(e, HTTPException): raise e
-        raise HTTPException(status_code=500, detail="Internal server error during search.")
 
     except Exception as e:
         logger.error(f"Search Error: {e}")
@@ -2310,9 +2359,11 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                                 if not last_eviction_date or p["last_eviction_date"] > last_eviction_date:
                                     last_eviction_date = p["last_eviction_date"]
 
-                            # Format assessed/appraised values
-                            assessed_total = p.get("assessed_total") or 0
-                            assessed_str = f"${int(assessed_total):,}" if assessed_total else "$0"
+                            # Format assessed/appraised values strictly from source (never fabricate "$0" or 1 unit)
+                            assessed_total = p.get("assessed_total")
+                            assessed_str = f"${int(assessed_total):,}" if assessed_total else None
+                            raw_units = p.get("units_total") or p.get("units_res")
+                            prop_unit_count = int(raw_units) if raw_units else None
 
                             properties.append({
                                 "id": p["bbl"],
@@ -2320,7 +2371,7 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                                 "address": p.get("address") or "Unknown Address",
                                 "city": (p.get("borough") or selected_city).title(),
                                 "owner": p.get("owner_name") or "Unknown Owner",
-                                "unit_count": int(p.get("units_total") or p.get("units_res") or 1),
+                                "unit_count": prop_unit_count,
                                 "assessed_value": assessed_str,
                                 "appraised_value": assessed_str,
                                 "violation_count": violation_count,
@@ -2332,12 +2383,12 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                                 "property_state": state_code
                             })
 
-                    # Build summaries
+                    # Build summaries (leave rolling windows None when source only provides cumulative counts)
                     eviction_summary = {
                         "eviction_count": eviction_count_total,
-                        "evictions_last_90d": 0,
-                        "evictions_last_365d": eviction_count_total,
-                        "evictions_prev_365d": 0,
+                        "evictions_last_90d": None,
+                        "evictions_last_365d": None,
+                        "evictions_prev_365d": None,
                         "closed_eviction_count": 0,
                         "active_eviction_count": 0,
                         "property_linked_count": sum(1 for p in properties if p["eviction_count"] > 0),
@@ -2349,14 +2400,14 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
 
                     code_summary = {
                         "source_available": True,
-                        "source_label": f"{selected_city.title()} Open Data",
+                        "source_label": f"{selected_city.title()} Code Enforcement",
                         "municipality": selected_city,
-                        "hartford_property_count": len(properties),
+                        "hartford_property_count": 0,
                         "total_records": violations_total_sum,
                         "properties_with_records": sum(1 for p in properties if p["violation_count"] > 0),
                         "open_records": violations_open_sum,
-                        "records_last_90d": 0,
-                        "records_last_365d": violations_total_sum,
+                        "records_last_90d": None,
+                        "records_last_365d": None,
                         "last_record_date": last_violation_date.isoformat() if last_violation_date and hasattr(last_violation_date, "isoformat") else str(last_violation_date) if last_violation_date else None,
                         "status_breakdown": []
                     }
@@ -2410,10 +2461,170 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                                 "details": {"connections": []}
                             })
 
-                    # Build complete bipartite links between principals and businesses
+                    # Build verified links strictly from co-registered contact filings & OpenCorporates corporate graph (never synthesize all-pairs links)
+                    seen_edges = set()
+                    principal_by_norm = {p["name"].upper(): p["id"] for p in principals}
                     for p in principals:
-                        for b in businesses:
-                            links.append({"source": p["id"], "target": b["id"]})
+                        principal_by_norm[p["id"].replace("_", " ").upper()] = p["id"]
+                    biz_by_norm = {b["name"].upper(): b["id"] for b in businesses}
+
+                    if bbl_list and principals and businesses:
+                        try:
+                            cur.execute(
+                                f"""
+                                SELECT DISTINCT
+                                    UPPER(TRIM(COALESCE(c.full_name, CONCAT_WS(' ', c.first_name, c.last_name)))) AS person_name,
+                                    UPPER(TRIM(c.corporation_name)) AS corp_name
+                                FROM {db_prefix}_hpd_registrations r
+                                JOIN {db_prefix}_hpd_contacts c ON c.registration_id = r.registration_id
+                                WHERE r.bbl = ANY(%s)
+                                  AND c.corporation_name IS NOT NULL
+                                  AND COALESCE(c.full_name, c.last_name) IS NOT NULL
+                                """,
+                                (bbl_list,),
+                            )
+                            for crow in cur.fetchall():
+                                p_id = principal_by_norm.get(crow["person_name"] or "")
+                                b_id = biz_by_norm.get(crow["corp_name"] or "")
+                                if p_id and b_id and (p_id, b_id) not in seen_edges:
+                                    seen_edges.add((p_id, b_id))
+                                    links.append({"source": p_id, "target": b_id})
+                        except Exception:
+                            conn.rollback()
+
+                    # Enrich graph entities & edges with verified OpenCorporates officers and parent/branch companies
+                    if bbl_list:
+                        try:
+                            cur.execute(
+                                f"""
+                                SELECT DISTINCT
+                                    UPPER(TRIM(p.owner_name)) AS deed_owner,
+                                    p.oc_jurisdiction_code,
+                                    p.oc_company_number
+                                FROM {db_prefix}_properties p
+                                WHERE p.bbl = ANY(%s)
+                                  AND p.oc_jurisdiction_code IS NOT NULL
+                                  AND p.oc_company_number IS NOT NULL
+                                LIMIT 80
+                                """,
+                                (bbl_list,),
+                            )
+                            prop_oc_rows = cur.fetchall()
+                            if prop_oc_rows:
+                                from shared_utils import is_excluded_third_party_entity, looks_like_person_owner
+                                seed_pairs = sorted({(r["oc_jurisdiction_code"], r["oc_company_number"]) for r in prop_oc_rows})
+                                j_seed = [x[0] for x in seed_pairs]
+                                n_seed = [x[1] for x in seed_pairs]
+                                cid_to_biz_ids: dict[str, set[str]] = {}
+                                for r in prop_oc_rows:
+                                    cid = f"{r['oc_jurisdiction_code']}/{r['oc_company_number']}"
+                                    deed_upper = (r["deed_owner"] or "").strip()
+                                    if deed_upper and deed_upper in biz_by_norm:
+                                        cid_to_biz_ids.setdefault(cid, set()).add(biz_by_norm[deed_upper])
+
+                                cur.execute(
+                                    """
+                                    SELECT c.jurisdiction_code, c.company_number, c.name,
+                                           c.home_jurisdiction_code, c.home_company_number
+                                    FROM UNNEST(%s::text[], %s::text[]) AS k(j, n)
+                                    JOIN oc_companies c ON c.jurisdiction_code = k.j AND c.company_number = k.n
+                                    """,
+                                    (j_seed, n_seed),
+                                )
+                                oc_comp_rows = list(cur.fetchall())
+                                home_pairs = sorted({
+                                    (r["home_jurisdiction_code"], r["home_company_number"])
+                                    for r in oc_comp_rows
+                                    if r.get("home_jurisdiction_code") and r.get("home_company_number")
+                                } - set(seed_pairs))
+                                if home_pairs:
+                                    cur.execute(
+                                        """
+                                        SELECT c.jurisdiction_code, c.company_number, c.name,
+                                               c.home_jurisdiction_code, c.home_company_number
+                                        FROM UNNEST(%s::text[], %s::text[]) AS k(j, n)
+                                        JOIN oc_companies c ON c.jurisdiction_code = k.j AND c.company_number = k.n
+                                        """,
+                                        ([x[0] for x in home_pairs], [x[1] for x in home_pairs]),
+                                    )
+                                    oc_comp_rows.extend(cur.fetchall())
+
+                                def _ensure_biz_node(raw_name: str, oc_cid: str | None = None) -> str:
+                                    u = raw_name.strip().upper()
+                                    if u in biz_by_norm:
+                                        return biz_by_norm[u]
+                                    bid = f"oc_biz_{(oc_cid or u).replace('/', '_').replace(' ', '_').lower()}"
+                                    biz_by_norm[u] = bid
+                                    businesses.append({
+                                        "id": bid,
+                                        "name": raw_name.strip(),
+                                        "type": "business",
+                                        "details": {"connections": [], "opencorporates_id": oc_cid},
+                                    })
+                                    return bid
+
+                                def _ensure_principal_node(raw_name: str) -> str:
+                                    u = raw_name.strip().upper()
+                                    if u in principal_by_norm:
+                                        return principal_by_norm[u]
+                                    pid = f"oc_p_{u.replace(' ', '_').lower()}"
+                                    principal_by_norm[u] = pid
+                                    principals.append({
+                                        "id": pid,
+                                        "name": raw_name.strip().title(),
+                                        "type": "principal",
+                                        "principal_id": pid,
+                                        "details": {"connections": [], "source": "OpenCorporates"},
+                                    })
+                                    return pid
+
+                                comp_by_cid = {}
+                                for cr in oc_comp_rows:
+                                    cid = f"{cr['jurisdiction_code']}/{cr['company_number']}"
+                                    comp_by_cid[cid] = cr
+                                    if cid not in cid_to_biz_ids and cr.get("name"):
+                                        cid_to_biz_ids[cid] = {_ensure_biz_node(cr["name"], cid)}
+
+                                for cr in oc_comp_rows:
+                                    cid = f"{cr['jurisdiction_code']}/{cr['company_number']}"
+                                    hj, hn = cr.get("home_jurisdiction_code"), cr.get("home_company_number")
+                                    if hj and hn:
+                                        hcid = f"{hj}/{hn}"
+                                        h_row = comp_by_cid.get(hcid)
+                                        if h_row and h_row.get("name"):
+                                            parent_bid = _ensure_biz_node(h_row["name"], hcid)
+                                            cid_to_biz_ids.setdefault(hcid, set()).add(parent_bid)
+                                            for child_bid in cid_to_biz_ids.get(cid, ()):
+                                                if parent_bid != child_bid and (parent_bid, child_bid) not in seen_edges:
+                                                    seen_edges.add((parent_bid, child_bid))
+                                                    links.append({"source": parent_bid, "target": child_bid})
+
+                                all_pairs = sorted({tuple(cid.split("/", 1)) for cid in comp_by_cid.keys()})
+                                if all_pairs:
+                                    cur.execute(
+                                        """
+                                        SELECT o.jurisdiction_code, o.company_number, o.name,
+                                               o.role_class, o.is_corporate_officer
+                                        FROM UNNEST(%s::text[], %s::text[]) AS k(j, n)
+                                        JOIN oc_officers o ON o.jurisdiction_code = k.j AND o.company_number = k.n
+                                        WHERE o.role_class IN ('beneficial_principal', 'corporate_parent')
+                                        LIMIT 200
+                                        """,
+                                        ([x[0] for x in all_pairs], [x[1] for x in all_pairs]),
+                                    )
+                                    for orow in cur.fetchall():
+                                        onm = (orow.get("name") or "").strip()
+                                        if not onm or is_excluded_third_party_entity(onm):
+                                            continue
+                                        cid = f"{orow['jurisdiction_code']}/{orow['company_number']}"
+                                        is_corp = bool(orow.get("is_corporate_officer")) or orow.get("role_class") == "corporate_parent" or not looks_like_person_owner(onm)
+                                        src_id = _ensure_biz_node(onm) if is_corp else _ensure_principal_node(onm)
+                                        for tgt_bid in cid_to_biz_ids.get(cid, ()):
+                                            if src_id != tgt_bid and (src_id, tgt_bid) not in seen_edges:
+                                                seen_edges.add((src_id, tgt_bid))
+                                                links.append({"source": src_id, "target": tgt_bid})
+                        except Exception:
+                            conn.rollback()
 
                     # Yield entities chunk
                     yield _yield(json.dumps({
@@ -2446,26 +2657,21 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                 network_direct_mode = False
                 network_owned_properties_sql = (
                     """
-                    SELECT DISTINCT p.id
-                    FROM properties p
-                    JOIN entity_networks en ON (
-                        (en.entity_type = 'business' AND p.business_id = en.entity_id)
-                        OR
-                        (en.entity_type = 'business' AND UPPER(p.owner) = UPPER(en.entity_name))
-                        OR
-                        (en.entity_type = 'business' AND p.owner_norm = en.normalized_name)
-                        OR
-                        (en.entity_type = 'principal' AND p.principal_id = en.entity_id)
-                        OR
-                        (en.entity_type = 'principal' AND p.owner_norm = en.entity_id)
-                        OR
-                        (en.entity_type = 'principal' AND p.co_owner_norm = en.entity_id)
-                        OR
-                        (en.entity_type = 'principal' AND p.owner_norm = en.normalized_name)
-                        OR
-                        (en.entity_type = 'principal' AND p.co_owner_norm = en.normalized_name)
+                    WITH target_entities AS (
+                        SELECT en.entity_type, en.entity_id, en.entity_name, en.normalized_name
+                        FROM entity_networks en
+                        WHERE en.network_id = ANY(%s)
+                    ),
+                    matched_props AS (
+                        SELECT p.id FROM target_entities te JOIN properties p ON p.business_id = te.entity_id WHERE te.entity_type = 'business' AND te.entity_id IS NOT NULL AND te.entity_id <> ''
+                        UNION
+                        SELECT p.id FROM target_entities te JOIN properties p ON UPPER(p.owner) = UPPER(te.entity_name) WHERE te.entity_type = 'business' AND te.entity_name IS NOT NULL AND te.entity_name <> ''
+                        UNION
+                        SELECT p.id FROM target_entities te JOIN properties p ON p.owner_norm = te.normalized_name WHERE te.entity_type = 'business' AND te.normalized_name IS NOT NULL AND te.normalized_name <> ''
+                        UNION
+                        SELECT p.id FROM target_entities te JOIN properties p ON p.principal_id = te.entity_id WHERE te.entity_type = 'principal' AND te.entity_id IS NOT NULL AND te.entity_id <> ''
                     )
-                    WHERE en.network_id = ANY(%s)
+                    SELECT DISTINCT id FROM matched_props
                     """
                 )
 
@@ -2503,6 +2709,27 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                         row = cursor.fetchone()
                         if row:
                             network_ids = [row["network_id"]]
+                        else:
+                            # Management company fallback: if the business holds no deeds directly,
+                            # pivot through its SOS principals (already filtered in entity_networks).
+                            cursor.execute(
+                                """
+                                SELECT en.network_id
+                                FROM businesses b
+                                JOIN principal_business_links pbl ON pbl.business_id = b.id
+                                JOIN entity_networks en
+                                  ON en.entity_type = 'principal'
+                                 AND en.entity_id = pbl.principal_id::text
+                                JOIN networks n ON n.id = en.network_id
+                                WHERE b.id = %s OR UPPER(b.name) = UPPER(%s)
+                                ORDER BY n.total_properties DESC
+                                LIMIT 1
+                                """,
+                                (entity_id, entity_name or entity_id),
+                            )
+                            mgmt_row = cursor.fetchone()
+                            if mgmt_row:
+                                network_ids = [mgmt_row["network_id"]]
 
                 elif entity_type == "owner":
                     # Try direct principal/network lookup first
@@ -3397,126 +3624,44 @@ async def stream_load_network(req: Request, conn=Depends(get_db_connection)):
                 # DEDUPLICATION FIX: Use DISTINCT ON to return only one row per physical address
                 # NEIGHBOR FETCH: Find "Base Addresses" and fetch ALL units, flagging ownership.
 
-                neighbor_fetch_limit = 80
-                is_large_network = (
-                    network_property_count > neighbor_fetch_limit
-                    or len(businesses) > 200
-                    or len(principals_in_network) > 200
-                    or (insight_row.get('building_count') or 0) > 100
-                )
-                if is_large_network:
-                    logger.info(
-                        "🚀 Large network detected (%s owned properties, %s businesses, %s principals). "
-                        "Using direct source-owned property query.",
-                        network_property_count,
-                        len(businesses),
-                        len(principals_in_network),
-                    )
-                    cursor.execute(
-                        """
-                        WITH enforcement_counts AS (
-                            SELECT
-                                property_id,
-                                COUNT(*)::int AS code_enforcement_count,
-                                COUNT(*) FILTER (
-                                    WHERE record_status IS NULL
-                                       OR lower(record_status) NOT LIKE 'closed%%'
-                                )::int AS open_code_enforcement_count,
-                                MAX(date_opened) AS last_code_enforcement_date
-                            FROM code_enforcement
-                            WHERE property_id = ANY(%s::int[])
-                              AND UPPER(COALESCE(municipality, 'HARTFORD')) = 'HARTFORD'
-                            GROUP BY property_id
-                        ),
-                        eviction_counts AS (
-                            SELECT property_id, COUNT(*)::int AS eviction_count
-                            FROM evictions
-                            WHERE property_id = ANY(%s::int[])
-                            GROUP BY property_id
-                        )
-                        SELECT DISTINCT ON (p.location, p.property_city, p.unit)
-                            p.*,
-                            COALESCE(enc.open_code_enforcement_count, 0) AS violation_count,
-                            COALESCE(enc.code_enforcement_count, 0) AS code_enforcement_count,
-                            COALESCE(enc.open_code_enforcement_count, 0) AS open_code_enforcement_count,
-                            enc.last_code_enforcement_date,
-                            COALESCE(ec.eviction_count, 0) AS eviction_count,
-                            true as is_in_network
-                        FROM properties p
-                        LEFT JOIN enforcement_counts enc ON enc.property_id = p.id
-                        LEFT JOIN eviction_counts ec ON ec.property_id = p.id
-                        WHERE p.id = ANY(%s::int[])
-                        ORDER BY p.location, p.property_city, p.unit, p.id DESC
-                        """,
-                        (network_property_ids, network_property_ids, network_property_ids)
-                    )
-                else:
-                    property_query = r"""
-                        WITH network_owned_properties AS (
-                            SELECT unnest(%s::int[]) AS id
-                        ),
-                        network_bases AS (
-                            SELECT DISTINCT
-                                property_city,
-                                -- Heuristic: Remove trailing unit (Space + 1 Letter OR Space + 1-4 Digits)
-                                REGEXP_REPLACE(location, '\s+([A-Z]|\d{1,4})$', '') as base_loc
-                            FROM properties p
-                            JOIN network_owned_properties nop ON p.id = nop.id
-                        ),
-                        candidate_properties AS (
-                            SELECT DISTINCT ON (p.location, p.property_city, p.unit)
-                                p.*
-                            FROM properties p
-                            JOIN network_bases nb ON p.property_city = nb.property_city
-                            -- Match: Exact Base, OR Base + Space + Unit
-                            -- OPTIMIZATION: Use LIKE as primary filter (with %% for wildcard escaping in psycopg2)
-                            WHERE (
-                                p.location = nb.base_loc
-                                OR (
-                                    p.location LIKE (nb.base_loc || ' %%')
-                                    AND p.location ~ ('^' || REGEXP_REPLACE(nb.base_loc, '([!$()*+.:<=>?[\\\]^{|}-])', '\\\\1', 'g') || '\s+([A-Z]|\d{1,4})$')
-                                )
-                            )
-                            ORDER BY p.location, p.property_city, p.unit, p.id DESC
-                        ),
-                        enforcement_counts AS (
-                            SELECT
-                                ce.property_id,
-                                COUNT(*)::int AS code_enforcement_count,
-                                COUNT(*) FILTER (
-                                    WHERE ce.record_status IS NULL
-                                       OR lower(ce.record_status) NOT LIKE 'closed%%'
-                                )::int AS open_code_enforcement_count,
-                                MAX(ce.date_opened) AS last_code_enforcement_date
-                            FROM code_enforcement ce
-                            JOIN candidate_properties cp ON cp.id = ce.property_id
-                            WHERE UPPER(COALESCE(ce.municipality, 'HARTFORD')) = 'HARTFORD'
-                            GROUP BY ce.property_id
-                        ),
-                        eviction_counts AS (
-                            SELECT e.property_id, COUNT(*)::int AS eviction_count
-                            FROM evictions e
-                            JOIN candidate_properties cp ON cp.id = e.property_id
-                            GROUP BY e.property_id
-                        )
+                cursor.execute(
+                    """
+                    WITH enforcement_counts AS (
                         SELECT
-                            cp.*,
-                            COALESCE(enc.open_code_enforcement_count, 0) AS violation_count,
-                            COALESCE(enc.code_enforcement_count, 0) AS code_enforcement_count,
-                            COALESCE(enc.open_code_enforcement_count, 0) AS open_code_enforcement_count,
-                            enc.last_code_enforcement_date,
-                            COALESCE(ec.eviction_count, 0) AS eviction_count,
-                            CASE WHEN nop.id IS NOT NULL THEN true ELSE false END AS is_in_network
-                        FROM candidate_properties cp
-                        LEFT JOIN network_owned_properties nop ON cp.id = nop.id
-                        LEFT JOIN enforcement_counts enc ON enc.property_id = cp.id
-                        LEFT JOIN eviction_counts ec ON ec.property_id = cp.id
-                        ORDER BY cp.location, cp.property_city, cp.unit, cp.id DESC
-                        """
-                    cursor.execute(
-                        property_query,
-                        (network_property_ids,)
+                            property_id,
+                            COUNT(*)::int AS code_enforcement_count,
+                            COUNT(*) FILTER (
+                                WHERE record_status IS NULL
+                                   OR lower(record_status) NOT LIKE 'closed%%'
+                            )::int AS open_code_enforcement_count,
+                            MAX(date_opened) AS last_code_enforcement_date
+                        FROM code_enforcement
+                        WHERE property_id = ANY(%s::int[])
+                          AND UPPER(COALESCE(municipality, 'HARTFORD')) = 'HARTFORD'
+                        GROUP BY property_id
+                    ),
+                    eviction_counts AS (
+                        SELECT property_id, COUNT(*)::int AS eviction_count
+                        FROM evictions
+                        WHERE property_id = ANY(%s::int[])
+                        GROUP BY property_id
                     )
+                    SELECT DISTINCT ON (p.location, p.property_city, p.unit)
+                        p.*,
+                        COALESCE(enc.open_code_enforcement_count, 0) AS violation_count,
+                        COALESCE(enc.code_enforcement_count, 0) AS code_enforcement_count,
+                        COALESCE(enc.open_code_enforcement_count, 0) AS open_code_enforcement_count,
+                        enc.last_code_enforcement_date,
+                        COALESCE(ec.eviction_count, 0) AS eviction_count,
+                        true as is_in_network
+                    FROM properties p
+                    LEFT JOIN enforcement_counts enc ON enc.property_id = p.id
+                    LEFT JOIN eviction_counts ec ON ec.property_id = p.id
+                    WHERE p.id = ANY(%s::int[])
+                    ORDER BY p.location, p.property_city, p.unit, p.id DESC
+                    """,
+                    (network_property_ids, network_property_ids, network_property_ids)
+                )
 
                 # Stream flat properties (Frontend handles grouping)
                 # First, fetch ALL properties to get their subsidies in one go
@@ -4091,32 +4236,67 @@ def _calculate_dashboard_network_eviction_metrics(
 
     cursor.execute("""
         CREATE TEMP TABLE tmp_dashboard_target_properties AS
-        SELECT DISTINCT
-            t.target_key,
-            p.id::int AS property_id,
-            p.owner_norm,
-            p.co_owner_norm,
-            UPPER(COALESCE(p.property_city, '')) AS property_city
-        FROM tmp_dashboard_target_networks t
-        JOIN entity_networks en ON en.network_id = t.network_id
-        JOIN properties p ON (
-            (en.entity_type = 'business' AND p.business_id = en.entity_id)
-            OR
-            (en.entity_type = 'business' AND UPPER(p.owner) = UPPER(en.entity_name))
-            OR
-            (en.entity_type = 'business' AND p.owner_norm = en.normalized_name)
-            OR
-            (en.entity_type = 'principal' AND p.principal_id = en.entity_id)
-            OR
-            (en.entity_type = 'principal' AND p.owner_norm = en.entity_id)
-            OR
-            (en.entity_type = 'principal' AND p.co_owner_norm = en.entity_id)
-            OR
-            (en.entity_type = 'principal' AND p.owner_norm = en.normalized_name)
-            OR
-            (en.entity_type = 'principal' AND p.co_owner_norm = en.normalized_name)
+        WITH target_entities AS (
+            SELECT t.target_key, en.entity_type, en.entity_id, en.entity_name, en.normalized_name
+            FROM tmp_dashboard_target_networks t
+            JOIN entity_networks en ON en.network_id = t.network_id
+        ),
+        matched_props AS (
+            SELECT te.target_key, p.id::int AS property_id, p.owner_norm, p.co_owner_norm, UPPER(COALESCE(p.property_city, '')) AS property_city
+            FROM target_entities te
+            JOIN properties p ON p.business_id = te.entity_id
+            WHERE te.entity_type = 'business' AND te.entity_id IS NOT NULL AND te.entity_id <> ''
+
+            UNION
+
+            SELECT te.target_key, p.id::int AS property_id, p.owner_norm, p.co_owner_norm, UPPER(COALESCE(p.property_city, '')) AS property_city
+            FROM target_entities te
+            JOIN properties p ON UPPER(p.owner) = UPPER(te.entity_name)
+            WHERE te.entity_type = 'business' AND te.entity_name IS NOT NULL AND te.entity_name <> ''
+
+            UNION
+
+            SELECT te.target_key, p.id::int AS property_id, p.owner_norm, p.co_owner_norm, UPPER(COALESCE(p.property_city, '')) AS property_city
+            FROM target_entities te
+            JOIN properties p ON p.owner_norm = te.normalized_name
+            WHERE te.entity_type = 'business' AND te.normalized_name IS NOT NULL AND te.normalized_name <> ''
+
+            UNION
+
+            SELECT te.target_key, p.id::int AS property_id, p.owner_norm, p.co_owner_norm, UPPER(COALESCE(p.property_city, '')) AS property_city
+            FROM target_entities te
+            JOIN properties p ON p.principal_id = te.entity_id
+            WHERE te.entity_type = 'principal' AND te.entity_id IS NOT NULL AND te.entity_id <> ''
+
+            UNION
+
+            SELECT te.target_key, p.id::int AS property_id, p.owner_norm, p.co_owner_norm, UPPER(COALESCE(p.property_city, '')) AS property_city
+            FROM target_entities te
+            JOIN properties p ON p.owner_norm = te.entity_id
+            WHERE te.entity_type = 'principal' AND te.entity_id IS NOT NULL AND te.entity_id <> ''
+
+            UNION
+
+            SELECT te.target_key, p.id::int AS property_id, p.owner_norm, p.co_owner_norm, UPPER(COALESCE(p.property_city, '')) AS property_city
+            FROM target_entities te
+            JOIN properties p ON p.co_owner_norm = te.entity_id
+            WHERE te.entity_type = 'principal' AND te.entity_id IS NOT NULL AND te.entity_id <> ''
+
+            UNION
+
+            SELECT te.target_key, p.id::int AS property_id, p.owner_norm, p.co_owner_norm, UPPER(COALESCE(p.property_city, '')) AS property_city
+            FROM target_entities te
+            JOIN properties p ON p.owner_norm = te.normalized_name
+            WHERE te.entity_type = 'principal' AND te.normalized_name IS NOT NULL AND te.normalized_name <> ''
+
+            UNION
+
+            SELECT te.target_key, p.id::int AS property_id, p.owner_norm, p.co_owner_norm, UPPER(COALESCE(p.property_city, '')) AS property_city
+            FROM target_entities te
+            JOIN properties p ON p.co_owner_norm = te.normalized_name
+            WHERE te.entity_type = 'principal' AND te.normalized_name IS NOT NULL AND te.normalized_name <> ''
         )
-        WHERE p.id IS NOT NULL
+        SELECT DISTINCT * FROM matched_props
     """)
     cursor.execute("CREATE INDEX tmp_dashboard_target_properties_id_idx ON tmp_dashboard_target_properties(property_id)")
     cursor.execute("CREATE INDEX tmp_dashboard_target_properties_key_idx ON tmp_dashboard_target_properties(target_key)")
@@ -4353,56 +4533,152 @@ def get_dashboard_network_metrics(req: DashboardNetworkMetricsRequest, conn=Depe
         logger.exception("Could not calculate dashboard network metrics.")
         raise HTTPException(status_code=500, detail="Failed to calculate dashboard network metrics.")
 
+from .municipal_config import MUNICIPAL_DATA_SOURCES
+
+_DASHBOARD_SUMMARY_LOCK = threading.Lock()
+_DASHBOARD_SUMMARY_INFLIGHT: Set[str] = set()
+
+_EXTRA_CT_GEODATA_TOWNS = {
+    'ANDOVER', 'BARKHAMSTED', 'BETHEL', 'BOLTON', 'BRANFORD', 'BROOKLYN', 'CANTERBURY',
+    'CHAPLIN', 'CHESTER', 'CLINTON', 'COLUMBIA', 'CORNWALL', 'COVENTRY', 'CROMWELL',
+    'DARIEN', 'DEEP RIVER', 'DURHAM', 'EAST GRANBY', 'EAST HADDAM', 'EAST HAMPTON',
+    'EAST HARTFORD', 'EAST LYME', 'EAST WINDSOR', 'EASTFORD', 'ELLINGTON', 'ESSEX',
+    'FRANKLIN', 'GLASTONBURY', 'GOSHEN', 'GRANBY', 'GREENWICH', 'GRISWOLD', 'GROTON',
+    'GUILFORD', 'HADDAM', 'HAMPTON', 'HARTLAND', 'HARWINTON', 'HEBRON', 'KENT',
+    'KILLINGLY', 'KILLINGWORTH', 'LEBANON', 'LEDYARD', 'LISBON', 'LITCHFIELD', 'LYME',
+    'MADISON', 'MANSFIELD', 'MARLBOROUGH', 'MIDDLEBURY', 'MIDDLEFIELD', 'MIDDLETOWN',
+    'MONROE', 'MONTVILLE', 'MORRIS', 'NAUGATUCK', 'NEW CANAAN', 'NEW FAIRFIELD',
+    'NEW HARTFORD', 'NEW LONDON', 'NEW MILFORD', 'NEWINGTON', 'NEWTOWN', 'NORFOLK',
+    'NORTH BRANFORD', 'NORTH CANAAN', 'NORTH HAVEN', 'NORTH STONINGTON', 'NORWICH',
+    'OLD LYME', 'OLD SAYBROOK', 'ORANGE', 'OXFORD', 'PLAINFIELD', 'PLAINVILLE',
+    'PLYMOUTH', 'POMFRET', 'PORTLAND', 'PRESTON', 'PROSPECT', 'PUTNAM', 'REDDING',
+    'ROCKY HILL', 'ROXBURY', 'SALEM', 'SALISBURY', 'SCOTLAND', 'SEYMOUR', 'SHARON',
+    'SHELTON', 'SHERMAN', 'SIMSBURY', 'SOMERS', 'SOUTH WINDSOR', 'SOUTHBURY',
+    'SOUTHINGTON', 'SPRAGUE', 'STAFFORD', 'STERLING', 'STONINGTON', 'STRATFORD',
+    'SUFFIELD', 'THOMASTON', 'THOMPSON', 'TOLLAND', 'TORRINGTON', 'TRUMBULL', 'UNION',
+    'VERNON', 'VOLUNTOWN', 'WALLINGFORD', 'WARREN', 'WASHINGTON', 'WATERFORD',
+    'WATERTOWN', 'WESTBROOK', 'WESTON', 'WESTPORT', 'WETHERSFIELD', 'WILLINGTON',
+    'WILTON', 'WINCHESTER', 'WINDHAM', 'WINDSOR LOCKS', 'WOLCOTT', 'WOODBRIDGE',
+    'WOODBURY', 'WOODSTOCK'
+}
+
+
+def _get_ct_city_variants(cursor) -> List[str]:
+    cursor.execute("""
+        SELECT source_name FROM data_source_status
+        WHERE source_type IN ('vision_appraisal', 'PROPERTYRECORDCARDS', 'MAPXPRESS', 'ct_geodata_csv', 'TIGHE_BOND', 'MAPGEO', 'windsor_api')
+    """)
+    base_ct_towns = {r['source_name'].strip().upper() for r in cursor.fetchall() if r.get('source_name')}
+    base_ct_towns.update(k.strip().upper() for k in MUNICIPAL_DATA_SOURCES.keys())
+    base_ct_towns.update(_EXTRA_CT_GEODATA_TOWNS)
+    return sorted({v for t in base_ct_towns for v in (t, t.title(), t.lower())})
+
+
+def _get_or_compute_ct_prop_stats(cursor, force_refresh: bool = False) -> List[Dict[str, Any]]:
+    if not force_refresh:
+        cursor.execute("SELECT value FROM kv_cache WHERE key = 'ct_completeness_prop_stats'")
+        ct_cache_row = cursor.fetchone()
+        if ct_cache_row and ct_cache_row.get('value'):
+            return ct_cache_row['value']
+
+    ct_city_variants = _get_ct_city_variants(cursor)
+    cursor.execute("""
+        SELECT
+            COALESCE(TRIM(UPPER(property_city)), 'UNKNOWN') as town,
+            COUNT(*)::int as total_properties,
+            COALESCE(SUM(number_of_units), 0) as total_units,
+            COUNT(CASE WHEN building_photo IS NOT NULL OR image_url IS NOT NULL THEN 1 END)::int as with_photos,
+            COUNT(CASE WHEN cama_site_link IS NOT NULL THEN 1 END)::int as with_cama,
+            COUNT(CASE WHEN latitude IS NOT NULL THEN 1 END)::int as with_coords,
+            COUNT(CASE WHEN owner IS NOT NULL AND UPPER(owner) NOT LIKE 'CURRENT OWNER%%' THEN 1 END)::int as with_owner,
+            COUNT(CASE WHEN year_built IS NOT NULL THEN 1 END)::int as with_year_built,
+            COUNT(CASE WHEN living_area IS NOT NULL THEN 1 END)::int as with_living_area
+        FROM properties
+        WHERE property_city = ANY(%s)
+          AND source IS DISTINCT FROM 'NYS_OPEN_DATA'
+        GROUP BY TRIM(UPPER(property_city))
+    """, (ct_city_variants,))
+    ct_prop_rows = [dict(r) for r in cursor.fetchall()]
+    cursor.execute(
+        """
+        INSERT INTO kv_cache (key, value, created_at) VALUES ('ct_completeness_prop_stats', %s::jsonb, NOW())
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, created_at = NOW()
+        """,
+        (json.dumps(ct_prop_rows, default=json_converter),),
+    )
+    return ct_prop_rows
+
+
 def _calculate_ct_dashboard_summary(cursor, city: str) -> Dict[str, Any]:
     selected_city = (city or "STATEWIDE").strip().upper()
     is_statewide = selected_city == "STATEWIDE"
-    city_clause = ""
-    city_params: Tuple[Any, ...] = ()
-    if not is_statewide:
-        city_clause = "AND UPPER(COALESCE(property_city, '')) = %s"
-        city_params = (selected_city,)
+    scalar_city_params: Tuple[Any, ...] = () if is_statewide else (selected_city,)
 
-    cursor.execute(f"""
-        SELECT
-            COUNT(*)::int AS property_count,
-            COALESCE(SUM(number_of_units), 0) AS unit_count,
-            COUNT(DISTINCT UPPER(COALESCE(property_city, '')))::int AS town_count
-        FROM properties
-        WHERE source IS DISTINCT FROM 'NYS_OPEN_DATA'
-          {city_clause}
-    """, city_params)
-    property_row = cursor.fetchone() or {}
+    if is_statewide:
+        ct_rows = _get_or_compute_ct_prop_stats(cursor)
+        has_units = bool(ct_rows and "total_units" in ct_rows[0])
+        if not has_units:
+            ct_rows = _get_or_compute_ct_prop_stats(cursor, force_refresh=True)
+        property_row = {
+            "property_count": sum(int(r.get("total_properties") or 0) for r in ct_rows),
+            "unit_count": sum(float(r.get("total_units") or 0) for r in ct_rows),
+            "town_count": sum(1 for r in ct_rows if int(r.get("total_properties") or 0) > 0),
+        }
 
-    cursor.execute(f"""
-        WITH matched_properties AS (
-            SELECT id, business_id, principal_id
+        cursor.execute("""
+            SELECT
+                COUNT(DISTINCT network_id)::int AS network_count,
+                COUNT(DISTINCT property_id)::int AS network_linked_property_count
+            FROM network_properties
+        """)
+        network_row = cursor.fetchone() or {}
+        if int(network_row.get("network_count") or 0) == 0:
+            cursor.execute("""
+                SELECT
+                    COUNT(*)::int AS network_count,
+                    COALESCE(SUM(total_properties), 0)::int AS network_linked_property_count
+                FROM networks
+                WHERE COALESCE(total_properties, 0) > 0
+            """)
+            network_row = cursor.fetchone() or {}
+
+        cursor.execute("""
+            SELECT COUNT(DISTINCT en.entity_id)::int AS business_count
+            FROM entity_networks en
+            JOIN network_properties np ON np.network_id = en.network_id
+            WHERE en.entity_type = 'business'
+        """)
+        business_row = cursor.fetchone() or {}
+    else:
+        city_variants = [selected_city, selected_city.title(), selected_city.lower()]
+        cursor.execute("""
+            SELECT
+                COUNT(*)::int AS property_count,
+                COALESCE(SUM(number_of_units), 0) AS unit_count,
+                COUNT(DISTINCT UPPER(COALESCE(property_city, '')))::int AS town_count
             FROM properties
-            WHERE source IS DISTINCT FROM 'NYS_OPEN_DATA'
-              {city_clause}
-        ),
-        property_networks AS (
-            SELECT mp.id AS property_id, en.network_id
-            FROM matched_properties mp
-            JOIN entity_networks en
-              ON en.entity_type = 'business'
-             AND mp.business_id::text = en.entity_id
-            WHERE mp.business_id IS NOT NULL
+            WHERE property_city = ANY(%s)
+              AND source IS DISTINCT FROM 'NYS_OPEN_DATA'
+        """, (city_variants,))
+        property_row = cursor.fetchone() or {}
 
-            UNION
+        cursor.execute("""
+            SELECT
+                COUNT(DISTINCT network_id)::int AS network_count,
+                COUNT(DISTINCT property_id)::int AS network_linked_property_count
+            FROM network_properties
+            WHERE property_city = %s
+        """, (selected_city,))
+        network_row = cursor.fetchone() or {}
 
-            SELECT mp.id AS property_id, en.network_id
-            FROM matched_properties mp
-            JOIN entity_networks en
-              ON en.entity_type = 'principal'
-             AND mp.principal_id::text = en.entity_id
-            WHERE mp.principal_id IS NOT NULL
-        )
-        SELECT
-            COUNT(DISTINCT network_id)::int AS network_count,
-            COUNT(DISTINCT property_id)::int AS network_linked_property_count
-        FROM property_networks
-    """, city_params)
-    network_row = cursor.fetchone() or {}
+        cursor.execute("""
+            SELECT COUNT(DISTINCT en.entity_id)::int AS business_count
+            FROM entity_networks en
+            JOIN network_properties np ON np.network_id = en.network_id
+            WHERE np.property_city = %s
+              AND en.entity_type = 'business'
+        """, (selected_city,))
+        business_row = cursor.fetchone() or {}
 
     eviction_clause = ""
     if not is_statewide:
@@ -4414,7 +4690,7 @@ def _calculate_ct_dashboard_summary(cursor, city: str) -> Dict[str, Any]:
             MAX(filing_date) AS last_filing_date
         FROM evictions
         {eviction_clause}
-    """, city_params)
+    """, scalar_city_params)
     eviction_row = cursor.fetchone() or {}
 
     code_clause = ""
@@ -4427,7 +4703,7 @@ def _calculate_ct_dashboard_summary(cursor, city: str) -> Dict[str, Any]:
             MAX(date_opened) AS last_date_opened
         FROM code_enforcement
         {code_clause}
-    """, city_params)
+    """, scalar_city_params)
     code_row = cursor.fetchone() or {}
 
     first_filing_date = eviction_row.get("first_filing_date")
@@ -4436,8 +4712,17 @@ def _calculate_ct_dashboard_summary(cursor, city: str) -> Dict[str, Any]:
     last_code_date = code_row.get("last_date_opened")
 
     cursor.execute("""
-        SELECT MAX(COALESCE(external_last_updated, last_refreshed_at)) AS last_updated
+        SELECT MAX(
+            CASE
+                WHEN external_last_updated IS NOT NULL
+                 AND external_last_updated <= NOW() + INTERVAL '1 day'
+                THEN external_last_updated
+                ELSE last_refreshed_at
+            END
+        ) AS last_updated
         FROM data_source_status
+        WHERE source_name NOT SIMILAR TO '(NYC|DC|BALTIMORE|BOSTON|DETROIT|PHILADELPHIA|CHICAGO|MIAMI|MINNEAPOLIS|NJ|NY_DOS)(_%%)?'
+          AND COALESCE(last_refreshed_at, NOW()) <= NOW() + INTERVAL '1 day'
     """)
     ds_row = cursor.fetchone() or {}
     last_updated_dt = ds_row.get("last_updated")
@@ -4449,6 +4734,7 @@ def _calculate_ct_dashboard_summary(cursor, city: str) -> Dict[str, Any]:
         "data_source": "CT Municipal Assessments & Business Registry",
         "last_updated": last_updated_dt.isoformat() if last_updated_dt else None,
         "network_count": int(network_row.get("network_count") or 0),
+        "business_count": int(business_row.get("business_count") or 0),
         "network_linked_property_count": int(network_row.get("network_linked_property_count") or 0),
         "property_count": int(property_row.get("property_count") or 0),
         "unit_count": int(float(property_row.get("unit_count") or 0)),
@@ -4477,16 +4763,83 @@ def _calculate_ct_dashboard_summary(cursor, city: str) -> Dict[str, Any]:
         }
     }
 
+
+def _refresh_dashboard_summary_async(selected_city: str) -> None:
+    cache_key = f"dashboard_summary:v2:ct:{selected_city}"
+    with _DASHBOARD_SUMMARY_LOCK:
+        if cache_key in _DASHBOARD_SUMMARY_INFLIGHT:
+            return
+        _DASHBOARD_SUMMARY_INFLIGHT.add(cache_key)
+
+    def _worker():
+        bg_conn = None
+        try:
+            if not DATABASE_URL:
+                return
+            bg_conn = psycopg2.connect(DATABASE_URL)
+            with bg_conn.cursor(cursor_factory=RealDictCursor) as cur:
+                data = _calculate_ct_dashboard_summary(cur, selected_city)
+                cur.execute(
+                    """
+                    INSERT INTO kv_cache (key, value, created_at)
+                    VALUES (%s, %s::jsonb, NOW())
+                    ON CONFLICT (key) DO UPDATE SET
+                        value = EXCLUDED.value,
+                        created_at = NOW()
+                    """,
+                    (cache_key, json.dumps(data, default=json_converter)),
+                )
+            bg_conn.commit()
+        except Exception:
+            logger.exception("Background refresh failed for %s", cache_key)
+        finally:
+            if bg_conn:
+                try:
+                    bg_conn.close()
+                except Exception:
+                    pass
+            with _DASHBOARD_SUMMARY_LOCK:
+                _DASHBOARD_SUMMARY_INFLIGHT.discard(cache_key)
+
+    threading.Thread(target=_worker, daemon=True, name=f"summary-{selected_city.lower()}").start()
+
+
+@app.get("/api/landing/snapshot")
+def get_cached_landing_snapshot(refresh: bool = False, conn=Depends(get_db_connection)):
+    """
+    Returns the daily pre-computed landing snapshot (stats + top-3 networks across all
+    live jurisdictions and ranking modes) from kv_cache in single-digit milliseconds.
+    """
+    try:
+        from api.landing_cache import get_landing_snapshot
+        return get_landing_snapshot(conn, refresh=refresh)
+    except Exception:
+        logger.exception("Failed to load landing snapshot cache")
+        raise HTTPException(status_code=500, detail="Failed to load landing snapshot.")
+
+
 @app.get("/api/dashboard/summary")
-def get_dashboard_summary(city: str = "STATEWIDE", conn=Depends(get_db_connection)):
+def get_dashboard_summary(city: str = "STATEWIDE", refresh: bool = False, conn=Depends(get_db_connection)):
     selected_city = (city or "STATEWIDE").strip().upper()
     cache_key = f"dashboard_summary:v2:ct:{selected_city}"
+    stale_cached_value = None
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-            cursor.execute("SELECT value, created_at FROM kv_cache WHERE key = %s", (cache_key,))
+            cursor.execute(
+                """
+                SELECT value, created_at, (created_at > NOW() - INTERVAL '24 hours') AS is_fresh
+                FROM kv_cache
+                WHERE key = %s
+                """,
+                (cache_key,),
+            )
             row = cursor.fetchone()
             if row and row.get("value"):
-                return row["value"]
+                stale_cached_value = row["value"]
+                if not refresh:
+                    if not row.get("is_fresh"):
+                        _refresh_dashboard_summary_async(selected_city)
+                    return row["value"]
 
             data = _calculate_ct_dashboard_summary(cursor, selected_city)
             cursor.execute("""
@@ -4500,18 +4853,12 @@ def get_dashboard_summary(city: str = "STATEWIDE", conn=Depends(get_db_connectio
             return data
     except Exception:
         logger.exception("Could not calculate dashboard summary.")
-        return {
-            "property_count": 1045000,
-            "network_count": 312000,
-            "unit_count": 1250000,
-            "town_count": 169,
-            "code_record_count": 485000
-        }
+        if stale_cached_value:
+            return stale_cached_value
+        raise HTTPException(status_code=503, detail="Dashboard summary temporarily unavailable; refusing to fabricate fallback counts.")
 
 # --- NEW: Data Completeness Report ---
 
-
-from .municipal_config import MUNICIPAL_DATA_SOURCES
 
 def _calculate_completeness_matrix(conn):
     """
@@ -4520,11 +4867,15 @@ def _calculate_completeness_matrix(conn):
     logger.info("Calculating Data Completeness Matrix...")
 
     with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        # Check active cities
+        # Check active cities & statewide partitions
         active_cities = []
-        for city in ["nyc", "dc", "baltimore", "boston", "detroit", "philadelphia", "chicago", "miami", "minneapolis", "nj"]:
+        for city in [
+            "nyc", "dc", "baltimore", "boston", "detroit", "philadelphia",
+            "chicago", "miami", "minneapolis", "nj",
+            "ma", "fl", "ny", "co", "vt", "wi", "nc", "ar", "va",
+        ]:
             try:
-                cursor.execute(f"SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = '{city}_properties')")
+                cursor.execute("SELECT to_regclass(%s) IS NOT NULL AS exists", (f"public.{city}_properties",))
                 row = cursor.fetchone()
                 if row and row['exists']:
                     active_cities.append(city)
@@ -4547,41 +4898,38 @@ def _calculate_completeness_matrix(conn):
                 FROM {city}_properties
             """)
 
-        union_sql = ""
-        if union_subqueries:
-            union_sql = " UNION ALL " + " UNION ALL ".join(union_subqueries)
+        ct_prop_rows = _get_or_compute_ct_prop_stats(cursor)
+        conn.commit()
 
-        query = f"""
-            WITH prop_stats AS (
-                SELECT
-                    COALESCE(TRIM(UPPER(property_city)), 'UNKNOWN') as town,
-                    COUNT(*) as total_properties,
-                    COUNT(CASE WHEN building_photo IS NOT NULL OR image_url IS NOT NULL THEN 1 END) as with_photos,
-                    COUNT(CASE WHEN cama_site_link IS NOT NULL THEN 1 END) as with_cama,
-                    COUNT(CASE WHEN latitude IS NOT NULL THEN 1 END) as with_coords,
-                    COUNT(CASE WHEN owner IS NOT NULL AND UPPER(owner) NOT LIKE 'CURRENT OWNER%' THEN 1 END) as with_owner,
-                    COUNT(CASE WHEN year_built IS NOT NULL THEN 1 END) as with_year_built,
-                    COUNT(CASE WHEN living_area IS NOT NULL THEN 1 END) as with_living_area
-                FROM properties
-                WHERE source IS DISTINCT FROM 'NYS_OPEN_DATA'
-                GROUP BY TRIM(UPPER(property_city))
-                {union_sql}
-            )
+        city_prop_rows = []
+        if union_subqueries:
+            cursor.execute(" UNION ALL ".join(union_subqueries))
+            city_prop_rows = [dict(r) for r in cursor.fetchall()]
+
+        cursor.execute("""
             SELECT
-                ps.*,
+                source_name,
                 CASE
-                    WHEN ds.refresh_status = 'running' AND ds.last_refreshed_at < NOW() - INTERVAL '6 hours' THEN 'failure'
-                    ELSE ds.refresh_status
+                    WHEN refresh_status = 'running' AND last_refreshed_at < NOW() - INTERVAL '6 hours' THEN 'failure'
+                    ELSE refresh_status
                 END as refresh_status,
-                ds.last_refreshed_at,
-                ds.details,
-                ds.external_last_updated
-            FROM prop_stats ps
-            LEFT JOIN data_source_status ds ON ps.town = ds.source_name
-            ORDER BY ps.town;
-        """
-        cursor.execute(query)
-        prop_rows = cursor.fetchall()
+                last_refreshed_at,
+                details,
+                external_last_updated
+            FROM data_source_status
+        """)
+        ds_by_name = {r['source_name']: r for r in cursor.fetchall()}
+
+        prop_rows = []
+        for base_row in (ct_prop_rows + city_prop_rows):
+            ds = ds_by_name.get(base_row['town'], {})
+            merged = dict(base_row)
+            merged['refresh_status'] = ds.get('refresh_status')
+            merged['last_refreshed_at'] = ds.get('last_refreshed_at')
+            merged['details'] = ds.get('details')
+            merged['external_last_updated'] = ds.get('external_last_updated')
+            prop_rows.append(merged)
+        prop_rows.sort(key=lambda r: r['town'] or '')
 
         # Fetch system sources
         cursor.execute("""
@@ -4600,46 +4948,68 @@ def _calculate_completeness_matrix(conn):
              system_freshness[key] = r['last_refreshed_at'].isoformat() if r['last_refreshed_at'] else None
 
         city_dataset_prefixes = {
-            "NYC": ["NYC"],
-            "DC": ["DC"],
-            "BALTIMORE": ["BALTIMORE"],
-            "BOSTON": ["BOSTON"],
-            "DETROIT": ["DETROIT"],
-            "PHILADELPHIA": ["PHILADELPHIA"],
-            "CHICAGO": ["CHICAGO"],
-            "MIAMI": ["MIAMI"],
-            "MINNEAPOLIS": ["MINNEAPOLIS"],
-            "NJ": ["NJ"],
+            "NYC": ["NYC", "NY_DOS", "OC_US_NY"],
+            "NY": ["NY", "NY_DOS", "BUFFALO", "OC_US_NY"],
+            "DC": ["DC", "OC_US_DC"],
+            "BALTIMORE": ["BALTIMORE", "OC_US_MD"],
+            "BOSTON": ["BOSTON", "OC_US_MA"],
+            "DETROIT": ["DETROIT", "OC_US_MI"],
+            "PHILADELPHIA": ["PHILADELPHIA", "PA_DOS", "OC_US_PA"],
+            "CHICAGO": ["CHICAGO", "OC_US_IL"],
+            "MIAMI": ["MIAMI", "FL_SUNBIZ", "FL_DBPR", "OC_US_FL"],
+            "MINNEAPOLIS": ["MINNEAPOLIS", "OC_US_MN"],
+            "NJ": ["NJ", "OC_US_NJ"],
+            "MA": ["MA", "OC_US_MA"],
+            "FL": ["FL", "FL_SUNBIZ", "FL_DBPR", "OC_US_FL"],
+            "CO": ["CO", "DENVER", "OC_US_CO"],
+            "VT": ["VT", "OC_US_VT"],
+            "WI": ["WI", "OC_US_WI"],
+            "NC": ["NC", "OC_US_NC"],
+            "AR": ["AR", "OC_US_AR"],
+            "VA": ["VA", "OC_US_VA"],
         }
         cursor.execute("""
             SELECT source_name, source_type, external_last_updated, last_refreshed_at,
                    refresh_status, details
             FROM data_source_status
             WHERE source_name LIKE 'NYC%%'
+               OR source_name = 'NY' OR source_name LIKE 'NY_%%'
+               OR source_name LIKE 'BUFFALO_%%'
                OR source_name LIKE 'DC%%'
                OR source_name LIKE 'BALTIMORE%%'
                OR source_name LIKE 'BOSTON%%'
                OR source_name LIKE 'DETROIT%%'
                OR source_name LIKE 'PHILADELPHIA%%'
+               OR source_name LIKE 'PA_DOS%%'
                OR source_name LIKE 'CHICAGO%%'
                OR source_name LIKE 'MIAMI%%'
                OR source_name LIKE 'MINNEAPOLIS%%'
                OR source_name LIKE 'NJ%%'
+               OR source_name = 'MA' OR source_name LIKE 'MA_%%'
+               OR source_name = 'FL' OR source_name LIKE 'FL_%%'
+               OR source_name = 'CO' OR source_name LIKE 'CO_%%'
+               OR source_name LIKE 'DENVER_%%'
+               OR source_name = 'VT' OR source_name LIKE 'VT_%%'
+               OR source_name = 'WI' OR source_name LIKE 'WI_%%'
+               OR source_name = 'NC' OR source_name LIKE 'NC_%%'
+               OR source_name = 'AR' OR source_name LIKE 'AR_%%'
+               OR source_name = 'VA' OR source_name LIKE 'VA_%%'
+               OR source_name LIKE 'OC_%%'
             ORDER BY source_name
         """)
         city_dataset_rows = cursor.fetchall()
         city_datasets: Dict[str, List[Dict[str, Any]]] = {key: [] for key in city_dataset_prefixes}
         for ds in city_dataset_rows:
             source_name = (ds.get("source_name") or "").upper()
-            city_key = next(
-                (
-                    city
-                    for city, prefixes in city_dataset_prefixes.items()
-                    if any(source_name.startswith(prefix) for prefix in prefixes)
-                ),
-                None
-            )
-            if not city_key:
+            matched_city_keys = [
+                city
+                for city, prefixes in city_dataset_prefixes.items()
+                if any(
+                    source_name == prefix or source_name.startswith(prefix + "_")
+                    for prefix in prefixes
+                )
+            ]
+            if not matched_city_keys:
                 continue
             details = ds.get("details") or {}
             if isinstance(details, str):
@@ -4647,19 +5017,60 @@ def _calculate_completeness_matrix(conn):
                     details = json.loads(details)
                 except Exception:
                     details = {"message": details}
-            city_datasets[city_key].append({
+            props_count = (
+                details.get("properties_count")
+                or details.get("properties_loaded")
+                or details.get("deduped_buildings")
+                or details.get("features_processed")
+                or details.get("companies_count")
+            )
+            matched_props = (
+                details.get("matched_properties")
+                or details.get("matched_parcels")
+                or details.get("matched_licenses")
+                or details.get("buffalo_active_rental_registrations")
+            )
+            source_recs = (
+                details.get("source_records")
+                or props_count
+                or details.get("csv_rows_processed")
+                or details.get("active_apartment_licenses_statewide")
+                or details.get("blight_processed")
+                or details.get("registrations")
+                or details.get("nhpd_processed")
+            )
+            matched_recs = (
+                details.get("matched_records")
+                or details.get("matched_source_records")
+                or details.get("officers_count")
+                or details.get("buffalo_matched_code_violations")
+                or matched_props
+                or details.get("blight_matched")
+                or details.get("nhpd_matched")
+            )
+
+            entry_payload = {
                 "source_name": ds.get("source_name"),
                 "source_type": ds.get("source_type"),
                 "status": ds.get("refresh_status") or "unknown",
                 "external_last_updated": ds.get("external_last_updated").isoformat() if ds.get("external_last_updated") else None,
                 "last_refreshed_at": ds.get("last_refreshed_at").isoformat() if ds.get("last_refreshed_at") else None,
                 "source_url": details.get("source_url") or details.get("source_dataset") or details.get("sam_crosswalk_source"),
-                "source_records": details.get("source_records"),
-                "matched_records": details.get("matched_records") or details.get("matched_source_records"),
-                "matched_parcels": details.get("matched_parcels"),
+                "source_records": source_recs,
+                "matched_records": matched_recs,
+                "matched_parcels": details.get("matched_parcels") or matched_props,
+                "properties_count": props_count,
+                "properties_examined": details.get("properties_examined"),
+                "matched_properties": matched_props,
+                "unique_subsidies": details.get("unique_nhpd_properties_matched"),
+                "state_subsidies": details.get("nhpd_state_records"),
+                "match_methods": details.get("match_methods"),
                 "message": details.get("message") or details.get("eviction_note") or details.get("join_note"),
-                "sources": details.get("sources") if isinstance(details.get("sources"), list) else []
-            })
+                "sources": details.get("sources") if isinstance(details.get("sources"), list) else [],
+                "details": details
+            }
+            for city_key in matched_city_keys:
+                city_datasets[city_key].append(entry_payload)
 
         # Format for frontend
         sources = []
@@ -4734,6 +5145,33 @@ def _calculate_completeness_matrix(conn):
             elif town_upper == "NJ":
                 state = "NJ"
                 portal_url = "https://www.nj.gov/dca/codes/offices/bhi.shtml"
+            elif town_upper == "MA":
+                state = "MA"
+                portal_url = "https://www.mass.gov/info-details/massgis-data-property-tax-parcels"
+            elif town_upper == "FL":
+                state = "FL"
+                portal_url = "https://www.floridagio.gov/datasets/FGIO::florida-statewide-cadastral/about"
+            elif town_upper == "NY":
+                state = "NY"
+                portal_url = "https://data.gis.ny.gov/datasets/sharegisny::nys-tax-parcels-public/about"
+            elif town_upper == "CO":
+                state = "CO"
+                portal_url = "https://geodata.colorado.gov/datasets/colorado-public-parcels"
+            elif town_upper == "VT":
+                state = "VT"
+                portal_url = "https://geodata.vermont.gov/pages/parcels"
+            elif town_upper == "WI":
+                state = "WI"
+                portal_url = "https://www.sco.wisc.edu/parcels/data/"
+            elif town_upper == "NC":
+                state = "NC"
+                portal_url = "https://www.nconemap.gov/pages/parcels"
+            elif town_upper == "AR":
+                state = "AR"
+                portal_url = "https://gis.arkansas.gov/product/parcels-polygon/"
+            elif town_upper == "VA":
+                state = "VA"
+                portal_url = "https://vgin.vdem.virginia.gov/pages/parcels"
 
             sources.append({
                 "municipality": row['town'],
@@ -4872,7 +5310,43 @@ def get_reports(conn=Depends(get_db_connection)):
 NON_CT_MONITOR_CITIES = {
     "NYC": {"db_prefix": "nyc", "name": "New York City", "state": "NY"},
     "NY": {"db_prefix": "nyc", "name": "New York City", "state": "NY"},
+    "NEW YORK CITY": {"db_prefix": "nyc", "name": "New York City", "state": "NY"},
+    "NYS": {"db_prefix": "ny", "name": "New York State", "state": "NY"},
+    "NEW YORK STATE": {"db_prefix": "ny", "name": "New York State", "state": "NY"},
+    "DETROIT": {"db_prefix": "detroit", "name": "Detroit", "state": "MI"},
+    "MI": {"db_prefix": "detroit", "name": "Detroit", "state": "MI"},
+    "DC": {"db_prefix": "dc", "name": "Washington, D.C.", "state": "DC"},
+    "BALTIMORE": {"db_prefix": "baltimore", "name": "Baltimore", "state": "MD"},
+    "MD": {"db_prefix": "baltimore", "name": "Baltimore", "state": "MD"},
+    "BOSTON": {"db_prefix": "boston", "name": "Boston", "state": "MA"},
+    "MA": {"db_prefix": "ma", "name": "Massachusetts", "state": "MA"},
+    "MASSACHUSETTS": {"db_prefix": "ma", "name": "Massachusetts", "state": "MA"},
+    "PHILADELPHIA": {"db_prefix": "philadelphia", "name": "Philadelphia", "state": "PA"},
+    "PA": {"db_prefix": "philadelphia", "name": "Philadelphia", "state": "PA"},
+    "CHICAGO": {"db_prefix": "chicago", "name": "Chicago", "state": "IL"},
+    "IL": {"db_prefix": "chicago", "name": "Chicago", "state": "IL"},
+    "MIAMI": {"db_prefix": "miami", "name": "Miami", "state": "FL"},
+    "FL": {"db_prefix": "fl", "name": "Florida", "state": "FL"},
+    "FLORIDA": {"db_prefix": "fl", "name": "Florida", "state": "FL"},
+    "MINNEAPOLIS": {"db_prefix": "minneapolis", "name": "Minneapolis", "state": "MN"},
+    "MN": {"db_prefix": "minneapolis", "name": "Minneapolis", "state": "MN"},
+    "NJ": {"db_prefix": "nj", "name": "New Jersey", "state": "NJ"},
+    "NEW JERSEY": {"db_prefix": "nj", "name": "New Jersey", "state": "NJ"},
+    "CO": {"db_prefix": "co", "name": "Colorado", "state": "CO"},
+    "COLORADO": {"db_prefix": "co", "name": "Colorado", "state": "CO"},
+    "VT": {"db_prefix": "vt", "name": "Vermont", "state": "VT"},
+    "VERMONT": {"db_prefix": "vt", "name": "Vermont", "state": "VT"},
+    "WI": {"db_prefix": "wi", "name": "Wisconsin", "state": "WI"},
+    "WISCONSIN": {"db_prefix": "wi", "name": "Wisconsin", "state": "WI"},
+    "NC": {"db_prefix": "nc", "name": "North Carolina", "state": "NC"},
+    "NORTH CAROLINA": {"db_prefix": "nc", "name": "North Carolina", "state": "NC"},
+    "AR": {"db_prefix": "ar", "name": "Arkansas", "state": "AR"},
+    "ARKANSAS": {"db_prefix": "ar", "name": "Arkansas", "state": "AR"},
+    "VA": {"db_prefix": "va", "name": "Virginia", "state": "VA"},
+    "VIRGINIA": {"db_prefix": "va", "name": "Virginia", "state": "VA"},
 }
+
+NON_CT_INSTITUTIONAL_REGEX = THIRD_PARTY_INSTITUTIONAL_SQL_PATTERN
 
 @app.get("/api/monitor")
 @app.get("/api/hartford/playground")  # Backwards compatibility
@@ -4902,14 +5376,40 @@ def get_landlord_monitor(
                 SUM(COALESCE(s.violations_total, 0))::int AS violation_count,
                 SUM(COALESCE(s.violations_open, 0))::int AS active_violation_count,
                 (SUM(COALESCE(s.violations_total, 0)) - SUM(COALESCE(s.violations_open, 0)))::int AS closed_violation_count,
-                SUM(COALESCE(s.violations_open, 0))::int AS violations_last_365d,
+                0::int AS violations_last_365d,
                 MAX(s.last_violation_date) AS last_violation_date,
                 SUM(COALESCE(s.evictions_total, 0))::int AS eviction_count,
                 MAX(s.last_eviction_date) AS last_eviction_date
             FROM {db_prefix}_networks n
             CROSS JOIN LATERAL UNNEST(n.bbl_list) AS bbl_id
-            LEFT JOIN {db_prefix}_bbl_stats s ON s.bbl = bbl_id
+            JOIN {db_prefix}_bbl_stats s ON s.bbl = bbl_id
+            WHERE COALESCE(s.violations_total, 0) > 0 OR COALESCE(s.evictions_total, 0) > 0
             GROUP BY n.network_key
+        ),
+        top_raw AS (
+            SELECT
+                n.network_key,
+                n.display_name,
+                n.building_count,
+                n.member_names,
+                n.connection_signals,
+                stats.violation_count,
+                stats.active_violation_count,
+                stats.closed_violation_count,
+                stats.violations_last_365d,
+                stats.last_violation_date,
+                stats.eviction_count,
+                stats.last_eviction_date
+            FROM {db_prefix}_networks n
+            JOIN network_bbl_stats stats ON stats.network_key = n.network_key
+            WHERE (CASE WHEN %s = 'violations' THEN COALESCE(stats.violation_count, 0)
+                        ELSE COALESCE(stats.eviction_count, 0) END) > 0
+            ORDER BY
+                CASE WHEN %s = 'violations' THEN COALESCE(stats.violation_count, 0)
+                     ELSE COALESCE(stats.eviction_count, 0)
+                END DESC,
+                n.network_key
+            LIMIT 300
         ),
         candidate_networks AS (
             SELECT
@@ -4920,20 +5420,20 @@ def get_landlord_monitor(
                 COALESCE(n.building_count, 0)::int AS property_count,
                 COALESCE(ARRAY_LENGTH(n.member_names, 1), 0)::int AS network_business_count,
                 0::int AS network_principal_count,
-                COALESCE(stats.violation_count, 0)::int AS violation_count,
-                COALESCE(stats.active_violation_count, 0)::int AS active_violation_count,
-                COALESCE(stats.closed_violation_count, 0)::int AS closed_violation_count,
-                COALESCE(stats.violations_last_365d, 0)::int AS violations_last_365d,
-                stats.last_violation_date,
-                COALESCE(stats.eviction_count, 0)::int AS eviction_count,
-                stats.last_eviction_date,
+                COALESCE(n.violation_count, 0)::int AS violation_count,
+                COALESCE(n.active_violation_count, 0)::int AS active_violation_count,
+                COALESCE(n.closed_violation_count, 0)::int AS closed_violation_count,
+                COALESCE(n.violations_last_365d, 0)::int AS violations_last_365d,
+                n.last_violation_date,
+                COALESCE(n.eviction_count, 0)::int AS eviction_count,
+                n.last_eviction_date,
                 n.member_names AS violation_businesses,
                 n.connection_signals
-            FROM {db_prefix}_networks n
-            LEFT JOIN network_bbl_stats stats ON stats.network_key = n.network_key
+            FROM top_raw n
+            WHERE COALESCE(CONCAT_WS(' ', n.display_name, ARRAY_TO_STRING(n.member_names, ' ')), '') !~* %s
             ORDER BY
-                CASE WHEN %s = 'violations' THEN COALESCE(stats.violation_count, 0)
-                     ELSE COALESCE(stats.eviction_count, 0)
+                CASE WHEN %s = 'violations' THEN COALESCE(n.violation_count, 0)
+                     ELSE COALESCE(n.eviction_count, 0)
                 END DESC,
                 n.network_key
             LIMIT 100
@@ -4955,7 +5455,7 @@ def get_landlord_monitor(
             0::int AS entity_closed_violation_count,
             active_violation_count,
             0::int AS entity_active_violation_count,
-            violations_last_365d AS violations_last_90d,
+            0::int AS violations_last_90d,
             violations_last_365d,
             0::int AS entity_violations_last_90d,
             0::int AS entity_violations_last_365d,
@@ -5000,7 +5500,7 @@ def get_landlord_monitor(
         """
         try:
             with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-                cursor.execute(query, (sort_by, selected_city))
+                cursor.execute(query, (sort_by, sort_by, NON_CT_INSTITUTIONAL_REGEX, sort_by, selected_city))
                 rows = cursor.fetchall()
                 import json
                 for row in rows:
@@ -5037,17 +5537,25 @@ def get_landlord_monitor(
 
     is_statewide = selected_city in ("STATEWIDE", "CT", "CONNECTICUT")
     is_hartford = selected_city == "HARTFORD"
-    city_property_filter_sql = "" if is_statewide else "WHERE UPPER(property_city) = %s"
 
-    # Build date filter clause
+    # Build date filter clauses for evictions and code enforcement
     date_params = []
     date_clause = ""
+    ce_date_params = []
+    ce_date_clause = ""
     if date_from:
         date_clause += " AND e.filing_date >= %s"
         date_params.append(date_from)
+        ce_date_clause += " AND ce.date_opened >= %s"
+        ce_date_params.append(date_from)
     if date_to:
         date_clause += " AND e.filing_date <= %s"
         date_params.append(date_to)
+        ce_date_clause += " AND ce.date_opened <= %s"
+        ce_date_params.append(date_to)
+
+    eviction_city_clause = "" if is_statewide else " AND UPPER(TRIM(e.municipality)) = %s"
+    eviction_city_params = [] if is_statewide else [selected_city]
 
     # ── LLC dimension ──────────────────────────────────────────
     if dimension == "llc":
@@ -5065,6 +5573,7 @@ def get_landlord_monitor(
                     WHERE e.plaintiff_norm IS NOT NULL
                       AND TRIM(e.plaintiff_norm) NOT IN ('', '\\N')
                       AND e.filing_date IS NOT NULL
+                      {eviction_city_clause}
                       {date_clause}
                 ),
                 agg AS (
@@ -5088,10 +5597,11 @@ def get_landlord_monitor(
                     HAVING COUNT(*) >= 2
                 )
                 SELECT * FROM agg
+                WHERE dim_key !~* %s
                 ORDER BY eviction_count DESC
                 LIMIT 100
                 """
-                params = list(date_params)
+                params = list(eviction_city_params) + list(date_params) + [NON_CT_INSTITUTIONAL_REGEX]
                 cursor.execute(query, params)
                 rows = cursor.fetchall()
                 return [
@@ -5147,6 +5657,7 @@ def get_landlord_monitor(
                     WHERE {atty_key} IS NOT NULL
                       AND TRIM({atty_key}) NOT IN ('', '\\N', 'n/a', 'N/A')
                       AND e.filing_date IS NOT NULL
+                      {eviction_city_clause}
                       {date_clause}
                 ),
                 agg AS (
@@ -5173,7 +5684,7 @@ def get_landlord_monitor(
                 ORDER BY eviction_count DESC
                 LIMIT 100
                 """
-                params = list(date_params)
+                params = list(eviction_city_params) + list(date_params)
                 cursor.execute(query, params)
                 rows = cursor.fetchall()
                 return [
@@ -5225,29 +5736,35 @@ def get_landlord_monitor(
             )
 
             # ── STEP 1 & 2: Find top 100 candidate networks using indexed network_properties ──
-            city_clause = "" if is_statewide else "WHERE np.property_city = %s"
+            city_clause = "WHERE 1=1" if is_statewide else "WHERE np.property_city = %s"
             city_params = [] if is_statewide else [selected_city]
 
             if sort_by == "violations":
                 cursor.execute(f"""
                     SELECT np.network_id, COUNT(DISTINCT ce.id)::int AS cnt
                     FROM network_properties np
+                    JOIN networks n ON n.id = np.network_id
                     JOIN code_enforcement ce ON ce.property_id = np.property_id
                     {city_clause}
+                    AND COALESCE(n.primary_name, '') !~* %s
+                    {ce_date_clause}
                     GROUP BY np.network_id
                     ORDER BY cnt DESC
                     LIMIT 100
-                """, city_params)
+                """, city_params + [NON_CT_INSTITUTIONAL_REGEX] + ce_date_params)
             else:
                 cursor.execute(f"""
                     SELECT np.network_id, COUNT(DISTINCT e.id)::int AS cnt
                     FROM network_properties np
+                    JOIN networks n ON n.id = np.network_id
                     JOIN evictions e ON e.property_id = np.property_id
                     {city_clause}
+                    AND COALESCE(n.primary_name, '') !~* %s
+                    {date_clause}
                     GROUP BY np.network_id
                     ORDER BY cnt DESC
                     LIMIT 100
-                """, city_params)
+                """, city_params + [NON_CT_INSTITUTIONAL_REGEX] + date_params)
 
             candidate_rows = cursor.fetchall()
             candidate_ids = [r["network_id"] for r in candidate_rows]
@@ -5261,7 +5778,7 @@ def get_landlord_monitor(
             
             cursor.execute(f"""
                 CREATE TEMP TABLE tmp_monitor_sw_net_props AS
-                SELECT network_id, property_id, property_city
+                SELECT network_id, property_id, UPPER(TRIM(property_city)) AS property_city
                 FROM network_properties
                 WHERE network_id = ANY(%s)
             """, (candidate_ids,))
@@ -5309,6 +5826,7 @@ def get_landlord_monitor(
                 FROM tmp_monitor_city_net_props cnpl
                 JOIN code_enforcement ce ON ce.property_id = cnpl.property_id
                 WHERE cnpl.network_id = ANY(%s::int[])
+                  {ce_date_clause}
                 GROUP BY cnpl.network_id
             ),
             network_eviction_cases_raw AS (
@@ -5322,6 +5840,7 @@ def get_landlord_monitor(
                 FROM tmp_monitor_sw_net_props snpl
                 JOIN evictions e ON e.property_id = snpl.property_id
                 WHERE snpl.network_id = ANY(%s::int[])
+                  {date_clause}
             ),
             network_eviction_cases AS (
                 SELECT DISTINCT ON (network_id, eviction_key)
@@ -5383,8 +5902,15 @@ def get_landlord_monitor(
             ),
             ranked_entities AS (
                 SELECT en.network_id, en.entity_id, en.entity_name, en.entity_type, en.normalized_name,
-                    ROW_NUMBER() OVER (PARTITION BY en.network_id ORDER BY (en.entity_type = 'principal') DESC, length(en.entity_name) ASC) AS rank
+                    ROW_NUMBER() OVER (
+                        PARTITION BY en.network_id
+                        ORDER BY
+                            (UPPER(TRIM(en.entity_name)) = UPPER(TRIM(COALESCE(n.primary_name, '')))) DESC,
+                            (en.entity_type = 'principal') DESC,
+                            en.entity_id ASC
+                    ) AS rank
                 FROM entity_networks en
+                LEFT JOIN networks n ON n.id = en.network_id
                 WHERE en.network_id = ANY(%s::int[])
             ),
             representative_entities AS (
@@ -5394,7 +5920,10 @@ def get_landlord_monitor(
             network_entity_counts AS (
                 SELECT en.network_id,
                     COUNT(*) FILTER (WHERE en.entity_type = 'business')::int AS network_business_count,
-                    COUNT(*) FILTER (WHERE en.entity_type = 'principal')::int AS network_principal_count
+                    COUNT(*) FILTER (
+                        WHERE en.entity_type = 'principal'
+                          AND NOT (en.entity_name ~* '(LLC|INC|CORP|LTD|GROUP|HOLDINGS|REALTY|MANAGEMENT|TRUST|LP|PARTNERSHIP|FUND|INVESTMENT)')
+                    )::int AS network_principal_count
                 FROM entity_networks en
                 WHERE en.network_id = ANY(%s::int[])
                 GROUP BY en.network_id
@@ -5480,7 +6009,7 @@ def get_landlord_monitor(
             LEFT JOIN attorney_surge asg ON re.network_id = asg.network_id
             WHERE ((%s::boolean AND COALESCE(nv.violation_count, 0) > 0) OR COALESCE(ne.eviction_count, 0) > 0)
             ORDER BY
-                CASE WHEN %s = 'violations' AND %s::boolean
+                CASE WHEN %s = 'violations'
                     THEN COALESCE(nv.violation_count, 0)
                     WHEN %s = 'attorneys'
                     THEN COALESCE(asg.attorney_surge_filings, 0)
@@ -5497,21 +6026,26 @@ def get_landlord_monitor(
                 ) DESC
             LIMIT 100
             """
+            # Code-enforcement rows are joined by property_id, so a statewide
+            # selection still carries every municipality's cases that we hold.
+            # Gating the violations sort on is_hartford silently demoted it to an
+            # eviction sort everywhere else; gate on "did the caller ask for it".
+            code_scope_available = is_hartford or is_statewide
             params = (
-                candidate_ids,  # candidate_networks unnest
-                candidate_ids,  # network_violations filter
-                is_statewide,   # in_selected_city boolean
-                selected_city,  # in_selected_city city match
-                candidate_ids,  # network_eviction_cases filter
-                candidate_ids,  # ranked_entities filter
-                candidate_ids,  # network_entity_counts filter
-                selected_city,  # selected_city output
-                is_hartford,    # code_data_available
-                is_hartford,    # WHERE clause
-                sort_by,        # ORDER BY
-                is_hartford,    # ORDER BY code check
-                sort_by,        # ORDER BY attorneys check
-                is_hartford,    # ORDER BY secondary
+                [candidate_ids, candidate_ids]
+                + ce_date_params
+                + [is_statewide, selected_city, candidate_ids]
+                + date_params
+                + [
+                    candidate_ids,  # ranked_entities filter
+                    candidate_ids,  # network_entity_counts filter
+                    selected_city,  # selected_city output
+                    code_scope_available,  # code_data_available
+                    code_scope_available,  # WHERE clause
+                    sort_by,        # ORDER BY
+                    sort_by,        # ORDER BY attorneys check
+                    code_scope_available,  # ORDER BY secondary
+                ]
             )
             cursor.execute(query, params)
             rows = cursor.fetchall()
@@ -5520,13 +6054,19 @@ def get_landlord_monitor(
             if rows:
                 all_network_ids = [r["network_id"] for r in rows]
 
-                # Batch principals query
+                # Batch HUMAN principals query (ordered by linked business count, excluding entity/LLC members)
                 cursor.execute("""
-                    SELECT en.network_id, MIN(INITCAP(pr.name_c)) as name, MAX(pr.state) as state
+                    SELECT en.network_id,
+                           MIN(INITCAP(pr.name_c)) as name,
+                           MAX(pr.state) as state,
+                           COUNT(DISTINCT pr.business_id) as biz_cnt
                     FROM principals pr
                     JOIN entity_networks en ON pr.business_id = en.entity_id AND en.entity_type = 'business'
                     WHERE en.network_id = ANY(%s)
+                      AND pr.name_c IS NOT NULL
+                      AND NOT (pr.name_c ~* '(LLC|INC|CORP|LTD|GROUP|HOLDINGS|REALTY|MANAGEMENT|TRUST|LP|PARTNERSHIP|FUND|INVESTMENT)')
                     GROUP BY en.network_id, UPPER(pr.name_c)
+                    ORDER BY en.network_id, COUNT(DISTINCT pr.business_id) DESC, MIN(INITCAP(pr.name_c)) ASC
                 """, (all_network_ids,))
                 principals_by_network = {}
                 for pr in cursor.fetchall():
@@ -5602,12 +6142,12 @@ def get_monitor_city_stats(
                     "eviction_data_available": bool(row["total_evictions"] > 0),
                 }
             else:
-                is_statewide = selected_city == "STATEWIDE"
+                is_statewide = selected_city in ("STATEWIDE", "CT", "CONNECTICUT")
                 if is_statewide:
                     eviction_query = f"SELECT COUNT(*)::int FROM evictions WHERE filing_date IS NOT NULL{date_clause}"
                     eviction_params = date_params
                 else:
-                    eviction_query = f"SELECT COUNT(*)::int FROM evictions WHERE UPPER(municipality) = %s AND filing_date IS NOT NULL{date_clause}"
+                    eviction_query = f"SELECT COUNT(*)::int FROM evictions WHERE UPPER(TRIM(municipality)) = %s AND filing_date IS NOT NULL{date_clause}"
                     eviction_params = [selected_city] + date_params
 
                 cursor.execute(eviction_query, eviction_params)
@@ -5616,8 +6156,10 @@ def get_monitor_city_stats(
                 total_violations = 0
                 open_violations = 0
                 is_hartford = selected_city == "HARTFORD"
-                if is_hartford:
-                    cursor.execute("""
+                if is_hartford or is_statewide:
+                    ce_where = "WHERE date_opened >= %s" if date_from else ""
+                    ce_params = [date_from] if date_from else []
+                    cursor.execute(f"""
                         SELECT
                             COUNT(*)::int AS total_violations,
                             COUNT(*) FILTER (
@@ -5629,7 +6171,8 @@ def get_monitor_city_stats(
                                 )
                             )::int AS open_violations
                         FROM code_enforcement
-                    """)
+                        {ce_where}
+                    """, ce_params)
                     v_row = cursor.fetchone()
                     total_violations = v_row["total_violations"]
                     open_violations = v_row["open_violations"]
@@ -5638,7 +6181,7 @@ def get_monitor_city_stats(
                     "total_evictions": total_evictions,
                     "total_violations": total_violations,
                     "open_violations": open_violations,
-                    "code_data_available": is_hartford,
+                    "code_data_available": is_hartford or is_statewide,
                     "eviction_data_available": True,
                 }
     except Exception as e:
@@ -5649,35 +6192,47 @@ def get_monitor_city_stats(
 @app.get("/api/monitor/cities", response_model=List[str])
 def get_monitor_cities(evictions_only: bool = Query(False), conn=Depends(get_db_connection)):
     """Top municipalities by property count or eviction case count for the city monitor selector."""
+    cache_key = f"evictions_{evictions_only}"
+    now = time.time()
+    if cache_key in _MONITOR_CITIES_CACHE:
+        ts, data = _MONITOR_CITIES_CACHE[cache_key]
+        if now - ts < 3600:
+            return data
+
     try:
         with conn.cursor() as cursor:
             if evictions_only:
                 cursor.execute(
                     """
-                    SELECT UPPER(TRIM(p.property_city)) AS city
-                    FROM properties p
-                    JOIN evictions e ON e.property_id = p.id
-                    WHERE p.property_city IS NOT NULL AND TRIM(p.property_city) <> ''
-                    GROUP BY UPPER(TRIM(p.property_city))
-                    HAVING COUNT(e.id) > 0
-                    ORDER BY COUNT(e.id) DESC, UPPER(TRIM(p.property_city))
-                    """
-                )
-            else:
-                cursor.execute(
-                    """
-                    SELECT UPPER(TRIM(property_city)) AS city
-                    FROM properties
-                    WHERE property_city IS NOT NULL AND TRIM(property_city) <> ''
-                    GROUP BY UPPER(TRIM(property_city))
-                    ORDER BY COUNT(*) DESC, UPPER(TRIM(property_city))
+                    SELECT UPPER(TRIM(municipality)) AS city
+                    FROM evictions
+                    WHERE municipality IS NOT NULL AND TRIM(municipality) <> ''
+                    GROUP BY UPPER(TRIM(municipality))
+                    ORDER BY COUNT(*) DESC, UPPER(TRIM(municipality))
                     LIMIT 200
                     """
                 )
-            ct_cities = [r[0] for r in cursor.fetchall() if r and r[0]]
+                ct_cities = [r[0] for r in cursor.fetchall() if r and r[0]]
+            else:
+                try:
+                    from api.municipal_config import MUNICIPAL_DATA_SOURCES
+                    configured_towns = sorted(list(MUNICIPAL_DATA_SOURCES.keys()))
+                except Exception:
+                    configured_towns = []
+
+                priority_cities = [
+                    "HARTFORD", "NEW HAVEN", "BRIDGEPORT", "WATERBURY", "STAMFORD",
+                    "NORWALK", "DANBURY", "NEW BRITAIN", "WEST HAVEN", "GREENWICH",
+                    "HAMDEN", "MERIDEN", "BRISTOL", "MANCHESTER", "WEST HARTFORD",
+                    "EAST HARTFORD", "MIDDLETOWN", "WALLINGFORD", "NORWICH", "GROTON"
+                ]
+                ct_cities = priority_cities + [t for t in configured_towns if t not in priority_cities]
+
             ct_cities = [c for c in ct_cities if c != "HARTFORD"]
             non_ct_keys = list(NON_CT_MONITOR_CITIES.keys())
-            return ["HARTFORD"] + non_ct_keys + ct_cities
+            result = ["HARTFORD"] + non_ct_keys + ct_cities
+            _MONITOR_CITIES_CACHE[cache_key] = (now, result)
+            return result
     except Exception as e:
         logger.exception("Failed to fetch monitor cities")
         raise HTTPException(status_code=500, detail=str(e))
@@ -6369,21 +6924,27 @@ def _compute_local_context(conn, entity: str, entity_type: str) -> Dict[str, Any
 
             # 1. Fetch properties in this network
             cursor.execute("""
-                WITH matched AS (
-                    SELECT DISTINCT p.id, p.assessed_value, p.appraised_value
-                    FROM properties p
-                    JOIN entity_networks en ON (
-                        (en.entity_type = 'business' AND p.business_id = en.entity_id)
-                        OR
-                        (en.entity_type = 'business' AND UPPER(p.owner) = UPPER(en.entity_name))
-                        OR
-                        (en.entity_type = 'principal' AND p.principal_id = en.entity_id)
-                        OR
-                        (en.entity_type = 'principal' AND p.owner_norm = en.entity_id)
-                        OR
-                        (en.entity_type = 'principal' AND p.co_owner_norm = en.entity_id)
-                    )
+                WITH target_entities AS (
+                    SELECT en.entity_type, en.entity_id, en.entity_name, en.normalized_name
+                    FROM entity_networks en
                     WHERE en.network_id = %s
+                ),
+                matched AS (
+                    SELECT p.id, p.assessed_value, p.appraised_value
+                    FROM target_entities te JOIN properties p ON p.business_id = te.entity_id
+                    WHERE te.entity_type = 'business' AND te.entity_id IS NOT NULL AND te.entity_id <> ''
+                    UNION
+                    SELECT p.id, p.assessed_value, p.appraised_value
+                    FROM target_entities te JOIN properties p ON UPPER(p.owner) = UPPER(te.entity_name)
+                    WHERE te.entity_type = 'business' AND te.entity_name IS NOT NULL AND te.entity_name <> ''
+                    UNION
+                    SELECT p.id, p.assessed_value, p.appraised_value
+                    FROM target_entities te JOIN properties p ON p.owner_norm = te.normalized_name
+                    WHERE te.entity_type = 'business' AND te.normalized_name IS NOT NULL AND te.normalized_name <> ''
+                    UNION
+                    SELECT p.id, p.assessed_value, p.appraised_value
+                    FROM target_entities te JOIN properties p ON p.principal_id = te.entity_id
+                    WHERE te.entity_type = 'principal' AND te.entity_id IS NOT NULL AND te.entity_id <> ''
                 )
                 SELECT COUNT(*) AS cnt,
                        COALESCE(SUM(assessed_value),0) AS total_assessed,
@@ -7818,11 +8379,23 @@ def get_data_freshness(conn=Depends(get_db_connection)):
             """)
             sources = cursor.fetchall()
 
-            cursor.execute("SELECT COALESCE(external_last_updated::text, last_refreshed_at::text) as last_updated FROM data_source_status WHERE source_name = 'PRINCIPALS DB'")
+            cursor.execute("""
+                SELECT COALESCE(external_last_updated::text, last_refreshed_at::text) as last_updated
+                FROM data_source_status
+                WHERE source_name IN ('PRINCIPALS', 'PRINCIPALS DB')
+                ORDER BY last_refreshed_at DESC NULLS LAST
+                LIMIT 1
+            """)
             p_row = cursor.fetchone()
             p_date = p_row['last_updated'] if p_row else None
 
-            cursor.execute("SELECT COALESCE(external_last_updated::text, last_refreshed_at::text) as last_updated FROM data_source_status WHERE source_name = 'BUSINESS DB'")
+            cursor.execute("""
+                SELECT COALESCE(external_last_updated::text, last_refreshed_at::text) as last_updated
+                FROM data_source_status
+                WHERE source_name IN ('BUSINESSES', 'BUSINESS DB')
+                ORDER BY last_refreshed_at DESC NULLS LAST
+                LIMIT 1
+            """)
             b_row = cursor.fetchone()
             b_date = b_row['last_updated'] if b_row else None
 

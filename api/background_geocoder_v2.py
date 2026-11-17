@@ -169,6 +169,7 @@ def run_geocoder(reprocess_failures=False, max_batches=None):
                 rows = cur.fetchall()
                 
                 if not rows:
+                    conn.commit()
                     if reprocess_failures:
                         logger.info("No more failures to reprocess. Switching to normal mode...")
                         reprocess_failures = False

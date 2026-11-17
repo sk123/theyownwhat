@@ -1,4 +1,5 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { X, Building2, MapPin, DollarSign, User, ExternalLink, Link as LinkIcon, Copy, Check, FolderPlus, Loader2, List as ListIcon, AlertCircle, Gavel, Image as ImageIcon, Navigation } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import PropertyPublicDetails from './property_public_details.jsx';
@@ -65,7 +66,23 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
     }) || [];
 
 
-    // Helper to find first valid URL, robust for Hartford
+    const cityName = property.city || property.property_city || details.city || details.property_city || '';
+    const isHartfordProperty = cityName.toUpperCase() === 'HARTFORD';
+
+    // Helper to find first valid external HTTP(S) URL (never returns internal image proxy)
+    const getValidExternalUrl = (...args) => {
+        for (const arg of args) {
+            if (arg && typeof arg === 'string') {
+                const trimmed = arg.trim();
+                if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+                    return trimmed;
+                }
+            }
+        }
+        return null;
+    };
+
+    // Helper to find first valid photo URL, robust for Hartford
     const getValidUrl = (...args) => {
         for (const arg of args) {
             if (arg && typeof arg === 'string') {
@@ -75,8 +92,8 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
             }
         }
         // If Hartford and no valid photo, use proxy endpoint
-        if ((property.city || '').toUpperCase() === 'HARTFORD') {
-            let pid = details.account_number || details.link || property.id;
+        if (isHartfordProperty) {
+            let pid = details.account_number || property.account_number || details.link || property.link || property.id;
             if (pid) {
                 pid = pid.toString().replace(/[^0-9]/g, '');
                 return `/api/hartford/image/${pid}`;
@@ -88,55 +105,62 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
     // CORRECTED: Use cama_site_link and building_photo from details.
     // Construct URLs if we only have IDs (e.g. 52070-24675 for New Haven)
     const getCamaUrl = (link) => {
-        if (!link) return null;
-        if (link.startsWith('http')) return link;
+        const upperCity = cityName.toUpperCase();
+        if (link && typeof link === 'string' && link.trim().startsWith('http')) {
+            return link.trim();
+        }
 
         // New Haven VGSI ID format (e.g. 52070-24675 -> Pid=24675)
-        // Or generic Vision format
-        if (property.city?.toUpperCase() === 'NEW HAVEN' && link.includes('-')) {
+        if (upperCity === 'NEW HAVEN' && link && link.includes('-')) {
             const pid = link.split('-')[1];
-            if (pid) return `https://gis.vgsi.com/newhavenct/Parcel.aspx?Pid=${pid}`;
+            if (pid) return `https://gis.vgsi.com/newhavenct/Parcel.aspx?Pid=${encodeURIComponent(pid)}`;
         }
 
         // Hartford Patriot Properties format
-        if (property.city?.toUpperCase() === 'HARTFORD') {
-            let pid = details.link;
+        if (upperCity === 'HARTFORD') {
+            let pid = details.link || property.link;
             if (pid) {
-                // Determine format
                 // In DB, link is often missing dashes (142588122)
-                pid = pid.toString();
-                if (!pid.includes('-') && pid.length === 9) {
-                    pid = `${pid.substring(0, 3)}-${pid.substring(3, 6)}-${pid.substring(6)}`;
+                pid = pid.toString().trim();
+                if (!pid.startsWith('http')) {
+                    if (!pid.includes('-') && pid.length === 9) {
+                        pid = `${pid.substring(0, 3)}-${pid.substring(3, 6)}-${pid.substring(6)}`;
+                    }
+                    return `http://assessor1.hartford.gov/SearchResults.asp?SearchParcel=${encodeURIComponent(pid)}&SearchSubmitted=yes&cmdGo=Go`;
                 }
-                // Use SearchResults to auto-set session
-                return `http://assessor1.hartford.gov/SearchResults.asp?SearchParcel=${pid}&SearchSubmitted=yes&cmdGo=Go`;
             }
-            if (details.account_number) {
-                return `http://assessor1.hartford.gov/Summary.asp?AccountNumber=${details.account_number}`;
+            const acct = details.account_number || property.account_number;
+            if (acct) {
+                return `http://assessor1.hartford.gov/Summary.asp?AccountNumber=${encodeURIComponent(acct)}`;
             }
         }
 
-        // Generic fallback for other Vision IDs if possible, or just return null
         return null;
     };
 
     const imageUrl = getValidUrl(
         details.building_photo,
+        property.building_photo,
         property.image_url,
         details.image_url,
         details.link
     );
 
-    // Prioritize constructed URL for CAMA, then fallbacks
-    const gisUrl = getCamaUrl(details.cama_site_link) || getValidUrl(
+    const rawLat = Number(property.latitude ?? details.latitude);
+    const rawLon = Number(property.longitude ?? details.longitude);
+    const ctStateParcelFallback = (Number.isFinite(rawLat) && Number.isFinite(rawLon) && rawLat !== 0 && rawLon !== 0)
+        ? `https://geodata.ct.gov/datasets/ctmaps::connecticut-cama-and-parcel-layer/explore?location=${rawLat.toFixed(6)},${rawLon.toFixed(6)},18`
+        : 'https://geodata.ct.gov/datasets/ctmaps::connecticut-cama-and-parcel-layer/explore';
+
+    // Prioritize constructed municipal CAMA URL, then direct external GIS URLs, then official CT Geodata Parcel Explorer
+    const gisUrl = getCamaUrl(details.cama_site_link || property.cama_site_link) || getValidExternalUrl(
         property.gis_url,
         details.gis_url,
         property.vision_url,
-        details.link
-    );
-
-    const cityName = property.city || property.property_city || details.city || details.property_city || '';
-    const isHartfordProperty = cityName.toUpperCase() === 'HARTFORD';
+        details.vision_url,
+        details.link,
+        property.link
+    ) || ctStateParcelFallback;
     const unitLabel = property.unit || property.derivedUnit || details.unit;
     const mapAddress = propertyAddress ? [propertyAddress, cityName, 'CT'].filter(Boolean).join(', ') : null;
     const clipboardAddress = [
@@ -317,7 +341,7 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
         }
     };
 
-    return (
+    const modalContent = (
         <AnimatePresence>
             <motion.div
                 initial={{ opacity: 0 }}
@@ -327,6 +351,9 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
                 onClick={onClose}
             >
                 <motion.div
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label={propertyAddress ? `Property details for ${propertyAddress}` : 'Property details'}
                     initial={{ x: '100%' }}
                     animate={{ x: 0 }}
                     exit={{ x: '100%' }}
@@ -771,6 +798,8 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
 
                 </motion.div>
             </motion.div>
-        </AnimatePresence >
+        </AnimatePresence>
     );
+
+    return typeof document !== 'undefined' ? createPortal(modalContent, document.body) : modalContent;
 }

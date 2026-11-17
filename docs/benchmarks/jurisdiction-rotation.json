@@ -1,0 +1,419 @@
+{
+  "version": 1,
+  "description": "Nightly-first (Cycle 1) then weekly steady-state jurisdiction optimization, functional verification, ownership untangling, and UI reality-alignment rotation for They Own WHAT??",
+  "cadence": {
+    "initialCoverageCycle": 1,
+    "initialCoverage": {
+      "frequency": "nightly",
+      "minDaysBetweenAdvances": 0.75,
+      "overdueAfterDays": 2
+    },
+    "steadyState": {
+      "frequency": "weekly",
+      "minDaysBetweenAdvances": 6,
+      "overdueAfterDays": 10
+    }
+  },
+  "currentCycle": 1,
+  "nextCohortIndex": 1,
+  "lastRunAt": "2026-11-15T03:40:14Z",
+  "lastAdvancedAt": "2026-11-15T03:40:14Z",
+  "completedJurisdictionsInCycle": [
+    "CT",
+    "NYC"
+  ],
+  "cohorts": [
+    {
+      "id": "cohort-00-ct-nyc",
+      "label": "Priority Core \u2014 Connecticut Statewide & New York City",
+      "tier": "priority",
+      "jurisdictions": [
+        {
+          "code": "CT",
+          "name": "Connecticut (Statewide + 169 Municipalities)",
+          "kind": "statewide",
+          "minProperties": 1000000,
+          "minNetworks": 30000,
+          "sources": [
+            "BUSINESSES",
+            "PRINCIPALS",
+            "HARTFORD_CODE_ENFORCEMENT"
+          ],
+          "notes": "CT SOTS businesses/principals, 169-town CAMA/GIS parcels, CT Judicial evictions, Hartford code enforcement, Gurevitch (>=1,200) and Reiner anchors."
+        },
+        {
+          "code": "NYC",
+          "name": "New York City, NY",
+          "kind": "city",
+          "apiCity": "nyc",
+          "minProperties": 700000,
+          "minNetworks": 80000,
+          "sources": [
+            "NYC_HPD_REGISTRATIONS",
+            "NYC_HPD_ENRICHMENT",
+            "NY_DOS_CORPORATIONS"
+          ],
+          "notes": "HPD registrations/contacts, MapPLUTO, HPD violations/litigations/evictions, NY DOS Active Corporations untangling, MHANY/Banana Kelly 0-BBL overlap."
+        }
+      ]
+    },
+    {
+      "id": "cohort-01-nj-dc",
+      "label": "Mid-Atlantic Stateful & Capital \u2014 New Jersey & Washington, D.C.",
+      "tier": "core",
+      "jurisdictions": [
+        {
+          "code": "NJ",
+          "name": "New Jersey (Statewide DCA BHI)",
+          "kind": "city",
+          "apiCity": "nj",
+          "minProperties": 100000,
+          "minNetworks": 40000,
+          "sources": [
+            "NJ_BHI_BUILDINGS",
+            "NJ_NETWORKS"
+          ],
+          "notes": "NJ DCA Bureau of Housing Inspection multi-family registrations, Mod-IV links, conservative non-agent owner clustering, NHPD subsidies."
+        },
+        {
+          "code": "DC",
+          "name": "Washington, D.C.",
+          "kind": "city",
+          "apiCity": "dc",
+          "minProperties": 120000,
+          "minNetworks": 80000,
+          "sources": [
+            "DC",
+            "DC_RENTAL_LICENSES",
+            "DC_CODE_ENFORCEMENT"
+          ],
+          "notes": "DC GIS CAMA parcels, DLCP Basic Business Rental Licenses human-owner untangling, DOB code infractions, NHPD subsidies."
+        }
+      ]
+    },
+    {
+      "id": "cohort-02-baltimore-boston",
+      "label": "Northeast & Chesapeake \u2014 Baltimore & Boston",
+      "tier": "core",
+      "jurisdictions": [
+        {
+          "code": "BALTIMORE",
+          "name": "Baltimore, MD",
+          "kind": "city",
+          "apiCity": "baltimore",
+          "minProperties": 200000,
+          "minNetworks": 140000,
+          "sources": [
+            "BALTIMORE",
+            "BALTIMORE_RENTAL_REGISTRATIONS",
+            "BALTIMORE_CODE_ENFORCEMENT",
+            "BALTIMORE_EVICTIONS"
+          ],
+          "notes": "baltegis RealProperty/dmxOwnership, DHCD OpenGov Rental Registrations & Licenses, 12 Code/Vacant layers, MD District Court evictions, embedded official-records viewer."
+        },
+        {
+          "code": "BOSTON",
+          "name": "Boston, MA",
+          "kind": "city",
+          "apiCity": "boston",
+          "minProperties": 160000,
+          "minNetworks": 110000,
+          "sources": [
+            "BOSTON",
+            "BOSTON_CODE_ENFORCEMENT"
+          ],
+          "notes": "Analyze Boston property assessments, CKAN building & public-works violations via official SAM parcel crosswalk, NHPD subsidies."
+        }
+      ]
+    },
+    {
+      "id": "cohort-03-detroit-miami",
+      "label": "Great Lakes & South Florida \u2014 Detroit & Miami-Dade",
+      "tier": "core",
+      "jurisdictions": [
+        {
+          "code": "DETROIT",
+          "name": "Detroit, MI",
+          "kind": "city",
+          "apiCity": "detroit",
+          "minProperties": 350000,
+          "minNetworks": 170000,
+          "sources": [
+            "DETROIT",
+            "DETROIT_COMPLIANCE",
+            "DETROIT_RENTAL_REG",
+            "DETROIT_CODE_ENFORCEMENT"
+          ],
+          "notes": "Detroit GIS parcels, BSEED Certificates of Compliance, rental registrations, DAH blight tickets, NHPD subsidies (excluding ~78.9k Detroit Land Bank / public / bank parcels from private landlord networks)."
+        },
+        {
+          "code": "MIAMI",
+          "name": "Miami-Dade County, FL",
+          "kind": "city",
+          "apiCity": "miami",
+          "minProperties": 500000,
+          "minNetworks": 380000,
+          "sources": [
+            "MIAMI"
+          ],
+          "notes": "Miami-Dade Folio GIS parcel view, EPSG:2236->WGS84 coordinate projection sanity, mailing-address caps, NHPD subsidies."
+        }
+      ]
+    },
+    {
+      "id": "cohort-04-minneapolis-ct-muni-a",
+      "label": "Upper Midwest & CT Municipal Engines A \u2014 Minneapolis & CT Core Scrapers",
+      "tier": "core",
+      "jurisdictions": [
+        {
+          "code": "MINNEAPOLIS",
+          "name": "Minneapolis, MN",
+          "kind": "city",
+          "apiCity": "minneapolis",
+          "minProperties": 18000,
+          "minNetworks": 10000,
+          "sources": [
+            "MINNEAPOLIS",
+            "MINNEAPOLIS_CODE_ENFORCEMENT"
+          ],
+          "notes": "Complete 23k+ Minneapolis Active Rental Licenses (OBJECTID cursor pagination), owner/applicant contacts, Regulatory Services CaseViolations, NHPD subsidies."
+        },
+        {
+          "code": "CT_MUNI_COHORT_A",
+          "name": "CT Municipal Scraper Cohort A (Vision, MapXpress, Hartford, CT Geodata)",
+          "kind": "ct_municipal_cohort",
+          "sampleTowns": [
+            "HARTFORD",
+            "NEW HAVEN",
+            "BRIDGEPORT",
+            "STAMFORD",
+            "EAST HARTFORD",
+            "GREENWICH",
+            "GROTON",
+            "NORWALK"
+          ],
+          "sources": [
+            "HARTFORD",
+            "NEW HAVEN",
+            "BRIDGEPORT",
+            "STAMFORD",
+            "EAST HARTFORD",
+            "GREENWICH",
+            "GROTON",
+            "HARTFORD_CODE_ENFORCEMENT"
+          ],
+          "notes": "Audits Vision Appraisal, MapXpress, Hartford enrichment, and CT Geodata CSV (space/underscore schema normalization) municipal pipelines."
+        }
+      ]
+    },
+    {
+      "id": "cohort-05-philly-chicago-ct-muni-b",
+      "label": "Pennsylvania,Massachusetts Statewide & CT Municipal Engines B",
+      "tier": "core",
+      "jurisdictions": [
+        {
+          "code": "PHILADELPHIA",
+          "name": "Philadelphia, PA (OPA + L&I Rental Licenses + PA DOS + Violations)",
+          "kind": "city",
+          "apiCity": "philadelphia",
+          "minProperties": 500000,
+          "minNetworks": 300000,
+          "sources": [
+            "PHILADELPHIA",
+            "PHILADELPHIA_ENFORCEMENT",
+            "PA_DOS_CORPORATIONS"
+          ],
+          "notes": "Carto OPA parcels + taxpayer mailing addresses, active L&I Rental Licenses, PA DOS Governors/Officers corporate piercing, L&I code violations, NHPD matches."
+        },
+        {
+          "code": "CHICAGO",
+          "name": "Chicago, IL (Cook County Assessor Parcels — Staged)",
+          "kind": "city",
+          "apiCity": "chicago",
+          "productionHidden": true,
+          "minProperties": 850000,
+          "minNetworks": 400000,
+          "sources": [
+            "CHICAGO"
+          ],
+          "notes": "Cook County Assessor 14-digit PIN parcels (3723-97qp + pabr-t5kh + uzyt-m557), mortgage-escrow servicer bypass, guarded mail-linking."
+        },
+        {
+          "code": "MA",
+          "name": "Massachusetts (All 351 Municipalities — MassGIS L3 + MA SOC)",
+          "kind": "city",
+          "apiCity": "ma",
+          "minProperties": 2000000,
+          "minNetworks": 1200000,
+          "sources": [
+            "MA"
+          ],
+          "notes": "All 351 Massachusetts towns via MassGIS Level 3 Property Tax Parcels + 5-tier deterministic OpenCorporates (`us_ma`) officer/manager untangling + NHPD."
+        },
+        {
+          "code": "CT_MUNI_COHORT_B",
+          "name": "CT Municipal Scraper Cohort B (PRC, MapGeo, Tighe & Bond, Windsor API)",
+          "kind": "ct_municipal_cohort",
+          "sampleTowns": [
+            "WATERBURY",
+            "DANBURY",
+            "WEST HARTFORD",
+            "CROMWELL",
+            "EAST HAMPTON",
+            "WINDSOR",
+            "MERIDEN",
+            "NEW BRITAIN"
+          ],
+          "sources": [
+            "WATERBURY",
+            "DANBURY",
+            "CROMWELL",
+            "EAST HAMPTON",
+            "WINDSOR"
+          ],
+          "notes": "Audits PropertyRecordCards, MapGeo, Tighe & Bond, and Windsor ArcGIS API municipal pipelines."
+        }
+      ]
+    },
+    {
+      "id": "cohort-06-fl-nys",
+      "label": "High-Tier Statewide Registries — Florida (67 Counties) & New York State (33 Counties)",
+      "tier": "core",
+      "jurisdictions": [
+        {
+          "code": "FL",
+          "name": "Florida (All 67 Counties — FloridaGIO + Sunbiz + DBPR Ch. 509)",
+          "kind": "city",
+          "apiCity": "fl",
+          "minProperties": 2500000,
+          "minNetworks": 1200000,
+          "sources": [
+            "FL",
+            "FL_SUNBIZ_CORPORATIONS"
+          ],
+          "notes": "FloridaGIO statewide residential/multifamily parcels across all 67 counties, FL DOS Sunbiz bulk Officers/LLC Managers (`us_fl`), FL DBPR Ch. 509 Apartment Licenses, NHPD subsidies."
+        },
+        {
+          "code": "NYS",
+          "name": "New York State (33 Non-NYC Participating Counties + NY DOS + Buffalo)",
+          "kind": "city",
+          "apiCity": "ny",
+          "minProperties": 1000000,
+          "minNetworks": 600000,
+          "sources": [
+            "NY",
+            "NY_DOS_CORPORATIONS"
+          ],
+          "notes": "NYS ITS Public Tax Parcels across 33 participating counties, NY DOS Active Corporations CEO untangling (`us_ny`), Buffalo Rental Registry, Buffalo Code Violations & Housing Court, NHPD subsidies."
+        }
+      ]
+    },
+    {
+      "id": "cohort-07-co-nc-wi-vt",
+      "label": "Multi-Region Statewide Cadastres — Colorado, North Carolina, Wisconsin & Vermont",
+      "tier": "core",
+      "jurisdictions": [
+        {
+          "code": "CO",
+          "name": "Colorado (OIT Statewide Parcels + CO SOS + Denver Rental Licenses)",
+          "kind": "city",
+          "apiCity": "co",
+          "minProperties": 800000,
+          "minNetworks": 500000,
+          "sources": [
+            "CO",
+            "CO_SOS_CORPORATIONS"
+          ],
+          "notes": "Colorado OIT Public Parcels across participating counties, CO SOS Business Entities & Statement of True Name untangling (`us_co`), Denver Active Residential Rental Licenses, NHPD subsidies."
+        },
+        {
+          "code": "NC",
+          "name": "North Carolina (All 100 Counties — NC OneMap Parcels)",
+          "kind": "city",
+          "apiCity": "nc",
+          "minProperties": 1500000,
+          "minNetworks": 900000,
+          "sources": [
+            "NC"
+          ],
+          "notes": "NC OneMap statewide residential/improved parcels across 100 counties (unified siteadd + split street schema), guarded owner/mailing clustering, NHPD subsidies."
+        },
+        {
+          "code": "WI",
+          "name": "Wisconsin (All 72 Counties — SCO/DOA V11 Parcels)",
+          "kind": "city",
+          "apiCity": "wi",
+          "minProperties": 1800000,
+          "minNetworks": 1200000,
+          "sources": [
+            "WI"
+          ],
+          "notes": "Wisconsin SCO/DOA V11 Statewide Parcels across all 72 counties, guarded owner/mailing clustering, NHPD subsidies."
+        },
+        {
+          "code": "VT",
+          "name": "Vermont (250+ Municipalities — VCGI Grand List)",
+          "kind": "city",
+          "apiCity": "vt",
+          "minProperties": 200000,
+          "minNetworks": 150000,
+          "sources": [
+            "VT",
+            "OC_US_VT"
+          ],
+          "notes": "Vermont VCGI Standardized Parcels joined with Statewide Grand List owner/mailing roll, OpenCorporates (`us_vt`), NHPD subsidies."
+        }
+      ]
+    },
+    {
+      "id": "cohort-08-va-ar",
+      "label": "Mid-South & Commonwealth Statewide Cadastres — Virginia & Arkansas",
+      "tier": "core",
+      "jurisdictions": [
+        {
+          "code": "VA",
+          "name": "Virginia (~88 Counties & Cities — VGIN Local Schemas + HRGeo + County CAMA + VA SCC)",
+          "kind": "city",
+          "apiCity": "va",
+          "minProperties": 1800000,
+          "minNetworks": 900000,
+          "sources": [
+            "VA",
+            "OC_US_VA"
+          ],
+          "notes": "VGIN 2026 Q3 Local Schema Tables, Hampton Roads HRGeo, Henrico & Prince William CAMA, OpenCorporates (`us_va`) corporate/officer & foreign-branch piercing, NHPD subsidies."
+        },
+        {
+          "code": "AR",
+          "name": "Arkansas (All 75 Counties — Arkansas GIS Statewide Parcels + AR SOS)",
+          "kind": "city",
+          "apiCity": "ar",
+          "minProperties": 1800000,
+          "minNetworks": 1000000,
+          "sources": [
+            "AR",
+            "OC_US_AR"
+          ],
+          "notes": "Arkansas GIS Office statewide parcels across all 75 counties, OpenCorporates (`us_ar`) corporate/LLC officer & foreign-branch piercing, POA/timber/government isolation, NHPD subsidies."
+        }
+      ]
+    }
+  ],
+  "history": [
+    {
+      "timestamp": "2026-11-15T03:40:14Z",
+      "cycle": 1,
+      "cohortId": "cohort-00-ct-nyc",
+      "jurisdictions": [
+        "CT",
+        "NYC"
+      ],
+      "totalChecks": 28,
+      "passedChecks": 28,
+      "healedFeeds": [],
+      "rolledOverToCycle": null,
+      "reportPath": "docs/benchmarks/2026-11-15-cohort-00-ct-nyc-report.md",
+      "notes": "Automated battery pass"
+    }
+  ]
+}

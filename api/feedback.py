@@ -26,8 +26,8 @@ router = APIRouter()
 # Email config (set in .env)
 # ---------------------------------------------------------------------------
 ALERT_EMAIL_TO   = os.environ.get("ALERT_EMAIL_TO",   "salmunk@gmail.com")
-ALERT_EMAIL_FROM = os.environ.get("ALERT_EMAIL_FROM", "salmunk@gmail.com")
-ALERT_EMAIL_PASS = os.environ.get("ALERT_EMAIL_PASS", "")   # Gmail App Password
+ALERT_EMAIL_FROM = (os.environ.get("ALERT_EMAIL_FROM", "salmunk@gmail.com") or "").strip()
+ALERT_EMAIL_PASS = "".join((os.environ.get("ALERT_EMAIL_PASS", "") or "").split())   # Gmail App Password
 
 
 def _send_email_async(feedback_id: int, report_type: str, description: str, entities: list):
@@ -71,11 +71,18 @@ View feedback: GET /api/feedback
         msg["To"]      = ", ".join(recipients)
         msg.attach(MIMEText(body, "plain"))
 
-        with smtplib.SMTP("smtp.gmail.com", 587, timeout=15) as server:
-            server.ehlo()
-            server.starttls()
-            server.login(ALERT_EMAIL_FROM, ALERT_EMAIL_PASS)
-            server.sendmail(ALERT_EMAIL_FROM, recipients, msg.as_string())
+        try:
+            with smtplib.SMTP("smtp.gmail.com", 587, timeout=15) as server:
+                server.ehlo()
+                server.starttls()
+                server.ehlo()
+                server.login(ALERT_EMAIL_FROM, ALERT_EMAIL_PASS)
+                server.sendmail(ALERT_EMAIL_FROM, recipients, msg.as_string())
+        except Exception:
+            with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=15) as server:
+                server.ehlo()
+                server.login(ALERT_EMAIL_FROM, ALERT_EMAIL_PASS)
+                server.sendmail(ALERT_EMAIL_FROM, recipients, msg.as_string())
 
     except Exception as e:
         # Never let email failure surface to the user

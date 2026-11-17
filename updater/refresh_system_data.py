@@ -123,9 +123,12 @@ def refresh_system_data():
     except Exception as e:
         logger.error(f"Guarded Network Discovery failed: {e}")
 
-    # 4. NYC HPD Refresh (opt-in via NYC_HPD_ENABLED=true)
-    if os.environ.get("NYC_HPD_ENABLED", "").lower() == "true":
-        logger.info("NYC_HPD_ENABLED=true — starting NYC HPD refresh...")
+    run_inline_city_refresh = os.environ.get("RUN_INLINE_CITY_REFRESH", "").lower() == "true"
+
+    # 4. NYC HPD Refresh (opt-in via RUN_INLINE_CITY_REFRESH=true AND NYC_HPD_ENABLED=true;
+    #    scheduled_runner.py runs NYC on its own dedicated 03:30 schedule)
+    if run_inline_city_refresh and os.environ.get("NYC_HPD_ENABLED", "").lower() == "true":
+        logger.info("RUN_INLINE_CITY_REFRESH=true and NYC_HPD_ENABLED=true — starting NYC HPD refresh...")
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
         try:
@@ -150,11 +153,12 @@ def refresh_system_data():
 
         logger.info("NYC HPD refresh sequence complete.")
     else:
-        logger.info("NYC_HPD_ENABLED not set — skipping NYC refresh.")
+        logger.info("Skipping inline NYC HPD refresh (handled by dedicated schedule unless RUN_INLINE_CITY_REFRESH=true).")
 
-    # 5. NJ DCA BHI Refresh (opt-in via NJ_BHI_ENABLED=true)
-    if os.environ.get("NJ_BHI_ENABLED", "").lower() == "true":
-        logger.info("NJ_BHI_ENABLED=true — starting NJ DCA BHI refresh...")
+    # 5. NJ DCA BHI Refresh (opt-in via RUN_INLINE_CITY_REFRESH=true AND NJ_BHI_ENABLED=true;
+    #    scheduled_runner.py runs NJ on its own dedicated 03:45 schedule)
+    if run_inline_city_refresh and os.environ.get("NJ_BHI_ENABLED", "").lower() == "true":
+        logger.info("RUN_INLINE_CITY_REFRESH=true and NJ_BHI_ENABLED=true — starting NJ DCA BHI refresh...")
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
         try:
@@ -164,7 +168,7 @@ def refresh_system_data():
         except Exception as e:
             logger.error(f"NJ DCA BHI refresh failed: {e}")
     else:
-        logger.info("NJ_BHI_ENABLED not set — skipping NJ DCA BHI refresh.")
+        logger.info("Skipping inline NJ DCA BHI refresh (handled by dedicated schedule unless RUN_INLINE_CITY_REFRESH=true).")
 
 if __name__ == "__main__":
     refresh_system_data()

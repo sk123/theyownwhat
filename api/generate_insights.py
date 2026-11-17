@@ -8,6 +8,9 @@ from typing import List, Optional, Tuple, Dict
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from shared_utils import THIRD_PARTY_ENTITY_RE
+
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("generate_insights")
 
@@ -219,6 +222,7 @@ def compute_top_principals(cur, town_col: Optional[str], town_filter: Optional[s
             pl.network_id,
             ns.total_properties,
             ns.total_assessed_value,
+            ns.total_appraised_value,
             ns.residential_assessed_value,
             ns.building_count,
             ns.unit_count
@@ -233,11 +237,11 @@ def compute_top_principals(cur, town_col: Optional[str], town_filter: Optional[s
             NULL as principal_state,
             -- Determine if this is a human or entity principal
             CASE 
-                WHEN up.representative_name_c ~* '(LLC|INC|CORP|LTD|GROUP|HOLDINGS|REALTY|MANAGEMENT|TRUST|LP|PARTNERSH)' THEN 'entity'
+                WHEN up.representative_name_c ~* '(LLC|INC|CORP|LTD|GROUP|HOLDINGS|REALTY|MANAGEMENT|TRUST|LP|PARTNERSHIP|FUND|INVESTMENT)' THEN 'entity'
                 ELSE 'human'
             END as p_kind,
             n.business_count,
-            n.principal_count,
+            COALESCE(thp.human_principal_count, 0) as principal_count,
             n.primary_name as network_primary_name,
             -- Partition by network_id to avoid duplicate entries for the same portfolio
             ROW_NUMBER() OVER (
@@ -247,7 +251,7 @@ def compute_top_principals(cur, town_col: Optional[str], town_filter: Optional[s
                     CASE WHEN up.representative_name_c = n.primary_name THEN 0 ELSE 1 END ASC,
                     -- Priority: 2. Human names
                     CASE 
-                        WHEN up.representative_name_c ~* '(LLC|INC|CORP|LTD|GROUP|HOLDINGS|REALTY|MANAGEMENT|TRUST|LP|PARTNERSH|YANKEE|POWER|LIGHT| GAS |ELECTRIC|UTILITY)' THEN 2
+                        WHEN up.representative_name_c ~* '(LLC|INC|CORP|LTD|GROUP|HOLDINGS|REALTY|MANAGEMENT|TRUST|LP|PARTNERSHIP|FUND|INVESTMENT|YANKEE|POWER|LIGHT| GAS |ELECTRIC|UTILITY)' THEN 2
                         ELSE 1 
                     END ASC,
                     -- Priority: 3. Most properties
@@ -258,28 +262,57 @@ def compute_top_principals(cur, town_col: Optional[str], town_filter: Optional[s
         FROM network_aggregates na
         JOIN {SCHEMA}.unique_principals up ON up.principal_id::text = na.raw_pid
         LEFT JOIN {SCHEMA}.networks n ON n.id = na.network_id
+        LEFT JOIN temp_human_principal_counts thp ON thp.network_id = na.network_id
         LEFT JOIN temp_biz_counts tbc ON tbc.principal_id = up.principal_id
     )
-    SELECT 
-        principal_id,
-        principal_name,
-        principal_state,
-        network_id,
-        network_primary_name,
-        total_properties as property_count,
-        total_assessed_value,
-        residential_assessed_value,
-        0 as total_appraised_value,
-        business_count,
-        principal_count,
-        building_count,
-        unit_count,
-        linked_business_count,
-        p_kind
-    FROM deduplicated
-    WHERE mirror_rank = 1
-    ORDER BY unit_count DESC, building_count DESC, total_properties DESC
-    LIMIT 1000
+    SELECT * FROM (
+        (
+            SELECT 
+                principal_id,
+                principal_name,
+                principal_state,
+                network_id,
+                network_primary_name,
+                total_properties as property_count,
+                total_assessed_value,
+                residential_assessed_value,
+                total_appraised_value,
+                business_count,
+                principal_count,
+                building_count,
+                unit_count,
+                linked_business_count,
+                p_kind
+            FROM deduplicated
+            WHERE mirror_rank = 1
+            ORDER BY unit_count DESC, building_count DESC, total_properties DESC
+            LIMIT 1000
+        )
+        UNION
+        (
+            SELECT 
+                principal_id,
+                principal_name,
+                principal_state,
+                network_id,
+                network_primary_name,
+                total_properties as property_count,
+                total_assessed_value,
+                residential_assessed_value,
+                total_appraised_value,
+                business_count,
+                principal_count,
+                building_count,
+                unit_count,
+                linked_business_count,
+                p_kind
+            FROM deduplicated
+            WHERE mirror_rank = 1
+            ORDER BY total_properties DESC, unit_count DESC, building_count DESC
+            LIMIT 500
+        )
+    ) combined_principals
+    ORDER BY unit_count DESC, property_count DESC
     """
     
     cur.execute(sql_ranking)
@@ -291,9 +324,9 @@ def compute_top_principals(cur, town_col: Optional[str], town_filter: Optional[s
 
 def compute_top_business_networks(cur, town_col: Optional[str], town_filter: Optional[str]) -> List[Dict]:
     """
-    Optional enhancement: if entity_networks + businesses look usable, count properties
-    by business (properties.business_id -> businesses.id, via entity_networks).
-    Returns [] safely if columns/tables are missing.
+    Count full network portfolio metrics for business-anchored networks via
+    temp_network_stats / temp_network_town_stats so front-page cards always match
+    the exact loaded network count (`network_properties` / `networks.total_properties`).
     """
     if not (table_exists(cur, "entity_networks") and table_exists(cur, "businesses")):
         return []
@@ -303,53 +336,54 @@ def compute_top_business_networks(cur, town_col: Optional[str], town_filter: Opt
     if not (needed_en and needed_b):
         return []
 
-    if not column_exists(cur, "properties", "business_id"):
-        return []
-
     bname = pick_first_existing_column(cur, "businesses", ["name","business_name","business_legal_name"])
     if not bname:
         return []
 
-    where = ""
     params: List = []
     if town_col and town_filter:
-        where = f"AND COALESCE(p.source, '') <> 'NYS_OPEN_DATA' AND UPPER(p.{town_col}) = UPPER(%s)"
-        params.append(town_filter)
+        ns_join = "JOIN temp_network_town_stats ns ON ns.id = en.network_id AND ns.town = UPPER(%s)"
+        bpc_join = "LEFT JOIN temp_biz_town_prop_counts bpc ON bpc.network_id = en.network_id AND bpc.business_id = b.id::text AND bpc.town = UPPER(%s)"
+        params.extend([town_filter, town_filter])
+    else:
+        ns_join = "JOIN temp_network_stats ns ON ns.id = en.network_id"
+        bpc_join = "LEFT JOIN temp_biz_net_prop_counts bpc ON bpc.network_id = en.network_id AND bpc.business_id = b.id::text"
 
     sql = f"""
+        WITH candidate_nets AS (
+            (SELECT id FROM {'temp_network_town_stats WHERE town = UPPER(%s)' if (town_col and town_filter) else 'temp_network_stats'} ORDER BY unit_count DESC, total_properties DESC LIMIT 1000)
+            UNION
+            (SELECT id FROM {'temp_network_town_stats WHERE town = UPPER(%s)' if (town_col and town_filter) else 'temp_network_stats'} ORDER BY total_properties DESC, unit_count DESC LIMIT 500)
+        )
         SELECT
             en.network_id,
             b.id AS business_id,
             b.{bname} AS business_name,
-            COUNT(DISTINCT p.id) AS property_count,
-            COALESCE(SUM(p.assessed_value), 0) AS total_assessed_value,
-            COALESCE(SUM(CASE WHEN NOT (p.property_type ILIKE ANY(%s)) THEN p.assessed_value ELSE 0 END), 0) as residential_assessed_value,
-            COALESCE(SUM(p.appraised_value), 0) AS total_appraised_value,
-            (SELECT business_count FROM {SCHEMA}.networks WHERE id = en.network_id) as business_count,
-            (SELECT primary_name FROM {SCHEMA}.networks WHERE id = en.network_id) as network_primary_name,
-            COUNT(DISTINCT regexp_replace(UPPER(p.location), '\s*(?:UNIT|APT|#|STE|SUITE|FL|RM|BLDG|BUILDING|DEPT|DEPARTMENT|OFFICE).*$', '', 'g')) as building_count,
-            COALESCE(SUM(p.number_of_units), 0) as unit_count
-        FROM {SCHEMA}.entity_networks en
+            ns.total_properties AS property_count,
+            COALESCE(bpc.biz_prop_count, 0) AS biz_prop_count,
+            ns.total_assessed_value,
+            ns.residential_assessed_value,
+            ns.total_appraised_value,
+            n.business_count,
+            COALESCE(thp.human_principal_count, 0) AS principal_count,
+            n.primary_name AS network_primary_name,
+            ns.building_count,
+            ns.unit_count
+        FROM candidate_nets cn
+        JOIN {SCHEMA}.entity_networks en
+          ON en.network_id = cn.id
+         AND en.entity_type = 'business'
         JOIN {SCHEMA}.businesses b
-          ON en.entity_type = 'business'
-         AND en.entity_id = b.id::text
-        JOIN {SCHEMA}.properties p
-          ON p.business_id = b.id
-        WHERE 1=1 {where}
-        GROUP BY en.network_id, b.id, b.{bname}
-        HAVING COUNT(DISTINCT p.id) > 0
-        ORDER BY COALESCE(SUM(number_of_units), 0) DESC, COUNT(DISTINCT p.id) DESC, b.{bname} ASC
-        LIMIT 1000
+          ON en.entity_id = b.id::text
+        {ns_join}
+        {bpc_join}
+        LEFT JOIN {SCHEMA}.networks n ON n.id = en.network_id
+        LEFT JOIN temp_human_principal_counts thp ON thp.network_id = en.network_id
+        ORDER BY ns.unit_count DESC, ns.total_properties DESC, COALESCE(bpc.biz_prop_count, 0) DESC, b.{bname} ASC
+        LIMIT 2500
     """
-    # Exclusion list for unit/value calculations (re-defined here or passed? ideally passed but let's redefine for safety)
-    EXCLUDE_UNIT = ['%Storage%', '%Commercial%', '%Industrial%', '%Vacant%', '%Hotel%', '%Motel%', '%Nursing%', '%Assisted%', '%Office%', '%Retail%', '%Warehouse%']
-    EXCLUDE_RES_VAL = EXCLUDE_UNIT + ['%Lodging%', '%Research%', '%School%', '%University%']
-    
-    # We need to prepend the exclusion param to params
-    # Wait, %s usage in multiline string?
-    # Yes.
-    
-    cur.execute(sql, [EXCLUDE_RES_VAL] + params)
+    cand_params = [town_filter, town_filter] if (town_col and town_filter) else []
+    cur.execute(sql, cand_params + params)
     return [dict(r) for r in cur.fetchall()]
 
 # ------------------------------- ranking --------------------------------
@@ -396,7 +430,13 @@ def merge_and_rank(cur, principals: List[Dict], businesses: List[Dict], limit: i
             r'LODGING|HOSPITALITY|HOTEL|MOTEL|INN |SUITES',
             re.IGNORECASE
         )
-        if INSTITUTIONAL_PATTERN.search(name):
+        if INSTITUTIONAL_PATTERN.search(name) or THIRD_PARTY_ENTITY_RE.search(name):
+            continue
+        net_primary_check = item.get("network_primary_name") or ""
+        if net_primary_check and (
+            INSTITUTIONAL_PATTERN.search(net_primary_check)
+            or THIRD_PARTY_ENTITY_RE.search(net_primary_check)
+        ):
             continue
 
         p_kind = item.get("p_kind", "entity")
@@ -483,28 +523,51 @@ def merge_and_rank(cur, principals: List[Dict], businesses: List[Dict], limit: i
         
         # Find the best business name to use as a sub-header if the primary is a human
         best_biz = ""
-        best_biz_count = 0
+        best_biz_count = -1
         for b in businesses:
             if b.get('network_id') == nid:
                 bname = b.get('business_name')
-                if bname and (not best_biz or b.get('property_count', 0) > best_biz_count):
+                bscore = int(b.get('biz_prop_count') if b.get('biz_prop_count') is not None else (b.get('property_count') or 0))
+                if bname and (not best_biz or bscore > best_biz_count):
                     best_biz = bname
-                    best_biz_count = b.get('property_count', 0)
+                    best_biz_count = bscore
         item['controlling_business'] = best_biz
         item['building_count'] = item.get('building_count', 0)
         item['unit_count'] = item.get('unit_count', 0)
         combined.append(item)
 
-    # Sort by UNIT count descending (units are best measure of portfolio size)
-    combined.sort(key=lambda x: (x.get('unit_count', 0), x.get('building_count', 0), x.get('property_count', 0)), reverse=True)
-    
+    # Sort by UNIT count descending (units are best measure of portfolio size),
+    # while also guaranteeing Statewide top-by-property_count portfolios are retained.
+    by_units = sorted(
+        combined,
+        key=lambda x: (x.get('unit_count', 0), x.get('building_count', 0), x.get('property_count', 0)),
+        reverse=True,
+    )
+    if limit >= 1000:
+        top_prop_nids = {
+            x.get('network_id')
+            for x in sorted(combined, key=lambda x: (x.get('property_count', 0), x.get('unit_count', 0)), reverse=True)[:250]
+        }
+    else:
+        top_prop_nids = set()
+
+    ordered_candidates = list(by_units[:limit])
+    included_nids = {x.get('network_id') for x in ordered_candidates}
+    if top_prop_nids:
+        for item in sorted(combined, key=lambda x: (x.get('property_count', 0), x.get('unit_count', 0)), reverse=True)[:250]:
+            if item.get('network_id') not in included_nids:
+                ordered_candidates.append(item)
+                included_nids.add(item.get('network_id'))
+
+    effective_limit = len(ordered_candidates) if limit >= 1000 else limit
+
     # 5. Rank and find representative businesses for the top ones (Deduplicate Names)
     ranked = []
     seen_names = set()
     
     current_rank = 1
-    for item in combined:
-        if len(ranked) >= limit: break
+    for item in ordered_candidates:
+        if len(ranked) >= effective_limit: break
         
         nid = item.get('network_id')
         
@@ -532,11 +595,16 @@ def merge_and_rank(cur, principals: List[Dict], businesses: List[Dict], limit: i
         
         item['representative_entities'] = reps
         
-        # Populate principals for this network (associated with its businesses)
-        # Using a subquery for simplicity within this loop; usually only 10-20 networks total.
+        # Populate HUMAN principals for this network (ordered by linked business count, never corporate LLCs)
         cur.execute(f"""
-            SELECT DISTINCT entity_name as name FROM {SCHEMA}.entity_networks
-            WHERE network_id = %s AND entity_type = 'principal'
+            SELECT en.entity_name AS name
+            FROM {SCHEMA}.entity_networks en
+            LEFT JOIN temp_biz_counts tbc ON en.entity_id ~ '^[0-9]+$' AND tbc.principal_id = en.entity_id::int
+            WHERE en.network_id = %s
+              AND en.entity_type = 'principal'
+              AND NOT (en.entity_name ~* '(LLC|INC|CORP|LTD|GROUP|HOLDINGS|REALTY|MANAGEMENT|TRUST|LP|PARTNERSHIP|FUND|INVESTMENT|YANKEE|POWER|LIGHT| GAS |ELECTRIC|UTILITY)')
+            GROUP BY en.entity_name
+            ORDER BY MAX(COALESCE(tbc.cnt, 0)) DESC, en.entity_name ASC
             LIMIT 5
         """, (nid,))
         item['principals'] = [dict(r) for r in cur.fetchall()]
@@ -663,36 +731,55 @@ def rebuild_cached_insights(db_conn=None):
                 EXCLUDE_RES_VAL = EXCLUDE_UNIT + ['%Lodging%', '%Research%', '%School%', '%University%']
 
                 # --- GLOBAL OPTIMIZATION: Create Network Stats Temp Table ONCE ---
+                # Uses exact `(network_id, property_id)` membership from `network_properties`
+                # so front-page cards and Insights match `networks.total_properties` and
+                # `/api/network/stream_load` 1-for-1 (e.g. Gurevitch = 1,178 properties).
                 log.info("Creating global temp table for Network Stats...")
                 cur.execute(f"""
+                    CREATE TEMP TABLE temp_dedup_network_props AS
+                    SELECT DISTINCT ON (np.network_id, np.property_id)
+                        np.network_id,
+                        p.id AS property_id,
+                        p.business_id::text AS business_id,
+                        p.assessed_value,
+                        p.appraised_value,
+                        p.location,
+                        p.number_of_units,
+                        p.property_type,
+                        UPPER(TRIM(COALESCE(p.property_city, ''))) AS town,
+                        COALESCE(p.source, '') AS source
+                    FROM {SCHEMA}.network_properties np
+                    JOIN {SCHEMA}.properties p ON p.id = np.property_id
+                    ORDER BY np.network_id, np.property_id
+                """)
+                cur.execute("CREATE INDEX idx_tmp_dedup_np ON temp_dedup_network_props(network_id, town)")
+
+                cur.execute(f"""
                     CREATE TEMP TABLE temp_network_stats AS
-                    WITH property_networks AS (
-                        SELECT p.id as property_id, p.assessed_value, p.location, p.number_of_units, p.property_type, en.network_id
-                        FROM {SCHEMA}.properties p
-                        JOIN {SCHEMA}.entity_networks en ON en.entity_type = 'business' AND p.business_id::text = en.entity_id
-                        
-                        UNION
-                        
-                        SELECT p.id as property_id, p.assessed_value, p.location, p.number_of_units, p.property_type, en.network_id
-                        FROM {SCHEMA}.properties p
-                        JOIN {SCHEMA}.entity_networks en ON en.entity_type = 'principal' AND p.principal_id::text = en.entity_id
-                    )
                     SELECT 
                         network_id AS id,
-                        COUNT(DISTINCT property_id) AS total_properties,
-                        SUM(assessed_value) AS total_assessed_value,
-                        COUNT(DISTINCT regexp_replace(UPPER(location), '\s*(?:UNIT|APT|#|STE|SUITE|FL|RM|BLDG|BUILDING|DEPT|DEPARTMENT|OFFICE|LOT).*$', '', 'g')) as building_count,
+                        COUNT(*) AS total_properties,
+                        SUM(COALESCE(assessed_value, 0)) AS total_assessed_value,
+                        SUM(COALESCE(appraised_value, 0)) AS total_appraised_value,
+                        COUNT(DISTINCT regexp_replace(UPPER(location), '\\s*(?:UNIT|APT|#|STE|SUITE|FL|RM|BLDG|BUILDING|DEPT|DEPARTMENT|OFFICE|LOT).*$', '', 'g')) as building_count,
                         COALESCE(SUM(CASE WHEN NOT (property_type ILIKE ANY(%s)) THEN number_of_units ELSE 0 END), 0) as unit_count,
                         COALESCE(SUM(CASE WHEN NOT (property_type ILIKE ANY(%s)) THEN assessed_value ELSE 0 END), 0) as residential_assessed_value
-                    FROM property_networks
+                    FROM temp_dedup_network_props
                     GROUP BY network_id
-                    HAVING COUNT(DISTINCT property_id) > 0
-
+                    HAVING COUNT(*) > 0
                 """, (EXCLUDE_UNIT, EXCLUDE_RES_VAL))
                 cur.execute("CREATE INDEX idx_tmp_net_stats ON temp_network_stats(id)")
                 log.info("Global stats table created.")
 
-                
+                cur.execute("""
+                    CREATE TEMP TABLE temp_biz_net_prop_counts AS
+                    SELECT network_id, business_id, COUNT(*)::int AS biz_prop_count
+                    FROM temp_dedup_network_props
+                    WHERE business_id IS NOT NULL AND business_id <> ''
+                    GROUP BY network_id, business_id
+                """)
+                cur.execute("CREATE INDEX idx_tmp_bnpc ON temp_biz_net_prop_counts(network_id, business_id)")
+
                 # --- GLOBAL OPTIMIZATION 2: Temp Table for Town Stats ---
                 town_col = pick_first_existing_column(cur, "properties", ["town","city","municipality","locality", "property_city"])
                 if town_col:
@@ -700,39 +787,47 @@ def rebuild_cached_insights(db_conn=None):
                     log.info("Creating temp table for Town Stats...")
                     cur.execute(f"""
                         CREATE TEMP TABLE temp_network_town_stats AS
-                        WITH property_networks AS (
-                            SELECT p.id as property_id, p.assessed_value, p.location, p.number_of_units, p.property_type, UPPER(p.{town_col}) as town, en.network_id
-                            FROM {SCHEMA}.properties p
-                            JOIN {SCHEMA}.entity_networks en ON en.entity_type = 'business' AND p.business_id::text = en.entity_id
-                            WHERE p.{town_col} IS NOT NULL AND p.{town_col} <> ''
-                              AND COALESCE(p.source, '') <> 'NYS_OPEN_DATA'
-                            
-                            UNION
-                            
-                            SELECT p.id as property_id, p.assessed_value, p.location, p.number_of_units, p.property_type, UPPER(p.{town_col}) as town, en.network_id
-                            FROM {SCHEMA}.properties p
-                            JOIN {SCHEMA}.entity_networks en ON en.entity_type = 'principal' AND p.principal_id::text = en.entity_id
-                            WHERE p.{town_col} IS NOT NULL AND p.{town_col} <> ''
-                              AND COALESCE(p.source, '') <> 'NYS_OPEN_DATA'
-                        )
                         SELECT 
                             network_id AS id,
                             town,
-                            COUNT(DISTINCT property_id) AS total_properties,
-                            SUM(assessed_value) AS total_assessed_value,
+                            COUNT(*) AS total_properties,
+                            SUM(COALESCE(assessed_value, 0)) AS total_assessed_value,
+                            SUM(COALESCE(appraised_value, 0)) AS total_appraised_value,
                             COUNT(DISTINCT regexp_replace(UPPER(location), '\\s*(?:UNIT|APT|#|STE|SUITE|FL|RM|BLDG|BUILDING|DEPT|DEPARTMENT|OFFICE|LOT).*$', '', 'g')) as building_count,
                             COALESCE(SUM(CASE WHEN NOT (property_type ILIKE ANY(%s)) THEN number_of_units ELSE 0 END), 0) as unit_count,
                             COALESCE(SUM(CASE WHEN NOT (property_type ILIKE ANY(%s)) THEN assessed_value ELSE 0 END), 0) as residential_assessed_value
-                        FROM property_networks
+                        FROM temp_dedup_network_props
+                        WHERE town <> '' AND source <> 'NYS_OPEN_DATA'
                         GROUP BY network_id, town
-                        HAVING COUNT(DISTINCT property_id) > 0
-
+                        HAVING COUNT(*) > 0
                     """, (EXCLUDE_UNIT, EXCLUDE_RES_VAL))
                     cur.execute("CREATE INDEX idx_tmp_net_town_stats ON temp_network_town_stats(id, town)")
+                    cur.execute("""
+                        CREATE TEMP TABLE temp_biz_town_prop_counts AS
+                        SELECT network_id, business_id, town, COUNT(*)::int AS biz_prop_count
+                        FROM temp_dedup_network_props
+                        WHERE town <> '' AND source <> 'NYS_OPEN_DATA' AND business_id IS NOT NULL AND business_id <> ''
+                        GROUP BY network_id, business_id, town
+                    """)
+                    cur.execute("CREATE INDEX idx_tmp_btpc ON temp_biz_town_prop_counts(network_id, business_id, town)")
                     log.info("Town stats table created.")
                 else:
                     log.warning("No town-like column found on properties; computing Statewide only.")
                 # -----------------------------------------------------------------
+
+                # Pre-compute HUMAN principal counts per network so `People` on front-page cards
+                # matches `Human (N)` on the Network Profile page (excluding corporate/LLC members).
+                cur.execute(f"""
+                    CREATE TEMP TABLE temp_human_principal_counts AS
+                    SELECT
+                        en.network_id,
+                        COUNT(DISTINCT en.entity_id)::int AS human_principal_count
+                    FROM {SCHEMA}.entity_networks en
+                    WHERE en.entity_type = 'principal'
+                      AND NOT (en.entity_name ~* '(LLC|INC|CORP|LTD|GROUP|HOLDINGS|REALTY|MANAGEMENT|TRUST|LP|PARTNERSHIP|FUND|INVESTMENT|YANKEE|POWER|LIGHT| GAS |ELECTRIC|UTILITY)')
+                    GROUP BY en.network_id
+                """)
+                cur.execute("CREATE INDEX idx_tmp_hp_counts ON temp_human_principal_counts(network_id)")
 
                 # --- GLOBAL OPTIMIZATION 3: Temp Table for Principal-Network Map ---
                 log.info("Creating temp table for Principal-Network Map...")
@@ -796,11 +891,16 @@ def rebuild_cached_insights(db_conn=None):
                              b["business_name"] = "STATE OF CONNECTICUT"
                     insert_ranked_businesses(cur, "Statewide – Businesses", rank_first_n(top_businesses_state, 10), staging_table)
 
-                # PROMOTE IMMEDIATELY so frontend is happy
-                log.info(f"Promoting initial statewide results to {final_table}")
-                cur.execute(f"DELETE FROM {final_table} WHERE title LIKE 'Statewide%'")
-                cur.execute(f"INSERT INTO {final_table} SELECT * FROM {staging_table}")
-                conn.commit()
+                # Only pre-populate final_table early if it is completely empty (cold start).
+                # Otherwise leave the existing live table intact until the atomic swap below,
+                # avoiding SERIAL primary-key collisions with existing town rows.
+                cur.execute(f"SELECT EXISTS (SELECT 1 FROM {final_table} LIMIT 1) AS has_rows")
+                if not cur.fetchone()["has_rows"]:
+                    log.info(f"Cold start: promoting initial statewide results to empty {final_table}")
+                    non_id_cols = [c for c in get_column_names(cur, final_table.split('.')[-1]) if c != "id"]
+                    col_csv = ", ".join(non_id_cols)
+                    cur.execute(f"INSERT INTO {final_table} ({col_csv}) SELECT {col_csv} FROM {staging_table}")
+                    conn.commit()
 
                 # ---------- Per-town ----------
                 if town_col:
@@ -831,6 +931,11 @@ def rebuild_cached_insights(db_conn=None):
                 cur.execute(f"ALTER TABLE {staging_table} RENAME TO {final_table.split('.')[-1]}")
                 
                 # ---------- Cleanup ----------
+                cur.execute("DROP TABLE IF EXISTS temp_dedup_network_props")
+                cur.execute("DROP TABLE IF EXISTS temp_biz_net_prop_counts")
+                cur.execute("DROP TABLE IF EXISTS temp_biz_town_prop_counts")
+                cur.execute("DROP TABLE IF EXISTS temp_human_principal_counts")
+                cur.execute("DROP TABLE IF EXISTS temp_biz_counts")
                 cur.execute("DROP TABLE IF EXISTS temp_network_stats")
                 cur.execute("DROP TABLE IF EXISTS temp_principal_network_map")
                 cur.execute("DROP TABLE IF EXISTS temp_network_town_stats")
@@ -840,8 +945,10 @@ def rebuild_cached_insights(db_conn=None):
                 
                 # Fetch all rows from cached_insights
                 cur.execute(f"""
-                    SELECT title, rank, network_name, property_count, total_assessed_value, total_appraised_value,
-                           primary_entity_id, primary_entity_name, primary_entity_type, business_count, principal_count, building_count, unit_count, representative_entities, controlling_business, linked_business_count
+                    SELECT title, rank, network_id, network_name, property_count, total_assessed_value, total_appraised_value,
+                           residential_assessed_value, primary_entity_id, primary_entity_name, primary_entity_type,
+                           business_count, principal_count, building_count, unit_count,
+                           representative_entities, principals, controlling_business, linked_business_count
                     FROM {final_table}
                     ORDER BY title, rank
                 """)
@@ -906,6 +1013,15 @@ def rebuild_cached_insights(db_conn=None):
 
 
         log.info("✅ cached_insights rebuilt in %.2fs", time.time() - t0)
+        try:
+            from landing_cache import build_and_store_landing_snapshot
+            build_and_store_landing_snapshot(conn=conn)
+        except Exception as snap_err:
+            try:
+                from api.landing_cache import build_and_store_landing_snapshot
+                build_and_store_landing_snapshot(conn=conn)
+            except Exception:
+                log.warning("Landing snapshot refresh hook skipped: %s", snap_err)
     finally:
         if should_close and conn:
             conn.close()

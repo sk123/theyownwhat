@@ -583,6 +583,77 @@ def process_municipality_with_arcgis(conn, municipality_name, data_source_config
 
     return updated_count
 
+def _normalize_ct_geodata_columns(df):
+    """Normalize CT Geodata CSV column names across underscore vs space schema variants and deduplicate headers."""
+    # Remove UTF-8 BOM and deduplicate columns (keep first occurrence when upstream exports duplicate OBJECTID/Location)
+    cleaned_cols = [str(c).lstrip('\ufeff').strip() for c in df.columns]
+    df.columns = cleaned_cols
+    df = df.loc[:, ~df.columns.duplicated(keep='first')].copy()
+
+    canonical_aliases = {
+        'Town_Name': 'Town Name',
+        'Appraised Land': 'Appraised_Land',
+        'Appraised Building': 'Appraised_Building',
+        'Appraised Outbuilding': 'Appraised_Outbuilding',
+        'Assessed Total': 'Assessed_Total',
+        'Assessed Land': 'Assessed_Land',
+        'Assessed Building': 'Assessed_Building',
+        'Land Acres': 'Land_Acres',
+        'State Use Description': 'State_Use_Description',
+        'Living Area': 'Living_Area',
+        'Sale Price': 'Sale_Price',
+        'Sale Date': 'Sale_Date',
+        'Mailing Address': 'Mailing_Address',
+        'Mailing City': 'Mailing_City',
+        'Mailing State': 'Mailing_State',
+        'Mailing Zip': 'Mailing_Zip',
+        'Co Owner': 'Co_Owner',
+        'Co-Owner': 'Co_Owner',
+        'CAMA Link': 'CAMA_Link',
+        'Link From CAMA': 'Link_From_CAMA',
+        'Location CAMA': 'Location_CAMA',
+        'Unit Type': 'Unit_Type',
+        'Parcel ID': 'Parcel_ID',
+    }
+    rename_map = {}
+    existing = set(df.columns)
+    for src_col, dst_col in canonical_aliases.items():
+        if src_col in existing and dst_col not in existing:
+            rename_map[src_col] = dst_col
+            existing.add(dst_col)
+    if rename_map:
+        df = df.rename(columns=rename_map)
+    return df
+
+
+def sweep_stale_running_statuses(conn, max_age_hours: int = 12) -> int:
+    """Mark crashed/timed-out `running` entries older than `max_age_hours` as `interrupted`."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE data_source_status
+                SET refresh_status = 'interrupted',
+                    details = COALESCE(details, '{}'::jsonb) || jsonb_build_object(
+                        'swept_at', NOW()::text,
+                        'note', 'Marked interrupted after exceeding running lock timeout'
+                    )
+                WHERE LOWER(COALESCE(refresh_status, '')) = 'running'
+                  AND (last_refreshed_at IS NULL OR last_refreshed_at < NOW() - (%s || ' hours')::interval)
+                """,
+                (str(int(max_age_hours)),),
+            )
+            swept = cur.rowcount
+        conn.commit()
+        if swept:
+            log(f"Swept {swept} stale 'running' source status row(s) older than {max_age_hours}h -> 'interrupted'.")
+        return swept
+    except Exception as exc:
+        conn.rollback()
+        log(f"Warning: could not sweep stale running statuses: {exc}")
+        return 0
+
+
 # --- NEW: CT Geodata CSV Handler ---
 def download_ct_geodata_csv(url):
     """Downloads (or loads from local file) and caches CT Geodata CSV."""
@@ -604,6 +675,7 @@ def download_ct_geodata_csv(url):
                 response.raise_for_status()
                 df = pd.read_csv(StringIO(response.content.decode('utf-8-sig')), low_memory=False)
 
+            df = _normalize_ct_geodata_columns(df)
             GEODATA_CACHE[url] = df
             log(f"Successfully loaded {len(df)} records into cache.")
             return df
@@ -658,8 +730,17 @@ def process_municipality_with_ct_geodata(conn, municipality_name, config, curren
         'Occupancy': 'number_of_units'
     }
 
-    # Pre-calculate appraised_value
-    df['appraised_value'] = df[['Appraised_Land', 'Appraised_Building', 'Appraised_Outbuilding']].sum(axis=1)
+    # Pre-calculate appraised_value safely across whichever appraised columns exist
+    appraised_cols = [c for c in ('Appraised_Land', 'Appraised_Building', 'Appraised_Outbuilding') if c in df.columns]
+    if appraised_cols:
+        for col in appraised_cols:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+        df['appraised_value'] = df[appraised_cols].sum(axis=1)
+    elif 'Appraised_Total' in df.columns or 'Appraised Total' in df.columns:
+        tot_col = 'Appraised_Total' if 'Appraised_Total' in df.columns else 'Appraised Total'
+        df['appraised_value'] = pd.to_numeric(df[tot_col], errors='coerce').fillna(0)
+    else:
+        df['appraised_value'] = 0
 
     # Custom process data logic
     processed_data = {}
@@ -852,22 +933,40 @@ def parse_mapxpress_html(html_content):
                     i += 1
                     continue
 
+                def _clean_mapxpress_num(raw):
+                    if raw is None:
+                        return None
+                    cleaned = str(raw).replace('$', '').replace(',', '').strip()
+                    if not cleaned:
+                        return None
+                    try:
+                        float(cleaned)
+                        return cleaned
+                    except ValueError:
+                        return None
+
                 # Map keys
                 if 'year built' in k:
-                    data['year_built'] = val_text
+                    num_val = _clean_mapxpress_num(val_text)
+                    if num_val is not None:
+                        data['year_built'] = str(int(float(num_val)))
                     # Stop after consuming this pair
                     i += 2
                     continue
                 elif 'living area' in k or 'gross living area' in k or 'building gross' in k:
-                     # Prioritize specific living area if multiple match
-                     if 'living area' in k and 'gross' not in k:
-                         data['living_area'] = val_text
-                     elif 'living_area' not in data: # Fallback
-                         data['living_area'] = val_text
+                     # Prioritize specific living area if multiple match; skip non-numeric table headers
+                     num_val = _clean_mapxpress_num(val_text)
+                     if num_val is not None:
+                         if 'living area' in k and 'gross' not in k:
+                             data['living_area'] = num_val
+                         elif 'living_area' not in data: # Fallback
+                             data['living_area'] = num_val
                      i += 2
                      continue
                 elif 'total acres' in k:
-                    data['acres'] = val_text
+                    num_val = _clean_mapxpress_num(val_text)
+                    if num_val is not None:
+                        data['acres'] = num_val
                     i += 2
                     continue
                 elif 'sale date' in k:
@@ -875,7 +974,9 @@ def parse_mapxpress_html(html_content):
                     i += 2
                     continue
                 elif 'sale price' in k:
-                    data['sale_amount'] = val_text
+                    num_val = _clean_mapxpress_num(val_text)
+                    if num_val is not None:
+                        data['sale_amount'] = num_val
                     i += 2
                     continue
                 elif 'owner' in k and 'ownership' not in k:
@@ -893,8 +994,12 @@ def parse_mapxpress_html(html_content):
                      # <td align=LEFT>TOTAL:</td><td align=center>346600</td><td align=center>242620</td>
                      # 2nd cell is Appraised, 3rd is Assessed
                      if i + 2 < len(cells):
-                         data['appraised_value'] = val_text # 2nd cell
-                         data['assessed_value'] = cells[i+2].get_text(strip=True) # 3rd cell
+                         appr_num = _clean_mapxpress_num(val_text)
+                         assd_num = _clean_mapxpress_num(cells[i+2].get_text(strip=True))
+                         if appr_num is not None:
+                             data['appraised_value'] = appr_num # 2nd cell
+                         if assd_num is not None:
+                             data['assessed_value'] = assd_num # 3rd cell
                          i += 3
                          continue
 
@@ -1925,9 +2030,27 @@ def update_property_in_db(conn, property_db_id, vision_data, restricted_mode=Fal
         'unit', 'unit_cut', 'owner', 'co_owner', 'location', 'account_number'
     }
 
+    NUMERIC_FLOAT_FIELDS = {
+        'living_area', 'acres', 'sale_amount', 'assessed_value',
+        'appraised_value', 'latitude', 'longitude',
+    }
+    NUMERIC_INT_FIELDS = {'year_built', 'number_of_units'}
+
     for key, new_value in vision_data.items():
         if new_value is None or str(new_value).strip() == '':
             continue
+
+        if key in NUMERIC_FLOAT_FIELDS or key in NUMERIC_INT_FIELDS:
+            cleaned_num = str(new_value).replace('$', '').replace(',', '').strip()
+            try:
+                parsed_float = float(cleaned_num)
+                if key in NUMERIC_INT_FIELDS:
+                    new_value = int(round(parsed_float))
+                else:
+                    new_value = parsed_float
+            except (ValueError, TypeError):
+                log(f"Skipping non-numeric value for {key}: {new_value!r}", municipality=municipality_name)
+                continue
 
         should_update = True
         current_val = current_state.get(key)

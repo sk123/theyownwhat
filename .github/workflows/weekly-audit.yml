@@ -1,31 +1,79 @@
-name: Weekly System & Data Freshness Audit
+name: Weekly Dynamic Gemini Audit & Review Digest
 
 on:
   schedule:
-    # Run every Monday at 09:30 UTC
-    - cron: '30 9 * * 1'
+    # Run every Sunday at 12:30 UTC (7:30 AM EST / 8:30 AM EDT), right after
+    # the 6:30 AM Sunday local dynamic Gemini audit & optimization sweeper finishes.
+    - cron: '30 12 * * 0'
+  push:
+    branches:
+      - main
+    paths:
+      - 'docs/benchmarks/latest-weekly-gemini-audit.json'
   workflow_dispatch:
 
+concurrency:
+  group: weekly-gemini-audit-digest
+  cancel-in-progress: true
+
 jobs:
-  audit:
-    name: Audit They Own WHAT?? Platform & Town Data
+  weekly-digest:
+    name: Render & Email Weekly Gemini Audit Digest
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
-      - name: Checkout repository
+      - name: Checkout repository with commit history
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install dependencies
+      - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      - name: Run System Audit
+      - name: Render weekly Gemini audit HTML digest & signed 1-click review links
+        id: build_digest
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: python scripts/weekly_audit.py
+          PUBLIC_SITE_URL: https://theyownwhat.net
+          AUDIT_REVIEW_SECRET: ${{ secrets.AUDIT_REVIEW_SECRET || '' }}
+          MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD || secrets.ALERT_EMAIL_PASS || '' }}
+        run: |
+          python scripts/weekly_gemini_audit.py render-from-latest --public-url "https://theyownwhat.net"
+          subj="$(python -c "import json; d = json.load(open('build/weekly-gemini-audit-meta.json', encoding='utf-8')); print(d.get('subject') or '[They Own WHAT??] Weekly Gemini Audit & Review Digest')")"
+          echo "subject=$subj" >> "$GITHUB_OUTPUT"
+
+      - name: Upload weekly audit digest artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-gemini-audit-digest-${{ github.run_number }}
+          path: |
+            build/weekly-gemini-audit-email.html
+            build/weekly-gemini-audit-meta.json
+            docs/benchmarks/latest-weekly-gemini-audit.json
+          if-no-files-found: warn
+
+      - name: Send weekly Gemini audit digest email
+        if: success() && env.HAS_MAIL_SECRETS == 'true'
+        env:
+          HAS_MAIL_SECRETS: ${{ ((secrets.MAIL_USERNAME != '' && secrets.MAIL_PASSWORD != '') || (secrets.ALERT_EMAIL_FROM != '' && secrets.ALERT_EMAIL_PASS != '')) && 'true' || 'false' }}
+        uses: dawidd6/action-send-mail@v4
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.MAIL_USERNAME || secrets.ALERT_EMAIL_FROM }}
+          password: ${{ secrets.MAIL_PASSWORD || secrets.ALERT_EMAIL_PASS }}
+          subject: ${{ steps.build_digest.outputs.subject }}
+          to: salmunk@gmail.com, me@salmun.net
+          from: "They Own WHAT?? Weekly Audit <salmunk@gmail.com>"
+          html_body: file://build/weekly-gemini-audit-email.html
+          convert_markdown: false

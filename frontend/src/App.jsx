@@ -1,4 +1,4 @@
-import React, { useState, Suspense, useTransition } from 'react';
+import React, { useState, Suspense, useTransition, useRef, useCallback, useEffect } from 'react';
 import Header from './components/Header';
 import SearchBar from './components/SearchBar';
 import NetworkView from './components/NetworkView';
@@ -12,7 +12,7 @@ import ToolboxDashboard from './components/ToolboxDashboard';
 import StatCard from './components/StatCard';
 import BackgroundGrid from './components/BackgroundGrid';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Sparkles, Loader2, Search, ArrowRight, Building2, TrendingUp, Users, ShieldAlert, ChevronRight, List } from 'lucide-react';
+import { Sparkles, Loader2, Search, ArrowRight, ArrowUp, Building2, TrendingUp, Users, ShieldAlert, ChevronRight, List, CircleAlert, X } from 'lucide-react';
 import LandlordMonitor from './components/LandlordMonitor';
 import CityExplorer from './components/CityExplorer';
 import DatasetLanding from './components/DatasetLanding';
@@ -22,6 +22,7 @@ const BurstDetector = React.lazy(() => import('./components/BurstDetector'));
 const PropertyDetailsModal = React.lazy(() => import('./components/PropertyDetailsModal'));
 const EntityDetailsModal = React.lazy(() => import('./components/EntityDetailsModal'));
 const AboutModal = React.lazy(() => import('./components/AboutModal'));
+const UpgradeModal = React.lazy(() => import('./components/UpgradeModal'));
 const MultiPropertyMapModal = React.lazy(() => import('./components/MultiPropertyMapModal'));
 const FreshnessModal = React.lazy(() => import('./components/FreshnessModal'));
 const FeedbackModal = React.lazy(() => import('./components/FeedbackModal'));
@@ -46,11 +47,16 @@ const LocalAnalyticsDashboard = React.lazy(() => {
   });
 });
 
-const CITY_EXPLORER_STATES = new Set(['NY', 'DC', 'BALTIMORE', 'BOSTON', 'DETROIT', 'PHILADELPHIA', 'CHICAGO', 'MIAMI', 'MINNEAPOLIS', 'NJ']);
+const CITY_EXPLORER_STATES = new Set([
+  'NY', 'NYS', 'DC', 'BALTIMORE', 'BOSTON', 'DETROIT', 'PHILADELPHIA',
+  'CHICAGO', 'MIAMI', 'MINNEAPOLIS', 'NJ',
+  'MA', 'FL', 'CO', 'VT', 'WI', 'NC', 'AR', 'VA',
+]);
 const DATASET_STORAGE_KEY = 'theyownwhat.dataset';
 const DATASET_PATHS = {
   CT: '/ct',
   NY: '/nyc',
+  NYS: '/ny',
   DC: '/dc',
   BALTIMORE: '/baltimore',
   BOSTON: '/boston',
@@ -60,6 +66,14 @@ const DATASET_PATHS = {
   MIAMI: '/miami',
   MINNEAPOLIS: '/minneapolis',
   NJ: '/nj',
+  MA: '/ma',
+  FL: '/fl',
+  CO: '/co',
+  VT: '/vt',
+  WI: '/wi',
+  NC: '/nc',
+  AR: '/ar',
+  VA: '/va',
 };
 const PATH_DATASETS = Object.fromEntries(Object.entries(DATASET_PATHS).map(([state, path]) => [path, state]));
 
@@ -101,7 +115,7 @@ const SEO_BY_DATASET = {
   },
   PHILADELPHIA: {
     title: 'They Own WHAT?? | Philadelphia Landlord & Property Explorer',
-    description: 'Explore Philadelphia property records, OPA ownership networks, and municipal assessment database.',
+    description: 'Explore Philadelphia OPA assessments, L&I active rental licenses, code violations, PA DOS corporate Governor filings, and NHPD subsidies.',
     path: '/philadelphia',
   },
   CHICAGO: {
@@ -111,7 +125,7 @@ const SEO_BY_DATASET = {
   },
   MIAMI: {
     title: 'They Own WHAT?? | Miami Landlord & Property Explorer',
-    description: 'Explore Miami property records, owner networks, and Florida business registration data.',
+    description: 'Explore Miami-Dade property records, Florida Sunbiz corporate officer/manager networks, DBPR apartment licenses, and NHPD subsidies.',
     path: '/miami',
   },
   MINNEAPOLIS: {
@@ -123,6 +137,51 @@ const SEO_BY_DATASET = {
     title: 'They Own WHAT?? | New Jersey BHI Landlord & Property Explorer',
     description: 'Explore New Jersey DCA BHI active-building registration records and conservative owner networks from public source-loaded data.',
     path: '/nj',
+  },
+  NYS: {
+    title: 'They Own WHAT?? | New York State Landlord & Property Explorer',
+    description: 'Explore New York State non-NYC county tax parcels linked to NY DOS corporate filings, Buffalo rental/code/court records, and NHPD subsidies.',
+    path: '/ny',
+  },
+  MA: {
+    title: 'They Own WHAT?? | Massachusetts Statewide Landlord & Property Explorer',
+    description: 'Explore Massachusetts MassGIS Level 3 municipal tax parcels across all 351 cities and towns, landlord networks, and NHPD subsidies.',
+    path: '/ma',
+  },
+  FL: {
+    title: 'They Own WHAT?? | Florida Statewide Landlord & Property Explorer',
+    description: 'Explore Florida statewide investor/multifamily property parcels across all 67 counties linked to Sunbiz corporate principals, DBPR apartment licenses, and NHPD.',
+    path: '/fl',
+  },
+  CO: {
+    title: 'They Own WHAT?? | Colorado Statewide Landlord & Property Explorer',
+    description: 'Explore Colorado public property parcels linked to Colorado Secretary of State filings, Denver active rental licenses, and NHPD subsidies.',
+    path: '/co',
+  },
+  NC: {
+    title: 'They Own WHAT?? | North Carolina Statewide Landlord & Property Explorer',
+    description: 'Explore North Carolina NC OneMap property parcels across all 100 counties, landlord ownership networks, and NHPD subsidies.',
+    path: '/nc',
+  },
+  WI: {
+    title: 'They Own WHAT?? | Wisconsin Statewide Landlord & Property Explorer',
+    description: 'Explore Wisconsin statewide residential and multifamily property parcels, landlord networks, and NHPD subsidies.',
+    path: '/wi',
+  },
+  VT: {
+    title: 'They Own WHAT?? | Vermont Statewide Landlord & Property Explorer',
+    description: 'Explore Vermont VCGI standardized Grand List property parcels, landlord ownership networks, and NHPD subsidies.',
+    path: '/vt',
+  },
+  AR: {
+    title: 'They Own WHAT?? | Arkansas Statewide Landlord & Property Explorer',
+    description: 'Explore Arkansas GIS Office property parcels across all 75 counties linked to corporate officer filings and NHPD subsidies.',
+    path: '/ar',
+  },
+  VA: {
+    title: 'They Own WHAT?? | Virginia Statewide Landlord & Property Explorer',
+    description: 'Explore Virginia VGIN & county CAMA property parcels linked to Virginia SCC corporate officer filings, recent sales, and NHPD subsidies.',
+    path: '/va',
   },
 };
 
@@ -170,35 +229,63 @@ function NetworkJumpBar({ propertyCount, businessCount, principalCount, activeTa
   ];
 
   return (
-    <div className="sticky top-0 z-30 rounded-xl border border-slate-200 bg-white/95 shadow-sm backdrop-blur">
-      <div className="flex items-center gap-1 overflow-x-auto px-2 py-1.5">
-        <span className="hidden shrink-0 px-2 text-[9px] font-black uppercase tracking-wider text-slate-400 sm:inline">
-          Jump to
-        </span>
-        {items.map(({ id, label, count, icon: Icon }) => {
-          const isActive = activeTarget === id;
-          return (
-            <button
-              key={id}
-              type="button"
-              onClick={() => onJump(id)}
-              className={`flex shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[10px] font-black uppercase tracking-wider transition-colors ${
-                isActive
-                  ? 'border-blue-200 bg-blue-50 text-blue-700'
-                  : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-              }`}
-            >
-              <Icon size={13} />
-              <span>{label}</span>
-              <span className={`rounded-md px-1.5 py-px text-[9px] ${isActive ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-500'}`}>
-                {(count || 0).toLocaleString()}
-              </span>
-            </button>
-          );
-        })}
-      </div>
+    <div className="flex items-center gap-1.5 w-full py-0.5">
+      {items.map(({ id, label, count, icon: Icon }) => {
+        const isActive = activeTarget === id;
+        return (
+          <button
+            key={id}
+            type="button"
+            onClick={() => onJump(id)}
+            className={`flex-1 min-w-0 flex items-center justify-center gap-1 sm:gap-1.5 rounded-lg border py-2 px-1.5 text-[10px] font-black uppercase tracking-wide sm:tracking-wider transition-all shadow-2xs ${
+              isActive
+                ? 'border-blue-500 bg-blue-50 text-blue-700 font-extrabold shadow-sm ring-1 ring-blue-500/20'
+                : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+            }`}
+          >
+            <Icon size={12} aria-hidden="true" className={`shrink-0 hidden min-[380px]:inline ${isActive ? 'text-blue-600' : 'text-slate-400'}`} />
+            <span className="truncate">{label}</span>
+            <span className={`rounded-md px-1.5 py-px text-[9px] font-extrabold shrink-0 ${isActive ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-600'}`}>
+              {(count || 0).toLocaleString()}
+            </span>
+          </button>
+        );
+      })}
     </div>
   );
+}
+
+class DashboardErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+  componentDidCatch(error, errorInfo) {
+    console.error("DashboardErrorBoundary caught an error:", error, errorInfo);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="p-4 bg-red-50 border border-red-200 rounded-xl m-2 text-center shadow-xs">
+          <h3 className="text-xs font-bold text-red-800">Something went wrong displaying this section</h3>
+          <p className="text-[11px] text-red-600 mt-0.5">{this.state.error?.message || 'Render error'}</p>
+          <button
+            onClick={() => {
+              this.setState({ hasError: false, error: null });
+              if (this.props.onReset) this.props.onReset();
+            }}
+            className="mt-2 px-3 py-1 bg-red-600 hover:bg-red-700 text-white rounded-lg text-[10px] font-bold uppercase tracking-wider"
+          >
+            Reload Section
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 // NOTE: This is a simplified App.jsx. In a real scenario we'd use React Router.
@@ -214,6 +301,8 @@ function App() {
   })();
   const [view, setView] = useState(initialAnalytics ? 'analytics' : (initialDataset ? datasetHomeView(initialDataset) : 'datasets')); // datasets | home | dashboard | toolbox | hartford | nyc | analytics
   const [activeState, setActiveState] = useState(initialDataset || initialStoredDataset || 'CT'); // CT | NY | DC | BALTIMORE | BOSTON
+  const [liveJurisdictionKeys, setLiveJurisdictionKeys] = useState(null);
+  const [monitorCity, setMonitorCity] = useState('HARTFORD');
   const [lastDataset, setLastDataset] = useState(initialStoredDataset);
   const [cityExplorerKey, setCityExplorerKey] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -236,14 +325,35 @@ function App() {
   // Map Selection State
   const [selectedMapProperties, setSelectedMapProperties] = useState(null);
 
+  // Dashboard Scroll & State
+  const dashboardScrollRef = useRef(null);
+  const [isScrolledPastCards, setIsScrolledPastCards] = useState(false);
+
+  const handleDashboardScroll = useCallback(() => {
+    if (dashboardScrollRef.current) {
+      const st = dashboardScrollRef.current.scrollTop;
+      // When user scrolls down past the summary cards (> 250px), show jump-back button
+      setIsScrolledPastCards(st > 250);
+    }
+  }, []);
+
+  const handleScrollToTop = useCallback(() => {
+    if (dashboardScrollRef.current) {
+      dashboardScrollRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }, []);
+
   // Dashboard State
   const [selectedCity, setSelectedCity] = useState('All');
   const [includeNonLocalProperties, setIncludeNonLocalProperties] = useState(false);
   const [selectedEntityId, setSelectedEntityId] = useState(null);
   const [showAbout, setShowAbout] = useState(false);
+  const [showUpgrade, setShowUpgrade] = useState(false);
   const [showFreshness, setShowFreshness] = useState(false);
   const [showFeedback, setShowFeedback] = useState(false);
   const [feedbackEntity, setFeedbackEntity] = useState(null);
+  const [searchNotice, setSearchNotice] = useState(null);
+  const [cityInitialTarget, setCityInitialTarget] = useState(null);
 
   const handleOpenFeedback = (entity) => {
     setFeedbackEntity(entity);
@@ -291,15 +401,6 @@ function App() {
       })
       .catch(err => console.warn("Features check failed", err));
 
-    setLoadingInsights(true);
-    api.get('/insights')
-      .then(data => {
-        console.log("Insights loaded:", data);
-        setInsights(data);
-      })
-      .catch(err => console.error("Failed to load insights", err))
-      .finally(() => setLoadingInsights(false));
-
     // Listen for Hartford Playground trigger from Insights
     const handleOpenPlayground = () => setView('hartford');
     window.addEventListener('open-playground', handleOpenPlayground);
@@ -309,24 +410,53 @@ function App() {
     };
   }, []);
 
+  // Lazy-load the 2.9MB CT insights table ONLY when entering CT view (view === 'home')
+  const insightsRequestedRef = useRef(false);
+  React.useEffect(() => {
+    if (view !== 'home' || insightsRequestedRef.current) return;
+    insightsRequestedRef.current = true;
+    setLoadingInsights(true);
+    api.get('/insights')
+      .then(data => {
+        setInsights(data);
+      })
+      .catch(err => console.error("Failed to load insights", err))
+      .finally(() => setLoadingInsights(false));
+  }, [view]);
+
   // Search Handler
-  const handleSearch = async (type, term) => {
+  const handleSearch = async (type, term, state) => {
+    const targetState = state || activeState || 'CT';
+    if (targetState !== activeState) {
+      setActiveState(targetState);
+    }
     setLoading(true);
+    setSearchNotice(null);
     setSearchResults(null); // Clear previous results
+    resetNetworkView();
     try {
       // Use 'all' type for unified search
-      const results = await api.get(`/search?type=all&term=${encodeURIComponent(term)}&state=${activeState}`);
+      const searchType = type || 'all';
+      const results = await api.get(`/search?type=${encodeURIComponent(searchType)}&term=${encodeURIComponent(term)}&state=${targetState}`);
       console.log("Search results:", results);
 
       if (results && results.length > 0) {
         setSearchResults(results);
+        setDatasetPath(targetState);
+        setView('home');
       } else {
         console.warn("No results found for", term);
-        alert("No results found.");
+        setSearchNotice({
+          tone: 'info',
+          text: `No matching records found for "${term}" in ${targetState}. Try a broader owner surname, entity root, or street name without unit numbers.`,
+        });
       }
     } catch (err) {
       console.error(err);
-      alert("Search failed. Please try again.");
+      setSearchNotice({
+        tone: 'error',
+        text: 'Search request failed. Please try again in a moment.',
+      });
     } finally {
       setLoading(false);
     }
@@ -340,28 +470,54 @@ function App() {
     setSelectedEntityId(null);
     setIncludeNonLocalProperties(false);
 
+    let resolvedState = activeState;
     if (city) {
       const cityUpper = city.toUpperCase().trim();
       const stateMap = {
         'NYC': 'NY',
+        'NY': 'NY',
+        'NEW YORK CITY': 'NY',
+        'NYS': 'NYS',
+        'NEW YORK STATE': 'NYS',
         'BALTIMORE': 'BALTIMORE',
+        'BALT': 'BALTIMORE',
+        'MD': 'BALTIMORE',
         'BOSTON': 'BOSTON',
+        'MA': 'MA',
+        'MASSACHUSETTS': 'MA',
         'DETROIT': 'DETROIT',
+        'MI': 'DETROIT',
         'DC': 'DC',
+        'PHILADELPHIA': 'PHILADELPHIA',
+        'PA': 'PHILADELPHIA',
+        'CHICAGO': 'CHICAGO',
+        'IL': 'CHICAGO',
+        'MIAMI': 'MIAMI',
+        'FL': 'FL',
+        'FLORIDA': 'FL',
+        'MINNEAPOLIS': 'MINNEAPOLIS',
+        'MN': 'MINNEAPOLIS',
         'NJ': 'NJ',
         'NEW JERSEY': 'NJ',
+        'CO': 'CO',
+        'COLORADO': 'CO',
+        'VT': 'VT',
+        'VERMONT': 'VT',
+        'WI': 'WI',
+        'WISCONSIN': 'WI',
+        'NC': 'NC',
+        'NORTH CAROLINA': 'NC',
       };
-      if (stateMap[cityUpper]) {
-        setActiveState(stateMap[cityUpper]);
-      } else {
-        setActiveState('CT');
-      }
+      resolvedState = stateMap[cityUpper] || 'CT';
+      setActiveState(resolvedState);
     }
 
     const newData = { principals: [], businesses: [], properties: [], links: [], initialEntityName: name };
     const seenEntities = new Set();
 
-    const streamCity = city || (activeState === 'NY' ? 'NYC' : activeState === 'Balt' ? 'BALTIMORE' : activeState ? activeState.toUpperCase() : 'HARTFORD');
+    const streamCity = (city && city.toUpperCase().trim() === 'NY')
+      ? 'NYC'
+      : (city || (resolvedState === 'NY' ? 'NYC' : resolvedState === 'Balt' ? 'BALTIMORE' : resolvedState ? resolvedState.toUpperCase() : 'HARTFORD'));
 
     api.streamNetwork(id, type, name,
       (chunk) => {
@@ -371,7 +527,10 @@ function App() {
           if (chunk.data.building_count) newData.building_count = chunk.data.building_count;
           if (chunk.data.unit_count) newData.unit_count = chunk.data.unit_count;
           if (chunk.data.eviction_summary) newData.evictionSummary = chunk.data.eviction_summary;
-          if (chunk.data.code_enforcement_summary) newData.codeEnforcementSummary = chunk.data.code_enforcement_summary;
+          if (chunk.data.code_enforcement_summary) {
+            newData.codeEnforcementSummary = chunk.data.code_enforcement_summary;
+            newData.codeSummary = chunk.data.code_enforcement_summary;
+          }
           if (chunk.data.connection_signals) newData.connection_signals = chunk.data.connection_signals;
           if (chunk.data.transaction_summary) newData.transactionSummary = chunk.data.transaction_summary;
         } else if (chunk.type === 'entities') {
@@ -482,8 +641,12 @@ function App() {
         });
 
         setStreamingStatus(prev => ({ ...prev, active: false }));
+        setActiveMobileTab('properties');
         setView('dashboard');
         setLoading(false);
+        window.requestAnimationFrame(() => {
+          if (dashboardScrollRef.current) dashboardScrollRef.current.scrollTop = 0;
+        });
       },
       (err) => {
         console.error("Stream error", err);
@@ -519,9 +682,11 @@ function App() {
     }
   };
 
-  const openDataset = (state, { replace = false } = {}) => {
+  const openDataset = (state, { replace = false, initialTarget = null } = {}) => {
     if (!DATASET_PATHS[state]) return;
     resetNetworkView();
+    setSearchNotice(null);
+    setCityInitialTarget(initialTarget);
     setActiveState(state);
     setIncludeNonLocalProperties(false);
     setSelectedCity('All');
@@ -532,6 +697,35 @@ function App() {
       setCityExplorerKey(key => key + 1);
     }
     setView(datasetHomeView(state));
+  };
+
+  const handleSelectCtAutocompleteItem = (item) => {
+    if (!item) return;
+    setActiveState('CT');
+    rememberDataset('CT');
+    setDatasetPath('CT');
+    setSearchNotice(null);
+
+    const id = item.id || item.value;
+    if (item.type === 'Ownership Network' || item.type === 'network') {
+      loadNetwork(String(id), 'network', item.label || item.value, 'CT');
+    } else if (item.type === 'Business' || item.type === 'business') {
+      loadNetwork(item.id, 'business', item.label || item.value, 'CT');
+    } else if (item.type === 'Business Principal' || item.type === 'principal') {
+      loadNetwork(id, 'principal', item.label || item.value, 'CT');
+    } else if (item.type === 'Address' || item.type === 'address') {
+      if (item.business_id && item.owner) {
+        loadNetwork(item.business_id, 'business', item.owner, 'CT');
+      } else if (item.principal_id && item.owner) {
+        loadNetwork(item.principal_id, 'principal', item.owner, 'CT');
+      } else if (item.owner) {
+        loadNetwork(item.owner, 'owner', item.owner, 'CT');
+      } else {
+        loadNetwork(item.value, 'address', item.value, 'CT');
+      }
+    } else {
+      loadNetwork(id, 'owner', item.label || item.value, 'CT');
+    }
   };
 
   const showDatasetPicker = ({ replace = false } = {}) => {
@@ -736,15 +930,22 @@ function App() {
 
     window.requestAnimationFrame(() => {
       const isMobile = window.matchMedia('(max-width: 1023px)').matches;
-      const elementId = isMobile
-        ? 'mobile-network-panels'
-        : target === 'properties'
-          ? 'properties-panel'
-          : 'entities-panel';
-      document.getElementById(elementId)?.scrollIntoView({
-        behavior: 'smooth',
-        block: 'start'
-      });
+      if (isMobile) {
+        document.getElementById('mobile-network-panels')?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start'
+        });
+      } else {
+        const elementId = target === 'properties' ? 'properties-panel' : 'entities-panel';
+        const el = document.getElementById(elementId);
+        if (el && dashboardScrollRef.current) {
+          const topOffset = el.offsetTop - 85;
+          dashboardScrollRef.current.scrollTo({
+            top: Math.max(0, topOffset),
+            behavior: 'smooth'
+          });
+        }
+      }
     });
   };
 
@@ -756,9 +957,10 @@ function App() {
   // Maintenance Mode State
   const [maintenanceMode, setMaintenanceMode] = useState(false);
 
-  // Poll System Status
+  // Poll System Status (visibility-gated so background mobile tabs do not poll)
   React.useEffect(() => {
     const checkStatus = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       api.get('/system/status')
         .then(data => {
           if (data && data.maintenance !== undefined) {
@@ -773,32 +975,76 @@ function App() {
     };
 
     checkStatus();
-    const interval = setInterval(checkStatus, 10000); // Check every 10s
-    return () => clearInterval(interval);
+    const interval = setInterval(checkStatus, 30000);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') checkStatus();
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
   }, []);
 
   return (
-    <div className="h-screen bg-slate-50 flex flex-col overflow-hidden font-sans text-slate-900 selection:bg-blue-100 selection:text-blue-900">
+    <div className="h-dvh bg-slate-50 flex flex-col overflow-hidden font-sans text-slate-900 selection:bg-blue-100 selection:text-blue-900">
       <Header
         onHome={handleHeaderHome}
         onDatasets={() => showDatasetPicker()}
         onReset={view === 'dashboard' ? handleReset : null}
         onAbout={() => setShowAbout(true)}
+        onShowUpgrade={() => setShowUpgrade(true)}
         OnOpenToolbox={() => setView('toolbox')}
         toolboxEnabled={toolboxEnabled}
         onShowFreshness={() => setShowFreshness(true)}
         onReportIssue={() => setShowFeedback(true)}
         onHartfordPlayground={() => {
-          setActiveState('CT');
+          const defaultMonitorCity = activeState === 'NY' ? 'NYC' : activeState === 'DETROIT' ? 'DETROIT' : 'HARTFORD';
+          setMonitorCity(defaultMonitorCity);
+          if (activeState !== 'NY' && activeState !== 'DETROIT') {
+            setActiveState('CT');
+          }
           setView('hartford');
         }}
         onBurstDetector={evictionToolsEnabled ? () => setView('burst') : null}
         evictionToolsEnabled={evictionToolsEnabled}
         currentView={view}
         activeState={activeState}
+        liveJurisdictionKeys={liveJurisdictionKeys}
         onStateChange={(state) => openDataset(state)}
         onOpenAnalytics={() => setView('analytics')}
       />
+
+      {/* Non-blocking Search Notice Banner */}
+      <AnimatePresence>
+        {searchNotice && (
+          <motion.div
+            initial={{ opacity: 0, y: -16 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -16 }}
+            className="relative z-40 mx-auto mt-2 max-w-2xl px-4 w-full"
+          >
+            <div className={`flex items-start justify-between gap-3 rounded-xl border px-4 py-2.5 text-xs font-medium shadow-sm ${
+              searchNotice.tone === 'error'
+                ? 'border-red-200 bg-red-50 text-red-800'
+                : 'border-amber-200 bg-amber-50 text-amber-900'
+            }`}>
+              <div className="flex items-start gap-2">
+                <CircleAlert className="h-4 w-4 shrink-0 mt-0.5" aria-hidden="true" />
+                <span>{searchNotice.text}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSearchNotice(null)}
+                aria-label="Dismiss search notice"
+                className="p-0.5 rounded hover:bg-black/5 shrink-0"
+              >
+                <X className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Maintenance Overlay */}
       <AnimatePresence>
@@ -828,7 +1074,7 @@ function App() {
         properties={streamingStatus.properties}
       />
 
-      <main className="flex-1 overflow-hidden relative z-10 pb-20 md:pb-0">
+      <main className="flex-1 min-h-0 overflow-hidden relative">
 
         {/* HERO / SEARCH SECTION */}
         <AnimatePresence mode="wait">
@@ -855,10 +1101,24 @@ function App() {
               <DatasetLanding
                 activeDataset={activeState}
                 lastDataset={lastDataset}
+                onLiveKeysChange={setLiveJurisdictionKeys}
                 onSelect={(state) => openDataset(state)}
+                onSearch={handleSearch}
+                onSelectCtItem={handleSelectCtAutocompleteItem}
+                onOpenCityResult={(state, target) => openDataset(state, { initialTarget: target })}
+                onShowUpgrade={() => setShowUpgrade(true)}
+                onShowFreshness={() => setShowFreshness(true)}
                 onOpenMonitor={(city) => {
-                  if (city) setActiveState(city);
+                  const targetCity = (city || 'HARTFORD').toUpperCase().trim();
+                  setMonitorCity(targetCity === 'NY' ? 'NYC' : targetCity);
+                  if (targetCity === 'NYC' || targetCity === 'NY') setActiveState('NY');
+                  else if (targetCity === 'DETROIT') setActiveState('DETROIT');
+                  else setActiveState('CT');
                   setView('hartford');
+                }}
+                onOpenEntity={(id, type, name, state) => {
+                  if (state) setActiveState(state);
+                  loadNetwork(id, type, name, state);
                 }}
               />
             </motion.div>
@@ -868,88 +1128,46 @@ function App() {
             <div className="h-full overflow-y-auto w-full relative">
               <BackgroundGrid />
 
-              <div className="container mx-auto px-4 pt-4 md:pt-6 pb-24 md:pb-16 relative z-10">
+              <div className="mx-auto w-full max-w-[1720px] px-3 sm:px-5 pt-2.5 md:pt-3 pb-24 md:pb-14 relative z-10">
                 <motion.div
-                  initial={{ opacity: 0, y: 20 }}
+                  initial={{ opacity: 0, y: 12 }}
                   animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -20 }}
-                  transition={{ duration: 0.4, ease: "easeOut" }}
-                  className="max-w-7xl mx-auto"
+                  exit={{ opacity: 0, y: -12 }}
+                  transition={{ duration: 0.25, ease: "easeOut" }}
+                  className="w-full"
                 >
-                  {activeState === 'NY' && (
-                    <div
-                      onClick={() => setView('nyc')}
-                      className="mb-6 max-w-4xl mx-auto bg-gradient-to-r from-violet-50 to-indigo-50 border border-violet-200 text-violet-900 px-5 py-4 rounded-2xl flex items-start gap-3 shadow-md cursor-pointer hover:shadow-lg hover:border-violet-300 transition-all group"
-                    >
-                      <Building2 className="text-violet-500 shrink-0 mt-0.5" size={20} />
-                      <div className="text-sm flex-1">
-                        <span className="font-extrabold text-violet-800">NYC Landlord Networks — Now Live:</span>
-                        <p className="text-xs text-violet-700 mt-1 leading-relaxed">
-                          193,000+ HPD registrations · 83,000+ ownership networks · 2.5M residential units tracked.
-                          Search any landlord, LLC, or address.
-                        </p>
-                      </div>
-                      <ChevronRight size={16} className="text-violet-400 shrink-0 mt-1 group-hover:translate-x-1 transition-transform" />
-                    </div>
-                  )}
-
-                  {/* Search + Tools Toolbar */}
-                  <div className="mb-6 flex flex-col md:flex-row items-stretch gap-2 max-w-5xl mx-auto">
-                    {/* Search Bar */}
-                    <div className="flex-[3] relative group min-w-0">
-                      <div className="absolute -inset-0.5 bg-gradient-to-r from-blue-500/25 to-indigo-500/25 rounded-xl opacity-40 group-hover:opacity-70 blur-sm transition duration-500"></div>
-                      <div className="relative bg-white rounded-xl shadow-lg border border-blue-200/60 h-full">
-                        {!maintenanceMode && <SearchBar
+                  {/* Compact Search Bar (aligned directly below "they own WHAT??") + Quick Tools */}
+                  <div className="mb-3 flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+                    <div className="w-full md:max-w-xl lg:max-w-2xl">
+                      {!maintenanceMode && (
+                        <SearchBar
                           activeState={activeState}
                           onSearch={handleSearch}
-                          isLoading={loading}
-                          onSelect={async (item) => {
-                            let type = 'owner';
-                            let id = item.id || item.value;
-
-                            if (item.type === 'Business' || item.type === 'business') {
-                              type = 'business';
-                              id = item.id;
-                              loadNetwork(id, type, item.label || item.value);
-                            } else if (item.type === 'Business Principal' || item.type === 'principal') {
-                              type = 'principal';
-                              loadNetwork(id, type, item.label || item.value);
-                            } else if (item.type === 'Address' || item.type === 'address') {
-                              if (item.business_id && item.owner) {
-                                loadNetwork(item.business_id, 'business', item.owner);
-                              } else if (item.principal_id && item.owner) {
-                                loadNetwork(item.principal_id, 'principal', item.owner);
-                              } else if (item.owner) {
-                                loadNetwork(item.owner, 'owner', item.owner);
-                              } else {
-                                loadNetwork(item.value, 'address', item.value);
-                              }
-                            } else {
-                              loadNetwork(id, 'owner', item.label || item.value);
-                            }
-                          }}
-                        />}
-                      </div>
+                          onSelect={handleSelectCtAutocompleteItem}
+                        />
+                      )}
                     </div>
-                    {/* Action Buttons — height matches search */}
-                    <button
-                      onClick={() => setView('hartford')}
-                      className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-200 hover:border-red-300 hover:shadow-lg text-[11px] font-extrabold text-slate-700 hover:text-red-600 transition-all text-center leading-tight"
-                    >
-                      <ShieldAlert size={14} className="text-red-500 shrink-0" />
-                      <span><span className="hidden sm:inline">Landlord</span> Rap<br />Sheets</span>
-                      <span className="text-[8px] font-bold bg-red-100 text-red-500 px-1 py-0.5 rounded-full uppercase tracking-wider">Beta</span>
-                    </button>
-                    {evictionToolsEnabled && (
+
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
                       <button
-                        onClick={() => setView('burst')}
-                        className="flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-xl bg-white border border-slate-200 hover:border-amber-300 hover:shadow-lg text-[11px] font-extrabold text-slate-700 hover:text-amber-600 transition-all text-center leading-tight"
+                        type="button"
+                        onClick={() => setView('hartford')}
+                        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-200 hover:border-red-300 hover:bg-red-50/40 shadow-2xs text-xs font-extrabold text-slate-700 hover:text-red-600 transition-all whitespace-nowrap cursor-pointer"
                       >
-                        <TrendingUp size={14} className="text-amber-500 shrink-0" />
-                        <span><span className="hidden sm:inline">Eviction</span> Surge<br />Detector</span>
-                        <span className="text-[8px] font-bold bg-amber-100 text-amber-600 px-1 py-0.5 rounded-full uppercase tracking-wider">Beta</span>
+                        <ShieldAlert size={14} className="text-red-500 shrink-0" aria-hidden="true" />
+                        <span>Landlord Rap Sheets</span>
                       </button>
-                    )}
+                      {evictionToolsEnabled && (
+                        <button
+                          type="button"
+                          onClick={() => setView('burst')}
+                          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-200 hover:border-amber-300 hover:bg-amber-50/40 shadow-2xs text-xs font-extrabold text-slate-700 hover:text-amber-600 transition-all whitespace-nowrap cursor-pointer"
+                        >
+                          <TrendingUp size={14} className="text-amber-500 shrink-0" aria-hidden="true" />
+                          <span>Eviction Surge Detector</span>
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   {/* Results or Insights */}
@@ -992,89 +1210,91 @@ function App() {
           {
             view === 'dashboard' && (
               <motion.div
+                ref={dashboardScrollRef}
+                onScroll={handleDashboardScroll}
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
-                className="flex flex-col h-full w-full max-w-[1920px] mx-auto px-3 md:px-4 py-2 gap-2 overflow-y-auto bg-slate-50/50 backdrop-blur-sm"
+                className="flex flex-col h-full w-full max-w-[1920px] mx-auto px-2 sm:px-3 md:px-4 pt-2 pb-[calc(5.5rem+env(safe-area-inset-bottom,0px))] md:pb-4 lg:py-2 gap-2 overflow-y-auto overscroll-y-contain bg-slate-50/50"
               >
 
 
-                 {/* Compact Dashboard Header Strip */}
+                 {/* Compact Dashboard Header Strip + Quick Search under "they own WHAT??" */}
                  <div className="flex flex-col gap-2 shrink-0">
-                   <NetworkProfileCard 
-                     networkData={scopedNetworkData}
-                     stats={scopedStats}
-                     networkName={networkData.networkName} 
-                     initialEntityName={networkData.initialEntityName}
-                     onBack={handleReset}
-                     onOpenFeedback={handleOpenFeedback}
-                     onViewProperty={(prop) => setSelectedProperty(prop)}
-                     onSelectEntity={(id, type, name, city) => loadNetwork(id, type, name, city)}
-                     onExport={() => {
-                       const csvContent = "data:text/csv;charset=utf-8,"
-                         + "Address,City,Owner,Assessed Value,Appraised Value\n"
-                         + filteredProperties.map(p => `"${p.address || p.location}","${p.city || p.property_city}","${p.owner}","${p.assessed_value}","${p.appraised_value}"`).join("\n");
-                       const encodedUri = encodeURI(csvContent);
-                       const link = document.createElement("a");
-                       link.setAttribute("href", encodedUri);
-                       link.setAttribute("download", "portfolio_export.csv");
-                       document.body.appendChild(link);
-                       link.click();
-                     }}
-                     featureNav={
-                       <NetworkJumpBar
-                         propertyCount={filteredProperties.length}
-                         businessCount={networkData.businesses.length}
-                         principalCount={networkData.principals.length}
-                         activeTarget={activeMobileTab}
-                         onJump={handleNetworkJump}
+                   {!maintenanceMode && (
+                     <div className="w-full md:max-w-lg">
+                       <SearchBar
+                         activeState={activeState}
+                         onSearch={handleSearch}
+                         onSelect={handleSelectCtAutocompleteItem}
                        />
-                     }
-                   />
+                     </div>
+                   )}
+                   <DashboardErrorBoundary onReset={handleReset}>
+                     <NetworkProfileCard 
+                       networkData={scopedNetworkData}
+                       stats={scopedStats}
+                       networkName={networkData.networkName} 
+                       initialEntityName={networkData.initialEntityName}
+                       onBack={handleReset}
+                       onOpenFeedback={handleOpenFeedback}
+                       onViewProperty={(prop) => setSelectedProperty(prop)}
+                       onSelectEntity={(id, type, name, city) => loadNetwork(id, type, name, city)}
+                       onExport={() => {
+                         const csvContent = "data:text/csv;charset=utf-8,"
+                           + "Address,City,Owner,Assessed Value,Appraised Value\n"
+                           + filteredProperties.map(p => `"${p.address || p.location}","${p.city || p.property_city}","${p.owner}","${p.assessed_value}","${p.appraised_value}"`).join("\n");
+                         const encodedUri = encodeURI(csvContent);
+                         const link = document.createElement("a");
+                         link.setAttribute("href", encodedUri);
+                         link.setAttribute("download", "portfolio_export.csv");
+                         document.body.appendChild(link);
+                         link.click();
+                       }}
+                       featureNav={
+                         <NetworkJumpBar
+                           propertyCount={filteredProperties.length}
+                           businessCount={networkData.businesses.length}
+                           principalCount={networkData.principals.length}
+                           activeTarget={activeMobileTab}
+                           onJump={handleNetworkJump}
+                         />
+                       }
+                     />
+                   </DashboardErrorBoundary>
                  </div>
 
-
-
-                {/* Cross-Filtering & City Selection Controls - MOVED TO PROPERTY TABLE */}
-
-
+                {/* Sticky Jump-Back Bar when cards have scrolled off-screen */}
+                <AnimatePresence>
+                  {isScrolledPastCards && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -15 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -15 }}
+                      transition={{ duration: 0.15 }}
+                      className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border border-slate-200 rounded-xl px-3.5 py-2 shadow-md flex items-center justify-between gap-3 shrink-0 mb-1"
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="font-black text-xs md:text-sm text-slate-900 truncate">
+                          {networkData?.networkName || 'Landlord Portfolio'}
+                        </span>
+                        <span className="text-[10px] text-blue-700 bg-blue-50 border border-blue-200 font-extrabold px-2 py-0.5 rounded-full shrink-0">
+                          {(filteredProperties || []).length} Properties
+                        </span>
+                      </div>
+                      <button
+                        onClick={handleScrollToTop}
+                        className="flex items-center gap-1.5 text-xs font-black uppercase tracking-wider px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white shadow-xs transition-all cursor-pointer shrink-0 active:scale-95"
+                        title="Jump back up to summary cards at top of page"
+                      >
+                        <ArrowUp size={13} className="shrink-0" />
+                        <span>Jump to Cards</span>
+                      </button>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
 
                 {/* --- MOBILE TAB LAYOUT (lg:hidden) --- */}
-                <div id="mobile-network-panels" className="flex flex-col lg:hidden relative border border-slate-200 rounded-xl bg-white shadow-sm mt-1 scroll-mt-2">
-
-                  {/* Sticky Tab Header */}
-                  <div className="flex items-center border-b border-gray-100 bg-white/95 backdrop-blur-md sticky top-0 z-30 shadow-sm">
-                    <button
-                      onClick={() => handleTabChange('properties')}
-                      className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider transition-colors border-b-2 ${activeMobileTab === 'properties' ? 'border-blue-500 text-blue-700 bg-blue-50/50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
-                    >
-                      Properties
-                    </button>
-                    <button
-                      onClick={() => handleTabChange('businesses')}
-                      className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider transition-colors border-b-2 ${activeMobileTab === 'businesses' ? 'border-emerald-500 text-emerald-700 bg-emerald-50/50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
-                    >
-                      Businesses
-                    </button>
-                    <button
-                      onClick={() => handleTabChange('principals')}
-                      className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider transition-colors border-b-2 ${activeMobileTab === 'principals' ? 'border-indigo-500 text-indigo-700 bg-indigo-50/50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
-                    >
-                      Principals
-                    </button>
-
-                    {/* Start Over Button */}
-                    <button
-                      onClick={handleReset}
-                      className="px-3 py-3 text-gray-400 hover:text-red-500 hover:bg-red-50 border-b-2 border-transparent transition-colors"
-                      title="Start Over"
-                      aria-label="Start Over"
-                    >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-                        <path d="M3 3v5h5" />
-                      </svg>
-                    </button>
-                  </div>
+                <div id="mobile-network-panels" className="flex flex-col lg:hidden relative border border-slate-200 rounded-xl bg-white shadow-sm mt-1 scroll-mt-2 min-h-[calc(100dvh-80px)] shrink-0">
 
                   {/* Content Area - Auto Height for Page Scroll */}
                   <div className={`bg-white min-h-[500px] transition-opacity duration-200 ${isPending ? 'opacity-50' : 'opacity-100'}`}>
@@ -1091,7 +1311,6 @@ function App() {
                           highlightedEntityId={selectedEntityId}
                           onSelectProperty={setSelectedProperty}
                           onMapSelected={setSelectedMapProperties}
-                          onAiDigest={aiEnabled ? () => setShowAnalysis(true) : null}
                           forceExpanded={true}
                           autoHeight={true}
 
@@ -1135,7 +1354,7 @@ function App() {
                 </div>
 
                 {/* --- DESKTOP GRID LAYOUT (hidden lg:grid) --- */}
-                <div className="hidden lg:grid grid-cols-12 gap-3 flex-1 min-h-[360px] overflow-auto">
+                <div className="hidden lg:grid grid-cols-12 gap-3 h-[calc(100dvh-80px)] min-h-[650px] shrink-0">
                   {/* Left: Network List */}
                   <div id="entities-panel" className="col-span-4 h-full bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col scroll-mt-2">
                     <div className="flex-1 overflow-hidden">
@@ -1150,9 +1369,8 @@ function App() {
                   </div>
 
                   {/* Right: Property Table */}
-                  <div id="properties-panel" className="col-span-8 flex-1 overflow-auto flex flex-col min-h-0 scroll-mt-2">
+                  <div id="properties-panel" className="col-span-8 h-full bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col min-h-0 scroll-mt-2">
                     <div className="px-3 py-2 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center shrink-0">
-
                       <div className="text-xs font-bold text-slate-400">
                         {filteredProperties.length} {jurisdictionConfig.localLabel} Assets
                         {!includeNonLocalProperties && nonLocalPropertyCount > 0 && (
@@ -1182,6 +1400,24 @@ function App() {
                     </div>
                   </div>
                 </div>
+
+                {/* Floating Jump to Cards Button (Mobile only) */}
+                <AnimatePresence>
+                  {isScrolledPastCards && (
+                    <motion.button
+                      initial={{ opacity: 0, scale: 0.85, y: 15 }}
+                      animate={{ opacity: 1, scale: 1, y: 0 }}
+                      exit={{ opacity: 0, scale: 0.85, y: 15 }}
+                      transition={{ duration: 0.2 }}
+                      onClick={handleScrollToTop}
+                      className="fixed bottom-[calc(4.75rem+env(safe-area-inset-bottom,0px))] md:bottom-6 right-4 md:right-6 z-40 bg-slate-900/90 hover:bg-blue-600 text-white shadow-2xl backdrop-blur-md px-4 py-2.5 rounded-full text-xs font-black uppercase tracking-wider flex lg:hidden items-center gap-1.5 transition-all border border-white/15 cursor-pointer active:scale-95"
+                      title="Jump back to summary cards at top"
+                    >
+                      <ArrowUp size={14} className="text-blue-400 shrink-0" />
+                      <span>Jump to Cards</span>
+                    </motion.button>
+                  )}
+                </AnimatePresence>
               </motion.div>
             )
           }
@@ -1216,13 +1452,17 @@ function App() {
             <motion.div
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
-              className="h-full w-full"
+              className="h-full w-full min-h-0 overflow-hidden"
             >
               <CityExplorer
                 key={`${activeState}-${cityExplorerKey}`}
-                city={activeState === 'NY' ? 'nyc' : activeState.toLowerCase()}
+                city={activeState === 'NY' ? 'nyc' : activeState === 'NYS' ? 'ny' : activeState.toLowerCase()}
                 onBack={() => showDatasetPicker()}
                 onMapSelected={setSelectedMapProperties}
+                initialNetworkKey={cityInitialTarget?.networkKey || null}
+                initialBbl={cityInitialTarget?.bbl || null}
+                initialQuery={cityInitialTarget?.query || null}
+                onInitialConsumed={() => setCityInitialTarget(null)}
               />
             </motion.div>
           )}
@@ -1234,63 +1474,72 @@ function App() {
               className="h-full w-full min-h-0 flex flex-col overflow-y-auto md:overflow-hidden touch-pan-y"
             >
               <LandlordMonitor
-                initialCity={
-                  activeState === 'NY' ? 'NYC' :
-                  activeState === 'Balt' ? 'BALTIMORE' :
-                  activeState ? activeState.toUpperCase() : 'HARTFORD'
-                }
+                initialCity={monitorCity}
                 onSelectEntity={(id, type, name, city) => loadNetwork(id, type, name, city)}
               />
             </motion.div>
           )}
         </AnimatePresence>
+      </main>
 
-        <Suspense fallback={null}>
-          <PropertyDetailsModal
-            property={selectedProperty}
-            networkData={networkData}
-            onViewEntity={(entity, type) => setSelectedDetailEntity({ entity, type })}
-            onClose={() => setSelectedProperty(null)}
-            onOpenFeedback={handleOpenFeedback}
-          />
-          <EntityDetailsModal
-            entity={selectedDetailEntity?.entity}
-            type={selectedDetailEntity?.type}
-            networkData={networkData}
-            onNavigate={(entity, type) => setSelectedDetailEntity({ entity, type })}
-            onViewProperty={setSelectedProperty}
-            onClose={() => setSelectedDetailEntity(null)}
-            onOpenFeedback={handleOpenFeedback}
-          />
+      <Suspense fallback={null}>
+        <PropertyDetailsModal
+          property={selectedProperty}
+          networkData={networkData}
+          onViewEntity={(entity, type) => setSelectedDetailEntity({ entity, type })}
+          onClose={() => setSelectedProperty(null)}
+          onOpenFeedback={handleOpenFeedback}
+        />
+        <EntityDetailsModal
+          entity={selectedDetailEntity?.entity}
+          type={selectedDetailEntity?.type}
+          networkData={networkData}
+          onNavigate={(entity, type) => setSelectedDetailEntity({ entity, type })}
+          onViewProperty={setSelectedProperty}
+          onClose={() => setSelectedDetailEntity(null)}
+          onOpenFeedback={handleOpenFeedback}
+        />
 
-          <AboutModal
-            isOpen={showAbout}
-            onClose={() => setShowAbout(false)}
-            onShowFreshness={() => {
-              setShowAbout(false);
-              setShowFreshness(true);
-            }}
-            networkData={networkData}
-          />
-          <FreshnessModal
-            isOpen={showFreshness}
-            onClose={() => setShowFreshness(false)}
-          />
-          <FeedbackModal
-            isOpen={showFeedback}
-            onClose={() => {
-              setShowFeedback(false);
-              setFeedbackEntity(null);
-            }}
-            initialEntity={feedbackEntity || (selectedEntityId ? { id: selectedEntityId, title: 'Selected Entity' } : null)}
-            activeState={activeState}
-          />
-          <MultiPropertyMapModal
-            properties={selectedMapProperties}
-            onClose={() => setSelectedMapProperties(null)}
-          />
-        </Suspense>
-      </main >
+        <AboutModal
+          isOpen={showAbout}
+          onClose={() => setShowAbout(false)}
+          onShowFreshness={() => {
+            setShowAbout(false);
+            setShowFreshness(true);
+          }}
+          networkData={networkData}
+        />
+        <UpgradeModal
+          isOpen={showUpgrade}
+          onClose={() => setShowUpgrade(false)}
+          onShowFreshness={() => setShowFreshness(true)}
+          onOpenRapSheets={() => {
+            const defaultMonitorCity = activeState === 'NY' ? 'NYC' : activeState === 'DETROIT' ? 'DETROIT' : 'HARTFORD';
+            setMonitorCity(defaultMonitorCity);
+            if (activeState !== 'NY' && activeState !== 'DETROIT') {
+              setActiveState('CT');
+            }
+            setView('hartford');
+          }}
+        />
+        <FreshnessModal
+          isOpen={showFreshness}
+          onClose={() => setShowFreshness(false)}
+        />
+        <FeedbackModal
+          isOpen={showFeedback}
+          onClose={() => {
+            setShowFeedback(false);
+            setFeedbackEntity(null);
+          }}
+          initialEntity={feedbackEntity || (selectedEntityId ? { id: selectedEntityId, title: 'Selected Entity' } : null)}
+          activeState={activeState}
+        />
+        <MultiPropertyMapModal
+          properties={selectedMapProperties}
+          onClose={() => setSelectedMapProperties(null)}
+        />
+      </Suspense>
     </div >
   );
 }

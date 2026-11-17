@@ -125,6 +125,91 @@ NHPD_DOWNLOAD_URL = "https://preservationdatabase.org/wp-content/uploads/nhpd/ny
 
 NYC_COUNTY_FIPS = {"005", "047", "061", "081", "085",
                    "36005", "36047", "36061", "36081", "36085"}
+NYC_COUNTY_NAMES = {"BRONX", "KINGS", "NEW YORK", "QUEENS", "RICHMOND"}
+
+
+def load_local_nhpd_nyc() -> list:
+    """Fallback loader for NYC NHPD records from the local bulk Excel snapshot."""
+    candidates = [
+        "/app/data/Active and Inconclusive Properties.xlsx",
+        "data/Active and Inconclusive Properties.xlsx",
+    ]
+    xlsx_path = next((p for p in candidates if os.path.exists(p)), None)
+    if not xlsx_path:
+        return []
+
+    log.info(f"Loading NYC NHPD subsidy records from local snapshot: {xlsx_path}")
+    try:
+        import datetime as dt
+        import openpyxl
+
+        wb = openpyxl.load_workbook(xlsx_path, read_only=True, data_only=True)
+        ws = wb.active
+        row_iter = ws.iter_rows(values_only=True)
+        headers = [str(h or "").strip() for h in next(row_iter)]
+        idx = {h: i for i, h in enumerate(headers) if h}
+
+        state_i = idx.get("State")
+        county_code_i = idx.get("CountyCode")
+        county_i = idx.get("County")
+        addr_i = idx.get("PropertyAddress")
+        earliest_i = idx.get("EarliestEndDate")
+        latest_i = idx.get("LatestEndDate")
+        prog_indices = [i for i, h in enumerate(headers) if h.endswith("_ProgramName")]
+
+        if state_i is None or addr_i is None:
+            wb.close()
+            return []
+
+        records = []
+        for row in row_iter:
+            if not row or len(row) <= max(state_i, addr_i):
+                continue
+            if str(row[state_i] or "").strip().upper() != "NY":
+                continue
+
+            county_code = str(row[county_code_i] or "").strip() if county_code_i is not None and county_code_i < len(row) else ""
+            if county_code.endswith(".0"):
+                county_code = county_code[:-2]
+            county_name = str(row[county_i] or "").strip().upper() if county_i is not None and county_i < len(row) else ""
+            county_name_clean = county_name.replace(" COUNTY", "").strip()
+
+            if county_code not in NYC_COUNTY_FIPS and county_name_clean not in NYC_COUNTY_NAMES:
+                continue
+
+            addr = str(row[addr_i] or "").strip().upper()
+            if not addr:
+                continue
+
+            prog = "NHPD Subsidy"
+            for pi in prog_indices:
+                if pi < len(row) and row[pi] not in (None, ""):
+                    prog = str(row[pi]).strip()
+                    break
+
+            exp_val = None
+            for ei in (earliest_i, latest_i):
+                if ei is not None and ei < len(row) and row[ei] not in (None, ""):
+                    raw_exp = row[ei]
+                    if isinstance(raw_exp, dt.datetime):
+                        exp_val = raw_exp.date().isoformat()
+                    elif isinstance(raw_exp, dt.date):
+                        exp_val = raw_exp.isoformat()
+                    else:
+                        text_exp = str(raw_exp).strip()[:10]
+                        if len(text_exp) == 10 and text_exp[4] == "-":
+                            exp_val = text_exp
+                    if exp_val:
+                        break
+
+            records.append({"address": addr, "program": prog, "expiration": exp_val})
+
+        wb.close()
+        log.info(f"  → {len(records):,} NYC NHPD records loaded from local snapshot")
+        return records
+    except Exception as e:
+        log.error(f"Local NHPD Excel fallback failed: {e}")
+        return []
 
 
 def fetch_nhpd_nyc_csv() -> list:
@@ -235,6 +320,8 @@ def main():
 
     try:
         records = fetch_nhpd_nyc_csv()
+        if not records:
+            records = load_local_nhpd_nyc()
         apply_nhpd(records)
     except Exception as e:
         log.error(f"NHPD step failed: {e}", exc_info=True)

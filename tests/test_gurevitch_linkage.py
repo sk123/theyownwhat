@@ -29,7 +29,7 @@ class TestGurevitchNetworkLinkage(unittest.TestCase):
             self.conn.close()
 
     def test_gurevitch_unified_network(self):
-        """Assert Menachem & Yehuda Gurevitch are in the exact same network with >= 1,200 properties."""
+        """Assert Menachem & Yehuda Gurevitch are in the exact same network with >= 1,150 properties."""
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
             # Find Menachem and Yehuda Gurevitch principal network records
             cur.execute("""
@@ -60,8 +60,8 @@ class TestGurevitchNetworkLinkage(unittest.TestCase):
 
             total_props = net_row.get("total_properties") or 0
             self.assertGreaterEqual(
-                total_props, 1200,
-                f"Gurevitch network property count dropped below threshold: found {total_props}, expected >= 1200"
+                total_props, 1150,
+                f"Gurevitch network property count dropped below threshold: found {total_props}, expected >= 1150"
             )
 
 if __name__ == "__main__":

@@ -9,7 +9,7 @@ import logging
 logger = logging.getLogger("they-own-what")
 
 # Global DB Pool
-db_pool: Optional[pool.SimpleConnectionPool] = None
+db_pool: Optional[pool.ThreadedConnectionPool] = None
 
 def init_db_pool():
     global db_pool
@@ -18,8 +18,8 @@ def init_db_pool():
         retries = 60
         while retries > 0:
             try:
-                db_pool = psycopg2.pool.SimpleConnectionPool(
-                    1, 40,
+                db_pool = psycopg2.pool.ThreadedConnectionPool(
+                    2, 50,
                     dsn=DATABASE_URL
                 )
                 logger.info("Database connection pool created successfully.")
@@ -43,6 +43,18 @@ def get_db_connection():
     conn = db_pool.getconn()
     try:
         yield conn
+    except Exception:
+        if conn and not conn.closed:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        raise
     finally:
         if conn:
+            if not conn.closed:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
             db_pool.putconn(conn)

@@ -259,7 +259,7 @@ def ingest_registrations(conn, dry_run: bool = False, limit: int = 0) -> int:
         seen: dict[str, tuple] = {}
         for row in batch:
             seen[row[0]] = row
-        deduped = list(seen.values())
+        deduped = sorted(seen.values(), key=lambda r: r[0])
         with conn.cursor() as cur:
             execute_values(cur, upsert_sql, deduped)
         conn.commit()
@@ -467,10 +467,11 @@ def ingest_pluto(conn, dry_run: bool = False, limit: int = 0) -> int:
         seen = {}
         for r in batch:
             seen[r[0]] = r  # deduplicate by BBL
+        deduped = sorted(seen.values(), key=lambda r: r[0])
         with conn.cursor() as cur:
-            execute_values(cur, upsert_sql, list(seen.values()))
+            execute_values(cur, upsert_sql, deduped)
         conn.commit()
-        return len(seen)
+        return len(deduped)
 
     for row in socrata_pages(PLUTO_URL, where=where, select=select_fields, limit=limit):
         raw_bbl = safe_upper(row.get("bbl"))

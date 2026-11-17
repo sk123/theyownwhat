@@ -27,6 +27,7 @@ Usage:
 """
 
 import os
+import re
 import sys
 import argparse
 import logging
@@ -38,6 +39,16 @@ import psycopg2
 from psycopg2.extras import execute_values
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+from api.shared_utils import (
+    THIRD_PARTY_ENTITY_REGEX_BODY,
+    compose_address,
+    is_excluded_third_party_address,
+    is_excluded_third_party_entity,
+    load_registrar_address_substrings,
+    normalize_mailing_address_coarse,
+    strip_benign_care_of_prefix,
+)
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -51,8 +62,12 @@ logger = logging.getLogger("nyc-networks")
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
-# Mega-net threshold — any component with more buildings than this is re-split
+# Mega-net address-link threshold — any Pass-1 component with more buildings than
+# this has its address-only links stripped and is re-clustered on verified person/corp
+# ownership names only. Genuine NYC landlord portfolios verified by person/corp names
+# may legitimately exceed 300 buildings (up to MAX_VERIFIED_PORTFOLIO_BBLS).
 DEFAULT_MAX_BUILDINGS = 300
+MAX_VERIFIED_PORTFOLIO_BBLS = 2500
 
 # Only anchor on person names with these contact types
 PERSON_CONTACT_TYPES = {"HEADOFFICER", "INDIVIDUALOWNER", "JOINTOWNER"}
@@ -67,22 +82,86 @@ NOISE_NAMES = {"UNKNOWN", "VACANT", "NONE", "N A", "NA", "N/A", "TBD", "SAME"}
 # (Law firms, CT Corporation, management company HQs, etc.)
 ADDR_MAX_USERS = 10  # any address seen on ≥10 registrations → blocked
 
-# Corporations used by this many or more registrations are treated as institutional
-# entities (banks, mortgage servicers, title companies) and excluded from the
-# corporation clustering signal.  Small LLCs own 1-30 buildings; a corp on 75+
-# registrations is almost certainly not a mom-and-pop landlord.
-CORP_MAX_USERS = 75  # any corp seen on ≥75 registrations → excluded from corp_index
+# Corporations used by this many or more registrations are treated as unflagged
+# public/institutional umbrellas and excluded from corp_index. Legitimate multi-building
+# NYC rental LLCs/PACT entities (e.g. Townhouse Rental LLC = 248 BBLs, NYC PACT = 115 regs)
+# sit below 500, while banks/servicers/TPT are filtered explicitly via regex & blocklists.
+CORP_MAX_USERS = 500
+
+# Private shareholder co-op / condominium corporate patterns (intentionally excludes HDFC
+# so community affordable housing operators like MHANY, RiseBoro, and Fordham Bedford
+# retain their HDFC portfolios, while third-party co-op/condo managing agents like AKAM,
+# The Andrews Organization, and Daisy Management do not merge unrelated boards).
+PRIVATE_COOP_CONDO_CORP_RE = re.compile(
+    r"\b(?:CONDO|CONDOMINIUM|COOPERATIVE|CO-OP|"
+    r"OWNERS\s+CORP(?:ORATION|ORATED)?|"
+    r"OWNERS\s+INC(?:ORPORATED)?|"
+    r"TENANTS\s+CORP(?:ORATION|ORATED)?|"
+    r"APARTMENTS?\s+CORP(?:ORATION|ORATED)?)\b",
+    re.IGNORECASE,
+)
 
 # Nonprofit intermediary corporations that hold title on behalf of NYC HPD
 # (e.g. Third Party Transfer program) before transferring to community
 # development organizations.  They appear as CorporateOwner on registrations
 # managed by completely separate nonprofits (MHANY, Banana Kelly, etc.) and
-# must NOT be used as ownership-linking signals.
-NONPROFIT_INTERMEDIARY_CORPS = {
+# must NOT be used as ownership-linking signals — while preserving the real
+# community operator's HeadOfficer/CorporateOwner signal on those buildings.
+TPT_INTERMEDIARY_CORPS = {
     "NEIGHBORHOOD RESTORE HDFC",
+    "NEIGHBORHOOD RESTORE",
+    "NEIGHBORHOOD RENEWAL HDFC",
     "RESTORING COMMUNITIES HDFC",
+    "RESTORING URBAN NEIGHBORHOODS LLC",
+    "PRESERVING CITY NEIGHBORHOODS HDFC",
     "JOE NYC CLUSTER LLC",
 }
+
+NONPROFIT_INTERMEDIARY_CORPS = TPT_INTERMEDIARY_CORPS | {
+    "CITY OF NEW YORK",
+    "CITY OF NY",
+    "NYC HPD",
+    "NEW YORK CITY HOUSING AUTHORITY",
+    "NYCHA",
+}
+
+NYC_INSTITUTIONAL_PATTERN = re.compile(
+    rf"{THIRD_PARTY_ENTITY_REGEX_BODY}|"
+    r"CITY OF NEW YORK|CITY OF NY|\bNYC HPD\b|DEPARTMENT OF HOUSING PRESERVATION|"
+    r"DEPT OF HOUSING PRESERVATION|\bDAMP/?TIL\b|DAMPTIL|NEW YORK CITY HOUSING|"
+    r"\bNYCHA\b|NYC DEPARTMENT OF|NEIGHBORHOOD RESTORE|RESTORING COMMUNITIES|"
+    r"RESTORING URBAN NEIGHBORHOODS|PRESERVING CITY NEIGHBORHOODS|\bDEPT\s+VPR\b",
+    re.IGNORECASE,
+)
+
+# Queens/Bronx grid addresses are written both hyphenated and solid
+# ('70-33 260th Street' vs '7033 260 Street'), which are the same building.
+_HOUSE_NUMBER_RANGE = re.compile(r'^(\d+)-(\d+)\b')
+
+
+def normalize_contact_address(street, city, state, zip_code) -> Optional[str]:
+    """Build a building-level address key for HPD owner/officer contacts.
+
+    HPD stores the address as raw '<house> <street> <apartment>' with no
+    normalization, so '188-02 64TH AVE', '188-02 64TH. AVE.' and
+    '188-02 64 AVENUE' were three different keys for one office, and a suite
+    number kept two contacts in the same building apart. Normalizing first also
+    makes the ADDR_MAX_USERS frequency blocklist count whole offices rather
+    than individual spellings.
+    """
+    if not street:
+        return None
+    cleaned_street = strip_benign_care_of_prefix(street) or street
+    composed = compose_address(cleaned_street, city, state)
+    norm = normalize_mailing_address_coarse(composed)
+    if not norm:
+        return None
+    norm = _HOUSE_NUMBER_RANGE.sub(lambda m: f"{m.group(1)}{m.group(2)}", norm, count=1)
+    if len(norm) < 6:
+        return None
+    # ZIP stays a separate key component: it is the most reliable NYC
+    # discriminator when a street name repeats across boroughs.
+    return f"{norm}|{(zip_code or '').strip()[:5]}"
 
 
 # ---------------------------------------------------------------------------
@@ -199,7 +278,9 @@ def build_nyc_networks(skip_property_join: bool = False, max_buildings: int = DE
             c.full_name_norm,
             c.corporation_name_norm,
             c.business_address,
-            c.business_zip
+            c.business_zip,
+            c.business_city,
+            c.business_state
         FROM nyc_hpd_contacts c
         WHERE c.full_name_norm IS NOT NULL
            OR c.corporation_name_norm IS NOT NULL
@@ -239,31 +320,100 @@ def build_nyc_networks(skip_property_join: bool = False, max_buildings: int = DE
     corp_index:   dict[str, list[str]] = defaultdict(list)
     addr_index:   dict[str, list[str]] = defaultdict(list)
 
-    for reg_id, contact_type, name_norm, corp_norm, biz_addr, biz_zip in contacts:
+    registrar_substrings = load_registrar_address_substrings(conn)
+
+    # Pre-pass: identify pure non-landlord 3rd-party registrations (foreclosure banks,
+    # RMBS trustees, mortgage servicers, REO field vendors, or municipal housing agencies)
+    # that have ZERO private CorporateOwner/IndividualOwner/JointOwner contacts, so REO
+    # employees listed as HeadOfficer (e.g. VPR coordinators at LoanCare / US Bank Trust /
+    # Nationstar / Guardian Asset Management) never form fake landlord networks.
+    # TPT intermediaries (e.g. Neighborhood Restore HDFC) are intentionally NOT marked as
+    # pure excluded owners so community operators (Banana Kelly / MHANY) keep their buildings.
+    reg_has_excluded_owner: set[str] = set()
+    reg_has_private_owner: set[str] = set()
+    for reg_id, contact_type, name_norm, corp_norm, *_ in contacts:
+        if not reg_id or reg_id not in reg_bbl:
+            continue
+        ctype = (contact_type or "").upper()
+        if ctype in CORP_CONTACT_TYPES and corp_norm and len(corp_norm) >= 4:
+            if corp_norm in TPT_INTERMEDIARY_CORPS:
+                continue
+            if is_excluded_third_party_entity(corp_norm) or NYC_INSTITUTIONAL_PATTERN.search(corp_norm):
+                reg_has_excluded_owner.add(reg_id)
+            else:
+                reg_has_private_owner.add(reg_id)
+        elif ctype in {"INDIVIDUALOWNER", "JOINTOWNER"} and name_norm and name_norm not in NOISE_NAMES:
+            if is_excluded_third_party_entity(name_norm) or NYC_INSTITUTIONAL_PATTERN.search(name_norm):
+                reg_has_excluded_owner.add(reg_id)
+            else:
+                reg_has_private_owner.add(reg_id)
+        elif ctype == "HEADOFFICER":
+            if (
+                corp_norm
+                and corp_norm not in TPT_INTERMEDIARY_CORPS
+                and (is_excluded_third_party_entity(corp_norm) or NYC_INSTITUTIONAL_PATTERN.search(corp_norm))
+            ) or (
+                name_norm
+                and (is_excluded_third_party_entity(name_norm) or NYC_INSTITUTIONAL_PATTERN.search(name_norm))
+            ):
+                reg_has_excluded_owner.add(reg_id)
+
+    excluded_reg_ids = reg_has_excluded_owner - reg_has_private_owner
+    if excluded_reg_ids:
+        logger.info(
+            f"  Excluded {len(excluded_reg_ids):,} pure 3rd-party / REO / government HPD registrations "
+            "from landlord network clustering."
+        )
+        for rid in excluded_reg_ids:
+            bbl_val = reg_bbl.pop(rid, None)
+            reg_borough.pop(rid, None)
+            if bbl_val and bbl_val in bbl_index:
+                bbl_index[bbl_val] = [x for x in bbl_index[bbl_val] if x != rid]
+                if not bbl_index[bbl_val]:
+                    del bbl_index[bbl_val]
+
+    for reg_id, contact_type, name_norm, corp_norm, biz_addr, biz_zip, biz_city, biz_state in contacts:
         if not reg_id or reg_id not in reg_bbl:
             continue
 
         if biz_addr and biz_zip:
             reg_addrs[reg_id].add(f"{biz_addr.strip()} {biz_zip.strip()}")
 
-        # Signal 1: person name (officer types only)
+        # Signal 1: person name (officer types only, excluding municipal/DAMP-TIL/3rd-party placeholders)
         if name_norm and contact_type and contact_type.upper() in PERSON_CONTACT_TYPES:
-            if len(name_norm) >= 5 and name_norm not in NOISE_NAMES:
+            if (
+                len(name_norm) >= 5
+                and name_norm not in NOISE_NAMES
+                and not NYC_INSTITUTIONAL_PATTERN.search(name_norm)
+                and not is_excluded_third_party_entity(name_norm)
+            ):
                 person_index[name_norm].append(reg_id)
                 reg_people[reg_id].add(name_norm)
                 reg_names[reg_id].add(name_norm)
 
         # Signal 2: owner corp name. AGENT corporations are management signals,
         # not ownership signals, so they should not stitch landlord networks.
-        if corp_norm and len(corp_norm) >= 4 and contact_type and contact_type.upper() in CORP_CONTACT_TYPES:
+        if (
+            corp_norm
+            and len(corp_norm) >= 4
+            and contact_type
+            and contact_type.upper() in CORP_CONTACT_TYPES
+            and not NYC_INSTITUTIONAL_PATTERN.search(corp_norm)
+            and not is_excluded_third_party_entity(corp_norm)
+        ):
             corp_index[corp_norm].append(reg_id)
             reg_corps[reg_id].add(corp_norm)
             reg_names[reg_id].add(corp_norm)
 
-        # Signal 3: owner/officer mailing address (block high-frequency offices)
+        # Signal 3: owner/officer mailing address (block high-frequency offices, servicers & registrars).
+        # The key is normalized to building level so that spelling variants and
+        # suite numbers do not split one office into many weak keys.
         if biz_addr and biz_zip and contact_type and contact_type.upper() in ADDRESS_CONTACT_TYPES:
-            addr_key = f"{biz_addr.strip()}|{biz_zip.strip()}"
-            if len(addr_key) >= 10:
+            raw_composed = compose_address(biz_addr, biz_city, biz_state, biz_zip)
+            addr_key = normalize_contact_address(biz_addr, biz_city, biz_state, biz_zip)
+            if addr_key and not is_excluded_third_party_address(
+                raw_composed, addr_key.split("|")[0], registrar_substrings
+            ):
                 addr_index[addr_key].append(reg_id)
 
     # Auto-compute blocked addresses BEFORE applying address signal.
@@ -301,30 +451,59 @@ def build_nyc_networks(skip_property_join: bool = False, max_buildings: int = DE
         for k in intermediary_hits:
             del corp_index[k]
 
-    # Auto-compute blocked person names (Managing Agents acting as HeadOfficers across ≥10 distinct corps)
-    person_corps = defaultdict(set)
-    person_addrs = defaultdict(set)
-    for reg_id, contact_type, name_norm, corp_norm, biz_addr, biz_zip in contacts:
-        if name_norm and name_norm in person_index and corp_norm:
-            person_corps[name_norm].add(corp_norm)
-        if name_norm and name_norm in person_index and biz_addr:
-            person_addrs[name_norm].add(biz_addr.strip())
+    # Auto-compute blocked person names:
+    #   (A) TPT intermediary officers (e.g. Neighborhood Restore officers) whose
+    #       registrations are predominantly TPT intermediary corporations.
+    #   (B) Third-party private co-op/condominium managing agents (e.g. AKAM Associates,
+    #       The Andrews Organization, Daisy Management, MRE, Habitat, Leiter, Impact)
+    #       signing as HeadOfficer across ≥10 distinct CorporateOwner entities where ≥5
+    #       (and ≥35%) are shareholder co-ops or condominiums (excluding HDFCs so real
+    #       nonprofit housing operators like MHANY, RiseBoro, and Fordham Bedford stay intact).
+    raw_reg_owner_corps: dict[str, set[str]] = defaultdict(set)
+    for reg_id, contact_type, _, corp_norm, *_ in contacts:
+        if reg_id and reg_id in reg_bbl and corp_norm and contact_type and contact_type.upper() in CORP_CONTACT_TYPES:
+            raw_reg_owner_corps[reg_id].add(corp_norm)
+
+    person_owner_corps: dict[str, set[str]] = defaultdict(set)
+    person_tpt_regs: dict[str, set[str]] = defaultdict(set)
+    person_total_regs: dict[str, set[str]] = defaultdict(set)
+    for p_name, rids in list(person_index.items()):
+        unique_rids = set(rids)
+        person_total_regs[p_name] = unique_rids
+        for rid in unique_rids:
+            owners = raw_reg_owner_corps.get(rid, set())
+            person_owner_corps[p_name].update(owners)
+            if owners and owners <= NONPROFIT_INTERMEDIARY_CORPS:
+                person_tpt_regs[p_name].add(rid)
 
     blocked_people = set()
-    for p_name, corps in person_corps.items():
+    for p_name, total_rids in person_total_regs.items():
+        if len(total_rids) >= 10 and (len(person_tpt_regs[p_name]) / len(total_rids)) >= 0.5:
+            blocked_people.add(p_name)
+            continue
+        corps = person_owner_corps.get(p_name, set()) - NONPROFIT_INTERMEDIARY_CORPS
         if len(corps) >= 10:
-            addrs = person_addrs.get(p_name, set())
-            if len(addrs) > 0 and (len(addrs) / len(corps)) >= 0.5:
+            coop_condo_corps = {c for c in corps if PRIVATE_COOP_CONDO_CORP_RE.search(c)}
+            if len(coop_condo_corps) >= 5 and (len(coop_condo_corps) / len(corps)) >= 0.35:
                 blocked_people.add(p_name)
 
     if blocked_people:
         logger.info(
-            f"  Managing Agent Person blocklist: {len(blocked_people)} names blocked "
-            f"(each acting as HeadOfficer across ≥10 distinct corporate owners): "
-            + ", ".join(sorted(blocked_people)[:10])
+            f"  Managing Agent / TPT Person blocklist: {len(blocked_people)} names blocked "
+            f"(co-op/condo managing agents & TPT intermediary officers): "
+            + ", ".join(sorted(blocked_people)[:12])
         )
         for k in blocked_people:
             del person_index[k]
+
+    # CRITICAL: Prune blocked corps and managing-agent people from reg_names so
+    # split_meganet does not re-merge mega-clusters using blocked signals!
+    all_blocked_names = blocked_corps | blocked_people
+    if all_blocked_names:
+        for reg_id in list(reg_names.keys()):
+            reg_names[reg_id].difference_update(all_blocked_names)
+            reg_people[reg_id].difference_update(blocked_people)
+            reg_corps[reg_id].difference_update(blocked_corps)
 
     # ------------------------------------------------------------------
     # 4. Initial Union-Find (all three signals)
@@ -363,10 +542,12 @@ def build_nyc_networks(skip_property_join: bool = False, max_buildings: int = DE
         return len({reg_bbl.get(reg_id) for reg_id in members if reg_bbl.get(reg_id)})
 
     mega_count = sum(1 for members in components.values() if member_bbl_count(members) > max_buildings)
-    logger.info(f"  Mega-nets (>{max_buildings} BBLs): {mega_count}")
+    logger.info(f"  Address mega-nets (>{max_buildings} BBLs): {mega_count}")
+
+    verified_portfolio_cap = max(max_buildings, MAX_VERIFIED_PORTFOLIO_BBLS)
 
     if mega_count > 0:
-        logger.info(f"Pass 2: name-only re-clustering for {mega_count} mega-net(s) …")
+        logger.info(f"Pass 2: stripping address-only links for {mega_count} >{max_buildings}-BBL cluster(s) …")
         final_components: list[list[str]] = []
 
         for root, members in components.items():
@@ -374,7 +555,7 @@ def build_nyc_networks(skip_property_join: bool = False, max_buildings: int = DE
                 final_components.append(members)
                 continue
 
-            # Re-cluster this mega-net with name signal only
+            # Re-cluster this >max_buildings component with verified person/corp names only
             sub_clusters = split_meganet(members, reg_names, max_buildings)
             split_count  = len(sub_clusters)
             max_sub      = max(member_bbl_count(s) for s in sub_clusters)
@@ -383,20 +564,24 @@ def build_nyc_networks(skip_property_join: bool = False, max_buildings: int = DE
                 f"{split_count} sub-clusters (largest: {max_sub} BBLs)"
             )
 
-            # Recursively check if any sub-cluster is still oversized.
-            # If it still can't be split by name, break it into singletons
-            # (one network per registration). A real portfolio will be
-            # re-unified on the next ingest cycle; a fake mega-net disappears.
+            # Keep genuine large NYC portfolios that remain connected on verified
+            # person/corp ownership signals (up to verified_portfolio_cap), only breaking
+            # runaway unflagged public/institutional super-clusters above verified_portfolio_cap.
             for sub in sub_clusters:
-                if member_bbl_count(sub) > max_buildings:
+                sub_bbls = member_bbl_count(sub)
+                if sub_bbls > verified_portfolio_cap:
                     logger.warning(
-                        f"    Sub-cluster still >{max_buildings} after name-only split "
-                        f"({member_bbl_count(sub)} BBLs) — breaking into {len(sub)} singletons."
+                        f"    Sub-cluster exceeds hard safety cap >{verified_portfolio_cap} "
+                        f"({sub_bbls} BBLs) — breaking into {len(sub)} singletons."
                     )
-                    # Each registration becomes its own isolated network
                     for singleton in sub:
                         final_components.append([singleton])
                 else:
+                    if sub_bbls > max_buildings:
+                        logger.info(
+                            f"    Preserving verified large NYC portfolio ({sub_bbls} BBLs) "
+                            f"connected on non-agent person/corp signals."
+                        )
                     final_components.append(sub)
 
         logger.info(
@@ -411,6 +596,10 @@ def build_nyc_networks(skip_property_join: bool = False, max_buildings: int = DE
     # attributed to multiple separate network cards.
     if final_components:
         parent = list(range(len(final_components)))
+        comp_bbl_sets: dict[int, set[str]] = {
+            idx: {reg_bbl.get(reg_id) for reg_id in members if reg_bbl.get(reg_id)}
+            for idx, members in enumerate(final_components)
+        }
 
         def comp_find(i: int) -> int:
             while parent[i] != i:
@@ -421,7 +610,16 @@ def build_nyc_networks(skip_property_join: bool = False, max_buildings: int = DE
         def comp_union(a: int, b: int):
             ra, rb = comp_find(a), comp_find(b)
             if ra != rb:
+                combined = comp_bbl_sets[ra] | comp_bbl_sets[rb]
+                allowed_cap = (
+                    verified_portfolio_cap
+                    if max(len(comp_bbl_sets[ra]), len(comp_bbl_sets[rb])) > max_buildings
+                    else max_buildings
+                )
+                if len(combined) > allowed_cap:
+                    return
                 parent[rb] = ra
+                comp_bbl_sets[ra] = combined
 
         bbl_owner: dict[str, int] = {}
         for idx, members in enumerate(final_components):

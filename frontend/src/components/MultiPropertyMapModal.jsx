@@ -22,8 +22,12 @@ L.Marker.prototype.options.icon = DefaultIcon;
 const CT_BOUNDS = { minLat: 40.8, maxLat: 42.3, minLon: -73.9, maxLon: -71.6 };
 const US_BOUNDS = { minLat: 24, maxLat: 50, minLon: -125, maxLon: -66 };
 
-const isNyProperty = (prop = {}) => {
-    return String(prop.source || '').toUpperCase() === 'NYS_OPEN_DATA' || !!(prop.bbl || prop.borough);
+const isNonCtProperty = (prop = {}) => {
+    const src = String(prop.source || '').toUpperCase();
+    const st = String(prop.state || prop.property_state || '').toUpperCase();
+    if (src === 'NYS_OPEN_DATA') return true;
+    if (st && st !== 'CT') return true;
+    return !!(prop.bbl || prop.borough || prop.county || prop.municipality);
 };
 
 const isValidCoordinate = (prop, lat, lon) => {
@@ -32,7 +36,7 @@ const isValidCoordinate = (prop, lat, lon) => {
     if (!Number.isFinite(latNum) || !Number.isFinite(lonNum)) return false;
     if ((latNum === 0 && lonNum === 0) || (latNum === -1 && lonNum === -1)) return false;
     if (latNum < US_BOUNDS.minLat || latNum > US_BOUNDS.maxLat || lonNum < US_BOUNDS.minLon || lonNum > US_BOUNDS.maxLon) return false;
-    if (!isNyProperty(prop)) {
+    if (!isNonCtProperty(prop)) {
         return latNum >= CT_BOUNDS.minLat && latNum <= CT_BOUNDS.maxLat && lonNum >= CT_BOUNDS.minLon && lonNum <= CT_BOUNDS.maxLon;
     }
     return true;
@@ -104,7 +108,7 @@ export default function MultiPropertyMapModal({ properties, onClose }) {
                     processed++;
                 } else {
                     const isNyc = !!(prop.bbl || prop.borough);
-                    const state = isNyc ? 'NY' : 'CT';
+                    const state = prop.property_state || prop.state || (isNyc ? 'NY' : 'CT');
                     const cityVal = prop.city || prop.property_city || prop.borough || '';
                     const addressFull = `${prop.address || prop.location}, ${cityVal}, ${state}`;
                     const cache = getCache();
@@ -154,7 +158,7 @@ export default function MultiPropertyMapModal({ properties, onClose }) {
                                     results.push(result);
 
                                     const isNyc = !!(prop.bbl || prop.borough);
-                                    const state = isNyc ? 'NY' : 'CT';
+                                    const state = prop.property_state || prop.state || (isNyc ? 'NY' : 'CT');
                                     const addressFull = `${prop.address || prop.location}, ${prop.city || prop.property_city || prop.borough || ''}, ${state}`;
                                     updateCache(addressFull, { lat: Number(geo.lat), lon: Number(geo.lon) });
                                 }

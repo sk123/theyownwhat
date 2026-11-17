@@ -4,6 +4,7 @@ api/city_routes.py
 FastAPI routes for multi-city network data (NYC, DC, Baltimore, LA).
 """
 
+import datetime as dt
 import time
 import json
 import logging
@@ -18,28 +19,29 @@ from psycopg2.extras import RealDictCursor
 import requests
 
 import api.db as db_module
-from api.shared_utils import looks_like_person_owner
+from api.shared_utils import (
+    THIRD_PARTY_ENTITY_REGEX_BODY,
+    THIRD_PARTY_INSTITUTIONAL_SQL_PATTERN,
+    is_excluded_third_party_address,
+    is_excluded_third_party_entity,
+    looks_like_person_owner,
+)
 
 logger = logging.getLogger("city-api")
 
 router = APIRouter(prefix="/api/{city}", tags=["city"])
 
-VALID_CITIES = {"nyc", "dc", "baltimore", "boston", "detroit", "philadelphia", "chicago", "miami", "minneapolis", "nj"}
-RELIABLE_UNIT_CITIES = {"nyc", "baltimore", "miami", "minneapolis", "nj"}
-INSTITUTIONAL_NETWORK_PATTERN = (
-    r"CITY OF NEW YORK|CITY OF NY|NYC HPD|NEW YORK CITY|"
-    r"\bHPD\b|DAMP/?TIL|DAMPTIL|NEIGHBORHOOD RESTORE|NEIGHBORHOOD RENEWAL|"
-    r"RESTORING COMMUNITIES|RESTORING URBAN NEIGHBORHOODS|PRESERVING CITY NEIGHBORHOODS|"
-    r"DISTRICT OF COLUMBIA|UNITED STATES|WASHINGTON METROPOLITAN|WMATA|"
-    r"STATE OF NEW JERSEY|STATE OF NJ|NEW JERSEY TRANSIT|NJ TRANSIT|"
-    r"HOUSING AUTHORITY|LAND BANK|PARKS (?:&|AND) RECREATION|"
-    r"MIAMI-DADE COUNTY|COUNTY OF |SCHOOL BOARD|TRANSIT AGENCY|"
-    r"UNIVERSITY|COLLEGE|SCHOOL|ACADEMY|"
-    r"CHURCH|TEMPLE|SYNAGOGUE|CATHOLIC|ARCHBISHOP|DIOCESE|"
-    r"GOVERNMENT|DEPARTMENT|AUTHORITY|MUNICIPAL|BOARD OF EDUCATION|"
-    r"POTOMAC ELECTRIC POWER|PEPCO|RAILROAD COMPANY|TRANSIT AUTHORITY"
-)
-BALTIMORE_PROPERTY_LAYER_URL = "https://geodata.baltimorecity.gov/egis/rest/services/CityView/Realproperty_OB/FeatureServer/0/query"
+VALID_CITIES = {
+    "nyc", "dc", "baltimore", "boston", "detroit", "philadelphia",
+    "chicago", "miami", "minneapolis", "nj",
+    "ma", "fl", "ny", "co", "vt", "wi", "nc", "ar", "va",
+}
+RELIABLE_UNIT_CITIES = {"nyc", "baltimore", "philadelphia", "miami", "minneapolis", "nj", "ma", "fl"}
+# Python `re` pattern (\b word boundaries) exported for Python callers & battery checks;
+# PostgreSQL `!~*` queries use INSTITUTIONAL_NETWORK_SQL_PATTERN (\y word boundaries).
+INSTITUTIONAL_NETWORK_PATTERN = THIRD_PARTY_ENTITY_REGEX_BODY
+INSTITUTIONAL_NETWORK_SQL_PATTERN = THIRD_PARTY_INSTITUTIONAL_SQL_PATTERN
+BALTIMORE_PROPERTY_LAYER_URL = "https://baltegis.baltimorecity.gov/mapping/rest/services/CityView/RealProperty_OB/FeatureServer/0/query"
 NYC_HPD_VIOLATIONS_URL = "https://data.cityofnewyork.us/resource/wvxf-dwi5.json"
 NYC_HPD_VIOLATIONS_PAGE = "https://data.cityofnewyork.us/Housing-Development/Housing-Maintenance-Code-Violations/wvxf-dwi5"
 NYC_HPD_CLASS_LABELS = {
@@ -56,85 +58,92 @@ BALTIMORE_OFFICIAL_LAYERS = [
         "fields": ["BLOCKLOT", "FULLADDR", "OWNER_1", "OWNER_2", "USEGROUP", "SALEDATE", "SALEPRIC"],
     },
     {
+        "label": "DHCD Rental Registration & License",
+        "url": "https://baltegis.baltimorecity.gov/mapping/rest/services/Housing/OpenGov_RegAndLicense/MapServer/0/query",
+        "key_field": "BlockLot",
+        "date_field": "LicenseIssuedDate",
+        "fields": ["RecordNUMBER", "LicenceOrRegistration", "LicenseIssuedDate", "LicenseExpirationDate", "DwellingCount", "Address"],
+    },
+    {
         "label": "FTA Citations",
-        "url": "https://egisdata.baltimorecity.gov/egis/rest/services/Housing/dmxPermitsCodeEnforcement/MapServer/11/query",
+        "url": "https://baltegis.baltimorecity.gov/mapping/rest/services/Housing/dmxPermitsCodeEnforcement/MapServer/11/query",
         "key_field": "BlockLot",
         "date_field": "DateNotice",
         "fields": ["CitationNum", "DateNotice", "Title", "ViolationText", "TotalFine", "CitationStatus"],
     },
     {
         "label": "Open Interior Notices",
-        "url": "https://egisdata.baltimorecity.gov/egis/rest/services/Housing/dmxPermitsCodeEnforcement/MapServer/13/query",
+        "url": "https://baltegis.baltimorecity.gov/mapping/rest/services/Housing/dmxPermitsCodeEnforcement/MapServer/13/query",
         "key_field": "BlockLot",
         "date_field": "DateNotice",
         "fields": ["NoticeNum", "DateNotice", "NoticeType", "Status", "Address"],
     },
     {
         "label": "Open Exterior Notices",
-        "url": "https://egisdata.baltimorecity.gov/egis/rest/services/Housing/dmxPermitsCodeEnforcement/MapServer/14/query",
+        "url": "https://baltegis.baltimorecity.gov/mapping/rest/services/Housing/dmxPermitsCodeEnforcement/MapServer/14/query",
         "key_field": "BlockLot",
         "date_field": "DateNotice",
         "fields": ["NoticeNum", "DateNotice", "NoticeType", "Status", "Address"],
     },
     {
         "label": "Open Interior/Exterior Notices",
-        "url": "https://egisdata.baltimorecity.gov/egis/rest/services/Housing/dmxPermitsCodeEnforcement/MapServer/15/query",
+        "url": "https://baltegis.baltimorecity.gov/mapping/rest/services/Housing/dmxPermitsCodeEnforcement/MapServer/15/query",
         "key_field": "BlockLot",
         "date_field": "DateNotice",
         "fields": ["NoticeNum", "DateNotice", "NoticeType", "Status", "Address"],
     },
     {
         "label": "Open Cleaning Work Orders",
-        "url": "https://egisdata.baltimorecity.gov/egis/rest/services/Housing/dmxPermitsCodeEnforcement/MapServer/18/query",
+        "url": "https://baltegis.baltimorecity.gov/mapping/rest/services/Housing/dmxPermitsCodeEnforcement/MapServer/18/query",
         "key_field": "BLOCKLOT",
         "date_field": "DateCreate",
         "fields": ["CB_ID", "DateCreate", "Status", "WorkOrderType", "CleanType", "CleanSize", "BLOCKLOT"],
     },
     {
         "label": "Open Cleaning Work Orders 31-60 Days",
-        "url": "https://egisdata.baltimorecity.gov/egis/rest/services/Housing/dmxPermitsCodeEnforcement/MapServer/19/query",
+        "url": "https://baltegis.baltimorecity.gov/mapping/rest/services/Housing/dmxPermitsCodeEnforcement/MapServer/19/query",
         "key_field": "BLOCKLOT",
         "date_field": "DateCreate",
         "fields": ["CB_ID", "DateCreate", "Status", "WorkOrderType", "CleanType", "CleanSize", "BLOCKLOT"],
     },
     {
         "label": "Open Cleaning Work Orders 61-90 Days",
-        "url": "https://egisdata.baltimorecity.gov/egis/rest/services/Housing/dmxPermitsCodeEnforcement/MapServer/20/query",
+        "url": "https://baltegis.baltimorecity.gov/mapping/rest/services/Housing/dmxPermitsCodeEnforcement/MapServer/20/query",
         "key_field": "BLOCKLOT",
         "date_field": "DateCreate",
         "fields": ["CB_ID", "DateCreate", "Status", "WorkOrderType", "CleanType", "CleanSize", "BLOCKLOT"],
     },
     {
         "label": "Open Cleaning Work Orders 90+ Days",
-        "url": "https://egisdata.baltimorecity.gov/egis/rest/services/Housing/dmxPermitsCodeEnforcement/MapServer/21/query",
+        "url": "https://baltegis.baltimorecity.gov/mapping/rest/services/Housing/dmxPermitsCodeEnforcement/MapServer/21/query",
         "key_field": "BLOCKLOT",
         "date_field": "DateCreate",
         "fields": ["CB_ID", "DateCreate", "Status", "WorkOrderType", "CleanType", "CleanSize", "BLOCKLOT"],
     },
     {
         "label": "Open Boarding Work Orders 1-5 Days",
-        "url": "https://egisdata.baltimorecity.gov/egis/rest/services/Housing/dmxPermitsCodeEnforcement/MapServer/23/query",
+        "url": "https://baltegis.baltimorecity.gov/mapping/rest/services/Housing/dmxPermitsCodeEnforcement/MapServer/23/query",
         "key_field": "BLOCKLOT",
         "date_field": "DateCreate",
         "fields": ["CB_ID", "DateCreate", "Status", "WorkOrderType", "CleanType", "CleanSize", "BLOCKLOT"],
     },
     {
         "label": "Open Boarding Work Orders 6-10 Days",
-        "url": "https://egisdata.baltimorecity.gov/egis/rest/services/Housing/dmxPermitsCodeEnforcement/MapServer/24/query",
+        "url": "https://baltegis.baltimorecity.gov/mapping/rest/services/Housing/dmxPermitsCodeEnforcement/MapServer/24/query",
         "key_field": "BLOCKLOT",
         "date_field": "DateCreate",
         "fields": ["CB_ID", "DateCreate", "Status", "WorkOrderType", "CleanType", "CleanSize", "BLOCKLOT"],
     },
     {
         "label": "Open Boarding Work Orders 11+ Days",
-        "url": "https://egisdata.baltimorecity.gov/egis/rest/services/Housing/dmxPermitsCodeEnforcement/MapServer/25/query",
+        "url": "https://baltegis.baltimorecity.gov/mapping/rest/services/Housing/dmxPermitsCodeEnforcement/MapServer/25/query",
         "key_field": "BLOCKLOT",
         "date_field": "DateCreate",
         "fields": ["CB_ID", "DateCreate", "Status", "WorkOrderType", "CleanType", "CleanSize", "BLOCKLOT"],
     },
     {
         "label": "Open Vacant Building Notices",
-        "url": "https://egisdata.baltimorecity.gov/egis/rest/services/Housing/DHCD_Open_Baltimore_Datasets/FeatureServer/1/query",
+        "url": "https://baltegis.baltimorecity.gov/mapping/rest/services/Housing/DHCD_Open_Baltimore_Datasets/FeatureServer/1/query",
         "key_field": "BLOCKLOT",
         "date_field": "DateNotice",
         "fields": ["NoticeNum", "DateNotice", "NT", "Address", "DateCancel", "DateAbate"],
@@ -152,33 +161,62 @@ def _query(sql: str, params=None) -> list[dict]:
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(sql, params or ())
-            return [dict(r) for r in cur.fetchall()]
+            rows = [dict(r) for r in cur.fetchall()]
+        conn.commit()
+        return rows
+    except psycopg2.errors.UndefinedTable as exc:
+        conn.rollback()
+        raise HTTPException(status_code=404, detail="Dataset tables are not yet loaded") from exc
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         db_module.db_pool.putconn(conn)
 
 def _institutional_filter(include_institutional: bool, column: str = "display_name") -> tuple[str, list]:
     if include_institutional:
         return "", []
-    return f" AND COALESCE({column}, '') !~* %s", [INSTITUTIONAL_NETWORK_PATTERN]
+    return f" AND COALESCE({column}, '') !~* %s", [INSTITUTIONAL_NETWORK_SQL_PATTERN]
+
+_PROP_COLUMNS_CACHE: dict[str, tuple[float, set[str]]] = {}
+
+
+def _get_property_columns(city: str) -> set[str]:
+    now = time.time()
+    cached = _PROP_COLUMNS_CACHE.get(city)
+    if cached and now - cached[0] < 120:
+        return cached[1]
+    rows = _query(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = %s
+        """,
+        (f"{city}_properties",),
+    )
+    cols = {r["column_name"] for r in rows}
+    _PROP_COLUMNS_CACHE[city] = (now, cols)
+    return cols
+
 
 def _latest_registration_join(city: str, property_alias: str = "p", alias: str = "r") -> str:
-    if city == "nyc":
-        return f"""
-        LEFT JOIN LATERAL (
-            SELECT
-                r_latest.registration_id,
-                r_latest.last_registration_date,
-                r_latest.registration_end_date
-            FROM {city}_hpd_registrations r_latest
-            WHERE r_latest.bbl = {property_alias}.bbl
-            ORDER BY
-                r_latest.registration_end_date DESC NULLS LAST,
-                r_latest.last_registration_date DESC NULLS LAST,
-                r_latest.registration_id DESC
-            LIMIT 1
-        ) {alias} ON TRUE
-        """
-    return f"LEFT JOIN {city}_hpd_registrations {alias} ON {alias}.bbl = {property_alias}.bbl"
+    # Always select at most 1 registration row per parcel so multi-license / renewed
+    # registration feeds (NYC, DC, Baltimore, Detroit, Minneapolis) never multiply parcel rows.
+    return f"""
+    LEFT JOIN LATERAL (
+        SELECT
+            r_latest.registration_id,
+            r_latest.last_registration_date,
+            r_latest.registration_end_date
+        FROM {city}_hpd_registrations r_latest
+        WHERE r_latest.bbl = {property_alias}.bbl
+        ORDER BY
+            r_latest.registration_end_date DESC NULLS LAST,
+            r_latest.last_registration_date DESC NULLS LAST,
+            r_latest.registration_id DESC
+        LIMIT 1
+    ) {alias} ON TRUE
+    """
 
 def _parse_jsonish(value, fallback=None):
     if fallback is None:
@@ -280,20 +318,116 @@ def _city_refresh_snapshot(city: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# /api/{city}/stats  — platform-level summary
+# /api/{city}/stats  — platform-level summary (24h persisted kv_cache + L1 cache)
 # ---------------------------------------------------------------------------
+import threading
+
 _stats_cache: dict = {}
 _stats_ts: dict = {}
-STATS_TTL = 60  # 1 minute
+_networks_cache: dict = {}
+_networks_ts: dict = {}
+_bg_refresh_inflight: set[str] = set()
+_bg_refresh_lock = threading.Lock()
+_city_stats_locks: dict[str, threading.Lock] = {}
+STATS_TTL = 86400  # 24 hours (cached daily)
+
+
+def _kv_get(cache_key: str) -> tuple[dict | list | None, bool]:
+    try:
+        rows = _query(
+            """
+            SELECT value, (created_at > NOW() - INTERVAL '24 hours') AS is_fresh
+            FROM kv_cache
+            WHERE key = %s
+            """,
+            (cache_key,),
+        )
+        if rows and rows[0].get("value") is not None:
+            return rows[0]["value"], bool(rows[0].get("is_fresh"))
+    except Exception:
+        pass
+    return None, False
+
+
+def _kv_set(cache_key: str, payload) -> None:
+    try:
+        conn = db_module.db_pool.getconn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS kv_cache (
+                        key text PRIMARY KEY,
+                        value jsonb NOT NULL,
+                        created_at timestamptz NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    INSERT INTO kv_cache (key, value, created_at)
+                    VALUES (%s, %s::jsonb, NOW())
+                    ON CONFLICT (key) DO UPDATE SET
+                        value = EXCLUDED.value,
+                        created_at = NOW()
+                    """,
+                    (cache_key, json.dumps(payload, default=str)),
+                )
+            conn.commit()
+        finally:
+            db_module.db_pool.putconn(conn)
+    except Exception as exc:
+        logger.debug("kv_cache write skipped for %s: %s", cache_key, exc)
+
+
+def _spawn_kv_refresh(cache_key: str, fn) -> None:
+    with _bg_refresh_lock:
+        if cache_key in _bg_refresh_inflight:
+            return
+        _bg_refresh_inflight.add(cache_key)
+
+    def _runner():
+        try:
+            fn()
+        except Exception as exc:
+            logger.warning("Background city cache refresh failed for %s: %s", cache_key, exc)
+        finally:
+            with _bg_refresh_lock:
+                _bg_refresh_inflight.discard(cache_key)
+
+    threading.Thread(target=_runner, daemon=True).start()
+
 
 @router.get("/stats")
-def city_stats(city: str):
+def city_stats(city: str, force_refresh: bool = False):
     c = _validate_city(city)
     global _stats_cache, _stats_ts
-    cache_key = f"{c}_stats"
+    cache_key = f"city_stats:v1:{c}"
     now = time.time()
-    if cache_key in _stats_cache and cache_key in _stats_ts and now - _stats_ts[cache_key] < STATS_TTL:
-        return _stats_cache[cache_key]
+    if not force_refresh:
+        if cache_key in _stats_cache and cache_key in _stats_ts and now - _stats_ts[cache_key] < STATS_TTL:
+            return _stats_cache[cache_key]
+        kv_val, is_fresh = _kv_get(cache_key)
+        if kv_val is not None:
+            _stats_cache[cache_key] = kv_val
+            _stats_ts[cache_key] = now
+            if not is_fresh:
+                _spawn_kv_refresh(cache_key, lambda: city_stats(c, force_refresh=True))
+            return kv_val
+
+    with _bg_refresh_lock:
+        city_lock = _city_stats_locks.setdefault(c, threading.Lock())
+
+    with city_lock:
+        if not force_refresh:
+            now = time.time()
+            if cache_key in _stats_cache and cache_key in _stats_ts and now - _stats_ts[cache_key] < STATS_TTL:
+                return _stats_cache[cache_key]
+            kv_val, is_fresh = _kv_get(cache_key)
+            if kv_val is not None:
+                _stats_cache[cache_key] = kv_val
+                _stats_ts[cache_key] = now
+                return kv_val
 
     # Dynamically inject table names based on whitelisted city
     rows = _query(f"""
@@ -311,6 +445,21 @@ def city_stats(city: str):
 
     reg_row = _query(f"SELECT COUNT(*) AS registrations FROM {c}_hpd_registrations")
     prop_row = _query(f"SELECT COUNT(*) AS lots FROM {c}_properties")
+    biz_row = _query(
+        f"""
+        SELECT COUNT(DISTINCT UPPER(TRIM(m)))::int AS businesses
+        FROM {c}_networks n
+        CROSS JOIN LATERAL UNNEST(n.member_names) AS m
+        WHERE COALESCE(n.building_count, 0) > 0
+          AND m ~* %s
+        """,
+        (
+            r"(LLC|L\.L\.C|INC|CORP|CORPORATION|LTD|LP|L\.P|LLP|HOLDINGS|REALTY|PROPERTIES|PROPERTY|"
+            r"ASSOCIATES|ASSOC|PARTNERS|PARTNERSHIP|VENTURES|TRUST|TRUSTEE|COMPANY|CO\y|ENTERPRISES|"
+            r"GROUP|MANAGEMENT|INVESTMENTS|INVESTMENT|DEVELOPMENT|EQUITY|CAPITAL|BORROWER|OWNER|"
+            r"ESTATES|FUND|APARTMENTS|HOMES|HOUSING|RESIDENTIAL)",
+        ),
+    )
 
     status_rows = _query("""
         SELECT last_refreshed_at, external_last_updated
@@ -327,17 +476,27 @@ def city_stats(city: str):
         "nyc": "NYC HPD Multiple Dwelling Registrations + PLUTO",
         "dc": "D.C. GIS Computer Assisted Mass Appraisal",
         "baltimore": "Baltimore City GIS Ownership Records",
-        "philadelphia": "Philadelphia OPA Property Assessments",
+        "philadelphia": "Philadelphia OPA Assessments + L&I Active Rental Licenses + PA DOS",
         "boston": "Boston Property Assessment Roll",
         "detroit": "Detroit Property Assessment Roll",
-        "chicago": "Chicago Active Business Licenses + Owner Registry",
-        "miami": "Miami-Dade County Parcel Ownership",
+        "chicago": "Cook County Assessor Parcels (City of Chicago)",
+        "miami": "Miami-Dade Parcels + Florida Sunbiz + DBPR Apartment Licenses",
         "minneapolis": "Minneapolis Active Rental Licenses + MapIT GIS",
         "nj": "New Jersey DCA BHI Active Building Records",
+        "ma": "MassGIS Level 3 Property Tax Parcels (All 351 Municipalities)",
+        "fl": "FloridaGIO Statewide Parcels (67 Counties) + Sunbiz + DBPR Ch. 509 Licenses",
+        "ny": "NYS Public Tax Parcels (33 Non-NYC Counties) + NY DOS + Buffalo Enforcement",
+        "co": "Colorado OIT Public Parcels + CO SOS + Denver Active Rental Licenses",
+        "vt": "Vermont VCGI Standardized Parcels + Statewide Grand List",
+        "wi": "Wisconsin SCO/DOA Statewide Parcels (Class 1 Residential & Class 2 Multifamily)",
+        "nc": "North Carolina NC OneMap Parcels (All 100 Counties)",
+        "ar": "Arkansas GIS Office Statewide Parcels (All 75 Counties) + AR SOS",
+        "va": "Virginia VGIN Local Schema Parcels + HRGeo + County CAMA + VA SCC",
     }
 
     result = {
         "networks":        int(rows[0]["networks"]  or 0),
+        "businesses":      int(biz_row[0]["businesses"] or 0) if biz_row else 0,
         "buildings":       int(rows[0]["buildings"] or 0),
         "units":           int(rows[0]["units"] or 0) if c in RELIABLE_UNIT_CITIES else None,
         "unit_data_available": c in RELIABLE_UNIT_CITIES,
@@ -357,6 +516,7 @@ def city_stats(city: str):
 
     _stats_cache[cache_key] = result
     _stats_ts[cache_key] = time.time()
+    _kv_set(cache_key, result)
     return result
 
 
@@ -446,14 +606,24 @@ def _city_code_summary(city: str) -> dict:
     """)
     row = rows[0] if rows else {}
 
-    status_source = "NYC_HPD_ENRICHMENT" if city == "nyc" else f"{city.upper()}_CODE_ENFORCEMENT"
+    status_candidates = (
+        ["NYC_HPD_ENRICHMENT"]
+        if city == "nyc"
+        else (
+            ["BUFFALO_ENFORCEMENT", "NY_CODE_ENFORCEMENT", "NY_ENFORCEMENT"]
+            if city == "ny"
+            else [f"{city.upper()}_CODE_ENFORCEMENT", f"{city.upper()}_ENFORCEMENT"]
+        )
+    )
     status_rows = _query("""
-        SELECT external_last_updated, last_refreshed_at, refresh_status, details
+        SELECT source_name, external_last_updated, last_refreshed_at, refresh_status, details
         FROM data_source_status
-        WHERE source_name = %s
+        WHERE source_name = ANY(%s)
+        ORDER BY last_refreshed_at DESC NULLS LAST
         LIMIT 1
-    """, (status_source,))
+    """, (status_candidates,))
     status = status_rows[0] if status_rows else {}
+    status_source = status.get("source_name") or status_candidates[0]
     details = _parse_jsonish(status.get("details"), {})
     last_refreshed_at = status.get("external_last_updated") or status.get("last_refreshed_at")
     last_success_at = details.get("last_success_at")
@@ -573,27 +743,46 @@ def city_search(
         where_addr = " AND ".join(["p.address ILIKE %s" for _ in terms])
         where_owner = " AND ".join(["p.owner_name ILIKE %s" for _ in terms])
         prop_rows = _query(f"""
+            WITH matched_props AS (
+                SELECT
+                    p.bbl,
+                    p.address,
+                    p.borough,
+                    p.zip_code,
+                    p.owner_name,
+                    p.units_res
+                FROM {c}_properties p
+                WHERE ({where_addr})
+                   OR ({where_owner})
+                ORDER BY
+                    CASE WHEN p.address ILIKE %s THEN 0
+                         WHEN p.owner_name ILIKE %s THEN 1
+                         ELSE 2 END,
+                    p.units_res DESC NULLS LAST,
+                    p.address
+                LIMIT %s
+            )
             SELECT
-                p.bbl,
-                p.address,
-                p.borough,
-                p.zip_code,
-                p.owner_name,
-                p.units_res,
+                mp.bbl,
+                mp.address,
+                mp.borough,
+                mp.zip_code,
+                mp.owner_name,
+                mp.units_res,
                 n.network_key,
                 n.display_name AS network_name,
                 n.building_count
-            FROM {c}_properties p
-            LEFT JOIN {c}_networks n ON p.bbl = ANY(n.bbl_list)
-            WHERE ({where_addr})
-               OR ({where_owner})
-            ORDER BY
-                CASE WHEN p.address ILIKE %s THEN 0 
-                     WHEN p.owner_name ILIKE %s THEN 1
-                     ELSE 2 END,
-                p.units_res DESC NULLS LAST,
-                p.address
-            LIMIT %s
+            FROM matched_props mp
+            LEFT JOIN LATERAL (
+                SELECT
+                    net.network_key,
+                    net.display_name,
+                    net.building_count
+                FROM {c}_networks net
+                WHERE ARRAY[mp.bbl]::text[] <@ net.bbl_list
+                ORDER BY net.building_count DESC NULLS LAST
+                LIMIT 1
+            ) n ON TRUE
         """, [f"%{word}%" for word in terms] + [f"%{word}%" for word in terms] + [term_like, term_like, remaining])
 
         for r in prop_rows:
@@ -646,7 +835,8 @@ def city_search(
                     LIMIT 5
                 ) AS matched_member_names
             FROM {c}_networks
-            WHERE NOT (network_key = ANY(%s))
+            WHERE COALESCE(array_length(member_names, 1), 0) > 1
+              AND NOT (network_key = ANY(%s))
               AND NOT ({where_display_not_like})
               AND EXISTS (
                   SELECT 1 FROM unnest(COALESCE(member_names, ARRAY[]::text[])) AS n
@@ -673,6 +863,7 @@ def city_top_networks(
     min_buildings: int = Query(1, ge=0, le=1000),
     sort_by: str = Query("buildings"),
     include_institutional: bool = Query(False),
+    force_refresh: bool = Query(False),
 ):
     c = _validate_city(city)
     sort_columns = {
@@ -682,55 +873,161 @@ def city_top_networks(
         "open_violations": "open_violations",
         "violations": "open_violations",
         "code": "open_violations",
+        # Every code case on record, not just the ones still open. This is the
+        # ranking the landing-page cards use so the count matches what they show.
+        "code_cases": "total_violations",
+        "total_violations": "total_violations",
+        "evictions": "evictions_total",
+        "evictions_total": "evictions_total",
     }
     sort_col = sort_columns.get(sort_by, "building_count")
+    net_cache_key = f"city_top_nets:v1:{c}:{sort_col}:{limit}:{min_buildings}:{int(bool(include_institutional))}"
+    now = time.time()
+    if limit <= 25 and not force_refresh:
+        if net_cache_key in _networks_cache and net_cache_key in _networks_ts and now - _networks_ts[net_cache_key] < STATS_TTL:
+            return _networks_cache[net_cache_key]
+        kv_nets, is_fresh = _kv_get(net_cache_key)
+        if kv_nets is not None:
+            _networks_cache[net_cache_key] = kv_nets
+            _networks_ts[net_cache_key] = now
+            if not is_fresh:
+                _spawn_kv_refresh(
+                    net_cache_key,
+                    lambda: city_top_networks(
+                        c, limit=limit, min_buildings=min_buildings, sort_by=sort_by,
+                        include_institutional=include_institutional, force_refresh=True,
+                    ),
+                )
+            return kv_nets
     order_expr = "display_name ASC" if sort_col == "display_name" else f"{sort_col} DESC NULLS LAST, display_name ASC"
     institutional_text = (
-        "CONCAT_WS(' ', n.display_name, ARRAY_TO_STRING(n.member_names, ' '), "
-        "COALESCE(n.connection_signals::text, ''))"
+        "CONCAT_WS(E'\\n', n.display_name, "
+        "COALESCE(n.connection_signals::jsonb ->> 'primary_entity_name', ''), "
+        "COALESCE(n.connection_signals::jsonb ->> 'primary_human_name', ''), "
+        "CASE WHEN COALESCE(array_length(n.member_names, 1), 0) <= 3 "
+        "THEN ARRAY_TO_STRING(n.member_names, E'\\n') ELSE '' END)"
     )
     institutional_sql, institutional_params = _institutional_filter(include_institutional, institutional_text)
 
-    rows = _query(f"""
-        SELECT
-            n.network_key,
-            n.display_name,
-            n.building_count,
-            n.unit_count,
-            n.borough_summary,
-            n.member_names,
-            n.connection_signals,
-            COALESCE(stats.open_violations, 0) AS open_violations,
-            COALESCE(stats.open_violations_c, 0) AS open_violations_c,
-            COALESCE(stats.total_violations, 0) AS total_violations,
-            COALESCE(stats.evictions_total, 0) AS evictions_total
-        FROM {c}_networks
-        n
-        LEFT JOIN LATERAL (
-            SELECT
-                SUM(COALESCE(s.violations_open, 0))::int AS open_violations,
-                SUM(COALESCE(s.violations_open_c, 0))::int AS open_violations_c,
-                SUM(COALESCE(s.violations_total, 0))::int AS total_violations,
-                SUM(COALESCE(s.evictions_total, 0))::int AS evictions_total
-            FROM {c}_bbl_stats s
-            WHERE s.bbl = ANY(n.bbl_list)
-        ) stats ON TRUE
-        WHERE COALESCE(n.building_count, 0) >= %s
-          {institutional_sql}
-        ORDER BY {order_expr}
-        LIMIT %s
-    """, [min_buildings] + institutional_params + [limit])
+    candidate_limit = min(max(limit + 200, limit * 4), 1000)
+    if sort_col in ("building_count", "unit_count", "display_name"):
+        rows = _query(f"""
+            WITH base_nets AS (
+                SELECT
+                    n.network_key,
+                    n.display_name,
+                    n.building_count,
+                    n.unit_count,
+                    n.borough_summary,
+                    n.member_names,
+                    n.connection_signals,
+                    n.bbl_list
+                FROM {c}_networks n
+                WHERE COALESCE(n.building_count, 0) >= %s
+                ORDER BY {order_expr}
+                LIMIT %s
+            ),
+            ranked_candidates AS (
+                SELECT
+                    n.network_key,
+                    n.display_name,
+                    n.building_count,
+                    n.unit_count,
+                    n.borough_summary,
+                    n.member_names,
+                    n.connection_signals,
+                    COALESCE(stats.open_violations, 0) AS open_violations,
+                    COALESCE(stats.open_violations_c, 0) AS open_violations_c,
+                    COALESCE(stats.total_violations, 0) AS total_violations,
+                    COALESCE(stats.evictions_total, 0) AS evictions_total
+                FROM base_nets n
+                LEFT JOIN LATERAL (
+                    SELECT
+                        SUM(COALESCE(s.violations_open, 0))::int AS open_violations,
+                        SUM(COALESCE(s.violations_open_c, 0))::int AS open_violations_c,
+                        SUM(COALESCE(s.violations_total, 0))::int AS total_violations,
+                        SUM(COALESCE(s.evictions_total, 0))::int AS evictions_total
+                    FROM {c}_bbl_stats s
+                    WHERE s.bbl = ANY(n.bbl_list)
+                ) stats ON TRUE
+            )
+            SELECT *
+            FROM ranked_candidates n
+            WHERE TRUE
+              {institutional_sql}
+            ORDER BY {order_expr}
+            LIMIT %s
+        """, [min_buildings, candidate_limit] + institutional_params + [limit])
+    else:
+        rows = _query(f"""
+            WITH bbl_agg AS (
+                SELECT
+                    s.bbl,
+                    COALESCE(s.violations_open, 0) AS violations_open,
+                    COALESCE(s.violations_open_c, 0) AS violations_open_c,
+                    COALESCE(s.violations_total, 0) AS violations_total,
+                    COALESCE(s.evictions_total, 0) AS evictions_total
+                FROM {c}_bbl_stats s
+                WHERE COALESCE(s.violations_total, 0) > 0
+                   OR COALESCE(s.violations_open, 0) > 0
+                   OR COALESCE(s.evictions_total, 0) > 0
+            ),
+            net_hits AS (
+                SELECT
+                    n.network_key,
+                    SUM(ba.violations_open)::int AS open_violations,
+                    SUM(ba.violations_open_c)::int AS open_violations_c,
+                    SUM(ba.violations_total)::int AS total_violations,
+                    SUM(ba.evictions_total)::int AS evictions_total
+                FROM bbl_agg ba
+                JOIN {c}_networks n ON ARRAY[ba.bbl]::text[] <@ n.bbl_list
+                WHERE COALESCE(n.building_count, 0) >= %s
+                GROUP BY n.network_key
+            ),
+            ranked_candidates AS (
+                SELECT
+                    n.network_key,
+                    n.display_name,
+                    n.building_count,
+                    n.unit_count,
+                    n.borough_summary,
+                    n.member_names,
+                    n.connection_signals,
+                    nh.open_violations,
+                    nh.open_violations_c,
+                    nh.total_violations,
+                    nh.evictions_total
+                FROM net_hits nh
+                JOIN {c}_networks n ON n.network_key = nh.network_key
+                ORDER BY {order_expr}
+                LIMIT %s
+            )
+            SELECT *
+            FROM ranked_candidates n
+            WHERE TRUE
+              {institutional_sql}
+            ORDER BY {order_expr}
+            LIMIT %s
+        """, [min_buildings, candidate_limit] + institutional_params + [limit])
 
     results = []
     for row in rows:
         identity = _network_identity(
             row.get("display_name"), row.get("member_names"), row.get("connection_signals")
         )
+        member_names = row.get("member_names") or []
+        biz_count = sum(
+            1 for name in member_names
+            if name and not looks_like_person_owner(name)
+        )
+        if biz_count == 0 and row.get("display_name") and not looks_like_person_owner(row["display_name"]):
+            biz_count = 1
         results.append({
             "type": f"{c}_network",
             "network_key": row["network_key"],
             "display_name": row["display_name"],
             "building_count": int(row["building_count"] or 0),
+            "business_count": biz_count,
             "unit_count": int(row["unit_count"] or 0) if c in RELIABLE_UNIT_CITIES else None,
             "open_violations": _safe_int(row.get("open_violations")),
             "open_violations_c": _safe_int(row.get("open_violations_c")),
@@ -742,6 +1039,10 @@ def city_top_networks(
             "label": identity["primary_human_name"] or row["display_name"],
             "sublabel": _borough_summary_text(row["borough_summary"]),
         })
+    if limit <= 25:
+        _networks_cache[net_cache_key] = results
+        _networks_ts[net_cache_key] = time.time()
+        _kv_set(net_cache_key, results)
     return results
 
 
@@ -819,6 +1120,16 @@ def city_network_detail(city: str, network_key: str):
         mailing_join = ""
     registration_join = _latest_registration_join(c)
 
+    prop_cols = _get_property_columns(c)
+    sale_select = f"""
+        {'p.last_sale_date' if 'last_sale_date' in prop_cols else 'NULL::date'} AS last_sale_date,
+        {'p.last_sale_price' if 'last_sale_price' in prop_cols else 'NULL::numeric'} AS last_sale_price,
+        {'p.oc_jurisdiction_code' if 'oc_jurisdiction_code' in prop_cols else 'NULL::text'} AS oc_jurisdiction_code,
+        {'p.oc_company_number' if 'oc_company_number' in prop_cols else 'NULL::text'} AS oc_company_number,
+        {'p.oc_match_tier' if 'oc_match_tier' in prop_cols else 'NULL::smallint'} AS oc_match_tier,
+        {'p.oc_match_confidence' if 'oc_match_confidence' in prop_cols else 'NULL::numeric'} AS oc_match_confidence,
+    """
+
     # ---- Properties (buildings in this network) ----
     properties = _query(f"""
         SELECT
@@ -828,6 +1139,7 @@ def city_network_detail(city: str, network_key: str):
             p.zip_code,
             p.owner_name,
             {mailing_select}
+            {sale_select}
             p.land_use,
             p.bld_class,
             p.num_floors,
@@ -845,6 +1157,8 @@ def city_network_detail(city: str, network_key: str):
             r.registration_end_date,
             s.violations_total,
             s.violations_open,
+            s.violations_class_a,
+            s.violations_class_b,
             s.violations_class_c,
             s.violations_open_c,
             s.litigations_total,
@@ -930,6 +1244,91 @@ def city_network_detail(city: str, network_key: str):
             conn_signals = {}
     identity = _network_identity(net["display_name"], net["member_names"], conn_signals)
 
+    formatted_props = [_format_property(p, city=c) for p in properties]
+
+    # Build source-backed parcel transaction summary (only where genuine source `last_sale_date` exists)
+    today = dt.date.today()
+    cutoff_12m = today - dt.timedelta(days=365)
+    cutoff_36m = today - dt.timedelta(days=1095)
+    valid_sales = []
+    oc_ids_seen = set(conn_signals.get("oc_matched_companies") or ()) | set(conn_signals.get("oc_company_ids") or ())
+    cid_to_bbls: dict[str, set[str]] = {}
+    for fp in formatted_props:
+        if fp.get("oc_jurisdiction_code") and fp.get("oc_company_number"):
+            cid = f"{fp['oc_jurisdiction_code']}/{fp['oc_company_number']}"
+            oc_ids_seen.add(cid)
+            if fp.get("bbl"):
+                cid_to_bbls.setdefault(cid, set()).add(fp["bbl"])
+        raw_sd = fp.get("last_sale_date")
+        if not raw_sd:
+            continue
+        try:
+            sd = dt.date.fromisoformat(str(raw_sd)[:10])
+        except ValueError:
+            continue
+        if sd.year < 1901 or sd > today + dt.timedelta(days=30):
+            continue
+        amt = fp.get("last_sale_price")
+        clean_amt = amt if (amt is not None and amt > 0) else None
+        valid_sales.append(
+            (
+                sd,
+                {
+                    "bbl": fp.get("bbl"),
+                    "date": sd.isoformat(),
+                    "sale_date": sd.isoformat(),
+                    "amount": clean_amt,
+                    "sale_price": clean_amt,
+                    "address": fp.get("address"),
+                    "borough": fp.get("borough"),
+                    "owner_name": fp.get("owner_name"),
+                    "direction": "acquired",
+                },
+            )
+        )
+    valid_sales.sort(key=lambda pair: (pair[0], pair[1].get("amount") or 0), reverse=True)
+    acq_12m = sum(1 for sd, _ in valid_sales if sd >= cutoff_12m)
+    acq_36m = sum(1 for sd, _ in valid_sales if sd >= cutoff_36m)
+    transaction_summary = {
+        "total_with_sale_date": len(valid_sales),
+        "acquired_last_12m": acq_12m,
+        "acquired_last_36m": acq_36m,
+        "recent_transactions": [tx for _, tx in valid_sales[:250]],
+    }
+    formatted_contacts = [_format_contact(ct_row) for ct_row in contacts]
+    if oc_ids_seen:
+        oc_links, oc_contacts, oc_all_cids = _fetch_oc_enrichment_for_cids(oc_ids_seen, cid_to_bbls)
+        conn_signals = {
+            **conn_signals,
+            "oc_matched_companies": oc_all_cids,
+            "oc_company_links": oc_links,
+        }
+        existing_contact_keys = {
+            (
+                (fc.get("contact_type") or "").upper(),
+                (fc.get("full_name") or fc.get("corporation") or "").strip().upper(),
+            )
+            for fc in formatted_contacts
+        }
+        existing_person_names = {
+            (fc.get("full_name") or "").strip().upper()
+            for fc in formatted_contacts
+            if fc.get("full_name")
+        }
+        for occ in oc_contacts:
+            nm_upper = (occ.get("full_name") or occ.get("corporation") or "").strip().upper()
+            if not nm_upper:
+                continue
+            ctype_upper = (occ.get("contact_type") or "").upper()
+            if ctype_upper == "CORPORATE_PRINCIPAL" and nm_upper in existing_person_names:
+                continue
+            if (ctype_upper, nm_upper) in existing_contact_keys:
+                continue
+            existing_contact_keys.add((ctype_upper, nm_upper))
+            if occ.get("full_name"):
+                existing_person_names.add(nm_upper)
+            formatted_contacts.append(occ)
+
     return {
         "network_key":    net["network_key"],
         "anchor_type":    net["anchor_type"],
@@ -951,8 +1350,9 @@ def city_network_detail(city: str, network_key: str):
             "harassment_findings": _safe_int(pstats.get("harassment_findings")) if has_enrichment else None,
             "evictions":         _safe_int(pstats.get("evictions")) if has_enrichment else None,
         },
-        "properties":     [_format_property(p) for p in properties],
-        "contacts":       [_format_contact(c) for c in contacts],
+        "transaction_summary": transaction_summary,
+        "properties":     formatted_props,
+        "contacts":       formatted_contacts,
     }
 
 
@@ -1139,6 +1539,8 @@ def city_property_detail(city: str, bbl: str):
             r.registration_end_date,
             s.violations_total,
             s.violations_open,
+            s.violations_class_a,
+            s.violations_class_b,
             s.violations_class_c,
             s.violations_open_c,
             s.litigations_total,
@@ -1172,18 +1574,258 @@ def city_property_detail(city: str, bbl: str):
         LIMIT 1
     """, (bbl,))
 
+    formatted = _format_property(prop, city=c)
+    oc_company_links = []
+    oc_contacts = []
+    if formatted.get("oc_jurisdiction_code") and formatted.get("oc_company_number"):
+        cid = f"{formatted['oc_jurisdiction_code']}/{formatted['oc_company_number']}"
+        oc_company_links, oc_contacts, _ = _fetch_oc_enrichment_for_cids([cid], {cid: {bbl}})
+
     return {
-        **_format_property(prop),
+        **formatted,
         "network": nets[0] if nets else None,
+        "oc_company_links": oc_company_links,
+        "oc_contacts": oc_contacts,
     }
+
+
+def _fetch_oc_enrichment_for_cids(
+    raw_cids: set[str] | list[str],
+    cid_to_bbls: dict[str, set[str]] | None = None,
+) -> tuple[list[dict], list[dict], list[str]]:
+    """Resolve matched OpenCorporates company IDs (`us_xx/<num>`), 1-hop bidirectional
+    foreign-branch / home-company corporate links, and verified beneficial principals
+    & corporate parents from `oc_companies` and `oc_officers`.
+    """
+    seed_cids = [cid.strip() for cid in sorted(set(raw_cids))[:50] if isinstance(cid, str) and "/" in cid]
+    if not seed_cids:
+        return [], [], []
+
+    bbl_map: dict[str, set[str]] = {
+        k: set(v) for k, v in (cid_to_bbls or {}).items()
+    }
+    try:
+        j_seed = [cid.split("/", 1)[0] for cid in seed_cids]
+        n_seed = [cid.split("/", 1)[1] for cid in seed_cids]
+        seed_rows = _query(
+            """
+            SELECT c.jurisdiction_code, c.company_number, c.name, c.company_type,
+                   c.current_status, c.incorporation_date,
+                   c.registered_address_raw, c.mailing_address_raw, c.agent_address_raw,
+                   c.home_jurisdiction_code, c.home_company_number,
+                   c.opencorporates_url, c.registry_url
+            FROM UNNEST(%s::text[], %s::text[]) AS k(j, n)
+            JOIN oc_companies c ON c.jurisdiction_code = k.j AND c.company_number = k.n
+            """,
+            (j_seed, n_seed),
+        )
+    except Exception:
+        seed_rows = []
+
+    comp_by_cid: dict[str, dict] = {}
+    forward_homes: list[tuple[str, str, str]] = []
+    for r in seed_rows:
+        cid = f"{r['jurisdiction_code']}/{r['company_number']}"
+        comp_by_cid[cid] = r
+        hj, hn = r.get("home_jurisdiction_code"), r.get("home_company_number")
+        if hj and hn:
+            forward_homes.append((cid, hj, hn))
+
+    # Expand 1-hop forward (`home_company`) & reverse (foreign branch registrations)
+    try:
+        if forward_homes:
+            hj_arr = [x[1] for x in forward_homes]
+            hn_arr = [x[2] for x in forward_homes]
+            home_rows = _query(
+                """
+                SELECT c.jurisdiction_code, c.company_number, c.name, c.company_type,
+                       c.current_status, c.incorporation_date,
+                       c.registered_address_raw, c.mailing_address_raw, c.agent_address_raw,
+                       c.home_jurisdiction_code, c.home_company_number,
+                       c.opencorporates_url, c.registry_url
+                FROM UNNEST(%s::text[], %s::text[]) AS k(j, n)
+                JOIN oc_companies c ON c.jurisdiction_code = k.j AND c.company_number = k.n
+                """,
+                (hj_arr, hn_arr),
+            )
+            for r in home_rows:
+                hcid = f"{r['jurisdiction_code']}/{r['company_number']}"
+                comp_by_cid.setdefault(hcid, r)
+            for child_cid, hj, hn in forward_homes:
+                hcid = f"{hj}/{hn}"
+                if child_cid in bbl_map:
+                    bbl_map.setdefault(hcid, set()).update(bbl_map[child_cid])
+
+        rev_rows = _query(
+            """
+            SELECT c.jurisdiction_code, c.company_number, c.name, c.company_type,
+                   c.current_status, c.incorporation_date,
+                   c.registered_address_raw, c.mailing_address_raw, c.agent_address_raw,
+                   c.home_jurisdiction_code, c.home_company_number,
+                   c.opencorporates_url, c.registry_url
+            FROM UNNEST(%s::text[], %s::text[]) AS k(j, n)
+            JOIN oc_companies c ON c.home_jurisdiction_code = k.j AND c.home_company_number = k.n
+            LIMIT 40
+            """,
+            (j_seed, n_seed),
+        )
+        for r in rev_rows:
+            bcid = f"{r['jurisdiction_code']}/{r['company_number']}"
+            comp_by_cid.setdefault(bcid, r)
+            hcid = f"{r['home_jurisdiction_code']}/{r['home_company_number']}"
+            if hcid in bbl_map:
+                bbl_map.setdefault(bcid, set()).update(bbl_map[hcid])
+    except Exception:
+        pass
+
+    all_cids = sorted(set(seed_cids) | set(comp_by_cid.keys()))[:40]
+    oc_links = []
+    for cid in all_cids:
+        r = comp_by_cid.get(cid) or {}
+        j_code, c_num = cid.split("/", 1)
+        hq_addr = None
+        for cand_addr in (r.get("mailing_address_raw"), r.get("registered_address_raw")):
+            if cand_addr and cand_addr != r.get("agent_address_raw") and not is_excluded_third_party_address(cand_addr):
+                hq_addr = cand_addr
+                break
+        oc_links.append({
+            "id": cid,
+            "jurisdiction_code": j_code,
+            "company_number": c_num,
+            "company_name": r.get("name") or cid,
+            "company_type": r.get("company_type"),
+            "status": r.get("current_status"),
+            "incorporation_date": str(r["incorporation_date"]) if r.get("incorporation_date") else None,
+            "registered_address": hq_addr,
+            "home_company_id": (
+                f"{r['home_jurisdiction_code']}/{r['home_company_number']}"
+                if (r.get("home_jurisdiction_code") and r.get("home_company_number"))
+                else None
+            ),
+            "registry_url": r.get("registry_url"),
+            "url": r.get("opencorporates_url") or f"https://opencorporates.com/companies/{cid}",
+        })
+
+    # Fetch beneficial principals & corporate parents across all linked OC companies
+    oc_contacts: list[dict] = []
+    if all_cids:
+        try:
+            j_all = [cid.split("/", 1)[0] for cid in all_cids]
+            n_all = [cid.split("/", 1)[1] for cid in all_cids]
+            off_rows = _query(
+                """
+                SELECT o.jurisdiction_code, o.company_number, o.name, o.name_norm,
+                       o.position, o.role_class, o.is_corporate_officer, o.address_raw
+                FROM UNNEST(%s::text[], %s::text[]) AS k(j, n)
+                JOIN oc_officers o ON o.jurisdiction_code = k.j AND o.company_number = k.n
+                WHERE o.role_class IN ('beneficial_principal', 'corporate_parent')
+                ORDER BY o.is_current DESC NULLS LAST, o.officer_row_id ASC
+                LIMIT 250
+                """,
+                (j_all, n_all),
+            )
+        except Exception:
+            off_rows = []
+
+        grouped_off: dict[tuple[str, str], dict] = {}
+        for o in off_rows:
+            raw_nm = (o.get("name") or "").strip()
+            if not raw_nm or is_excluded_third_party_entity(raw_nm):
+                continue
+            cid = f"{o['jurisdiction_code']}/{o['company_number']}"
+            comp_row = comp_by_cid.get(cid) or {}
+            comp_name = comp_row.get("name") or cid
+            is_corp = bool(o.get("is_corporate_officer")) or o.get("role_class") == "corporate_parent" or not looks_like_person_owner(raw_nm)
+            ctype = "CORPORATEOWNER" if is_corp else "CORPORATE_PRINCIPAL"
+            norm_key = (o.get("name_norm") or raw_nm.upper()).strip()
+            entry = grouped_off.setdefault(
+                (ctype, norm_key),
+                {
+                    "contact_type": ctype,
+                    "full_name": None if is_corp else raw_nm,
+                    "corporation_self": raw_nm if is_corp else None,
+                    "corporations": set(),
+                    "bbls": set(),
+                    "registration_ids": set(),
+                    "address": None,
+                    "positions": [],
+                },
+            )
+            entry["corporations"].add(comp_name)
+            entry["registration_ids"].add(f"OC:{cid}")
+            entry["bbls"].update(bbl_map.get(cid, set()))
+            pos = (o.get("position") or "").strip()
+            if pos and pos not in entry["positions"]:
+                entry["positions"].append(pos)
+            cand_addr = (o.get("address_raw") or "").strip()
+            if not entry["address"] and cand_addr and not is_excluded_third_party_address(cand_addr):
+                entry["address"] = cand_addr
+            if not entry["address"]:
+                for hq_cand in (comp_row.get("mailing_address_raw"), comp_row.get("registered_address_raw")):
+                    if hq_cand and hq_cand != comp_row.get("agent_address_raw") and not is_excluded_third_party_address(hq_cand):
+                        entry["address"] = hq_cand
+                        break
+
+        for (_ctype, _nkey), ent in grouped_off.items():
+            corps_sorted = sorted(ent["corporations"])
+            if ent["corporation_self"] and ent["corporation_self"] not in corps_sorted:
+                corps_sorted.insert(0, ent["corporation_self"])
+            bbls_sorted = sorted(ent["bbls"])
+            oc_contacts.append({
+                "contact_type": ent["contact_type"],
+                "corporations": corps_sorted,
+                "corporation": ent["corporation_self"] or (corps_sorted[0] if corps_sorted else None),
+                "registration_ids": sorted(ent["registration_ids"]),
+                "bbls": bbls_sorted,
+                "building_count": len(bbls_sorted),
+                "first_name": None,
+                "last_name": None,
+                "full_name": ent["full_name"],
+                "address": ent["address"],
+                "city": None,
+                "state": None,
+                "zip": None,
+                "position": ", ".join(ent["positions"][:3]) if ent["positions"] else None,
+                "source": "OpenCorporates",
+            })
+
+    return oc_links, oc_contacts, all_cids
 
 
 # ---------------------------------------------------------------------------
 # Formatting helpers
 # ---------------------------------------------------------------------------
-def _format_property(r: dict) -> dict:
+CITY_STATE_MAP = {
+    "nyc": "NY",
+    "dc": "DC",
+    "baltimore": "MD",
+    "boston": "MA",
+    "detroit": "MI",
+    "philadelphia": "PA",
+    "chicago": "IL",
+    "miami": "FL",
+    "minneapolis": "MN",
+    "nj": "NJ",
+    "ma": "MA",
+    "fl": "FL",
+    "ny": "NY",
+    "co": "CO",
+    "vt": "VT",
+    "wi": "WI",
+    "nc": "NC",
+    "ar": "AR",
+    "va": "VA",
+}
+
+
+def _format_property(r: dict, city: str | None = None) -> dict:
+    oc_jur = r.get("oc_jurisdiction_code")
+    oc_num = r.get("oc_company_number")
+    raw_sale_price = _safe_num(r.get("last_sale_price"))
     return {
         "bbl":            r.get("bbl"),
+        "city_dataset":   city,
+        "property_state": CITY_STATE_MAP.get(city) if city else r.get("property_state"),
         "address":        r.get("address"),
         "borough":        r.get("borough"),
         "zip_code":       r.get("zip_code"),
@@ -1198,6 +1840,8 @@ def _format_property(r: dict) -> dict:
         "units_total":    _safe_int(r.get("units_total")),
         "year_built":     _safe_int(r.get("year_built")),
         "assessed_total": _safe_num(r.get("assessed_total")),
+        "last_sale_date": str(r["last_sale_date"]) if r.get("last_sale_date") else None,
+        "last_sale_price": raw_sale_price if (raw_sale_price is not None and raw_sale_price > 0) else None,
         "latitude":       _safe_num(r.get("latitude")),
         "longitude":      _safe_num(r.get("longitude")),
         "last_reg_date":  str(r["last_registration_date"]) if r.get("last_registration_date") else None,
@@ -1210,10 +1854,12 @@ def _format_property(r: dict) -> dict:
         "compliance_record_id": r.get("compliance_record_id"),
         "compliance_expiration": str(r["compliance_expiration"]) if r.get("compliance_expiration") else None,
         # Enrichment
-        "violations_total":  _safe_int(r.get("violations_total")),
-        "violations_open":   _safe_int(r.get("violations_open")),
+        "violations_total":   _safe_int(r.get("violations_total")),
+        "violations_open":    _safe_int(r.get("violations_open")),
+        "violations_class_a": _safe_int(r.get("violations_class_a")),
+        "violations_class_b": _safe_int(r.get("violations_class_b")),
         "violations_class_c": _safe_int(r.get("violations_class_c")),
-        "violations_open_c": _safe_int(r.get("violations_open_c")),
+        "violations_open_c":  _safe_int(r.get("violations_open_c")),
         "litigations_total": _safe_int(r.get("litigations_total")),
         "litigations_open":  _safe_int(r.get("litigations_open")),
         "litigations_harassment": _safe_int(r.get("litigations_harassment")),
@@ -1222,6 +1868,11 @@ def _format_property(r: dict) -> dict:
         "nhpd_subsidy":    bool(r.get("nhpd_subsidy")) if r.get("nhpd_subsidy") is not None else None,
         "nhpd_program":    r.get("nhpd_program"),
         "nhpd_expiration": str(r["nhpd_expiration"]) if r.get("nhpd_expiration") else None,
+        "oc_jurisdiction_code": oc_jur,
+        "oc_company_number": oc_num,
+        "oc_match_tier": _safe_int(r.get("oc_match_tier")),
+        "oc_match_confidence": _safe_num(r.get("oc_match_confidence")),
+        "opencorporates_url": f"https://opencorporates.com/companies/{oc_jur}/{oc_num}" if (oc_jur and oc_num) else None,
     }
 
 

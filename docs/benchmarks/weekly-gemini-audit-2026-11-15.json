@@ -1,0 +1,312 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-11-15T23:27:09Z",
+  "gemini_model": "gemini-3.1-pro-preview",
+  "gemini_primary_discovered": "gemini-3.1-pro-preview",
+  "gemini_fallback_discovered": "gemini-3.8-flash",
+  "gemini_error": null,
+  "headline": "Weekly Platform Audit: 19.9M Properties Mapped, Completeness Telemetry Timeout Detected",
+  "executive_summary": "The platform currently tracks 19,911,062 properties across 17 live jurisdictions, resolving into 13,071,752 distinct ownership networks. We have successfully quarantined 31,159 registered agent hubs to prevent graph distortion. However, the completeness telemetry check timed out during this audit cycle, and a significant data gap is present in the Colorado corporate registry officer counts.",
+  "highlights": [
+    "Total Properties: 19,911,062 across 17 jurisdictions.",
+    "Total Networks: 13,071,752.",
+    "Quarantined Registered Agent Hubs: 31,159.",
+    "Zero third-party leaks detected across all datasets."
+  ],
+  "optimizations_applied": [],
+  "jurisdiction_notes": [
+    {
+      "jurisdiction": "FL",
+      "status": "Review Required",
+      "note": "Largest max_cluster detected at 15,244 properties; monitoring for potential unquarantined agent hub."
+    },
+    {
+      "jurisdiction": "CO",
+      "status": "Data Gap",
+      "note": "Corporate registry shows 2,240,542 companies but only 12,632 officers."
+    },
+    {
+      "jurisdiction": "NYC",
+      "status": "Active",
+      "note": "Tracking 768,399 properties with 234,202 enforcement parcels."
+    }
+  ],
+  "review_items": [
+    {
+      "item_key": "completeness-telemetry-timeout",
+      "domain": "System Infrastructure",
+      "jurisdiction": "Global",
+      "title": "Completeness Check Timeout",
+      "why": "The completeness API endpoint returned a timeout error, preventing full validation of dataset freshness.",
+      "details": [
+        "reachable: false",
+        "error: timed out"
+      ]
+    },
+    {
+      "item_key": "co-officer-count-anomaly",
+      "domain": "Data Integrity",
+      "jurisdiction": "CO",
+      "title": "Colorado Officer Count Discrepancy",
+      "why": "The ratio of officers to companies in the CO corporate registry is abnormally low, suggesting a parsing failure or upstream redaction.",
+      "details": [
+        "Companies: 2,240,542",
+        "Officers: 12,632"
+      ]
+    },
+    {
+      "item_key": "fl-max-cluster-review",
+      "domain": "Ownership Graph",
+      "jurisdiction": "FL",
+      "title": "Florida Max Cluster Outlier",
+      "why": "Florida exhibits a max cluster of 15,244, which may indicate an unquarantined registered agent hub or a massive institutional portfolio requiring manual review.",
+      "details": [
+        "Properties: 3,062,205",
+        "Max Cluster: 15,244",
+        "Current Quarantined Hubs (Global): 31,159"
+      ]
+    }
+  ],
+  "snapshot": {
+    "captured_at": "2026-11-15T23:26:52Z",
+    "live_jurisdiction_count": 17,
+    "total_properties": 19911062,
+    "total_networks": 13071752,
+    "total_third_party_leaks": 0,
+    "quarantined_registered_agent_hubs": 31159,
+    "corporate_registries": {
+      "us_ny": {
+        "companies": 4317780,
+        "officers": 470996
+      },
+      "us_fl": {
+        "companies": 3818697,
+        "officers": 4569406
+      },
+      "us_pa": {
+        "companies": 2386129,
+        "officers": 1822241
+      },
+      "us_co": {
+        "companies": 2240542,
+        "officers": 12632
+      }
+    },
+    "jurisdictions": [
+      {
+        "slug": "ct",
+        "dataset_key": "CT",
+        "label": "Connecticut (169 Towns)",
+        "properties": 1295839,
+        "networks": 46541,
+        "multi_networks": 38832,
+        "max_cluster": 689,
+        "third_party_leaks": 0,
+        "subsidized_parcels": 1419,
+        "enforcement_parcels": 31703
+      },
+      {
+        "slug": "nyc",
+        "dataset_key": "NY",
+        "label": "New York City",
+        "properties": 768399,
+        "networks": 101196,
+        "multi_networks": 20104,
+        "max_cluster": 267,
+        "third_party_leaks": 0,
+        "subsidized_parcels": 1211,
+        "enforcement_parcels": 234202
+      },
+      {
+        "slug": "nj",
+        "dataset_key": "NJ",
+        "label": "New Jersey (DCA BHI)",
+        "properties": 116025,
+        "networks": 54130,
+        "multi_networks": 10450,
+        "max_cluster": 474,
+        "third_party_leaks": 0,
+        "subsidized_parcels": 1306,
+        "enforcement_parcels": 0
+      },
+      {
+        "slug": "philadelphia",
+        "dataset_key": "PHILADELPHIA",
+        "label": "Philadelphia, PA",
+        "properties": 583680,
+        "networks": 398108,
+        "multi_networks": 55158,
+        "max_cluster": 433,
+        "third_party_leaks": 0,
+        "subsidized_parcels": 18880,
+        "enforcement_parcels": 250183
+      },
+      {
+        "slug": "dc",
+        "dataset_key": "DC",
+        "label": "Washington, D.C.",
+        "properties": 132971,
+        "networks": 102143,
+        "multi_networks": 11537,
+        "max_cluster": 130,
+        "third_party_leaks": 0,
+        "subsidized_parcels": 308,
+        "enforcement_parcels": 1690
+      },
+      {
+        "slug": "baltimore",
+        "dataset_key": "BALTIMORE",
+        "label": "Baltimore, MD",
+        "properties": 236997,
+        "networks": 159530,
+        "multi_networks": 19780,
+        "max_cluster": 1517,
+        "third_party_leaks": 0,
+        "subsidized_parcels": 266,
+        "enforcement_parcels": 28952
+      },
+      {
+        "slug": "boston",
+        "dataset_key": "BOSTON",
+        "label": "Boston, MA",
+        "properties": 183438,
+        "networks": 132088,
+        "multi_networks": 21732,
+        "max_cluster": 244,
+        "third_party_leaks": 0,
+        "subsidized_parcels": 534,
+        "enforcement_parcels": 67642
+      },
+      {
+        "slug": "ma",
+        "dataset_key": "MA",
+        "label": "Massachusetts (351 Towns)",
+        "properties": 2237736,
+        "networks": 1630560,
+        "multi_networks": 245108,
+        "max_cluster": 479,
+        "third_party_leaks": 0,
+        "subsidized_parcels": 33610,
+        "enforcement_parcels": 0
+      },
+      {
+        "slug": "fl",
+        "dataset_key": "FL",
+        "label": "Florida (67 Counties)",
+        "properties": 3062205,
+        "networks": 1987025,
+        "multi_networks": 323470,
+        "max_cluster": 15244,
+        "third_party_leaks": 0,
+        "subsidized_parcels": 9877,
+        "enforcement_parcels": 0
+      },
+      {
+        "slug": "miami",
+        "dataset_key": "MIAMI",
+        "label": "Miami-Dade, FL",
+        "properties": 536652,
+        "networks": 430858,
+        "multi_networks": 40171,
+        "max_cluster": 1084,
+        "third_party_leaks": 0,
+        "subsidized_parcels": 4113,
+        "enforcement_parcels": 0
+      },
+      {
+        "slug": "ny",
+        "dataset_key": "NYS",
+        "label": "New York State (33 Counties)",
+        "properties": 2286296,
+        "networks": 1891077,
+        "multi_networks": 191550,
+        "max_cluster": 801,
+        "third_party_leaks": 0,
+        "subsidized_parcels": 12234,
+        "enforcement_parcels": 30763
+      },
+      {
+        "slug": "co",
+        "dataset_key": "CO",
+        "label": "Colorado",
+        "properties": 1704979,
+        "networks": 1284275,
+        "multi_networks": 173033,
+        "max_cluster": 1913,
+        "third_party_leaks": 0,
+        "subsidized_parcels": 8938,
+        "enforcement_parcels": 0
+      },
+      {
+        "slug": "nc",
+        "dataset_key": "NC",
+        "label": "North Carolina (100 Counties)",
+        "properties": 3921109,
+        "networks": 2817472,
+        "multi_networks": 424227,
+        "max_cluster": 5862,
+        "third_party_leaks": 0,
+        "subsidized_parcels": 10652,
+        "enforcement_parcels": 0
+      },
+      {
+        "slug": "wi",
+        "dataset_key": "WI",
+        "label": "Wisconsin (72 Counties)",
+        "properties": 2197909,
+        "networks": 1632049,
+        "multi_networks": 236018,
+        "max_cluster": 783,
+        "third_party_leaks": 0,
+        "subsidized_parcels": 10464,
+        "enforcement_parcels": 0
+      },
+      {
+        "slug": "vt",
+        "dataset_key": "VT",
+        "label": "Vermont",
+        "properties": 244872,
+        "networks": 207917,
+        "multi_networks": 20246,
+        "max_cluster": 123,
+        "third_party_leaks": 0,
+        "subsidized_parcels": 2539,
+        "enforcement_parcels": 0
+      },
+      {
+        "slug": "detroit",
+        "dataset_key": "DETROIT",
+        "label": "Detroit, MI",
+        "properties": 379858,
+        "networks": 182721,
+        "multi_networks": 40078,
+        "max_cluster": 1507,
+        "third_party_leaks": 0,
+        "subsidized_parcels": 4033,
+        "enforcement_parcels": 170012
+      },
+      {
+        "slug": "minneapolis",
+        "dataset_key": "MINNEAPOLIS",
+        "label": "Minneapolis, MN",
+        "properties": 22097,
+        "networks": 14062,
+        "multi_networks": 2434,
+        "max_cluster": 222,
+        "third_party_leaks": 0,
+        "subsidized_parcels": 796,
+        "enforcement_parcels": 19624
+      }
+    ],
+    "completeness": {
+      "reachable": false,
+      "error": "timed out"
+    },
+    "recent_feedback": [],
+    "recent_commits": [],
+    "open_fix_items": [],
+    "resolved_fix_items": [],
+    "active_decisions": [],
+    "optimizations_applied": []
+  }
+}

@@ -27,8 +27,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("send-audit-email")
 
 ALERT_EMAIL_TO   = os.environ.get("ALERT_EMAIL_TO",   "salmunk@gmail.com")
-ALERT_EMAIL_FROM = os.environ.get("ALERT_EMAIL_FROM", "salmunk@gmail.com")
-ALERT_EMAIL_PASS = os.environ.get("ALERT_EMAIL_PASS", "")
+ALERT_EMAIL_FROM = (os.environ.get("ALERT_EMAIL_FROM", "salmunk@gmail.com") or "").strip()
+ALERT_EMAIL_PASS = "".join((os.environ.get("ALERT_EMAIL_PASS", "") or "").split())
 
 # Default recipient list
 DEFAULT_RECIPIENTS = ["salmunk@gmail.com", "me@salmun.net"]
@@ -55,11 +55,19 @@ def send_audit_email(subject: str, body_text: str, body_html: str = None, recipi
         if body_html:
             msg.attach(MIMEText(body_html, "html"))
 
-        with smtplib.SMTP("smtp.gmail.com", 587, timeout=15) as server:
-            server.ehlo()
-            server.starttls()
-            server.login(ALERT_EMAIL_FROM, ALERT_EMAIL_PASS)
-            server.sendmail(ALERT_EMAIL_FROM, to_list, msg.as_string())
+        try:
+            with smtplib.SMTP("smtp.gmail.com", 587, timeout=20) as server:
+                server.ehlo()
+                server.starttls()
+                server.ehlo()
+                server.login(ALERT_EMAIL_FROM, ALERT_EMAIL_PASS)
+                server.sendmail(ALERT_EMAIL_FROM, to_list, msg.as_string())
+        except Exception as starttls_err:
+            logger.warning(f"Port 587 STARTTLS failed ({starttls_err}); retrying over port 465 SMTP_SSL...")
+            with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20) as server:
+                server.ehlo()
+                server.login(ALERT_EMAIL_FROM, ALERT_EMAIL_PASS)
+                server.sendmail(ALERT_EMAIL_FROM, to_list, msg.as_string())
         
         logger.info("✓ Email sent successfully to " + to_str)
         return True

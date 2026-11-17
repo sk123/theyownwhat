@@ -27,8 +27,8 @@ import requests
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://user:password@localhost:5432/ctdata")
-NHPD_USER = os.environ.get("NHPD_USER", "sk@ctfairhousing.org")
-NHPD_PASS = os.environ.get("NHPD_PASS", "cReKFao8v#32")
+NHPD_USER = os.environ.get("NHPD_USER", "")
+NHPD_PASS = os.environ.get("NHPD_PASS", "")
 
 # ArcGIS URLs
 URL_COMPLIANCE = "https://services2.arcgis.com/qvkbeam7Wirps6zC/arcgis/rest/services/bseed_active_residential_compliance_certificates/FeatureServer/0/query"
@@ -86,46 +86,96 @@ def parse_source_date(value: Any) -> Optional[dt.date]:
         return None
 
 
-def iter_arcgis_features(url: str, fields: str, page_size: int = 5000, limit: Optional[int] = None) -> Iterator[Dict[str, Any]]:
+def iter_arcgis_features(url: str, fields: str, page_size: int = 2000, limit: Optional[int] = None) -> Iterator[Dict[str, Any]]:
+    """Iterate through ArcGIS FeatureServer records using OBJECTID cursor pagination.
+
+    ArcGIS Online rejects large `resultOffset` values (e.g. >300k Detroit blight
+    tickets) with HTTP 400 / maxResultOffset errors. Cursor pagination via
+    `OBJECTID > last_oid` avoids offset limits and retrieves the complete layer.
+    Falls back to `resultOffset` only if a layer does not return an OBJECTID field.
+    """
+    field_tokens = {f.strip().upper() for f in fields.split(",") if f.strip()}
+    out_fields = fields if ("*" in field_tokens or "OBJECTID" in field_tokens) else f"OBJECTID,{fields}"
+
+    last_oid: Optional[int] = -1
+    use_cursor = True
     offset = 0
     yielded = 0
+
     while True:
         current_limit = min(page_size, limit - yielded) if limit else page_size
         if current_limit <= 0:
             break
-        params = {
-            "where": "1=1",
-            "outFields": fields,
+
+        params: Dict[str, Any] = {
+            "outFields": out_fields,
             "returnGeometry": "false",
             "f": "json",
-            "resultOffset": offset,
             "resultRecordCount": current_limit,
-            "orderByFields": "OBJECTID",
+            "orderByFields": "OBJECTID ASC",
         }
-        try:
-            response = requests.get(url, params=params, timeout=60)
-            response.raise_for_status()
-            data = response.json()
-        except Exception as e:
-            logger.error(f"Error fetching from {url} offset {offset}: {e}")
-            break
+        if use_cursor and last_oid is not None:
+            params["where"] = f"OBJECTID > {last_oid}"
+        else:
+            params["where"] = "1=1"
+            params["resultOffset"] = offset
 
-        if "error" in data:
-            logger.error(f"ArcGIS error for {url}: {data['error']}")
+        data = None
+        for attempt in range(1, 4):
+            try:
+                response = requests.get(url, params=params, timeout=90)
+                response.raise_for_status()
+                payload = response.json()
+                if "error" in payload:
+                    raise RuntimeError(f"ArcGIS error: {payload['error']}")
+                data = payload
+                break
+            except Exception as e:
+                if attempt >= 3:
+                    logger.error(f"Error fetching from {url} (cursor={last_oid}, offset={offset}): {e}")
+                    return
+                backoff = 2 ** attempt
+                logger.warning(f"Transient error fetching {url} (attempt {attempt}/3): {e} — retrying in {backoff}s")
+                time.sleep(backoff)
+
+        if not data:
             break
 
         features = data.get("features", [])
         if not features:
             break
 
+        max_oid = last_oid
+        saw_oid = False
         for feature in features:
             attrs = feature.get("attributes") or {}
+            raw_oid = attrs.get("OBJECTID")
+            if raw_oid is None:
+                raw_oid = attrs.get("ObjectId") if "ObjectId" in attrs else attrs.get("objectid")
+            if raw_oid is not None:
+                try:
+                    oid_int = int(raw_oid)
+                    saw_oid = True
+                    if max_oid is None or oid_int > max_oid:
+                        max_oid = oid_int
+                except (TypeError, ValueError):
+                    pass
+
             yield attrs
             yielded += 1
             if limit and yielded >= limit:
                 return
 
-        offset += len(features)
+        if use_cursor:
+            if saw_oid and max_oid is not None and (last_oid is None or max_oid > last_oid):
+                last_oid = max_oid
+            else:
+                # Layer did not expose monotonic OBJECTID; fall back to offset pagination
+                use_cursor = False
+                offset += len(features)
+        else:
+            offset += len(features)
+
         if len(features) < current_limit and not data.get("exceededTransferLimit"):
             break
 
@@ -329,8 +379,44 @@ def enrich_blight_and_subsidies(conn, limit: Optional[int] = None):
     # 2. Ingest NHPD Subsidies
     nhpd_processed = 0
     nhpd_matched = 0
-    if not NHPD_USER or not NHPD_PASS:
-        logger.warning("NHPD_USER / NHPD_PASS not set — skipping NHPD download.")
+    local_nhpd_path = "data/Active and Inconclusive Properties.xlsx"
+    if not os.path.exists(local_nhpd_path):
+        local_nhpd_path = "/app/data/Active and Inconclusive Properties.xlsx"
+
+    if os.path.exists(local_nhpd_path):
+        logger.info(f"Loading Michigan NHPD subsidy data from local file {local_nhpd_path}...")
+        try:
+            import pandas as pd
+            read_cols = {'State', 'PropertyAddress', 'LatestEndDate', 'EarliestEndDate'}
+            df_nhpd = pd.read_excel(local_nhpd_path, usecols=lambda c: c in read_cols or str(c).endswith('_ProgramName'))
+            if 'State' in df_nhpd.columns:
+                df_nhpd = df_nhpd[df_nhpd['State'] == 'MI']
+            for _, row in df_nhpd.iterrows():
+                nhpd_processed += 1
+                addr = str(row.get('PropertyAddress') or '').strip().upper()
+                # Find program
+                prog = "NHPD Subsidy"
+                for col in df_nhpd.columns:
+                    if col.endswith('_ProgramName') and pd.notna(row.get(col)):
+                        prog = str(row.get(col)).strip()
+                        break
+                exp = None
+                for exp_col in ('LatestEndDate', 'EarliestEndDate'):
+                    if pd.notna(row.get(exp_col)):
+                        exp = parse_source_date(row.get(exp_col))
+                        if exp:
+                            break
+                if addr in address_to_bbl:
+                    bbl = address_to_bbl[addr]
+                    nhpd_matched += 1
+                    stats_by_bbl[bbl]["nhpd_subsidy"] = True
+                    stats_by_bbl[bbl]["nhpd_program"] = prog
+                    stats_by_bbl[bbl]["nhpd_expiration"] = exp
+            logger.info(f"Local NHPD processing complete: Matched {nhpd_matched:,} Michigan subsidy records to properties.")
+        except Exception as e:
+            logger.warning(f"Could not load local NHPD file: {e}")
+    elif not NHPD_USER or not NHPD_PASS:
+        logger.info("NHPD_USER / NHPD_PASS not set — skipping NHPD remote download (will be enriched by enrich_all_cities_nhpd.py).")
     else:
         logger.info("Authenticating with NHPD to fetch Michigan subsidies...")
         session = requests.Session()
@@ -344,7 +430,7 @@ def enrich_blight_and_subsidies(conn, limit: Optional[int] = None):
             r.raise_for_status()
 
             if "login" in r.url:
-                logger.error("NHPD login rejected — check credentials.")
+                logger.warning("NHPD remote login rejected — skipping remote download.")
             else:
                 logger.info("NHPD login successful. Downloading MI dataset…")
                 r = session.get(URL_NHPD_DOWNLOAD, timeout=120, stream=True)
@@ -356,7 +442,6 @@ def enrich_blight_and_subsidies(conn, limit: Optional[int] = None):
                 for row in reader:
                     nhpd_processed += 1
                     county = str(row.get("county_fips_code") or row.get("county") or "").strip()
-                    # Wayne County FIPS 26163, 163, or name WAYNE
                     if county not in {"26163", "163", "WAYNE"}:
                         continue
 
@@ -372,7 +457,7 @@ def enrich_blight_and_subsidies(conn, limit: Optional[int] = None):
                         stats_by_bbl[bbl]["nhpd_expiration"] = exp
 
         except Exception as e:
-            logger.error(f"NHPD download/parse failed: {e}")
+            logger.warning(f"NHPD remote download/parse failed: {e} (enrich_all_cities_nhpd will handle subsidy enrichment)")
 
     logger.info(f"NHPD processing complete: Matched {nhpd_matched:,} Wayne County subsidy records to properties.")
 
@@ -452,6 +537,7 @@ def main():
         # Step 3: Blight Tickets & NHPD Subsidies
         blight_nhpd_details = enrich_blight_and_subsidies(conn, limit=args.limit)
         update_source_status(conn, "DETROIT_ENFORCEMENT", "city_enforcement", "success", blight_nhpd_details)
+        update_source_status(conn, "DETROIT_CODE_ENFORCEMENT", "city_enforcement", "success", blight_nhpd_details)
 
         logger.info("Detroit enrichment pipeline completed successfully.")
 

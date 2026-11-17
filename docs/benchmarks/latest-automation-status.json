@@ -1,0 +1,58 @@
+{
+  "updatedAt": "2026-11-15T03:40:14Z",
+  "rotation": {
+    "currentCycle": 1,
+    "cadencePhase": "initialCoverage",
+    "frequency": "nightly",
+    "minDaysBetweenAdvances": 0.75,
+    "overdueAfterDays": 2.0,
+    "isDue": false,
+    "isOverdue": false,
+    "daysSinceLastAdvance": 0.0,
+    "lastRunAt": "2026-11-15T03:40:14Z",
+    "lastAdvancedAt": "2026-11-15T03:40:14Z",
+    "nextDueAt": "2026-11-15T21:40:14Z",
+    "nextCohortIndex": 1,
+    "nextCohortId": "cohort-01-nj-dc",
+    "nextCohortLabel": "Mid-Atlantic Stateful & Capital \u2014 New Jersey & Washington, D.C.",
+    "nextJurisdictions": [
+      "NJ",
+      "DC"
+    ],
+    "completedInCycleCount": 2,
+    "totalJurisdictionsCount": 13,
+    "completedJurisdictionsInCycle": [
+      "CT",
+      "NYC"
+    ],
+    "remainingJurisdictionsInCycle": [
+      "NJ",
+      "DC",
+      "BALTIMORE",
+      "BOSTON",
+      "DETROIT",
+      "MIAMI",
+      "MINNEAPOLIS",
+      "CT_MUNI_COHORT_A",
+      "PHILADELPHIA",
+      "CHICAGO",
+      "CT_MUNI_COHORT_B"
+    ],
+    "historyCount": 1
+  },
+  "latestAdvance": {
+    "timestamp": "2026-11-15T03:40:14Z",
+    "cycle": 1,
+    "cohortId": "cohort-00-ct-nyc",
+    "jurisdictions": [
+      "CT",
+      "NYC"
+    ],
+    "totalChecks": 28,
+    "passedChecks": 28,
+    "healedFeeds": [],
+    "rolledOverToCycle": null,
+    "reportPath": "docs/benchmarks/2026-11-15-cohort-00-ct-nyc-report.md",
+    "notes": "Automated battery pass"
+  }
+}

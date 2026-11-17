@@ -32,13 +32,20 @@ logs/
 enrichment_log.txt
 nohup.out
 
+# Unrelated sibling projects
+lunch/
+
 # Temp / Lock files
 *.lock
 insights.json
 statewide.json
 *.html
 
-# Environments
+# Environments & Ephemeral Build Artifacts
+build/
+frontend/dist/
 .venv/
 node_modules/
 .env2
+.env.*
+!.env.example

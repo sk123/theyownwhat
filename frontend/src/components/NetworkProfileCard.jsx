@@ -1,7 +1,9 @@
-import React, { useMemo, useState } from 'react';
-import { Users, Info, Sparkles, X, Loader2, Gavel, FileText, Settings, Edit3, Save, CheckCircle, Calendar, GitMerge, ArrowLeft, Building2, ExternalLink, ShieldAlert, BarChart3, ClipboardList, Database, Home, Newspaper, ArrowUpRight, ArrowDownRight, Repeat2, TrendingUp } from 'lucide-react';
+import React, { useMemo, useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Users, Info, Sparkles, X, Loader2, Gavel, FileText, Settings, Edit3, Save, CheckCircle, Calendar, GitMerge, ArrowLeft, ArrowUp, Building2, ExternalLink, ShieldAlert, BarChart3, ClipboardList, Database, Home, Newspaper, ArrowUpRight, ArrowDownRight, Repeat2, TrendingUp } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { formatDisplayName } from '../utils/formatName';
 
 const reportMarkdownComponents = {
     h1: ({ node, ...props }) => (
@@ -246,7 +248,9 @@ export default function NetworkProfileCard({
     onOpenFeedback,
     onViewProperty,
     onSelectEntity,
-    onFilterSearch
+    onFilterSearch,
+    isScrolled = false,
+    onScrollToTop,
 }) {
     const [showReport, setShowReport] = useState(false);
     const [reportLoading, setReportLoading] = useState(false);
@@ -263,8 +267,6 @@ export default function NetworkProfileCard({
     const [showTxModal, setShowTxModal] = useState(false);
     const [txModalFilter, setTxModalFilter] = useState('all'); // 'all' | 'acquired' | 'disposed' | 'intra' | 'inter'
     const [txSearch, setTxSearch] = useState('');
-    const [isCompactLayout, setIsCompactLayout] = useState(false);
-
     if (!networkData) return null;
 
     const handleOpenReportModal = () => {
@@ -430,7 +432,16 @@ export default function NetworkProfileCard({
     const parcelsCount = safeStats.totalParcels || safeStats.total_parcels || networkData.properties?.length || 0;
     const unitsCount = safeStats.totalUnits || safeStats.total_units || 0;
 
+    const totalValStr = safeStats.totalValue >= 1000000000
+        ? `$${(safeStats.totalValue / 1000000000).toFixed(1)}B`
+        : safeStats.totalValue >= 1000000
+            ? `$${(safeStats.totalValue / 1000000).toFixed(1)}M`
+            : safeStats.totalValue > 0
+                ? `$${safeStats.totalValue.toLocaleString()}`
+                : '$0';
+
     const evictionSummary = networkData.evictionSummary || {};
+    const evictionCount = evictionSummary.eviction_count || 0;
     const evictionsLast12m = evictionSummary.evictions_last_12m || 0;
 
     const evictionTrend = useMemo(() => {
@@ -454,7 +465,7 @@ export default function NetworkProfileCard({
         }
     }, [evictionSummary]);
 
-    const codeSummary = networkData.codeSummary || {};
+    const codeSummary = networkData.codeSummary || networkData.codeEnforcementSummary || {};
     const hasCodeSummary = (codeSummary.total_records || 0) > 0;
     const topCodeStatuses = (codeSummary.top_statuses || []).slice(0, 3);
     const lastCodeDate = useMemo(() => {
@@ -558,167 +569,116 @@ export default function NetworkProfileCard({
 
     return (
         <>
-            <section
-                aria-label="Network Profile Summary"
-                className="bg-white rounded-xl p-3 shadow-sm border border-slate-200 w-full flex items-center justify-between flex-wrap gap-3 shrink-0"
-            >
-                <div className="flex items-center gap-3 min-w-0">
-                    {onBack && (
-                        <button
-                            onClick={onBack}
-                            className="p-1.5 hover:bg-slate-100 text-slate-400 hover:text-slate-700 rounded-lg transition-colors border border-slate-200 shrink-0"
-                            title="Back to Search"
-                        >
-                            <ArrowLeft className="w-4 h-4" />
-                        </button>
-                    )}
-                    <div className="min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                            <h2 className="text-base md:text-lg font-black text-slate-900 tracking-tight truncate" title={managerName}>
-                                {managerName}
-                            </h2>
-                            {(activeBusinesses.length > 0 || humanPrincipals.length > 0) && (
-                                <span className="text-[9px] bg-slate-100 text-slate-600 border border-slate-200 font-bold uppercase tracking-wider px-2 py-0.5 rounded-full">
-                                    {activeBusinesses.length + humanPrincipals.length + entityPrincipals.length} Network Entities
-                                </span>
-                            )}
-                        </div>
-                        {networkLabel && (
-                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider truncate mt-0.5" title={networkLabel}>
-                                {networkLabel}
-                            </p>
+            <div className="flex flex-col gap-2">
+                {/* Header Block */}
+            <div className="bg-white rounded-xl border border-slate-200 p-3 shadow-sm">
+                <section
+                    aria-label="Network Profile Summary"
+                    className="w-full flex items-center justify-between flex-wrap gap-2 shrink-0"
+                >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                        {onBack && (
+                            <button
+                                onClick={onBack}
+                                className="p-1.5 hover:bg-slate-100 text-slate-400 hover:text-slate-700 rounded-lg transition-colors border border-slate-200 shrink-0"
+                                title="Back to Search"
+                            >
+                                <ArrowLeft className="w-4 h-4" />
+                            </button>
                         )}
-                    </div>
-                </div>
-
-                <div className="flex items-center gap-2 ml-auto flex-wrap">
-                    <button
-                        onClick={() => setIsCompactLayout(prev => !prev)}
-                        className={`px-2.5 py-1.5 rounded-lg text-[10px] font-extrabold uppercase tracking-wider border transition-all flex items-center gap-1.5 ${
-                            isCompactLayout
-                                ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
-                                : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
-                        }`}
-                        title={isCompactLayout ? "Switch to full analytics view" : "Compact analytics to bring Property Tables right to the top"}
-                    >
-                        <BarChart3 size={13} />
-                        <span>{isCompactLayout ? 'Full Analytics' : 'Compact View'}</span>
-                    </button>
-
-                    {onOpenFeedback && (
-                        <button
-                            onClick={() => onOpenFeedback({
-                                id: managerName,
-                                name: managerName,
-                                type: 'Network',
-                                city: 'CT'
-                            })}
-                            className="px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-lg text-[10px] font-extrabold uppercase tracking-wider transition-all flex items-center gap-1 shrink-0"
-                            title="Report a data error, wrong landlord grouping, or missing detail"
-                        >
-                            <ShieldAlert size={12} className="text-amber-600 shrink-0" />
-                            <span className="hidden sm:inline">See something wrong?</span>
-                        </button>
-                    )}
-
-                    <div className="relative group">
-                        <button
-                            onClick={parcelsCount >= 10 ? handleOpenReportModal : undefined}
-                            disabled={parcelsCount < 10}
-                            className={`flex items-center gap-1.5 text-[10px] font-bold transition-all uppercase tracking-widest px-3 py-1.5 rounded-lg border shrink-0 ${
-                                parcelsCount >= 10
-                                    ? 'text-amber-750 hover:text-amber-850 bg-amber-50 hover:bg-amber-100 border-amber-205 cursor-pointer font-extrabold'
-                                    : 'text-slate-400 bg-slate-50 border-slate-200 cursor-not-allowed opacity-50 font-normal'
-                            }`}
-                            title={parcelsCount < 10 ? `AI Reports require 10+ parcels (currently ${parcelsCount})` : ''}
-                        >
-                            <Sparkles size={12} className="shrink-0 text-amber-500" />
-                            <span>AI Report</span>
-                        </button>
-                    </div>
-
-                    {onExport && (
-                        <button
-                            onClick={onExport}
-                            className="flex items-center gap-1.5 text-[10px] font-bold transition-all uppercase tracking-widest px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-750 hover:text-slate-900"
-                        >
-                            <FileText size={12} className="shrink-0 text-slate-500" />
-                            <span>Export CSV</span>
-                        </button>
-                    )}
-                </div>
-            </section>
-
-            {featureNav}
-
-            {(() => {
-                const sigs = networkData.connection_signals || {};
-                const allPeople = sigs.people || [];
-                const allCorps = sigs.corps || [];
-                const allAddresses = sigs.addresses || [];
-                const hasSignals = allPeople.length > 0 || allCorps.length > 0 || allAddresses.length > 0;
-
-                const displayedPeople = expandedSigs.people ? allPeople : allPeople.slice(0, 5);
-                const hasMorePeople = allPeople.length > 5;
-                const displayedCorps = expandedSigs.corps ? allCorps : allCorps.slice(0, 5);
-                const hasMoreCorps = allCorps.length > 5;
-                const displayedAddresses = expandedSigs.addresses ? allAddresses : allAddresses.slice(0, 5);
-                const hasMoreAddresses = allAddresses.length > 5;
-
-                if (isCompactLayout) {
-                    return (
-                        <div className="bg-white border border-slate-200 rounded-xl p-2.5 shadow-sm mt-1 flex items-center justify-between flex-wrap gap-2 text-xs">
-                            <div className="flex items-center gap-3 flex-wrap">
-                                <div className="flex items-center gap-1.5 bg-blue-50 text-blue-800 border border-blue-100 px-2.5 py-1 rounded-lg font-bold">
-                                    <Home size={13} className="text-blue-600" />
-                                    <span>{complexesCount.toLocaleString()} bldgs ({unitsCount.toLocaleString()} units)</span>
-                                    <span className="text-blue-500 font-extrabold ml-1">
-                                        {safeStats.totalValue >= 1000000000 ? `$${(safeStats.totalValue / 1000000000).toFixed(2)}B` : `$${(safeStats.totalValue / 1000000).toFixed(1)}M`}
+                        <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                                <h2 className="text-base md:text-lg font-black text-slate-900 tracking-tight truncate" title={managerName}>
+                                    {formatDisplayName(managerName)}
+                                </h2>
+                                {(activeBusinesses.length > 0 || humanPrincipals.length > 0) && (
+                                    <span className="text-[9px] bg-slate-100 text-slate-600 border border-slate-200 font-bold uppercase tracking-wider px-2 py-0.5 rounded-full shrink-0">
+                                        {activeBusinesses.length + humanPrincipals.length + entityPrincipals.length} Network Entities
                                     </span>
-                                </div>
-
-                                <div className="flex items-center gap-1.5 bg-indigo-50 text-indigo-800 border border-indigo-100 px-2.5 py-1 rounded-lg font-bold">
-                                    <Gavel size={13} className="text-indigo-600" />
-                                    <span>{(evictionSummary.eviction_count || 0).toLocaleString()} evictions</span>
-                                    {evictionsLast12m > 0 && <span className="text-indigo-600 font-extrabold text-[10px]">({evictionsLast12m} last 12m)</span>}
-                                </div>
-
-                                {allTxns.length > 0 && (
-                                    <div className="flex items-center gap-1.5 bg-amber-50 text-amber-800 border border-amber-100 px-2.5 py-1 rounded-lg font-bold">
-                                        <TrendingUp size={13} className="text-amber-600" />
-                                        <span>{allTxns.length} transactions</span>
-                                        <button
-                                            onClick={() => setShowTxModal(true)}
-                                            className="text-blue-700 hover:underline text-[10px] font-black uppercase ml-1"
-                                        >
-                                            History
-                                        </button>
-                                    </div>
-                                )}
-
-                                {hasSignals && (
-                                    <div className="flex items-center gap-1.5 bg-violet-50 text-violet-800 border border-violet-100 px-2.5 py-1 rounded-lg font-bold">
-                                        <GitMerge size={13} className="text-violet-600" />
-                                        <span>{allPeople.length} people · {allCorps.length} corps · {allAddresses.length} addrs</span>
-                                    </div>
                                 )}
                             </div>
+                            {networkLabel && (
+                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider truncate mt-0.5" title={networkLabel}>
+                                    {networkLabel}
+                                </p>
+                            )}
+                        </div>
+                    </div>
 
+                    {/* Right action buttons */}
+                    <div className="flex items-center gap-1.5 ml-auto flex-wrap">
+                        {onOpenFeedback && (
                             <button
-                                onClick={() => setIsCompactLayout(false)}
-                                className="text-[10px] font-bold text-slate-500 hover:text-slate-800 uppercase tracking-wider underline ml-auto"
+                                onClick={() => onOpenFeedback({
+                                    id: managerName,
+                                    name: managerName,
+                                    type: 'Network',
+                                    city: 'CT'
+                                })}
+                                className="px-2 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-lg text-[10px] font-extrabold uppercase tracking-wider transition-all flex items-center gap-1 shrink-0"
+                                title="Report a data error, wrong landlord grouping, or missing detail"
                             >
-                                Expand Full Dashboard
+                                <ShieldAlert size={12} className="text-amber-600 shrink-0" />
+                                <span className="hidden sm:inline">Wrong?</span>
+                            </button>
+                        )}
+
+                        <div className="relative group">
+                            <button
+                                onClick={parcelsCount >= 10 ? handleOpenReportModal : undefined}
+                                disabled={parcelsCount < 10}
+                                className={`flex items-center gap-1 text-[10px] font-bold transition-all uppercase tracking-widest px-2.5 py-1.5 rounded-lg border shrink-0 ${
+                                    parcelsCount >= 10
+                                        ? 'text-amber-800 hover:text-amber-900 bg-amber-50 hover:bg-amber-100 border-amber-200 cursor-pointer font-extrabold'
+                                        : 'text-slate-400 bg-slate-50 border-slate-200 cursor-not-allowed opacity-50 font-normal'
+                                }`}
+                                title={parcelsCount < 10 ? `AI Reports require 10+ parcels (currently ${parcelsCount})` : ''}
+                            >
+                                <Sparkles size={11} className="shrink-0 text-amber-500" />
+                                <span>AI Report</span>
                             </button>
                         </div>
-                    );
-                }
 
-                const topCols = hasCodeSummary ? "grid-cols-1 md:grid-cols-3" : "grid-cols-1 md:grid-cols-2";
+                        {onExport && (
+                            <button
+                                onClick={onExport}
+                                className="flex items-center gap-1 text-[10px] font-bold transition-all uppercase tracking-widest px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 hover:text-slate-900"
+                            >
+                                <FileText size={11} className="shrink-0 text-slate-500" />
+                                <span className="hidden sm:inline">Export</span>
+                            </button>
+                        )}
+                    </div>
+                </section>
 
-                return (
-                    <>
-                    <div className={`grid ${topCols} gap-2 mt-2 items-start`}>
+                {/* Mobile Tab switcher (hidden on desktop where panels are side-by-side) */}
+                {featureNav && (
+                    <div className="pt-2 border-t border-slate-100 mt-2 lg:hidden">
+                        {featureNav}
+                    </div>
+                )}
+            </div>
+
+            {/* Normal Analytics Cards */}
+            {(() => {
+                            const sigs = networkData.connection_signals || {};
+                            const allPeople = sigs.people || [];
+                            const allCorps = sigs.corps || [];
+                            const allAddresses = sigs.addresses || [];
+                            const hasSignals = allPeople.length > 0 || allCorps.length > 0 || allAddresses.length > 0;
+
+                            const displayedPeople = expandedSigs.people ? allPeople : allPeople.slice(0, 5);
+                            const hasMorePeople = allPeople.length > 5;
+                            const displayedCorps = expandedSigs.corps ? allCorps : allCorps.slice(0, 5);
+                            const hasMoreCorps = allCorps.length > 5;
+                            const displayedAddresses = expandedSigs.addresses ? allAddresses : allAddresses.slice(0, 5);
+                            const hasMoreAddresses = allAddresses.length > 5;
+
+                            const topCols = hasCodeSummary ? "grid-cols-1 md:grid-cols-3" : "grid-cols-1 md:grid-cols-2";
+
+                            return (
+                                <div className="flex flex-col gap-2 mt-2">
+                                    <div className={`grid ${topCols} gap-2 items-start`}>
                         <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-sm flex flex-col self-start">
                             <div>
                                 <div className="flex items-center gap-2 mb-2">
@@ -775,7 +735,7 @@ export default function NetworkProfileCard({
                                                             txFilter === 'acquired' ? 'bg-emerald-600 text-white shadow-sm' : 'text-emerald-700 hover:bg-emerald-50'
                                                         }`}
                                                     >
-                                                        +Acq ({txSummary.acquisitions_last_12m})
+                                                        +Acq ({txSummary?.acquisitions_last_12m ?? propertyAcquisitions.length})
                                                     </button>
                                                     <button
                                                         onClick={() => setTxFilter('disposed')}
@@ -783,18 +743,18 @@ export default function NetworkProfileCard({
                                                             txFilter === 'disposed' ? 'bg-rose-600 text-white shadow-sm' : 'text-rose-700 hover:bg-rose-50'
                                                         }`}
                                                     >
-                                                        -Disp ({txSummary.dispositions_last_12m})
+                                                        -Disp ({txSummary?.dispositions_last_12m ?? 0})
                                                     </button>
                                                 </div>
                                             </div>
 
                                             <div className="grid grid-cols-3 gap-2 mb-2">
                                                 <div className="rounded-lg bg-emerald-50 border border-emerald-100 px-2 py-1 text-center">
-                                                    <div className="text-base font-black text-emerald-700 leading-none">{txSummary.acquisitions_last_12m}</div>
+                                                    <div className="text-base font-black text-emerald-700 leading-none">{txSummary?.acquisitions_last_12m ?? propertyAcquisitions.length}</div>
                                                     <div className="text-[8px] font-bold text-emerald-600 uppercase mt-0.5">Acquired</div>
                                                 </div>
                                                 <div className="rounded-lg bg-rose-50 border border-rose-100 px-2 py-1 text-center">
-                                                    <div className="text-base font-black text-rose-700 leading-none">{txSummary.dispositions_last_12m}</div>
+                                                    <div className="text-base font-black text-rose-700 leading-none">{txSummary?.dispositions_last_12m ?? 0}</div>
                                                     <div className="text-[8px] font-bold text-rose-500 uppercase mt-0.5">Disposed</div>
                                                 </div>
                                                 <div className={`rounded-lg border px-2 py-1 text-center ${
@@ -820,8 +780,8 @@ export default function NetworkProfileCard({
                                                         </button>
                                                     </div>
 
-                                                    <div className="space-y-1 max-h-[90px] overflow-y-auto pr-1">
-                                                        {filteredInCardTxns.slice(0, 3).map((txn, i) => {
+                                                    <div className="space-y-1 max-h-52 overflow-y-auto overscroll-contain [scrollbar-gutter:stable] pr-1">
+                                                        {filteredInCardTxns.slice(0, 6).map((txn, i) => {
                                                             const isAcq = txn.direction === 'acquired';
                                                             const isDisp = txn.direction === 'disposed';
                                                             const isIntra = txn.scope === 'intra_network' || txn.direction === 'reshuffle';
@@ -908,10 +868,12 @@ export default function NetworkProfileCard({
                                 </div>
 
                                 <div className="space-y-1.5">
-                                    <div className="flex items-center justify-between text-xs border-b border-slate-100 pb-1.5">
-                                        <span className="text-slate-500 font-medium">Last 12 Months:</span>
-                                        <span className="font-bold text-slate-800">{evictionsLast12m.toLocaleString()} filings</span>
-                                    </div>
+                                    {evictionSummary.evictions_last_365d != null && (
+                                        <div className="flex items-center justify-between text-xs border-b border-slate-100 pb-1.5">
+                                            <span className="text-slate-500 font-medium">Last 12 Months:</span>
+                                            <span className="font-bold text-slate-800">{evictionsLast12m.toLocaleString()} filings</span>
+                                        </div>
+                                    )}
                                     <div className="flex items-center justify-between text-xs border-b border-slate-100 pb-1.5">
                                         <span className="text-slate-500 font-medium">Trend:</span>
                                         <span className="font-bold text-slate-700 bg-slate-50 border border-slate-200 px-1.5 py-0.5 rounded-md text-[10px]">
@@ -944,7 +906,11 @@ export default function NetworkProfileCard({
                                         <div className="p-1.5 rounded-lg bg-red-50 text-red-600">
                                             <ShieldAlert size={14} />
                                         </div>
-                                        <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Hartford Code</span>
+                                        <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                                            {codeSummary.municipality && codeSummary.municipality.toUpperCase() !== 'HARTFORD'
+                                                ? (codeSummary.source_label || `${codeSummary.municipality} Code`)
+                                                : 'Hartford Code'}
+                                        </span>
                                     </div>
 
                                     <div className="flex items-baseline gap-2 mb-2">
@@ -961,10 +927,12 @@ export default function NetworkProfileCard({
                                                 {(codeSummary.open_records || 0).toLocaleString()} open
                                             </span>
                                         </div>
-                                        <div className="flex items-center justify-between text-xs border-b border-slate-100 pb-1.5">
-                                            <span className="text-slate-500 font-medium">Last 12 Months:</span>
-                                            <span className="font-bold text-slate-800">{(codeSummary.records_last_365d || 0).toLocaleString()} records</span>
-                                        </div>
+                                        {codeSummary.records_last_365d != null && (
+                                            <div className="flex items-center justify-between text-xs border-b border-slate-100 pb-1.5">
+                                                <span className="text-slate-500 font-medium">Last 12 Months:</span>
+                                                <span className="font-bold text-slate-800">{(codeSummary.records_last_365d || 0).toLocaleString()} records</span>
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
                             </div>
@@ -1009,7 +977,7 @@ export default function NetworkProfileCard({
                                                     className="text-[9.5px] font-semibold px-2 py-0.5 rounded-full bg-white text-violet-800 border border-violet-200 hover:bg-violet-100 hover:border-violet-300 transition-all cursor-pointer shadow-2xs"
                                                     title={`Click to filter network by principal ${p}`}
                                                 >
-                                                    {p}
+                                                    {formatDisplayName(p)}
                                                 </button>
                                             ))}
                                         </div>
@@ -1039,7 +1007,7 @@ export default function NetworkProfileCard({
                                                     className="text-[9.5px] font-semibold px-2 py-0.5 rounded-full bg-white text-indigo-800 border border-indigo-200 hover:bg-indigo-100 hover:border-indigo-300 transition-all cursor-pointer shadow-2xs"
                                                     title={`Click to filter network by corporation ${c}`}
                                                 >
-                                                    {c}
+                                                    {formatDisplayName(c)}
                                                 </button>
                                             ))}
                                         </div>
@@ -1078,9 +1046,10 @@ export default function NetworkProfileCard({
                             </div>
                         </div>
                     )}
-                    </>
-                );
-            })()}
+                </div>
+            );
+                        })()}
+                    </div>
 
             {/* AI Report Modal */}
             {showReport && (

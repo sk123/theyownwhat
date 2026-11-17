@@ -27,17 +27,35 @@ from psycopg2.extras import RealDictCursor, execute_values
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from api.shared_utils import looks_like_business_name, normalize_owner_name
+from api.shared_utils import (
+    extract_owner_family_key,
+    is_excluded_third_party_address,
+    is_excluded_third_party_entity,
+    is_registrar_address,
+    load_registrar_address_substrings,
+    looks_like_business_name,
+    looks_like_person_owner,
+    normalize_mailing_address,
+    normalize_mailing_address_coarse,
+    normalize_owner_name,
+    normalize_person_name,
+    strip_benign_care_of_prefix,
+)
 
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
-OWNER_ADDRESS_MAX_DISTINCT_OWNERS = 12
+OWNER_ADDRESS_MAX_DISTINCT_OWNERS = 10
+OWNER_COARSE_BUILDING_MAX_FAMILIES = 12
+PO_BOX_MAX_OWNER_FAMILIES = 4
 LOGGER = logging.getLogger("nj-networks")
 
 GENERIC_OWNER_NAMES = {
     "",
     "UNKNOWN",
     "UNKNOWN OWNER",
+    "CURRENT OWNER",
+    "OCCUPANT",
+    "REFERENCE ONLY",
     "NO INFORMATION PROVIDED",
     "NOT PROVIDED",
     "N/A",
@@ -56,12 +74,20 @@ PUBLIC_ENTITY_KEYWORDS = {
     "STATE OF NEW JERSEY",
     "STATE OF NJ",
     "UNITED STATES",
+    "SECRETARY OF HOUSING",
+    "SECRETARY OF VETERANS",
+    "FANNIE MAE",
+    "FREDDIE MAC",
     "HOUSING AUTHORITY",
+    "REDEVELOPMENT",
+    "LAND BANK",
     "BOARD OF EDUCATION",
     "SCHOOL DISTRICT",
     "RUTGERS UNIVERSITY",
     "MONTCLAIR STATE UNIVERSITY",
     "PORT AUTHORITY",
+    "NEW JERSEY TRANSIT",
+    "NJ TRANSIT",
 }
 
 
@@ -97,8 +123,11 @@ def get_conn():
 
 
 def is_public_or_generic_owner(name: Optional[str]) -> bool:
-    norm = normalize_owner_name(name or "")
+    raw = (name or "").strip()
+    norm = normalize_owner_name(raw)
     if norm in GENERIC_OWNER_NAMES:
+        return True
+    if is_excluded_third_party_entity(raw) or is_excluded_third_party_entity(norm):
         return True
     return any(keyword in norm for keyword in PUBLIC_ENTITY_KEYWORDS)
 
@@ -122,7 +151,26 @@ def network_key_for(root_bbl: str) -> str:
     return f"network_nj_{clean}"
 
 
+def ensure_nj_oc_columns(conn) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            ALTER TABLE nj_properties ADD COLUMN IF NOT EXISTS owner_co_name TEXT;
+            ALTER TABLE nj_properties ADD COLUMN IF NOT EXISTS owner_is_truncated BOOLEAN DEFAULT FALSE;
+            ALTER TABLE nj_properties ADD COLUMN IF NOT EXISTS mailing_address_coarse TEXT;
+            ALTER TABLE nj_properties ADD COLUMN IF NOT EXISTS mailing_state TEXT;
+            ALTER TABLE nj_properties ADD COLUMN IF NOT EXISTS last_sale_date DATE;
+            ALTER TABLE nj_properties ADD COLUMN IF NOT EXISTS oc_jurisdiction_code TEXT;
+            ALTER TABLE nj_properties ADD COLUMN IF NOT EXISTS oc_company_number TEXT;
+            ALTER TABLE nj_properties ADD COLUMN IF NOT EXISTS oc_match_tier SMALLINT;
+            ALTER TABLE nj_properties ADD COLUMN IF NOT EXISTS oc_match_confidence NUMERIC(4,3);
+            """
+        )
+    conn.commit()
+
+
 def load_properties(conn) -> List[dict]:
+    ensure_nj_oc_columns(conn)
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(
             """
@@ -137,7 +185,11 @@ def load_properties(conn) -> List[dict]:
                 county,
                 municipality,
                 units_res,
-                bhi_registration_no
+                bhi_registration_no,
+                oc_jurisdiction_code,
+                oc_company_number,
+                oc_match_tier,
+                oc_match_confidence
             FROM nj_properties
             WHERE bbl IS NOT NULL
             """
@@ -145,28 +197,85 @@ def load_properties(conn) -> List[dict]:
         return [dict(row) for row in cur.fetchall()]
 
 
-def build_groups(properties: Iterable[dict]) -> tuple[Dict[str, List[dict]], dict]:
-    props = [p for p in properties if p.get("bbl")]
+def build_groups(
+    properties: Iterable[dict],
+    registrar_substrings: Optional[tuple] = None,
+    oc_principals_by_key: Optional[Dict[tuple, dict]] = None,
+) -> tuple[Dict[str, List[dict]], dict]:
+    all_props = [p for p in properties if p.get("bbl")]
+    excluded_coarse_counts: Dict[str, int] = defaultdict(int)
+    props: List[dict] = []
+    excluded_parcels = 0
+    oc_map = oc_principals_by_key or {}
+    attorney_re = re.compile(r"\b(?:ESQ|ESQUIRE|CPA|C\.P\.A\.|ATTORNEY)\b", re.IGNORECASE)
+
+    for prop in all_props:
+        raw_owner = (prop.get("owner_name") or "").strip()
+        owner_norm = normalize_owner_name(prop.get("owner_name_norm") or raw_owner)
+        prop["owner_name_norm"] = owner_norm
+        raw_mail = (prop.get("mailing_address") or "").strip()
+        clean_mail = strip_benign_care_of_prefix(raw_mail)
+        address_norm = (prop.get("mailing_address_norm") or normalize_mailing_address(clean_mail) or "").strip()
+        coarse_mail = normalize_mailing_address_coarse(clean_mail)
+        prop["mailing_address_norm"] = address_norm
+        prop["_coarse_mail"] = coarse_mail
+
+        if not owner_norm or is_public_or_generic_owner(raw_owner) or is_public_or_generic_owner(owner_norm):
+            excluded_parcels += 1
+            if coarse_mail:
+                excluded_coarse_counts[coarse_mail] += 1
+            continue
+        props.append(prop)
+
+    contaminated_coarse = {c for c, cnt in excluded_coarse_counts.items() if cnt >= 2}
+
     uf = UnionFind()
     for prop in props:
         uf.add(prop["bbl"])
 
     by_owner: Dict[str, List[str]] = defaultdict(list)
     by_owner_address: Dict[str, List[str]] = defaultdict(list)
-    address_owners: Dict[str, set] = defaultdict(set)
+    address_families: Dict[str, set] = defaultdict(set)
+    coarse_families: Dict[str, set] = defaultdict(set)
+    addr_to_coarse: Dict[str, str] = {}
+    by_oc_entity: Dict[tuple, List[str]] = defaultdict(list)
+    oc_entity_fams: Dict[tuple, set] = defaultdict(set)
+    by_oc_human: Dict[str, List[str]] = defaultdict(list)
+    oc_human_fams: Dict[str, set] = defaultdict(set)
 
     for prop in props:
         bbl = prop["bbl"]
-        owner_norm = normalize_owner_name(prop.get("owner_name_norm") or prop.get("owner_name") or "")
-        prop["owner_name_norm"] = owner_norm
-        address_norm = (prop.get("mailing_address_norm") or "").strip()
-        prop["mailing_address_norm"] = address_norm
+        owner_norm = prop["owner_name_norm"]
+        family = extract_owner_family_key(prop.get("owner_name")) or owner_norm
+        raw_mail = prop.get("mailing_address") or ""
+        address_norm = prop["mailing_address_norm"]
+        coarse_mail = prop.get("_coarse_mail") or ""
 
-        if owner_norm and not is_public_or_generic_owner(owner_norm):
-            by_owner[owner_norm].append(bbl)
-            if not is_generic_address(address_norm):
-                by_owner_address[address_norm].append(bbl)
-                address_owners[address_norm].add(owner_norm)
+        by_owner[owner_norm].append(bbl)
+        if (
+            not is_generic_address(address_norm)
+            and (not coarse_mail or coarse_mail not in contaminated_coarse)
+            and not is_excluded_third_party_address(raw_mail, address_norm, registrar_substrings or ())
+        ):
+            by_owner_address[address_norm].append(bbl)
+            address_families[address_norm].add(family)
+            if coarse_mail:
+                addr_to_coarse[address_norm] = coarse_mail
+                coarse_families[coarse_mail].add(family)
+
+        oj, oc = prop.get("oc_jurisdiction_code"), prop.get("oc_company_number")
+        if oj and oc:
+            okey = (oj, oc)
+            by_oc_entity[okey].append(bbl)
+            oc_entity_fams[okey].add(family)
+            oc_info = oc_map.get(okey) or {}
+            for h_raw in oc_info.get("humans") or ():
+                if attorney_re.search(h_raw) or is_public_or_generic_owner(h_raw):
+                    continue
+                h_norm = normalize_person_name(h_raw)
+                if h_norm and len(h_norm.split()) >= 2:
+                    by_oc_human[h_norm].append(bbl)
+                    oc_human_fams[h_norm].add(family)
 
     for bbls in by_owner.values():
         anchor = bbls[0]
@@ -175,29 +284,68 @@ def build_groups(properties: Iterable[dict]) -> tuple[Dict[str, List[dict]], dic
 
     skipped_address_links = 0
     for address_norm, bbls in by_owner_address.items():
-        if len(address_owners[address_norm]) > OWNER_ADDRESS_MAX_DISTINCT_OWNERS:
+        is_po_box = address_norm.upper().startswith("PO BOX ")
+        max_fine = PO_BOX_MAX_OWNER_FAMILIES if is_po_box else OWNER_ADDRESS_MAX_DISTINCT_OWNERS
+        fam_cnt = len(address_families[address_norm])
+        coarse_key = addr_to_coarse.get(address_norm)
+        coarse_cnt = len(coarse_families[coarse_key]) if coarse_key else fam_cnt
+        if fam_cnt > max_fine or coarse_cnt > OWNER_COARSE_BUILDING_MAX_FAMILIES:
             skipped_address_links += 1
             continue
         anchor = bbls[0]
         for bbl in bbls[1:]:
             uf.union(anchor, bbl)
 
+    oc_entity_merges = 0
+    for okey, bbls in by_oc_entity.items():
+        if len(bbls) >= 2 and len(oc_entity_fams[okey]) <= 40:
+            anchor = bbls[0]
+            for bbl in bbls[1:]:
+                if uf.find(anchor) != uf.find(bbl):
+                    uf.union(anchor, bbl)
+                    oc_entity_merges += 1
+
+    oc_human_merges = 0
+    for h_norm, bbls in by_oc_human.items():
+        if len(bbls) >= 2 and len(oc_human_fams[h_norm]) <= 25:
+            anchor = bbls[0]
+            for bbl in bbls[1:]:
+                if uf.find(anchor) != uf.find(bbl):
+                    uf.union(anchor, bbl)
+                    oc_human_merges += 1
+
     groups: Dict[str, List[dict]] = defaultdict(list)
     for prop in props:
         groups[uf.find(prop["bbl"])].append(prop)
 
+    from api.oc_linker import cluster_with_oc_and_series
+    groups_merged, oc_series_merges = cluster_with_oc_and_series(
+        props,
+        dict(groups),
+        oc_map,
+        is_public_fn=is_public_or_generic_owner,
+        generic_owner_names=GENERIC_OWNER_NAMES,
+    )
+
     metadata = {
-        "properties_loaded": len(props),
+        "properties_loaded": len(all_props),
+        "excluded_third_party_properties": excluded_parcels,
         "owner_signal_count": len(by_owner),
         "owner_address_signal_count": len(by_owner_address),
         "skipped_high_cardinality_owner_addresses": skipped_address_links,
         "owner_address_max_distinct_owners": OWNER_ADDRESS_MAX_DISTINCT_OWNERS,
+        "oc_entity_merges": oc_entity_merges + oc_series_merges,
+        "oc_human_principal_merges": oc_human_merges,
     }
-    return groups, metadata
+    return groups_merged, metadata
 
 
-def format_network_rows(groups: Dict[str, List[dict]]) -> List[tuple]:
+def format_network_rows(
+    groups: Dict[str, List[dict]],
+    oc_principals_by_key: Optional[Dict[tuple, dict]] = None,
+) -> List[tuple]:
     rows = []
+    oc_map = oc_principals_by_key or {}
     for root_bbl, group in groups.items():
         owner_counts = Counter(p.get("owner_name") or "Unknown owner" for p in group)
         display_name = owner_counts.most_common(1)[0][0]
@@ -211,14 +359,44 @@ def format_network_rows(groups: Dict[str, List[dict]]) -> List[tuple]:
         borough_summary = Counter(p.get("county") or "UNKNOWN" for p in group)
         unit_count = sum(int(float(p.get("units_res") or 0)) for p in group)
 
+        human_counts: Counter[str] = Counter()
+        holding_entities: set[str] = set()
+        oc_ids: set[str] = set()
+        for p in group:
+            onm = (p.get("owner_name") or "").strip()
+            if onm and looks_like_person_owner(onm):
+                human_counts[onm] += 2
+            oj, oc = p.get("oc_jurisdiction_code"), p.get("oc_company_number")
+            if oj and oc:
+                oc_ids.add(f"{oj}/{oc}")
+                info = oc_map.get((oj, oc)) or {}
+                for h_nm in info.get("humans") or ():
+                    if not is_public_or_generic_owner(h_nm):
+                        human_counts[h_nm] += 1
+                for he in info.get("holding_entities") or ():
+                    if not is_public_or_generic_owner(he):
+                        holding_entities.add(he)
+
+        source_humans = [nm for nm, _ in sorted(human_counts.items(), key=lambda x: (-x[1], x[0]))]
+        primary_human = source_humans[0] if source_humans else None
+
+        linking_signals = ["primary_owner_name", "primary_owner_mailing_address"]
+        if oc_ids:
+            linking_signals.append("opencorporates_registry_graph")
+
         connection_signals = {
-            "source_scope": "NJ DCA BHI registered active buildings",
+            "source_scope": "NJ DCA BHI registered active buildings + OpenCorporates corporate filings",
             "owner_names": member_names[:50],
             "owner_name_count": len(member_names),
             "owner_mailing_address_count": len(member_addresses),
             "authorized_agents_observed": agent_names[:50],
             "authorized_agents_not_used_for_linking": True,
-            "linking_signals": ["primary_owner_name", "primary_owner_mailing_address"],
+            "source_human_names": source_humans[:25],
+            "primary_human_name": primary_human,
+            "principal_status": "source_listed_person" if primary_human else "unresolved_entity",
+            "oc_company_ids": sorted(oc_ids)[:25],
+            "oc_holding_entities": sorted(holding_entities)[:20],
+            "linking_signals": linking_signals,
         }
 
         rows.append(
@@ -266,9 +444,46 @@ def build_nj_networks(conn=None):
     assert conn is not None
     try:
         update_status(conn, "running", {"message": "Rebuilding NJ BHI owner networks"})
+        ensure_nj_oc_columns(conn)
+        oc_stats = {"evaluated": 0, "matched": 0}
+        try:
+            from api.oc_linker import link_jurisdiction_parcels_to_oc, resolve_oc_company_principals
+            oc_stats = link_jurisdiction_parcels_to_oc(conn, "nj", "NJ", col_max_len=40)
+            if oc_stats.get("matched"):
+                LOGGER.info(
+                    "OpenCorporates linker matched %s / %s NJ BHI corporate buildings",
+                    f"{oc_stats['matched']:,}",
+                    f"{oc_stats['evaluated']:,}",
+                )
+        except Exception as oc_exc:
+            conn.rollback()
+            LOGGER.warning("NJ OC linking skipped: %s", oc_exc)
+
+        registrar_substrings = load_registrar_address_substrings(conn)
         properties = load_properties(conn)
-        groups, metadata = build_groups(properties)
-        rows = format_network_rows(groups)
+        matched_oc_keys = sorted(
+            {
+                (p["oc_jurisdiction_code"], p["oc_company_number"])
+                for p in properties
+                if p.get("oc_jurisdiction_code") and p.get("oc_company_number")
+            }
+        )
+        oc_principals_by_key = {}
+        if matched_oc_keys:
+            try:
+                from api.oc_linker import resolve_oc_company_principals
+                oc_principals_by_key = resolve_oc_company_principals(conn, matched_oc_keys, max_hops=3)
+            except Exception as oc_exc:
+                conn.rollback()
+                LOGGER.warning("NJ OC principal resolution skipped: %s", oc_exc)
+
+        groups, metadata = build_groups(
+            properties,
+            registrar_substrings=registrar_substrings,
+            oc_principals_by_key=oc_principals_by_key,
+        )
+        metadata["oc_matched_buildings"] = oc_stats.get("matched", 0)
+        rows = format_network_rows(groups, oc_principals_by_key=oc_principals_by_key)
         with conn.cursor() as cur:
             cur.execute("TRUNCATE TABLE nj_networks;")
             if rows:

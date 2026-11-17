@@ -15,6 +15,7 @@ services:
       - ./reporter:/app/reporter
       - ./nyc:/app/nyc
       - ./data:/app/data
+      - ./docs:/app/docs
     environment:
       - DATABASE_URL=postgresql://user:password@ctdata_db:5432/ctdata
       - OPENAI_API_KEY=${OPENAI_API_KEY}
@@ -29,6 +30,11 @@ services:
       - ALERT_EMAIL_TO=${ALERT_EMAIL_TO:-salmunk@gmail.com}
       - ALERT_EMAIL_FROM=${ALERT_EMAIL_FROM:-salmunk@gmail.com}
       - ALERT_EMAIL_PASS=${ALERT_EMAIL_PASS}
+      - AUDIT_REVIEW_SECRET=${AUDIT_REVIEW_SECRET:-}
+      - OPENCORPORATES_SFTP_HOST=${OPENCORPORATES_SFTP_HOST:-}
+      - OPENCORPORATES_SFTP_PORT=${OPENCORPORATES_SFTP_PORT:-22}
+      - OPENCORPORATES_SFTP_USER=${OPENCORPORATES_SFTP_USER:-}
+      - OPENCORPORATES_SFTP_PASSWORD=${OPENCORPORATES_SFTP_PASSWORD:-}
     command: python -m uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/api/health" ]
@@ -77,6 +83,11 @@ services:
       - ALERT_EMAIL_TO=${ALERT_EMAIL_TO:-salmunk@gmail.com}
       - ALERT_EMAIL_FROM=${ALERT_EMAIL_FROM:-salmunk@gmail.com}
       - ALERT_EMAIL_PASS=${ALERT_EMAIL_PASS}
+      - AUDIT_REVIEW_SECRET=${AUDIT_REVIEW_SECRET:-}
+      - OPENCORPORATES_SFTP_HOST=${OPENCORPORATES_SFTP_HOST:-}
+      - OPENCORPORATES_SFTP_PORT=${OPENCORPORATES_SFTP_PORT:-22}
+      - OPENCORPORATES_SFTP_USER=${OPENCORPORATES_SFTP_USER:-}
+      - OPENCORPORATES_SFTP_PASSWORD=${OPENCORPORATES_SFTP_PASSWORD:-}
     networks:
       - default
 
@@ -102,6 +113,7 @@ services:
     image: postgres:15-alpine
     container_name: ctdata_db
     restart: unless-stopped
+    command: postgres -c shared_buffers=4GB -c work_mem=32MB -c maintenance_work_mem=512MB -c effective_cache_size=16GB -c max_wal_size=4GB -c checkpoint_completion_target=0.9 -c random_page_cost=1.1
     environment:
       - POSTGRES_USER=user
       - POSTGRES_PASSWORD=password
@@ -117,7 +129,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    shm_size: 1gb
+    shm_size: 2gb
 
 networks:
   default:

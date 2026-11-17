@@ -42,13 +42,27 @@ FALLBACK_PRIORITY_TOWNS = [
     'MILFORD'
 ]
 
+# The full network rebuild (relink every property, rebuild the graph, swap the
+# tables) runs far longer than an ordinary scraper step. Killing it partway
+# leaves the live network tables stale without any obvious failure, so it gets
+# its own budget rather than the 2-hour default.
+NETWORK_REBUILD_TIMEOUT = int(os.environ.get("NETWORK_REBUILD_TIMEOUT", str(8 * 3600)))
+
+
 def run_source_only(cmd, **kwargs):
     """Run a scheduled child process with source-only mode explicitly enabled."""
     env = kwargs.pop("env", None)
+    timeout = kwargs.pop("timeout", 7200) # 2-hour default timeout to protect scheduler from infinite hangs
     child_env = os.environ.copy() if env is None else env.copy()
     child_env[SOURCE_ONLY_ENV_VAR] = "true"
-    logger.info("Executing source-only command: %s", " ".join(cmd))
-    return subprocess.run(cmd, env=child_env, **kwargs)
+    logger.info("Executing source-only command: %s (timeout=%ds)", " ".join(cmd), timeout)
+    try:
+        return subprocess.run(cmd, env=child_env, timeout=timeout, **kwargs)
+    except subprocess.TimeoutExpired:
+        logger.error(f"Command timed out after {timeout}s: {' '.join(cmd)}")
+        class TimeoutResult:
+            returncode = 124
+        return TimeoutResult()
 
 def get_dynamic_priority_towns(limit=10):
     """
@@ -131,20 +145,46 @@ def get_dynamic_priority_towns(limit=10):
         logger.error(f"Error dynamically determining priority towns: {e}. Falling back to default list.")
         return FALLBACK_PRIORITY_TOWNS
 
+def sweep_stale_locks():
+    """Sweep crashed or orphaned 'running' statuses older than 12 hours."""
+    try:
+        from updater.update_data import get_db_connection, sweep_stale_running_statuses
+        conn = get_db_connection()
+        try:
+            swept = sweep_stale_running_statuses(conn, max_age_hours=12)
+            if swept:
+                logger.warning("Swept %d stale 'running' data_source_status lock(s): %s", len(swept), swept)
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.warning("Stale running-status sweep warning: %s", e)
+
 def run_nightly_update():
     """Run nightly update for Current Owner properties in priority towns"""
     logger.info("=" * 80)
     logger.info("Starting nightly Vision data update (Parallel)")
     logger.info("=" * 80)
     
+    sweep_stale_locks()
     priority_towns = get_dynamic_priority_towns(limit=10)
     
     try:
         # 0. Refresh System Data (Businesses, Principals) & Run Network Discovery
+        # This step relinks every property and rebuilds the whole ownership graph.
+        # It outgrew the 2-hour default timeout when the NY parcel set landed, so
+        # it was being killed mid-rebuild every night and the swap never ran —
+        # leaving `networks` frozen at whatever the last completed build produced.
         logger.info("Starting System Data Refresh & Network Discovery...")
         system_refresh_cmd = [sys.executable, "updater/refresh_system_data.py"]
-        run_source_only(system_refresh_cmd, check=False)
-        logger.info("✓ System Data Refresh finished")
+        result = run_source_only(system_refresh_cmd, check=False, timeout=NETWORK_REBUILD_TIMEOUT)
+        if getattr(result, "returncode", 1) == 0:
+            logger.info("✓ System Data Refresh finished")
+        else:
+            logger.error(
+                "✘ System Data Refresh did NOT complete (exit=%s). Networks were not "
+                "rebuilt this cycle and the live tables are now stale.",
+                getattr(result, "returncode", "unknown"),
+            )
 
         # Run update_data.py as a subprocess for better isolation
         cmd = [
@@ -240,8 +280,14 @@ def run_weekly_nightly_updates():
         # Trigger safe network refresh
         logger.info("Triggering post-scrape network and insights rebuild...")
         refresh_cmd = [sys.executable, "api/safe_network_refresh.py"]
-        run_source_only(refresh_cmd, check=False)
-        logger.info("✓ Post-scrape rebuild finished.")
+        rebuild = run_source_only(refresh_cmd, check=False, timeout=NETWORK_REBUILD_TIMEOUT)
+        if getattr(rebuild, "returncode", 1) == 0:
+            logger.info("✓ Post-scrape rebuild finished.")
+        else:
+            logger.error(
+                "✘ Post-scrape network rebuild did NOT complete (exit=%s).",
+                getattr(rebuild, "returncode", "unknown"),
+            )
         logger.info("✓ Weekly update process finished successfully.")
     except Exception as e:
         logger.error(f"✘ Weekly update failed: {e}")
@@ -284,8 +330,14 @@ def run_monthly_other_updates():
         # Trigger safe network refresh
         logger.info("Triggering post-scrape network and insights rebuild...")
         refresh_cmd = [sys.executable, "api/safe_network_refresh.py"]
-        run_source_only(refresh_cmd, check=False)
-        logger.info("✓ Post-scrape rebuild finished.")
+        rebuild = run_source_only(refresh_cmd, check=False, timeout=NETWORK_REBUILD_TIMEOUT)
+        if getattr(rebuild, "returncode", 1) == 0:
+            logger.info("✓ Post-scrape rebuild finished.")
+        else:
+            logger.error(
+                "✘ Post-scrape network rebuild did NOT complete (exit=%s).",
+                getattr(rebuild, "returncode", "unknown"),
+            )
         logger.info("✓ Monthly update process finished successfully.")
     except Exception as e:
         logger.error(f"✘ Monthly update failed: {e}")
@@ -310,6 +362,7 @@ def run_nightly_nyc_update():
 
     steps = [
         ("HPD Registrations + Contacts + PLUTO ingestion", [sys.executable, "-m", "nyc.ingest_hpd"]),
+        ("NY DOS Active Corporations untangling enrichment", [sys.executable, "-m", "nyc.enrich_ny_dos", "--limit-corps", "800"]),
         ("HPD Violations / Litigations / Evictions enrichment", [sys.executable, "-m", "nyc.enrich_hpd"]),
         ("NYC Ownership Network rebuild",                    [sys.executable, "-m", "nyc.build_nyc_networks"]),
         ("NHPD subsidy + rent-stabilization enrichment",    [sys.executable, "-m", "nyc.enrich_nhpd"]),
@@ -363,30 +416,28 @@ def run_nightly_other_cities_update():
     logger.info("=" * 80)
     logger.info("Checking nightly multi-city source-only update hook")
     logger.info("=" * 80)
-    try:
-        cmd = [sys.executable, "updater/update_cities.py"]
-        result = run_source_only(cmd, check=False)
-        if result.returncode == 0:
-            logger.info("✓ Multi-city updates finished.")
-        else:
-            logger.warning(f"⚠ Multi-city updates exited with code {result.returncode}.")
-        logger.info("Starting source-backed multi-city enforcement enrichment...")
-        run_city_enforcement_enrichment()
-        logger.info("Starting Detroit enforcement and compliance enrichment...")
-        run_detroit_enrichment()
-        logger.info("Starting official Maryland eviction event ingest...")
-        run_maryland_eviction_ingest()
-        logger.info("Starting NHPD subsidy enrichment...")
-        nhpd_cmd = [sys.executable, "scripts/enrich_all_cities_nhpd.py"]
-        run_source_only(nhpd_cmd, check=False)
-        logger.info("Starting Connecticut NHPD subsidy enrichment...")
-        ct_nhpd_cmd = [sys.executable, "scripts/import_nhpd.py"]
-        run_source_only(ct_nhpd_cmd, check=False)
-        logger.info("Starting DC CAMA enrichment...")
-        dc_cama_cmd = [sys.executable, "scripts/enrich_dc_cama.py"]
-        run_source_only(dc_cama_cmd, check=False)
-    except Exception as e:
-        logger.error(f"✘ Multi-city updates crashed: {e}")
+    
+    steps = [
+        ("Stale running-status lock sweep", sweep_stale_locks),
+        ("Multi-city property updates", lambda: run_source_only([sys.executable, "updater/update_cities.py"], check=False)),
+        ("DC DLCP Basic Business Rental Licenses & untangling", lambda: run_source_only([sys.executable, "updater/enrich_dc_licenses.py"], check=False)),
+        ("Baltimore DHCD Rental Registrations & Licenses", lambda: run_source_only([sys.executable, "updater/enrich_baltimore_registrations.py"], check=False)),
+        ("Multi-city enforcement enrichment", run_city_enforcement_enrichment),
+        ("Detroit enforcement and compliance enrichment", run_detroit_enrichment),
+        ("Official Maryland eviction event ingest", run_maryland_eviction_ingest),
+        ("Multi-city NHPD subsidy enrichment", lambda: run_source_only([sys.executable, "scripts/enrich_all_cities_nhpd.py"], check=False)),
+        ("Connecticut NHPD subsidy enrichment", lambda: run_source_only([sys.executable, "scripts/import_nhpd.py"], check=False)),
+        ("DC CAMA enrichment", lambda: run_source_only([sys.executable, "scripts/enrich_dc_cama.py"], check=False)),
+    ]
+
+    for label, fn in steps:
+        try:
+            logger.info(f"Starting {label}...")
+            fn()
+            logger.info(f"✓ {label} finished.")
+        except Exception as e:
+            logger.error(f"✘ {label} failed: {e}")
+
     logger.info("=" * 80)
 
 def run_weekly_other_cities_full_scan():
@@ -396,30 +447,28 @@ def run_weekly_other_cities_full_scan():
     logger.info("=" * 80)
     logger.info("Starting weekly FULL multi-city (D.C., Baltimore, Boston, Detroit, Philadelphia) data update & network rebuild")
     logger.info("=" * 80)
-    try:
-        cmd = [sys.executable, "updater/update_cities.py", "--full"]
-        result = run_source_only(cmd, check=False)
-        if result.returncode == 0:
-            logger.info("✓ Weekly full multi-city updates finished.")
-        else:
-            logger.warning(f"⚠ Weekly full multi-city updates exited with code {result.returncode}.")
-        logger.info("Starting source-backed multi-city enforcement enrichment...")
-        run_city_enforcement_enrichment()
-        logger.info("Starting Detroit enforcement and compliance enrichment...")
-        run_detroit_enrichment()
-        logger.info("Starting official Maryland eviction event ingest...")
-        run_maryland_eviction_ingest()
-        logger.info("Starting NHPD subsidy enrichment...")
-        nhpd_cmd = [sys.executable, "scripts/enrich_all_cities_nhpd.py"]
-        run_source_only(nhpd_cmd, check=False)
-        logger.info("Starting Connecticut NHPD subsidy enrichment...")
-        ct_nhpd_cmd = [sys.executable, "scripts/import_nhpd.py"]
-        run_source_only(ct_nhpd_cmd, check=False)
-        logger.info("Starting DC CAMA enrichment...")
-        dc_cama_cmd = [sys.executable, "scripts/enrich_dc_cama.py"]
-        run_source_only(dc_cama_cmd, check=False)
-    except Exception as e:
-        logger.error(f"✘ Weekly full multi-city updates crashed: {e}")
+    
+    steps = [
+        ("Stale running-status lock sweep", sweep_stale_locks),
+        ("Weekly full multi-city updates", lambda: run_source_only([sys.executable, "updater/update_cities.py", "--full"], check=False)),
+        ("DC DLCP Basic Business Rental Licenses & untangling", lambda: run_source_only([sys.executable, "updater/enrich_dc_licenses.py"], check=False)),
+        ("Baltimore DHCD Rental Registrations & Licenses", lambda: run_source_only([sys.executable, "updater/enrich_baltimore_registrations.py"], check=False)),
+        ("Multi-city enforcement enrichment", run_city_enforcement_enrichment),
+        ("Detroit enforcement and compliance enrichment", run_detroit_enrichment),
+        ("Official Maryland eviction event ingest", run_maryland_eviction_ingest),
+        ("Multi-city NHPD subsidy enrichment", lambda: run_source_only([sys.executable, "scripts/enrich_all_cities_nhpd.py"], check=False)),
+        ("Connecticut NHPD subsidy enrichment", lambda: run_source_only([sys.executable, "scripts/import_nhpd.py"], check=False)),
+        ("DC CAMA enrichment", lambda: run_source_only([sys.executable, "scripts/enrich_dc_cama.py"], check=False)),
+    ]
+
+    for label, fn in steps:
+        try:
+            logger.info(f"Starting {label}...")
+            fn()
+            logger.info(f"✓ {label} finished.")
+        except Exception as e:
+            logger.error(f"✘ {label} failed: {e}")
+
     logger.info("=" * 80)
 
 def run_nightly_nj_update():
@@ -478,16 +527,136 @@ def run_daily_usage_report():
         logger.error(f"✘ Daily usage report crashed: {e}")
     logger.info("=" * 80)
 
+def run_scheduled_jurisdiction_optimization():
+    """Ledger-driven jurisdiction rotation & functional/data-reality optimization battery.
+    Runs nightly during Cycle 1 (until all 6 cohorts complete) and weekly from Cycle 2 onward."""
+    logger.info("=" * 80)
+    logger.info("Checking Scheduled Jurisdiction Optimization Battery (--cohort due --if-due)")
+    logger.info("=" * 80)
+    try:
+        cmd = [
+            sys.executable,
+            "scripts/run_jurisdiction_battery.py",
+            "run",
+            "--cohort", "due",
+            "--if-due",
+            "--heal",
+            "--write-report",
+            "--advance",
+            "--send-email",
+        ]
+        result = run_source_only(cmd, check=False, timeout=3600)
+        if getattr(result, "returncode", 1) == 0:
+            logger.info("✓ Scheduled Jurisdiction Optimization Battery completed cleanly.")
+        else:
+            logger.warning(
+                "⚠ Scheduled Jurisdiction Optimization Battery exited with code %s.",
+                getattr(result, "returncode", "unknown"),
+            )
+    except Exception as e:
+        logger.error(f"✘ Scheduled Jurisdiction Optimization Battery crashed: {e}")
+    logger.info("=" * 80)
+
+def run_weekly_statewide_and_opencorporates_update():
+    """Weekly automated update path for ALL statewide OpenCorporates-linked jurisdictions
+    (`vt`, `co`, `ny`, `fl`, `wi`, `nc`, `ar`, `ma`, `va`) + OpenCorporates SFTP snapshot poller.
+    Rotates through 3 statewide GIS partitions per week (full 9-state GIS cycle every 3 weeks)
+    while polling OpenCorporates SFTP & refreshing NHPD + daily landing/completeness caches weekly."""
+    logger.info("=" * 80)
+    logger.info("Starting Weekly OpenCorporates SFTP Poll & Statewide Jurisdiction Refresh")
+    logger.info("=" * 80)
+    sweep_stale_locks()
+
+    # 1. Poll OpenCorporates SFTP for any newer dated bulk snapshot & sync OC_US_* status
+    try:
+        oc_cmd = [sys.executable, "scripts/sync_opencorporates_scheduled.py", "--poll-sftp"]
+        oc_res = run_source_only(oc_cmd, check=False, timeout=NETWORK_REBUILD_TIMEOUT)
+        if getattr(oc_res, "returncode", 1) == 0:
+            logger.info("✓ OpenCorporates SFTP check & completeness sync finished.")
+        else:
+            logger.warning("⚠ OpenCorporates SFTP check exited with code %s.", getattr(oc_res, "returncode", "unknown"))
+    except Exception as e:
+        logger.error("✘ OpenCorporates SFTP sync failed: %s", e)
+
+    # 2. Rotate 3 statewide GIS partitions per week across all 9 statewide datasets
+    cohorts = [
+        [("states", ["vt", "co", "wi"])],
+        [("states", ["ny", "nc", "ar"])],
+        [("states", ["fl"]), ("ma", None), ("va", None)],
+    ]
+    week_idx = datetime.now().isocalendar()[1] % len(cohorts)
+    for kind, payload in cohorts[week_idx]:
+        try:
+            if kind == "states" and payload:
+                cmd = [sys.executable, "states/ingest_statewide_parcels.py", "--states"] + payload
+            elif kind == "ma":
+                cmd = [sys.executable, "ma/ingest_massgis.py", "--full"]
+            elif kind == "va":
+                cmd = [sys.executable, "states/ingest_va_parcels.py", "--refresh-gdb"]
+            else:
+                continue
+            logger.info("▶ Statewide cohort refresh (week_slot=%d): %s", week_idx, " ".join(cmd))
+            res = run_source_only(cmd, check=False, timeout=NETWORK_REBUILD_TIMEOUT)
+            if getattr(res, "returncode", 1) == 0:
+                logger.info("✓ Statewide step finished: %s", " ".join(cmd))
+            else:
+                logger.warning("⚠ Statewide step exited with code %s: %s", getattr(res, "returncode", "unknown"), " ".join(cmd))
+        except Exception as e:
+            logger.error("✘ Statewide refresh step failed (%s): %s", kind, e)
+
+    # 3. Refresh NHPD subsidy overlays & landing/completeness caches across all 20 jurisdictions
+    try:
+        run_source_only([sys.executable, "scripts/enrich_all_cities_nhpd.py"], check=False, timeout=3600)
+        run_daily_landing_cache_refresh()
+    except Exception as e:
+        logger.error("✘ Post-statewide NHPD/cache refresh failed: %s", e)
+
+    logger.info("=" * 80)
+
+def run_daily_landing_cache_refresh():
+    """Daily pre-warm of cached_insights, landing_snapshot:v1 & per-city stats/top-networks kv_cache."""
+    logger.info("=" * 80)
+    logger.info("Refreshing Daily Landing Page & Jurisdiction Insights Snapshot Cache")
+    logger.info("=" * 80)
+    try:
+        ins_cmd = [sys.executable, "api/generate_insights.py"]
+        ins_res = run_source_only(ins_cmd, check=False, timeout=1800)
+        if getattr(ins_res, "returncode", 1) == 0:
+            logger.info("✓ CT cached_insights + landing_snapshot refreshed cleanly.")
+        else:
+            logger.warning("⚠ generate_insights exited with code %s; running standalone landing_cache fallback.", getattr(ins_res, "returncode", "unknown"))
+            cmd = [sys.executable, "-m", "api.landing_cache"]
+            result = run_source_only(cmd, check=False, timeout=1800)
+            if getattr(result, "returncode", 1) == 0:
+                logger.info("✓ Daily landing snapshot cache refreshed cleanly.")
+            else:
+                logger.warning("⚠ Daily landing snapshot cache refresh exited with code %s.", getattr(result, "returncode", "unknown"))
+    except Exception as e:
+        logger.error("✘ Daily landing snapshot cache refresh crashed: %s", e)
+    logger.info("=" * 80)
+
 def _daily_report_thread():
-    """Independent daemon thread for daily usage report.
-    Runs on its own schedule instance so it is never blocked by long-running
+    """Independent daemon thread for daily usage report & daily landing cache warmup.
+    Runs on its own schedule.Scheduler() instance so it is never blocked by long-running
     nightly syncs that monopolize the main schedule loop for hours."""
-    import schedule as daily_schedule  # private instance
-    daily_schedule.clear()  # ensure clean
+    daily_schedule = schedule.Scheduler()
+    daily_schedule.every().day.at("06:15").do(run_daily_landing_cache_refresh)
     daily_schedule.every().day.at("08:00").do(run_daily_usage_report)
-    logger.info("[Daily Report Thread] Started — fires at 08:00 UTC daily (independent of main loop)")
+    logger.info("[Daily Report & Cache Thread] Started — landing cache at 06:15 UTC, usage report at 08:00 UTC daily")
     while True:
         daily_schedule.run_pending()
+        time.sleep(30)
+
+def _optimization_rotation_thread():
+    """Independent daemon thread for rotating jurisdiction tests & source-only optimization.
+    Runs on its own schedule.Scheduler() instance at 11:30 UTC daily (after the 5:15 AM ET
+    Antigravity agent automation window) so multi-hour CT scrapes never starve verification
+    and --if-due acts as a zero-duplicate self-healing fallback."""
+    opt_schedule = schedule.Scheduler()
+    opt_schedule.every().day.at("11:30").do(run_scheduled_jurisdiction_optimization)
+    logger.info("[Jurisdiction Optimization Thread] Started — checks due cohort at 11:30 UTC daily")
+    while True:
+        opt_schedule.run_pending()
         time.sleep(30)
 
 def main():
@@ -498,12 +667,17 @@ def main():
     # so it fires reliably even when nightly syncs block the main loop for hours
     report_thread = threading.Thread(target=_daily_report_thread, daemon=True, name="daily-report")
     report_thread.start()
+
+    # Start the ledger-driven jurisdiction optimization battery in its own daemon thread
+    opt_thread = threading.Thread(target=_optimization_rotation_thread, daemon=True, name="jurisdiction-optimization")
+    opt_thread.start()
     
     # Schedule heavy jobs on the main loop
     schedule.every().day.at("02:00").do(run_nightly_update)
     schedule.every().day.at("03:30").do(run_nightly_nyc_update)
     schedule.every().day.at("03:45").do(run_nightly_nj_update)
     schedule.every().day.at("04:00").do(run_nightly_other_cities_update)
+    schedule.every().saturday.at("01:30").do(run_weekly_statewide_and_opencorporates_update)
     schedule.every().sunday.at("00:00").do(run_weekly_nightly_updates)
     schedule.every(30).days.at("01:00").do(run_monthly_other_updates)
     schedule.every().sunday.at("03:00").do(run_weekly_full_scan)
@@ -515,6 +689,8 @@ def main():
     logger.info("  - Nightly NYC update (HPD + enrichment + networks): 3:30 AM daily")
     logger.info("  - Nightly NJ update (BHI + networks): 3:45 AM daily")
     logger.info("  - Nightly multi-city source-only hook: 4:00 AM daily")
+    logger.info("  - Weekly OpenCorporates SFTP poll & 9-Statewide GIS rotation (VT/CO/WI/NY/NC/AR/FL/MA/VA): 1:30 AM Saturday")
+    logger.info("  - Rotating Jurisdiction Optimization Battery (Cycle 1 nightly -> Cycle 2+ weekly): 11:30 AM UTC daily [INDEPENDENT THREAD]")
     logger.info("  - Daily Server-Side Usage Analytics Email (salmunk@gmail.com): 8:00 AM daily [INDEPENDENT THREAD]")
     logger.info("  - Weekly update (Weekly/Nightly towns): 12:00 AM Sunday")
     logger.info("  - Monthly update (Other towns): 1:00 AM every 30 days")

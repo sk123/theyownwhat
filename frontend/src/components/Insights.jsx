@@ -15,6 +15,7 @@ import {
     ShieldAlert,
     Users
 } from 'lucide-react';
+import { formatDisplayName } from '../utils/formatName';
 
 const METRICS = [
     { key: 'properties', label: 'Properties', icon: Landmark, source: 'cached', valueKey: 'property_count', tone: 'blue' },
@@ -340,17 +341,21 @@ export default function Insights({ data, onSelect, activeState }) {
     const evictionDateRange = formatDateRange(dashboardSummary?.date_ranges?.evictions);
     const codeDateRange = formatDateRange(dashboardSummary?.date_ranges?.code_records);
     const summaryCards = [
-        { label: 'Networks', value: dashboardSummary?.network_count },
-        { label: 'Properties', value: dashboardSummary?.property_count },
-        { label: 'Units', value: dashboardSummary?.unit_count },
+        { label: 'Networks', value: dashboardSummary?.network_count, accentBorder: 'border-l-blue-600', valueTone: 'text-slate-950' },
+        { label: 'Properties', value: dashboardSummary?.property_count, accentBorder: 'border-l-indigo-600', valueTone: 'text-slate-950' },
+        { label: 'Units', value: dashboardSummary?.unit_count, accentBorder: 'border-l-violet-600', valueTone: 'text-slate-950' },
         {
             label: 'Evictions',
             value: dashboardSummary?.eviction_count,
+            accentBorder: 'border-l-rose-500',
+            valueTone: 'text-rose-950',
             tooltip: evictionDateRange || 'No CT Judicial eviction filing dates are loaded for this scope.'
         },
         {
             label: 'Code Records',
             value: dashboardSummary?.code_record_count,
+            accentBorder: 'border-l-amber-500',
+            valueTone: 'text-slate-950',
             tooltip: codeDateRange || `No code-enforcement date range is loaded for ${displayCity(selectedCity)}. CT code coverage currently comes from Hartford records.`
         }
     ];
@@ -380,33 +385,81 @@ export default function Insights({ data, onSelect, activeState }) {
     const MetricIcon = metric.icon;
 
     return (
-        <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-                <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-                    <div className="min-w-0">
-                        <div className="flex items-center gap-3">
-                            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white shadow-lg shadow-blue-500/20">
-                                {selectedCity === 'STATEWIDE' ? <Globe size={20} /> : <Landmark size={20} />}
+        <div className="space-y-3 animate-in fade-in slide-in-from-bottom-4 duration-300">
+            {/* 1. PROMINENT CT STATEWIDE / TOWN TOTALS HERO CARD */}
+            <section className="rounded-2xl border border-blue-200/90 bg-white shadow-md overflow-hidden ring-1 ring-blue-500/10">
+                <div className="bg-gradient-to-r from-slate-900 via-blue-950 to-indigo-950 px-4 py-2.5 text-white flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-2.5 min-w-0">
+                        <span className="inline-flex items-center gap-1.5 rounded-lg bg-blue-500/25 border border-blue-400/40 px-2.5 py-1 text-xs font-black uppercase tracking-wider text-white">
+                            {selectedCity === 'STATEWIDE' ? <Globe size={14} className="text-blue-300" /> : <Landmark size={14} className="text-blue-300" />}
+                            <span>{summaryScopeLabel}</span>
+                        </span>
+                        <p className="text-xs font-medium text-blue-100/90">
+                            {summaryDescription}
+                        </p>
+                    </div>
+                    {dashboardSummary?.town_count > 0 && selectedCity === 'STATEWIDE' && (
+                        <div className="rounded-full border border-emerald-400/40 bg-emerald-500/20 px-3 py-0.5 text-xs font-extrabold text-emerald-100 shrink-0">
+                            {fmt(dashboardSummary.town_count)} towns loaded
+                        </div>
+                    )}
+                </div>
+
+                <div className="p-3 bg-gradient-to-b from-blue-50/35 to-white grid grid-cols-2 gap-2.5 lg:grid-cols-5">
+                    {summaryCards.map(({ label, value, tooltip, accentBorder, valueTone }) => (
+                        <div
+                            key={label}
+                            className={`relative rounded-xl border border-slate-200/90 border-l-4 ${accentBorder} bg-white px-3.5 py-2.5 shadow-2xs`}
+                            title={tooltip || undefined}
+                        >
+                            <div className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider text-slate-500">
+                                <span>{label}</span>
+                                {tooltip && (
+                                    <button
+                                        type="button"
+                                        className="group/tooltip relative inline-flex items-center justify-center p-0.5 rounded text-slate-400 hover:text-blue-600 focus-visible:outline-2 focus-visible:outline-blue-600"
+                                        aria-label={`${label} date range: ${tooltip}`}
+                                    >
+                                        <Info size={12} className="cursor-help" aria-hidden="true" />
+                                        <span aria-hidden="true" className="pointer-events-none absolute left-1/2 top-full z-20 mt-2 w-56 -translate-x-1/2 rounded-lg bg-slate-950 px-3 py-2 text-left text-[11px] font-semibold normal-case leading-4 tracking-normal text-white opacity-0 shadow-xl transition-opacity group-hover/tooltip:opacity-100 group-focus-visible/tooltip:opacity-100">
+                                            {tooltip}
+                                        </span>
+                                    </button>
+                                )}
                             </div>
-                            <div className="min-w-0">
-                                <h3 className="text-2xl font-black tracking-tight text-slate-950">
-                                    CT Network Explorer
-                                </h3>
-                                <p className="mt-0.5 text-xs font-semibold text-slate-500">
-                                    Ranking {displayCity(selectedCity)} by {metric.label.toLowerCase()}. {metricHint(metric, selectedCity)}
-                                </p>
+                            <div className={`mt-0.5 text-xl sm:text-2xl font-black tabular-nums tracking-tight ${valueTone}`}>
+                                {fmtOrDash(value)}
                             </div>
+                        </div>
+                    ))}
+                </div>
+            </section>
+
+            {/* 2. COMPACT CT NETWORK EXPLORER CONTROLS */}
+            <section className="rounded-xl border border-slate-200 bg-white p-3 shadow-xs">
+                <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-600 text-white shadow-sm">
+                            {selectedCity === 'STATEWIDE' ? <Globe size={16} /> : <Landmark size={16} />}
+                        </div>
+                        <div className="min-w-0">
+                            <h3 className="text-base sm:text-lg font-black tracking-tight text-slate-950 leading-tight">
+                                CT Network Explorer
+                            </h3>
+                            <p className="text-[11px] font-medium text-slate-500 truncate">
+                                Ranking {displayCity(selectedCity)} by {metric.label.toLowerCase()}. {metricHint(metric, selectedCity)}
+                            </p>
                         </div>
                     </div>
 
                     <div className="flex flex-col gap-2 md:flex-row md:items-center">
-                        <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 text-xs font-bold text-slate-500">
+                        <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-bold text-slate-500">
                             Town
                             <select
                                 value={selectedCity}
                                 onChange={(e) => setSelectedCity(e.target.value)}
                                 disabled={metric.hartfordOnly}
-                                className="bg-transparent text-sm font-black text-slate-800 outline-none disabled:opacity-70"
+                                className="bg-transparent text-xs sm:text-sm font-black text-slate-800 outline-none disabled:opacity-70 cursor-pointer"
                             >
                                 {cities.map(city => (
                                     <option key={city} value={city}>{displayCity(city)}</option>
@@ -414,17 +467,18 @@ export default function Insights({ data, onSelect, activeState }) {
                             </select>
                         </label>
                         {metric.source === 'cached' && (
-                            <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1">
+                            <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5">
                                 {[
                                     ['count', 'Count'],
                                     ['value', 'Value']
                                 ].map(([mode, label]) => (
                                     <button
                                         key={mode}
+                                        type="button"
                                         onClick={() => setSortMode(mode)}
-                                        className={`rounded-md px-3 py-1.5 text-xs font-black transition-all ${
+                                        className={`rounded-md px-2.5 py-1 text-xs font-black transition-all ${
                                             sortMode === mode
-                                                ? 'bg-white text-blue-700 shadow-sm ring-1 ring-blue-100'
+                                                ? 'bg-white text-blue-700 shadow-2xs ring-1 ring-blue-100'
                                                 : 'text-slate-500 hover:text-slate-800'
                                         }`}
                                     >
@@ -433,33 +487,36 @@ export default function Insights({ data, onSelect, activeState }) {
                                 ))}
                             </div>
                         )}
-                        <div className="relative min-w-[240px]">
-                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={15} />
+                        <div className="relative min-w-[220px]">
+                            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
                             <input
+                                type="search"
                                 value={query}
                                 onChange={(e) => setQuery(e.target.value)}
-                                placeholder="Filter networks, people, LLCs..."
-                                className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm font-medium outline-none transition-all focus:border-blue-400 focus:ring-4 focus:ring-blue-500/10"
+                                placeholder="Filter leaderboard..."
+                                aria-label="Filter CT network leaderboard"
+                                className="w-full rounded-lg border border-slate-200 bg-white py-1.5 pl-8 pr-3 text-xs sm:text-sm font-medium outline-none transition-all focus:border-blue-400 focus:ring-3 focus:ring-blue-500/10"
                             />
                         </div>
                     </div>
                 </div>
 
-                <div className="mt-4 flex flex-wrap gap-2">
+                <div className="mt-2.5 flex flex-wrap gap-1.5">
                     {METRICS.map(item => {
                         const Icon = item.icon;
                         const active = item.key === metric.key;
                         return (
                             <button
                                 key={item.key}
+                                type="button"
                                 onClick={() => setMetricKey(item.key)}
-                                className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-black transition-all ${
+                                className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-black transition-all cursor-pointer ${
                                     active
-                                        ? `${toneClasses[item.tone]} shadow-sm`
+                                        ? `${toneClasses[item.tone]} shadow-2xs`
                                         : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50 hover:text-slate-800'
                                 }`}
                             >
-                                <Icon size={14} />
+                                <Icon size={13} />
                                 {item.label}
                                 {item.hartfordOnly && <span className="rounded bg-white/70 px-1 py-px text-[9px]">Hartford</span>}
                             </button>
@@ -468,54 +525,13 @@ export default function Insights({ data, onSelect, activeState }) {
                 </div>
             </section>
 
-            <div className="flex items-start gap-2 rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs font-semibold leading-5 text-amber-900">
-                <Info size={14} className="mt-0.5 shrink-0 text-amber-600" />
+            {/* 3. COMPACT SINGLE-LINE VISIBLE NETWORK ASSOCIATION DISCLAIMER */}
+            <div className="flex items-center gap-2 rounded-lg border border-amber-200/80 bg-amber-50/75 px-3 py-1.5 text-[11px] font-medium text-amber-900">
+                <Info size={13} className="shrink-0 text-amber-600" aria-hidden="true" />
                 <span>
-                    Network associations are algorithmic estimates. Small backend tuning changes can make a network overbroad or underbroad, so counts may differ from the last time you used the tool. Fine-tuning is in progress.
+                    <strong className="font-bold">Algorithmic estimate:</strong> Network associations are algorithmic estimates; small backend tuning updates can shift counts slightly while fine-tuning is in progress.
                 </span>
             </div>
-
-            <section className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
-                <div className="mb-3 flex flex-col gap-1 md:flex-row md:items-end md:justify-between">
-                    <div>
-                        <div className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">{summaryScopeLabel}</div>
-                        <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">
-                            {summaryDescription}
-                        </p>
-                    </div>
-                    {dashboardSummary?.town_count > 0 && selectedCity === 'STATEWIDE' && (
-                        <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-bold leading-5 text-blue-700">
-                            {fmt(dashboardSummary.town_count)} towns loaded
-                        </div>
-                    )}
-                </div>
-                <div className="grid grid-cols-2 gap-2 lg:grid-cols-5">
-                    {summaryCards.map(({ label, value, tooltip }) => (
-                        <div
-                            key={label}
-                            className="relative rounded-lg border border-slate-200 bg-slate-50/80 px-3 py-2"
-                            title={tooltip || undefined}
-                        >
-                            <div className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider text-slate-400">
-                                <span>{label}</span>
-                                {tooltip && (
-                                    <span
-                                        className="group/tooltip relative inline-flex"
-                                        tabIndex={0}
-                                        aria-label={tooltip}
-                                    >
-                                        <Info size={12} className="cursor-help text-slate-400" />
-                                        <span className="pointer-events-none absolute left-1/2 top-full z-20 mt-2 w-56 -translate-x-1/2 rounded-lg bg-slate-950 px-3 py-2 text-left text-[11px] font-semibold normal-case leading-4 tracking-normal text-white opacity-0 shadow-xl transition-opacity group-hover/tooltip:opacity-100 group-focus-within/tooltip:opacity-100">
-                                            {tooltip}
-                                        </span>
-                                    </span>
-                                )}
-                            </div>
-                            <div className="mt-1 text-xl font-black text-slate-900">{fmtOrDash(value)}</div>
-                        </div>
-                    ))}
-                </div>
-            </section>
 
             <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
                 <div className="flex items-center justify-between gap-3 border-b border-slate-100 bg-slate-50 px-4 py-3">
@@ -579,7 +595,11 @@ function NetworkInsightCard({ row, rank, metric, networkMetric, networkMetricsLo
         ...(row.violation_businesses || []),
         ...reps.map(b => b.name || b.entity_name)
     ].filter(Boolean);
-    const visiblePrincipals = principals.map(p => p.name).filter(Boolean).slice(0, 3);
+    const ENTITY_PRINCIPAL_RE = /\b(LLC|INC|CORP|CORPORATION|LTD|GROUP|HOLDINGS|REALTY|MANAGEMENT|TRUST|LP|LLP|PARTNERSHIP|PARTNERS|FUND|INVESTMENT|INVESTMENTS)\b/i;
+    const visiblePrincipals = principals
+        .map(p => p.name)
+        .filter(n => n && !ENTITY_PRINCIPAL_RE.test(n))
+        .slice(0, 3);
     const visibleBusinesses = Array.from(new Set(businesses)).slice(0, 3);
     const propertyCount = row.property_count || row.value || 0;
     const businessCount = row.business_count || row.network_business_count || 0;
@@ -626,12 +646,12 @@ function NetworkInsightCard({ row, rank, metric, networkMetric, networkMetricsLo
 
             <div className="mt-4 min-w-0">
                 <h4 className="line-clamp-2 text-lg font-black leading-tight text-slate-950 group-hover:text-blue-700">
-                    {name}
+                    {formatDisplayName(name)}
                 </h4>
-                <p className="mt-1 min-h-[18px] truncate text-xs font-bold uppercase tracking-wider text-slate-400">
+                <p className="mt-1 min-h-[18px] truncate text-xs font-semibold tracking-wide text-slate-400">
                     {row.attorney_surge_name
-                        ? `Attorney: ${row.attorney_surge_name}`
-                        : (visibleBusinesses[0] ? `Sample entity: ${visibleBusinesses[0]}` : 'Network portfolio')}
+                        ? `Attorney: ${formatDisplayName(row.attorney_surge_name)}`
+                        : (visibleBusinesses[0] ? `Sample entity: ${formatDisplayName(visibleBusinesses[0])}` : 'Network portfolio')}
                 </p>
             </div>
 
@@ -726,7 +746,7 @@ function ChipGroup({ icon: Icon, label, values, tone }) {
             <div className="flex flex-wrap gap-1.5">
                 {values.map(value => (
                     <span key={value} className={`max-w-full truncate rounded border px-2 py-1 text-[10px] font-bold ${toneClass}`}>
-                        {value}
+                        {formatDisplayName(value)}
                     </span>
                 ))}
             </div>

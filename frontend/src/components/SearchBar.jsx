@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, MapPin, Briefcase, User, ArrowRight } from 'lucide-react';
+import { Search, MapPin, Briefcase, User, ArrowRight, Layers, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { formatDisplayName } from '../utils/formatName';
 
-export default function SearchBar({ onSearch, onSelect, isLoading, activeState }) {
+export default function SearchBar({ onSearch, onSelect, activeState }) {
     const [term, setTerm] = useState('');
     const [suggestions, setSuggestions] = useState([]);
     const [showSuggestions, setShowSuggestions] = useState(false);
@@ -83,44 +84,65 @@ export default function SearchBar({ onSearch, onSelect, isLoading, activeState }
 
 
     return (
-        <div className="flex flex-col w-full h-full relative" ref={searchRef}>
-            {/* Input Area */}
-            <div className="p-3 bg-white flex items-center gap-2 relative">
+        <search className="flex flex-col w-full relative" ref={searchRef}>
+            {/* Compact Input Area */}
+            <div className="flex items-center gap-1.5 relative">
                 <div className="flex-1 relative">
-                    <div className="relative">
+                    <div className="relative flex items-center">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-600 w-4 h-4 pointer-events-none" aria-hidden="true" />
                         <input
-                            type="text"
+                            type="search"
                             value={term}
                             onChange={(e) => { setTerm(e.target.value); setShowSuggestions(true); }}
                             onFocus={() => setShowSuggestions(true)}
                             onKeyDown={handleKeyDown}
-                            placeholder={activeState === 'CT' ? "Search by business, owner, or address..." : "Search by business, owner, or address in NY (WIP)..."}
-                            className="w-full pl-12 pr-4 py-4 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-medium text-slate-900 placeholder:text-slate-400 text-lg shadow-inner"
-                            autoFocus
+                            placeholder={activeState === 'CT' ? "Search CT businesses, principals, owners, or addresses..." : "Search businesses, principals, owners, or street addresses..."}
+                            className="w-full pl-9 pr-20 py-2 bg-white border border-slate-300 rounded-xl focus:outline-none focus:ring-3 focus:ring-blue-500/15 focus:border-blue-500 transition-all font-medium text-slate-900 placeholder:text-slate-400 text-xs sm:text-sm shadow-2xs"
                             aria-label="Search by business, owner, or address"
                         />
-                        <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 w-5 h-5" />
+                        <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                            {term && (
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setTerm('');
+                                        setSuggestions([]);
+                                        setShowSuggestions(false);
+                                    }}
+                                    aria-label="Clear search query"
+                                    className="p-1 text-slate-400 hover:text-slate-600 rounded-md"
+                                >
+                                    <X className="w-3.5 h-3.5" aria-hidden="true" />
+                                </button>
+                            )}
+                            <button
+                                type="button"
+                                onClick={handleSearch}
+                                className="px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-extrabold transition-colors cursor-pointer"
+                            >
+                                Search
+                            </button>
+                        </div>
                     </div>
 
                     {/* Autocomplete Dropdown */}
                     <AnimatePresence>
                         {showSuggestions && term.length >= 2 && (
                             <motion.div
-                                initial={{ opacity: 0, y: 10 }}
+                                initial={{ opacity: 0, y: 6 }}
                                 animate={{ opacity: 1, y: 0 }}
-                                exit={{ opacity: 0, y: 10 }}
-                                className="absolute top-full left-0 right-0 mt-2 bg-white rounded-xl shadow-xl border border-slate-100 overflow-hidden z-50 max-h-[400px] overflow-y-auto"
+                                exit={{ opacity: 0, y: 6 }}
+                                className="absolute top-full left-0 right-0 mt-1.5 bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden z-50 max-h-[360px] overflow-y-auto"
                             >
                                 {loading ? (
-                                    <div className="p-8 text-center text-slate-500 flex flex-col items-center justify-center gap-2">
-                                        <div className="w-10 h-10 rounded-full bg-slate-50 flex items-center justify-center mb-1 animate-spin">
-                                            <Search className="w-5 h-5 text-slate-300" />
-                                        </div>
-                                        <p className="font-medium">Searching...</p>
+                                    <div className="p-5 text-center text-xs font-semibold text-slate-500 flex items-center justify-center gap-2">
+                                        <progress aria-label="Searching records" className="loading-spinner" />
+                                        <span>Searching...</span>
                                     </div>
                                 ) : suggestions.length > 0 ? (
                                     suggestions.map((item, index) => {
                                         const typeInfo = {
+                                            'Ownership Network': { icon: Layers, color: 'text-violet-600', bg: 'bg-violet-50' },
                                             'Business': { icon: Briefcase, color: 'text-blue-500', bg: 'bg-blue-50' },
                                             'Business Principal': { icon: User, color: 'text-indigo-500', bg: 'bg-indigo-50' },
                                             'Property Owner': { icon: User, color: 'text-emerald-500', bg: 'bg-emerald-50' },
@@ -132,36 +154,34 @@ export default function SearchBar({ onSearch, onSelect, isLoading, activeState }
                                         return (
                                             <button
                                                 key={index}
+                                                type="button"
                                                 onClick={() => handleSelectSuggestion(item)}
-                                                className="w-full text-left px-4 py-3 hover:bg-slate-50 text-sm border-b border-slate-50 last:border-0 flex items-center gap-3 transition-colors group"
+                                                className="w-full text-left px-3.5 py-2.5 hover:bg-slate-50 text-xs border-b border-slate-100 last:border-0 flex items-center gap-2.5 transition-colors group"
                                             >
-                                                <div className={`p-2 ${typeInfo.bg} rounded-lg ${typeInfo.color} transition-colors`}>
-                                                    <Icon className="w-4 h-4" />
+                                                <div className={`p-1.5 ${typeInfo.bg} rounded-lg ${typeInfo.color} transition-colors`}>
+                                                    <Icon className="w-3.5 h-3.5" aria-hidden="true" />
                                                 </div>
                                                 <div className="flex-1 min-w-0">
-                                                    <div className="font-bold text-slate-800 truncate text-base">
-                                                        {item.label || item.value || item}
+                                                    <div className="font-bold text-slate-800 truncate text-sm">
+                                                        {formatDisplayName(String(item.label || item.value || item))}
                                                     </div>
                                                     {(item.context || item.type) && (
-                                                        <div className="text-xs text-slate-500 truncate flex items-center gap-1">
+                                                        <div className="text-[11px] text-slate-500 truncate flex items-center gap-1">
                                                             {item.type && <span className="font-semibold text-slate-600">{item.type}</span>}
                                                             {item.context && <span>• {item.context}</span>}
                                                         </div>
                                                     )}
                                                 </div>
                                                 <div className="opacity-0 group-hover:opacity-100 text-blue-600">
-                                                    <ArrowRight className="w-4 h-4" />
+                                                    <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
                                                 </div>
                                             </button>
                                         );
                                     })
                                 ) : (
-                                    <div className="p-8 text-center text-slate-500 flex flex-col items-center justify-center gap-2">
-                                        <div className="w-10 h-10 rounded-full bg-slate-50 flex items-center justify-center mb-1">
-                                            <Search className="w-5 h-5 text-slate-300" />
-                                        </div>
-                                        <p className="font-medium">No results found for "{term}"</p>
-                                        <p className="text-xs text-slate-400">Try checking for typos or using a broader term.</p>
+                                    <div className="p-6 text-center text-xs text-slate-500">
+                                        <p className="font-semibold text-slate-700">No results found for &ldquo;{term}&rdquo;</p>
+                                        <p className="mt-0.5 text-slate-400">Try checking for typos or using a broader term.</p>
                                     </div>
                                 )}
                             </motion.div>
@@ -169,7 +189,6 @@ export default function SearchBar({ onSearch, onSelect, isLoading, activeState }
                     </AnimatePresence>
                 </div>
             </div>
-        </div>
+        </search>
     );
-
 }

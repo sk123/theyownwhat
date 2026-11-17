@@ -18,20 +18,32 @@ import {
     X,
 } from 'lucide-react';
 
-const DATASET_ORDER = ['CT', 'NYC', 'DC', 'BALTIMORE', 'BOSTON', 'DETROIT', 'MINNEAPOLIS', 'NJ'];
+const DATASET_ORDER = [
+    'CT', 'NYC', 'PHILADELPHIA', 'DC', 'BALTIMORE', 'BOSTON', 'MA',
+    'FL', 'MIAMI', 'CHICAGO', 'NYS', 'NJ', 'CO', 'NC', 'VA', 'AR', 'WI', 'VT', 'DETROIT', 'MINNEAPOLIS',
+];
 
 const DATASET_META = {
     CT: { label: 'Connecticut', short: 'CT', accent: 'blue' },
     NYC: { label: 'New York City', short: 'NYC', accent: 'indigo' },
+    NYS: { label: 'New York State (33 Counties)', short: 'NY State', accent: 'indigo' },
     DC: { label: 'Washington, D.C.', short: 'D.C.', accent: 'cyan' },
     BALTIMORE: { label: 'Baltimore', short: 'Baltimore', accent: 'amber' },
     BOSTON: { label: 'Boston', short: 'Boston', accent: 'emerald' },
+    MA: { label: 'Massachusetts', short: 'MA', accent: 'emerald' },
     DETROIT: { label: 'Detroit', short: 'Detroit', accent: 'rose' },
     PHILADELPHIA: { label: 'Philadelphia', short: 'Philadelphia', accent: 'violet' },
     CHICAGO: { label: 'Chicago', short: 'Chicago', accent: 'sky' },
-    MIAMI: { label: 'Miami', short: 'Miami', accent: 'teal' },
+    FL: { label: 'Florida', short: 'FL', accent: 'teal' },
+    MIAMI: { label: 'Miami-Dade', short: 'Miami', accent: 'teal' },
     MINNEAPOLIS: { label: 'Minneapolis', short: 'Mpls', accent: 'blue' },
     NJ: { label: 'New Jersey', short: 'NJ', accent: 'cyan' },
+    CO: { label: 'Colorado', short: 'CO', accent: 'amber' },
+    NC: { label: 'North Carolina', short: 'NC', accent: 'cyan' },
+    VA: { label: 'Virginia', short: 'VA', accent: 'indigo' },
+    AR: { label: 'Arkansas', short: 'AR', accent: 'amber' },
+    WI: { label: 'Wisconsin', short: 'WI', accent: 'rose' },
+    VT: { label: 'Vermont', short: 'VT', accent: 'violet' },
     OTHER: { label: 'Other Sources', short: 'Other', accent: 'slate' },
 };
 
@@ -63,16 +75,25 @@ function getDatasetKey(row) {
     const state = String(row?.state || '').toUpperCase();
     const municipality = String(row?.municipality || '').toUpperCase();
     if (state === 'CT' || row?.type === 'state') return 'CT';
-    if (municipality.includes('NYC') || municipality.includes('NEW YORK')) return 'NYC';
+    if (municipality === 'NY' || municipality === 'NYS' || municipality === 'NEW YORK STATE') return 'NYS';
+    if (municipality.includes('NYC') || municipality.includes('NEW YORK CITY') || municipality.includes('NEW YORK')) return 'NYC';
     if (municipality === 'DC' || municipality.includes('WASHINGTON')) return 'DC';
     if (municipality.includes('BALTIMORE')) return 'BALTIMORE';
     if (municipality.includes('BOSTON')) return 'BOSTON';
+    if (municipality === 'MA' || municipality.includes('MASSACHUSETTS')) return 'MA';
     if (municipality.includes('DETROIT')) return 'DETROIT';
     if (municipality.includes('PHILADELPHIA')) return 'PHILADELPHIA';
     if (municipality.includes('CHICAGO')) return 'CHICAGO';
     if (municipality.includes('MIAMI')) return 'MIAMI';
+    if (municipality === 'FL' || municipality.includes('FLORIDA')) return 'FL';
     if (municipality.includes('MINNEAPOLIS')) return 'MINNEAPOLIS';
     if (state === 'NJ' || municipality.includes('NEW JERSEY') || municipality === 'NJ') return 'NJ';
+    if (municipality === 'CO' || municipality.includes('COLORADO')) return 'CO';
+    if (municipality === 'NC' || municipality.includes('NORTH CAROLINA')) return 'NC';
+    if (municipality === 'VA' || municipality.includes('VIRGINIA')) return 'VA';
+    if (municipality === 'AR' || municipality.includes('ARKANSAS')) return 'AR';
+    if (municipality === 'WI' || municipality.includes('WISCONSIN')) return 'WI';
+    if (municipality === 'VT' || municipality.includes('VERMONT')) return 'VT';
     return 'OTHER';
 }
 
@@ -134,7 +155,7 @@ function getStatusClasses(status) {
     if (value === 'success') return 'bg-emerald-50 text-emerald-700 border-emerald-100';
     if (value === 'running') return 'bg-blue-50 text-blue-700 border-blue-100';
     if (value === 'unavailable') return 'bg-slate-100 text-slate-500 border-slate-200';
-    if (value === 'failed' || value === 'error') return 'bg-rose-50 text-rose-700 border-rose-100';
+    if (value === 'failed' || value === 'failure' || value === 'error') return 'bg-rose-50 text-rose-700 border-rose-100';
     return 'bg-amber-50 text-amber-700 border-amber-100';
 }
 
@@ -169,7 +190,7 @@ function normalizeRows(data) {
             datasets: Array.isArray(row.datasets) ? row.datasets : [],
             total_properties: Number(row.total_properties || 0),
         };
-    }).filter(row => row.datasetKey !== 'PHILADELPHIA' && row.datasetKey !== 'CHICAGO');
+    });
 }
 
 function matchesSearch(row, term) {
@@ -328,13 +349,6 @@ const FreshnessModal = ({ isOpen, onClose }) => {
         return sortAsc ? <ArrowUp className="h-3.5 w-3.5" /> : <ArrowDown className="h-3.5 w-3.5" />;
     };
 
-<<<<<<< Updated upstream
-    const jumpToDataset = (key) => {
-        document.getElementById(`freshness-section-${key}`)?.scrollIntoView({
-            behavior: 'smooth',
-            block: 'start',
-        });
-=======
     useEffect(() => {
         if (!isOpen) return;
         const prevOverflow = document.body.style.overflow;
@@ -352,7 +366,6 @@ const FreshnessModal = ({ isOpen, onClose }) => {
                 el.scrollIntoView({ behavior: 'smooth', block: 'start' });
             }
         }, 50);
->>>>>>> Stashed changes
     };
 
     const scrollToSection = (datasetKey) => {
@@ -635,6 +648,15 @@ function TownCompletenessRow({ row }) {
 }
 
 function CitySourceCard({ row }) {
+    // Find NHPD subsidy count if available across datasets
+    const nhpdDs = row.datasets.find(d => 
+        String(d.source_name || '').toUpperCase().includes('NHPD') || 
+        d.unique_subsidies > 0 || 
+        d.details?.matched_properties > 0
+    );
+    const subsidizedCount = nhpdDs?.matched_properties || nhpdDs?.details?.matched_properties;
+    const nhpdProjects = nhpdDs?.unique_subsidies || nhpdDs?.details?.unique_nhpd_properties_matched;
+
     return (
         <article className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -642,9 +664,15 @@ function CitySourceCard({ row }) {
                     <div className="flex flex-wrap items-center gap-2">
                         <h4 className="text-lg font-black text-slate-950">{row.displayName}</h4>
                         <StatusBadge status={row.status || 'unknown'} />
+                        {subsidizedCount > 0 && (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-800 border border-emerald-200 px-2.5 py-0.5 rounded-full">
+                                {Number(subsidizedCount).toLocaleString()} Subsidies (NHPD)
+                            </span>
+                        )}
                     </div>
                     <div className="mt-1 text-xs font-bold text-slate-400">
                         {formatCount(row.total_properties) || '0'} property rows · {row.datasets.length.toLocaleString()} datasets
+                        {nhpdProjects > 0 && ` · ${Number(nhpdProjects).toLocaleString()} NHPD projects`}
                     </div>
                 </div>
                 <div className="grid grid-cols-3 gap-2 text-xs sm:min-w-[260px]">
@@ -667,11 +695,43 @@ function CitySourceCard({ row }) {
     );
 }
 
+function formatMatchMethods(matchMethods) {
+    if (!matchMethods || typeof matchMethods !== 'object') return null;
+    const labels = {
+        coordinates: 'coordinates',
+        street_zip: 'address + zip',
+        street_city: 'address + city',
+    };
+    return Object.entries(matchMethods)
+        .filter(([_, v]) => Number(v) > 0)
+        .map(([k, v]) => `${Number(v).toLocaleString()} via ${labels[k] || k}`)
+        .join(' · ');
+}
+
 function DatasetStatusCard({ dataset }) {
     const sourceRows = Array.isArray(dataset.sources) ? dataset.sources : [];
+    const details = dataset.details || {};
+
+    const isNhpd = String(dataset.source_name || '').toUpperCase().includes('NHPD') || Boolean(dataset.unique_subsidies || details.unique_nhpd_properties_matched);
+
+    const propsCount = dataset.properties_count || details.properties_count || details.properties_loaded || details.deduped_buildings;
+    const propsExamined = dataset.properties_examined || details.properties_examined;
+    const matchedSubsidies = dataset.matched_properties || details.matched_properties;
+    const uniqueNhpd = dataset.unique_subsidies || details.unique_nhpd_properties_matched;
+    const stateNhpdRecords = dataset.state_subsidies || details.nhpd_state_records;
+    const matchMethodsText = formatMatchMethods(dataset.match_methods || details.match_methods);
+
+    const evictionsTotal = details.evictions_total;
+    const openViolations = details.open_violations;
+    const registrations = details.registrations || details.active_licenses || details.active_registrations;
+    const contacts = details.contacts;
+    const networks = details.networks;
+    const companiesCount = details.companies_count;
+    const officersCount = details.officers_count;
+    const parcelsEnriched = details.parcels_enriched;
 
     return (
-        <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+        <div className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-xs">
             <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                     <div className="truncate text-xs font-black uppercase tracking-[0.12em] text-slate-900">
@@ -684,24 +744,85 @@ function DatasetStatusCard({ dataset }) {
                 <StatusBadge status={dataset.status || 'unknown'} />
             </div>
 
-            <div className="mt-3 flex flex-wrap gap-2">
-                {formatCount(dataset.source_records) && <MetricChip label="Source" value={formatCount(dataset.source_records)} />}
-                {formatCount(dataset.matched_records) && <MetricChip label="Matched" value={formatCount(dataset.matched_records)} />}
-                {formatCount(dataset.matched_parcels) && <MetricChip label="Parcels" value={formatCount(dataset.matched_parcels)} />}
+            <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                {/* Properties Loaded / Examined */}
+                {formatCount(propsCount) && (
+                    <MetricChip label="Properties Loaded" value={formatCount(propsCount)} tone="blue" />
+                )}
+                {formatCount(propsExamined) && !propsCount && (
+                    <MetricChip label="Examined" value={formatCount(propsExamined)} />
+                )}
+
+                {/* NHPD Subsidies */}
+                {isNhpd && formatCount(matchedSubsidies) && (
+                    <MetricChip label="Subsidized Properties" value={formatCount(matchedSubsidies)} tone="emerald" />
+                )}
+                {isNhpd && formatCount(uniqueNhpd) && (
+                    <MetricChip label="NHPD Projects" value={formatCount(uniqueNhpd)} tone="emerald" />
+                )}
+                {isNhpd && formatCount(stateNhpdRecords) && (
+                    <MetricChip label="State NHPD Records" value={formatCount(stateNhpdRecords)} tone="default" />
+                )}
+
+                {/* General / Other Sources */}
+                {!isNhpd && formatCount(dataset.source_records) && !propsCount && (
+                    <MetricChip label="Source Records" value={formatCount(dataset.source_records)} />
+                )}
+                {!isNhpd && formatCount(dataset.matched_records) && (
+                    <MetricChip label="Matched Records" value={formatCount(dataset.matched_records)} tone="indigo" />
+                )}
+                {!isNhpd && formatCount(dataset.matched_parcels) && (
+                    <MetricChip label="Parcels Matched" value={formatCount(dataset.matched_parcels)} tone="indigo" />
+                )}
+
+                {/* Violations / Evictions / Registrations */}
+                {formatCount(evictionsTotal) && (
+                    <MetricChip label="Evictions" value={formatCount(evictionsTotal)} tone="amber" />
+                )}
+                {formatCount(openViolations) && (
+                    <MetricChip label="Open Violations" value={formatCount(openViolations)} tone="rose" />
+                )}
+                {formatCount(registrations) && (
+                    <MetricChip label="Registrations" value={formatCount(registrations)} tone="indigo" />
+                )}
+                {formatCount(contacts) && (
+                    <MetricChip label="Owner Contacts" value={formatCount(contacts)} tone="indigo" />
+                )}
+                {formatCount(networks) && (
+                    <MetricChip label="Networks" value={formatCount(networks)} tone="blue" />
+                )}
+                {formatCount(companiesCount) && (
+                    <MetricChip label="Registered Entities" value={formatCount(companiesCount)} tone="indigo" />
+                )}
+                {formatCount(officersCount) && (
+                    <MetricChip label="Principals / Officers" value={formatCount(officersCount)} tone="emerald" />
+                )}
+                {formatCount(parcelsEnriched) && (
+                    <MetricChip label="Parcels Enriched" value={formatCount(parcelsEnriched)} tone="indigo" />
+                )}
+
                 {dataset.source_url && (
                     <a
                         href={dataset.source_url}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 rounded-lg border border-blue-100 bg-blue-50 px-2 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-blue-700 hover:bg-blue-100"
+                        className="inline-flex items-center gap-1 rounded-lg border border-blue-100 bg-blue-50 px-2 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-blue-700 hover:bg-blue-100 transition-colors"
                     >
                         Source <ExternalLink className="h-3 w-3" />
                     </a>
                 )}
             </div>
 
+            {/* Match breakdown pill for NHPD / Spatial Joins */}
+            {matchMethodsText && (
+                <div className="mt-2.5 flex items-center gap-1.5 text-[10px] font-bold text-slate-500 bg-slate-50 border border-slate-200/80 px-2.5 py-1 rounded-lg">
+                    <span className="text-slate-400 uppercase tracking-wider shrink-0">Match Methods:</span>
+                    <span className="text-slate-700 font-extrabold truncate">{matchMethodsText}</span>
+                </div>
+            )}
+
             {dataset.message && (
-                <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-xs font-medium leading-5 text-slate-500">
+                <div className="mt-2.5 rounded-lg bg-slate-50 px-3 py-2 text-xs font-medium leading-5 text-slate-500">
                     {dataset.message}
                 </div>
             )}
@@ -761,10 +882,24 @@ function DateBlock({ label, value }) {
     );
 }
 
-function MetricChip({ label, value }) {
+function MetricChip({ label, value, tone = 'default' }) {
+    const toneStyles = {
+        default: 'border-slate-200 bg-slate-50 text-slate-500 text-slate-900',
+        emerald: 'border-emerald-200 bg-emerald-50 text-emerald-700 text-emerald-950',
+        blue: 'border-blue-200 bg-blue-50 text-blue-700 text-blue-950',
+        indigo: 'border-indigo-200 bg-indigo-50 text-indigo-700 text-indigo-950',
+        amber: 'border-amber-200 bg-amber-50 text-amber-700 text-amber-950',
+        rose: 'border-rose-200 bg-rose-50 text-rose-700 text-rose-950',
+    };
+    const current = toneStyles[tone] || toneStyles.default;
+    const parts = current.split(' ');
+    const borderBg = `${parts[0]} ${parts[1]}`;
+    const labelColor = parts[2];
+    const valColor = parts[3];
+
     return (
-        <span className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">
-            {label}: <span className="text-slate-900">{value}</span>
+        <span className={`rounded-lg border ${borderBg} px-2 py-1 text-[10px] font-black uppercase tracking-[0.12em] ${labelColor}`}>
+            {label}: <span className={`font-black ${valColor}`}>{value}</span>
         </span>
     );
 }

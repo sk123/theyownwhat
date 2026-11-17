@@ -12,16 +12,26 @@ import sys
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from shared_utils import (
+    THIRD_PARTY_ENTITY_REGEX_BODY,
+    _STREET_FOLLOWER_LOOKAHEAD,
     normalize_business_name,
     normalize_person_name,
     normalize_mailing_address,
     normalize_mailing_address_coarse,
     first_normalized_mailing_address,
     is_ignored_shared_address,
+    is_excluded_third_party_address,
+    is_excluded_third_party_entity,
+    strip_benign_care_of_prefix,
     canonicalize_person_name,
     canonicalize_business_name,
+    looks_like_business_name,
+    looks_like_person_owner,
     get_name_variations,
-    get_email_match_key
+    get_email_match_key,
+    compose_address,
+    load_registrar_address_substrings,
+    is_registrar_address,
 )
 
 # Configure logging
@@ -35,11 +45,17 @@ MAX_DEPTH = 4 # Standard depth for network discovery
 PUBLIC_EMAIL_MAX_BUSINESSES = int(os.environ.get("PUBLIC_EMAIL_MAX_BUSINESSES", "25"))
 CUSTOM_EMAIL_DOMAIN_MAX_BUSINESSES = int(os.environ.get("CUSTOM_EMAIL_DOMAIN_MAX_BUSINESSES", "75"))
 AMBIGUOUS_PRINCIPAL_MIN_BUSINESSES = int(os.environ.get("AMBIGUOUS_PRINCIPAL_MIN_BUSINESSES", "12"))
-AMBIGUOUS_PRINCIPAL_MAX_OWNING_BUSINESSES = int(os.environ.get("AMBIGUOUS_PRINCIPAL_MAX_OWNING_BUSINESSES", "10"))
+AMBIGUOUS_PRINCIPAL_MAX_OWNING_BUSINESSES = int(os.environ.get("AMBIGUOUS_PRINCIPAL_MAX_OWNING_BUSINESSES", "3"))
 AMBIGUOUS_PRINCIPAL_MIN_EMAIL_DOMAINS = int(os.environ.get("AMBIGUOUS_PRINCIPAL_MIN_EMAIL_DOMAINS", "5"))
 AMBIGUOUS_PRINCIPAL_MIN_MAIL_ADDRESSES = int(os.environ.get("AMBIGUOUS_PRINCIPAL_MIN_MAIL_ADDRESSES", "8"))
 AMBIGUOUS_PRINCIPAL_TOP_EMAIL_SHARE = float(os.environ.get("AMBIGUOUS_PRINCIPAL_TOP_EMAIL_SHARE", "0.35"))
 AMBIGUOUS_PRINCIPAL_MAIL_ADDRESS_SHARE = float(os.environ.get("AMBIGUOUS_PRINCIPAL_MAIL_ADDRESS_SHARE", "0.60"))
+MULTI_UNIT_BUILDING_MIN_DISTINCT_UNITS = int(os.environ.get("MULTI_UNIT_BUILDING_MIN_DISTINCT_UNITS", "3"))
+# Any single mailing address shared by more than this many property-owning
+# businesses is treated as a registered-agent office / virtual mailbox rather
+# than a real shared headquarters. Curated offices live in address_match_rules;
+# this cap catches the ones nobody has listed yet.
+SHARED_ADDRESS_MAX_BUSINESSES = int(os.environ.get("SHARED_ADDRESS_MAX_BUSINESSES", "75"))
 
 # Placeholder/Generic names to skip during linking to prevent bad merges
 SKIP_NAMES = {
@@ -48,29 +64,48 @@ SKIP_NAMES = {
     'USA', 'UNITED STATES', 'NO NAME', 'N/A', 'NA', 'NONE',
     'NO INFORMATION PROVIDED', 'NOT PROVIDED', 'VACANT', 'NULL',
     'NOT AVAILABLE', '[UNKNOWN]', 'CURRENT COMPANY OWNER', 'CURRENT COMPANY-OWNER',
-    'SV', 'SURVIVORSHIP', 'JT', 'TIC', 'TC', 'ET AL', 'LII', 'ETAL'
+    'SV', 'SURVIVORSHIP', 'SURV', 'TITLE', 'LIVING', 'TRUST', 'ESTATE',
+    'CORPORATION', 'INCORPORATED', 'ASSOCIATION', 'COMPANY',
+    'JT', 'TIC', 'TC', 'ET AL', 'LII', 'ETAL', 'REFERENCE ONLY'
 }
 
-# Institutional/Service regex to catch pseudo-hubs and exclude them from graph
+# Generic single-token canonical business stems that collide with assessor
+# overflow fragments (e.g. 'TITLE', '(SURV)', 'LIVING', '(TRUST)', 'CORP', 'INC').
+GENERIC_BUSINESS_CANON_STOPWORDS = {
+    '', 'TITLE', 'SURV', 'SURVIVORSHIP', 'LIVING', 'TRUST', 'TRUSTEE', 'TRUSTEES',
+    'ESTATE', 'REALTY', 'HOLDINGS', 'HOLDING', 'PROPERTIES', 'PROPERTY',
+    'MANAGEMENT', 'DEVELOPMENT', 'INVESTMENTS', 'INVESTMENT', 'PARTNERS',
+    'PARTNERSHIP', 'ASSOCIATES', 'ASSOCIATION', 'COMPANY', 'CORPORATION',
+    'INCORPORATED', 'LIMITED', 'GROUP', 'SERVICES', 'ENTERPRISES', 'ENTERPRISE',
+    'VENTURES', 'OWNER', 'OWNERS', 'APARTMENTS', 'APARTMENT', 'HOMES', 'HOME',
+    'HOUSING', 'LAND', 'BUILDING', 'BUILDINGS', 'CENTER', 'SYSTEM', 'SYSTEMS',
+    'CEMETERY', 'CHURCH', 'BANK', 'LIFE', 'REVOCABLE', 'IRREVOCABLE', 'FAMILY',
+    'INC', 'LLC', 'CORP', 'LTD', 'LP', 'LLP', 'THE', 'CT', 'NY', 'STATE', 'CITY', 'TOWN'
+}
+
+# Institutional/Service regex to catch pseudo-hubs (banks, mortgage servicers,
+# RMBS trustees, registered agents, government, utilities, hospitals, universities,
+# hospitality, etc.) and exclude them from the landlord ownership graph.
 INSTITUTIONAL_PATTERN = re.compile(
-    r'HOUSING AUTHORITY|UNIVERSITY|COLLEGE|SCHOOL|ACADEMY|'
-    r'STATE OF |CONNECTICUT STATE|TOWN OF |CITY OF |REDEVELOPMENT|'
-    r'BOARD OF EDUCATION|MUNICIPAL|FEDERAL|DEPARTMENT OF|AUTHORITY|'
+    rf'{THIRD_PARTY_ENTITY_REGEX_BODY}|'
+    r'\b(?:PREPARATORY|BOARDING|HIGH|ELEMENTARY|MIDDLE|GRAMMAR|PAROCHIAL|CHARTER)\s+SCHOOL\b|'
+    rf'\bACADEMY{_STREET_FOLLOWER_LOOKAHEAD}\b|'
+    rf'\bFEDERAL{_STREET_FOLLOWER_LOOKAHEAD}\b|'
+    r'CITY BUFFALO|PERFECTING TITLE|REDEVELOPMENT|'
+    r'SUFFOLK COUNTY|NASSAU COUNTY|WESTCHESTER COUNTY|ALBANY COUNTY|ERIE COUNTY|MONROE COUNTY|ONONDAGA COUNTY|'
+    r'\b(?:MUNICIPAL|DEPARTMENT\s+OF|AUTHORITY)\b|'
     r'LAND TRUST|HUMAN SERVICES|FOUNDATION FOR .* LIVING|'
     r'SENIOR HOUSING|ELDERLY HOUSING|INTERFAITH HOUSING|PUBLIC HOUSING|'
     r'HOUSING CORPORATION|HOUSING ASSOCIATES|HOUSING, INC|HOUSING INC|'
     r'CONGREGATE HOMES|RETIREMENT COMMUNITY|'
-    r'HOSPITAL|MEDICAL CENTER|HEALTHCARE|HEALTH CENTER|CLINIC|NEW SAMARITAN|'
-    r'CHURCH|TEMPLE|SYNAGOGUE|CATHOLIC|DIOCESE|'
-    r'LODGING|HOSPITALITY|HOTEL|MOTEL|INN |SUITES|'
-    r'CORPORATION SERVICE COMPANY|CT CORPORATION|C T CORPORATION|CSC ENTITY|'
-    r'NORTHWEST REGISTERED AGENT|COGENCY GLOBAL|VCORP SERVICES|WOLTERS KLUWER|'
-    r'NATIONAL REGISTERED AGENTS|REGISTERED AGENT|'
-    r'CORP CREATIONS|UNITED AGENT GROUP|PRIME CORPORATE SERVICES|'
-    # Utility companies — prevent mega-network merging through shared agents
-    r'WATER COMPANY|LIGHT AND POWER|GAS SERVICES|ELECTRIC COMPANY|POWER COMPANY|'
-    r'WATER UTILITY|SEWER |AQUARION|EVERSOURCE|UNITED ILLUMINATING|'
-    r'YANKEE GAS|SOUTHERN CONN.* GAS|AVANGRID|BERKSHIRE GAS|CONNECTICUT NATURAL GAS',
+    r'\b(?:HOSPITAL|HEALTHCARE|HEALTH\s+CENTER|CLINIC|NEW\s+SAMARITAN)\b|'
+    r'\b(?:CATHOLIC|CEMETERY|NATURE\s+CONSERVANCY)\b|'
+    r'\b(?:LODGING|HOSPITALITY|HOTEL|MOTEL)\b|\bINN\s+|\bSUITES\b|'
+    r'WATER COMPANY|GAS SERVICES|POWER CORPORATION|POWER CORP|'
+    r'NATIONAL FUEL|CENTRAL HUDSON|ROCHESTER GAS|NYSEG|'
+    r'ORANGE AND ROCKLAND|LONG ISLAND POWER|'
+    r'WATER UTILITY|SEWER |YANKEE GAS|SOUTHERN CONN.* GAS|AVANGRID|BERKSHIRE GAS|CONNECTICUT NATURAL GAS|'
+    r'VERIZON|FRONTIER COMMUNICATIONS|SOUTHERN NEW ENGLAND TELEPHONE|RAILROAD',
     re.IGNORECASE
 )
 
@@ -101,31 +136,109 @@ def link_properties_to_entities(conn):
             b_count += 1
             if b_count % 100000 == 0:
                 logger.info(f"    Loaded {b_count:,} businesses...")
-            norm = normalize_business_name(row['name'])
-            if norm: b_map[norm] = row['id']
+            raw_bname = row['name'] or ''
+            if not raw_bname or INSTITUTIONAL_PATTERN.search(raw_bname):
+                continue
+            norm = normalize_business_name(raw_bname)
+            if not norm or norm in SKIP_NAMES or norm in GENERIC_BUSINESS_CANON_STOPWORDS:
+                continue
+            # Do not allow a bare human-name DBA record (without business suffixes)
+            # to hijack homeowner parcels in Pass 1.
+            if not looks_like_business_name(raw_bname) and looks_like_person_owner(raw_bname):
+                continue
+            b_map[norm] = row['id']
 
-            # Add canonical version as secondary match key
-            bc = canonicalize_business_name(row['name'])
-            if bc and bc not in b_canon_map: # Prefer earlier (better) names if collision
+            # Add canonical version as secondary match key only when sufficiently
+            # specific (never single-token generic words or bare person names).
+            bc = canonicalize_business_name(raw_bname)
+            if (
+                bc
+                and bc not in GENERIC_BUSINESS_CANON_STOPWORDS
+                and (len(bc.split()) >= 2 or len(bc) >= 8)
+                and not looks_like_person_owner(bc)
+                and bc not in b_canon_map
+            ):
                 b_canon_map[bc] = row['id']
 
         logger.info(f"  - Business map loaded ({len(b_map):,} unique normal, {len(b_canon_map):,} unique canon).")
 
         # 2. Load Principal Map
+        #
+        # unique_principals is not deduplicated by name: ~11k names are shared by
+        # ~55k rows (one name is held by 146 separate principal_ids). A plain
+        # name -> id dict keeps whichever row happened to be scanned last, so a
+        # property owned by "MARTIN WILLIAM" was attached to an arbitrary one of
+        # 118 William Martins. Ambiguous names are recorded and then skipped:
+        # leaving a property unlinked is far better than crediting it to the
+        # wrong person on a public accountability site.
         p_map = {}
-        cur.execute("SELECT principal_id, name_normalized FROM unique_principals")
+        p_ambiguous = set()
+        p_mid_init = {}
+
+        _ROLE_SUFFIX_RE = re.compile(r'\b(?:TRUSTEES?|TR|TRS|JR|SR|II|III|IV|ESQ|ESQUIRE|MD|PHD|CPA)\b')
+
+        def _extract_middle_initial(raw_person_name: str) -> str:
+            if not raw_person_name:
+                return ""
+            s = str(raw_person_name).upper().strip()
+            if ',' in s:
+                last_part, rest = s.split(',', 1)
+                s = f"{rest.strip()} {last_part.strip()}"
+            if ' & ' in s or ' AND ' in s or ' / ' in s:
+                s = re.split(r'\s+(?:&|AND|/)\s+', s, maxsplit=1)[0]
+            s = re.sub(r"[,.'`\"]", '', s)
+            s = _ROLE_SUFFIX_RE.sub(' ', s)
+            tokens = [t for t in s.split() if t]
+            if len(tokens) == 3 and len(tokens[1]) == 1 and tokens[1].isalpha():
+                return tokens[1]
+            return ""
+
+        def register_principal(key, pid):
+            if not key:
+                return
+            existing = p_map.get(key)
+            if existing is None:
+                p_map[key] = pid
+            elif existing != pid:
+                p_ambiguous.add(key)
+
+        cur.execute("SELECT principal_id, name_normalized, representative_name_c FROM unique_principals")
         logger.info("  - Loading principal names into memory...")
         p_count = 0
         for row in cur:
             p_count += 1
             if p_count % 100000 == 0:
                 logger.info(f"    Loaded {p_count:,} principals...")
+            pid_val = row['principal_id']
+            rep_c = row.get('representative_name_c') or ''
+            norm_p = row.get('name_normalized') or ''
+            if INSTITUTIONAL_PATTERN.search(rep_c) or INSTITUTIONAL_PATTERN.search(norm_p):
+                continue
+            mid = _extract_middle_initial(rep_c)
+            if mid:
+                p_mid_init[pid_val] = mid
             # unique_principals.name_normalized is already fairly clean, but we canonicalize it
-            p_map[row['name_normalized']] = row['principal_id']
-            canon = canonicalize_person_name(row['name_normalized'])
-            if canon: p_map[canon] = row['principal_id']
+            register_principal(norm_p, pid_val)
+            register_principal(canonicalize_person_name(norm_p), pid_val)
 
-        logger.info(f"  - Principal map loaded ({len(p_map):,} unique names).")
+        for key in p_ambiguous:
+            p_map.pop(key, None)
+
+        def lookup_principal(key, owner_mid=""):
+            """Resolve a name to a principal, refusing ambiguous names or conflicting middle initials."""
+            if not key or key in p_ambiguous:
+                return None
+            cand = p_map.get(key)
+            if cand is not None and owner_mid:
+                cand_mid = p_mid_init.get(cand, "")
+                if cand_mid and cand_mid != owner_mid:
+                    return None
+            return cand
+
+        logger.info(
+            f"  - Principal map loaded ({len(p_map):,} unambiguous names; "
+            f"{len(p_ambiguous):,} ambiguous names withheld from matching)."
+        )
 
         # Use a separate connection for the server-side cursor to avoid closure on commit
         read_conn = get_db_connection()
@@ -165,20 +278,32 @@ def link_properties_to_entities(conn):
                         skip_co_owner = bool(CARE_OF_PATTERN.match(cname))
 
                         # Pass 1: Primary Business matches
+                        # Co-owner frequently holds overflow fragments ('(SURV)', 'TITLE', 'LIVING', 'INC');
+                        # require co_owner to look like a real multi-token business name before matching.
+                        co_owner_biz_ok = (
+                            not skip_co_owner
+                            and cnorm not in SKIP_NAMES
+                            and looks_like_business_name(cname)
+                            and len(canonicalize_business_name(cname).split()) >= 2
+                        )
                         bid = None
                         if not skip_owner and onorm not in SKIP_NAMES:
                             bid = b_map.get(onorm)
-                        if not bid and not skip_co_owner and cnorm not in SKIP_NAMES:
+                        if not bid and co_owner_biz_ok:
                             bid = b_map.get(cnorm)
 
                         # Pass 2: Canonical Business matches (Suffix-stripped)
+                        # Only suffix-strip owner strings that actually look like business entities,
+                        # so human homeowners ('DAVID, SMITH') never match 'DAVID SMITH, INC.'
                         if not bid:
-                            if not skip_owner and onorm not in SKIP_NAMES:
+                            if not skip_owner and onorm not in SKIP_NAMES and looks_like_business_name(oname):
                                 bc_owner = canonicalize_business_name(oname)
-                                bid = b_canon_map.get(bc_owner)
-                            if not bid and not skip_co_owner and cnorm not in SKIP_NAMES:
+                                if bc_owner and bc_owner not in GENERIC_BUSINESS_CANON_STOPWORDS:
+                                    bid = b_canon_map.get(bc_owner)
+                            if not bid and co_owner_biz_ok:
                                 bc_co = canonicalize_business_name(cname)
-                                bid = b_canon_map.get(bc_co)
+                                if bc_co and bc_co not in GENERIC_BUSINESS_CANON_STOPWORDS:
+                                    bid = b_canon_map.get(bc_co)
 
                         # Pass 3: Principal matches (with LAST FIRST ↔ FIRST LAST reversal)
                         pid = None
@@ -188,29 +313,31 @@ def link_properties_to_entities(conn):
                                 if skip: continue
                                 if pid: break # Found one already
 
-                                name_clean = normalize_person_name(raw_name)
+                                owner_mid = _extract_middle_initial(raw_name)
+                                stripped_role = re.sub(r'\b(?:TRUSTEES?|TR|TRS)\b', ' ', raw_name, flags=re.IGNORECASE)
+                                name_clean = normalize_person_name(stripped_role)
                                 if not name_clean:
                                     continue
                                 # Direct match
-                                pid = p_map.get(name_clean)
+                                pid = lookup_principal(name_clean, owner_mid)
                                 # Canonical match
                                 if not pid:
-                                    pid = p_map.get(canonicalize_person_name(name_clean))
+                                    pid = lookup_principal(canonicalize_person_name(name_clean), owner_mid)
                                 # LAST FIRST → FIRST LAST reversal
                                 if not pid:
                                     parts = name_clean.split()
                                     if len(parts) >= 2:
                                         # Try "LAST FIRST" → "FIRST LAST"
                                         reversed_name = f"{parts[-1]} {' '.join(parts[:-1])}"
-                                        pid = p_map.get(reversed_name)
+                                        pid = lookup_principal(reversed_name, owner_mid)
                                         if not pid:
-                                            pid = p_map.get(canonicalize_person_name(reversed_name))
+                                            pid = lookup_principal(canonicalize_person_name(reversed_name), owner_mid)
                                         # Try "FIRST LAST" → "LAST FIRST"
                                         if not pid:
                                             reversed_name2 = f"{' '.join(parts[1:])} {parts[0]}"
-                                            pid = p_map.get(reversed_name2)
+                                            pid = lookup_principal(reversed_name2, owner_mid)
                                             if not pid:
-                                                pid = p_map.get(canonicalize_person_name(reversed_name2))
+                                                pid = lookup_principal(canonicalize_person_name(reversed_name2), owner_mid)
 
                         if bid or pid:
                             updates.append((bid, pid, row['id']))
@@ -265,39 +392,29 @@ def build_graph(conn, skip_emails=False):
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute("SELECT normalized_name FROM principal_ignore_list")
         ignore_names_raw = {row['normalized_name'] for row in cur}
-        # CRITICAL: The ignore list stores names like 'ZENON LANKOWSKY' but
-        # unique_principals.name_normalized uses last-name-first ('LANKOWSKY ZENON').
-        # Include both forms to ensure matching.
+        # The ignore list stores names first-last ('ZENON LANKOWSKY') while
+        # unique_principals.name_normalized is last-first ('LANKOWSKY ZENON').
+        # normalize_person_name preserves word order, so comparing normalized
+        # forms never matched. Compare word-sorted canonical forms instead,
+        # which are order-independent.
         ignore_names = set(ignore_names_raw)
         for raw in ignore_names_raw:
             ignore_names.add(normalize_person_name(raw))
-        logger.info(f"  - Loaded {len(ignore_names_raw)} ignore list entries ({len(ignore_names)} with normalized forms).")
+        ignore_canon = {canonicalize_person_name(raw) for raw in ignore_names_raw}
+        ignore_canon.discard("")
 
-        # Institutional/Service regex to catch pseudo-hubs
-        INSTITUTIONAL_PATTERN = re.compile(
-            r'HOUSING AUTHORITY|UNIVERSITY|COLLEGE|SCHOOL|ACADEMY|'
-            r'STATE OF |CONNECTICUT STATE|TOWN OF |CITY OF |REDEVELOPMENT|'
-            r'BOARD OF EDUCATION|MUNICIPAL|FEDERAL|DEPARTMENT OF|AUTHORITY|'
-            r'LAND TRUST|HUMAN SERVICES|FOUNDATION FOR .* LIVING|'
-            r'SENIOR HOUSING|ELDERLY HOUSING|INTERFAITH HOUSING|PUBLIC HOUSING|'
-            r'HOUSING CORPORATION|HOUSING ASSOCIATES|HOUSING, INC|HOUSING INC|'
-            r'CONGREGATE HOMES|RETIREMENT COMMUNITY|'
-            r'HOSPITAL|MEDICAL CENTER|HEALTHCARE|HEALTH CENTER|CLINIC|NEW SAMARITAN|'
-            r'CHURCH|TEMPLE|SYNAGOGUE|CATHOLIC|DIOCESE|'
-            r'LODGING|HOSPITALITY|HOTEL|MOTEL|INN |SUITES|'
-            r'CORPORATION SERVICE COMPANY|CT CORPORATION|C T CORPORATION|CSC ENTITY|'
-            r'NORTHWEST REGISTERED AGENT|COGENCY GLOBAL|VCORP SERVICES|WOLTERS KLUWER|'
-            r'NATIONAL REGISTERED AGENTS|REGISTERED AGENT|'
-            r'CORP CREATIONS|UNITED AGENT GROUP|PRIME CORPORATE SERVICES|'
-            # Utility companies — prevent mega-network merging through shared agents
-            r'WATER COMPANY|LIGHT AND POWER|GAS SERVICES|ELECTRIC COMPANY|POWER COMPANY|'
-            r'WATER UTILITY|SEWER |AQUARION|EVERSOURCE|UNITED ILLUMINATING|'
-            r'WATER UTILITY|SEWER |AQUARION|EVERSOURCE|UNITED ILLUMINATING|'
-            r'YANKEE GAS|SOUTHERN CONN.* GAS|AVANGRID|BERKSHIRE GAS|CONNECTICUT NATURAL GAS',
-            re.IGNORECASE
+        def is_ignored_principal(name):
+            if not name:
+                return False
+            return name in ignore_names or canonicalize_person_name(name) in ignore_canon
+
+        logger.info(
+            f"  - Loaded {len(ignore_names_raw)} ignore list entries "
+            f"({len(ignore_canon)} order-independent keys)."
         )
 
-        # Whitelist patterns to protect known large legitimate networks from anti-hub filters
+        # Reuse module-level INSTITUTIONAL_PATTERN so build_graph and link_properties_to_entities
+        # share the exact same institutional/utility/government exclusions.
         WHITELIST_PATTERN = re.compile(r'GUREVITCH|MANDY|NETZ|ACME', re.IGNORECASE)
 
         SERVICE_PATTERN = re.compile(r'SERVICES|AGENT|PROPERTY MGMT', re.IGNORECASE)
@@ -334,67 +451,82 @@ def build_graph(conn, skip_emails=False):
         # diffuse, low-property-owner cases; concentrated high-count operators
         # remain eligible for matching.
         ambiguous_principal_ids = set()
+        attorney_organizer_re = re.compile(r'\b(?:ESQ|ESQUIRE)\b', re.IGNORECASE)
         logger.info("  - Detecting ambiguous common-name principal bridges...")
         cur.execute(
             """
-            WITH high_principals AS (
-                SELECT principal_id, name_normalized, representative_name_c, business_count
-                FROM unique_principals
-                WHERE business_count >= %s
-            ),
-            links AS (
-                SELECT
-                    hp.principal_id,
-                    hp.name_normalized,
-                    hp.representative_name_c,
-                    hp.business_count,
-                    pbl.business_id,
-                    LOWER(TRIM(COALESCE(b.business_email_address, ''))) AS email,
-                    SPLIT_PART(LOWER(TRIM(COALESCE(b.business_email_address, ''))), '@', 2) AS domain,
-                    UPPER(TRIM(COALESCE(b.mail_address, ''))) AS mail_address,
-                    EXISTS (
-                        SELECT 1 FROM properties p
-                        WHERE p.business_id = pbl.business_id
-                    ) AS owns_property
-                FROM high_principals hp
-                JOIN principal_business_links pbl ON pbl.principal_id = hp.principal_id
-                JOIN businesses b ON b.id = pbl.business_id
-            ),
-            email_counts AS (
-                SELECT principal_id, email, COUNT(*) AS email_count
-                FROM links
-                WHERE email <> ''
-                GROUP BY principal_id, email
-            )
             SELECT
-                l.principal_id,
-                MAX(l.name_normalized) AS name_normalized,
-                MAX(l.representative_name_c) AS representative_name_c,
-                COUNT(DISTINCT l.business_id)::int AS linked_businesses,
-                COUNT(DISTINCT l.business_id) FILTER (WHERE l.owns_property)::int AS owning_businesses,
-                COUNT(DISTINCT NULLIF(l.email, ''))::int AS email_count,
-                COUNT(DISTINCT NULLIF(l.domain, ''))::int AS email_domain_count,
-                COUNT(DISTINCT NULLIF(l.mail_address, ''))::int AS mail_address_count,
-                COALESCE(MAX(ec.email_count), 0)::int AS top_email_count
-            FROM links l
-            LEFT JOIN email_counts ec ON ec.principal_id = l.principal_id
-            GROUP BY l.principal_id
+                hp.principal_id,
+                hp.name_normalized,
+                hp.representative_name_c,
+                pbl.business_id,
+                LOWER(TRIM(COALESCE(b.business_email_address, ''))) AS email,
+                SPLIT_PART(LOWER(TRIM(COALESCE(b.business_email_address, ''))), '@', 2) AS domain,
+                b.mail_address, b.mail_city, b.mail_state, b.mail_zip,
+                b.business_address, b.business_city, b.business_state, b.business_zip,
+                EXISTS (
+                    SELECT 1 FROM properties p
+                    WHERE p.business_id = pbl.business_id
+                ) AS owns_property
+            FROM unique_principals hp
+            JOIN principal_business_links pbl ON pbl.principal_id = hp.principal_id
+            JOIN businesses b ON b.id = pbl.business_id
+            WHERE hp.business_count >= %s
             """,
             (AMBIGUOUS_PRINCIPAL_MIN_BUSINESSES,),
         )
-        for row in cur:
-            name = row.get("name_normalized") or row.get("representative_name_c") or ""
-            if WHITELIST_PATTERN.search(name):
+        hp_stats = {}
+        for r in cur:
+            pid_key = r["principal_id"]
+            st = hp_stats.get(pid_key)
+            if st is None:
+                st = {
+                    "name_normalized": r.get("name_normalized") or "",
+                    "representative_name_c": r.get("representative_name_c") or "",
+                    "businesses": set(),
+                    "owning_businesses": set(),
+                    "domains": set(),
+                    "emails": defaultdict(int),
+                    "mail_addresses": set(),
+                }
+                hp_stats[pid_key] = st
+            bid_val = r["business_id"]
+            st["businesses"].add(bid_val)
+            if r["owns_property"]:
+                st["owning_businesses"].add(bid_val)
+            em = r.get("email") or ""
+            if em:
+                st["emails"][em] += 1
+            dom = r.get("domain") or ""
+            if dom:
+                st["domains"].add(dom)
+            norm_addr = first_normalized_mailing_address(
+                compose_address(r["mail_address"], r["mail_city"], r["mail_state"], r["mail_zip"]),
+                compose_address(r["business_address"], r["business_city"], r["business_state"], r["business_zip"]),
+                coarse=True,
+            )
+            if norm_addr:
+                st["mail_addresses"].add(norm_addr)
+
+        for pid_key, st in hp_stats.items():
+            name = st["name_normalized"] or st["representative_name_c"]
+            rep_name = st["representative_name_c"] or name
+            if WHITELIST_PATTERN.search(name) or WHITELIST_PATTERN.search(rep_name):
                 continue
-            linked = int(row.get("linked_businesses") or 0)
+            linked = len(st["businesses"])
             if linked < AMBIGUOUS_PRINCIPAL_MIN_BUSINESSES:
                 continue
-            owning = int(row.get("owning_businesses") or 0)
-            domains = int(row.get("email_domain_count") or 0)
-            mail_addresses = int(row.get("mail_address_count") or 0)
-            top_email = int(row.get("top_email_count") or 0)
+            owning = len(st["owning_businesses"])
+            domains = len(st["domains"])
+            mail_addresses = len(st["mail_addresses"])
+            top_email = max(st["emails"].values(), default=0)
             top_email_share = (top_email / linked) if linked else 0
             mail_address_share = (mail_addresses / linked) if linked else 0
+
+            # Suppress explicit ESQ/Esquire corporate organizer hubs bridging unrelated client portfolios
+            if attorney_organizer_re.search(rep_name) and linked >= 8 and mail_addresses >= 4 and top_email_share < 0.50:
+                ambiguous_principal_ids.add(pid_key)
+                continue
 
             diffuse_email_evidence = (
                 domains >= AMBIGUOUS_PRINCIPAL_MIN_EMAIL_DOMAINS
@@ -407,11 +539,11 @@ def build_graph(conn, skip_emails=False):
             low_property_owner_evidence = owning <= AMBIGUOUS_PRINCIPAL_MAX_OWNING_BUSINESSES
 
             if low_property_owner_evidence and (diffuse_email_evidence or diffuse_address_evidence):
-                ambiguous_principal_ids.add(row["principal_id"])
+                ambiguous_principal_ids.add(pid_key)
 
         if ambiguous_principal_ids:
             logger.info(
-                "  - Suppressing %s ambiguous common-name principal bridge(s).",
+                "  - Suppressing %s ambiguous common-name / organizer principal bridge(s).",
                 f"{len(ambiguous_principal_ids):,}",
             )
 
@@ -423,7 +555,10 @@ def build_graph(conn, skip_emails=False):
         with conn.cursor(name="network_pbl_links", cursor_factory=RealDictCursor) as link_cur:
             link_cur.itersize = 50000
             link_cur.execute("""
-                SELECT pbl.business_id, pbl.principal_id, up.name_normalized as p_name, b.name as b_name
+                SELECT pbl.business_id, pbl.principal_id,
+                       up.name_normalized as p_name,
+                       up.representative_name_c as p_rep_name,
+                       b.name as b_name
                 FROM principal_business_links pbl
                 JOIN unique_principals up ON up.principal_id = pbl.principal_id
                 JOIN businesses b ON b.id = pbl.business_id
@@ -437,16 +572,22 @@ def build_graph(conn, skip_emails=False):
                 if bid not in owning_business_ids:
                     continue
 
-                if row['p_name'] in ignore_names: continue
+                if is_ignored_principal(row['p_name']) or is_ignored_principal(row['p_rep_name']): continue
                 if pid in ambiguous_principal_ids: continue
                 if pid in hub_principals: continue
                 if bid in hub_businesses: continue
 
-                # Extra safety: name-based filter for institutional entities that might have low degree
-                is_whitelisted = WHITELIST_PATTERN.search(row['p_name'] or "") or WHITELIST_PATTERN.search(row['b_name'] or "")
+                # Extra safety: name-based filter for institutional entities that might have low degree.
+                # Check BOTH name_normalized and representative_name_c because name_normalized
+                # transposes word order (e.g. 'AGENTS INC NATIONAL REGISTERED' vs 'NATIONAL REGISTERED AGENTS, INC.').
+                is_whitelisted = (
+                    WHITELIST_PATTERN.search(row['p_name'] or "")
+                    or WHITELIST_PATTERN.search(row['p_rep_name'] or "")
+                    or WHITELIST_PATTERN.search(row['b_name'] or "")
+                )
 
                 if not is_whitelisted:
-                    if INSTITUTIONAL_PATTERN.search(row['p_name'] or ""):
+                    if INSTITUTIONAL_PATTERN.search(row['p_name'] or "") or INSTITUTIONAL_PATTERN.search(row['p_rep_name'] or ""):
                         continue
                     if INSTITUTIONAL_PATTERN.search(row['b_name'] or ""):
                         continue
@@ -467,6 +608,207 @@ def build_graph(conn, skip_emails=False):
                 count += 1
                 if count % 100000 == 0:
                     logger.debug(f"    Loaded {count:,} links...")
+
+        # A1b. OpenCorporates Multi-Hop Foreign & Holding-Company Principal Bridges
+        # Pierces Delaware / NY / MA / NJ / FL / WY parent & foreign-registered LLCs
+        # owning CT properties (`owning_business_ids`) using `oc_*` when populated.
+        try:
+            cur.execute("SAVEPOINT sp_ct_oc_bridges")
+            cur.execute("SELECT to_regclass('public.oc_companies') IS NOT NULL AS has_tbl")
+            has_oc_tbl = bool(cur.fetchone()["has_tbl"])
+            has_oc_rows = False
+            if has_oc_tbl:
+                cur.execute("SELECT EXISTS (SELECT 1 FROM oc_companies LIMIT 1) AS has_rows")
+                has_oc_rows = bool(cur.fetchone()["has_rows"])
+
+            if has_oc_rows and owning_business_ids:
+                from oc_linker import (
+                    OCCandidate,
+                    demangle_assessor_owner,
+                    load_oc_registered_agent_addresses,
+                    resolve_oc_company_principals,
+                    score_oc_candidates,
+                )
+
+                logger.info("  - Resolving OpenCorporates multi-hop foreign/parent bridges for CT owning businesses...")
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS ct_oc_principal_links (
+                        business_id  TEXT NOT NULL,
+                        principal_id INTEGER NOT NULL,
+                        PRIMARY KEY (business_id, principal_id)
+                    );
+                    TRUNCATE TABLE ct_oc_principal_links;
+                    """
+                )
+
+                # Build conservative unambiguous `canonicalize_person_name -> principal_id` map
+                canon_to_pid = {}
+                canon_ambig = set()
+                cur.execute("SELECT principal_id, name_normalized, representative_name_c FROM unique_principals")
+                for up_row in cur:
+                    pid_cand = up_row["principal_id"]
+                    if pid_cand in ambiguous_principal_ids or pid_cand in hub_principals:
+                        continue
+                    rep_nm = up_row.get("representative_name_c") or ""
+                    norm_nm = up_row.get("name_normalized") or ""
+                    if is_ignored_principal(norm_nm) or is_ignored_principal(rep_nm):
+                        continue
+                    if attorney_organizer_re.search(rep_nm):
+                        continue
+                    if not (WHITELIST_PATTERN.search(norm_nm) or WHITELIST_PATTERN.search(rep_nm)):
+                        if INSTITUTIONAL_PATTERN.search(norm_nm) or INSTITUTIONAL_PATTERN.search(rep_nm):
+                            continue
+                    ck = canonicalize_person_name(norm_nm or rep_nm)
+                    if not ck or len(ck.split()) < 2:
+                        continue
+                    prev_pid = canon_to_pid.get(ck)
+                    if prev_pid is None:
+                        canon_to_pid[ck] = pid_cand
+                    elif prev_pid != pid_cand:
+                        canon_ambig.add(ck)
+                for ak in canon_ambig:
+                    canon_to_pid.pop(ak, None)
+
+                ra_addrs = load_oc_registered_agent_addresses(conn)
+                owning_list = sorted(owning_business_ids)
+                ct_biz_records = {}
+                lookup_norms = set()
+                for b_idx in range(0, len(owning_list), 5000):
+                    b_chunk = owning_list[b_idx : b_idx + 5000]
+                    cur.execute(
+                        """
+                        SELECT id, name, mail_address, mail_city, mail_state, mail_zip,
+                               business_address, business_city, business_state, business_zip
+                        FROM businesses
+                        WHERE id = ANY(%s)
+                        """,
+                        (b_chunk,),
+                    )
+                    for brow in cur.fetchall():
+                        bid_k = brow["id"]
+                        bname = brow.get("name") or ""
+                        if not bname or (INSTITUTIONAL_PATTERN.search(bname) and not WHITELIST_PATTERN.search(bname)):
+                            continue
+                        m_addr = compose_address(brow.get("mail_address"), brow.get("mail_city"), brow.get("mail_state"), brow.get("mail_zip"))
+                        b_addr = compose_address(brow.get("business_address"), brow.get("business_city"), brow.get("business_state"), brow.get("business_zip"))
+                        rec = demangle_assessor_owner(bname, mailing_address=(m_addr or b_addr))
+                        if not rec.is_business or not rec.owner_norm:
+                            continue
+                        m_coarse = normalize_mailing_address_coarse(m_addr) if m_addr else ""
+                        b_coarse = normalize_mailing_address_coarse(b_addr) if b_addr else ""
+                        ct_biz_records[bid_k] = (rec, m_coarse or b_coarse, b_coarse if (m_coarse and b_coarse) else "")
+                        lookup_norms.add(rec.owner_norm)
+
+                oc_cands_by_norm = defaultdict(list)
+                ct_oc_jurs = ["us_ct", "us_de", "us_ny", "us_ma", "us_nj", "us_fl", "us_wy", "us_nv"]
+                norm_list = sorted(lookup_norms)
+                for n_idx in range(0, len(norm_list), 4000):
+                    n_chunk = norm_list[n_idx : n_idx + 4000]
+                    cur.execute(
+                        """
+                        SELECT jurisdiction_code, company_number, name, name_norm, is_active,
+                               registered_address_coarse, mailing_address_coarse, agent_address_coarse,
+                               home_jurisdiction_code, home_company_number
+                        FROM oc_companies
+                        WHERE jurisdiction_code = ANY(%s)
+                          AND name_norm = ANY(%s)
+                        """,
+                        (ct_oc_jurs, n_chunk),
+                    )
+                    for oc_r in cur.fetchall():
+                        oc_cands_by_norm[oc_r["name_norm"]].append(
+                            OCCandidate(
+                                jurisdiction_code=oc_r["jurisdiction_code"],
+                                company_number=oc_r["company_number"],
+                                name=oc_r["name"],
+                                name_norm=oc_r["name_norm"],
+                                is_active=bool(oc_r.get("is_active", True)),
+                                registered_address_coarse=oc_r.get("registered_address_coarse") or "",
+                                mailing_address_coarse=oc_r.get("mailing_address_coarse") or "",
+                                agent_address_coarse=oc_r.get("agent_address_coarse") or "",
+                                home_jurisdiction_code=oc_r.get("home_jurisdiction_code"),
+                                home_company_number=oc_r.get("home_company_number"),
+                            )
+                        )
+
+                matched_oc_by_bid = {}
+                for bid_k, (rec, prim_c, ext_c) in ct_biz_records.items():
+                    m_res = score_oc_candidates(
+                        rec,
+                        parcel_state="CT",
+                        parcel_mailing_coarse=prim_c or None,
+                        candidates=oc_cands_by_norm.get(rec.owner_norm, ()),
+                        extra_parcel_coarse_addrs=(ext_c,) if ext_c else (),
+                        registered_agent_addrs=ra_addrs,
+                    )
+                    if m_res is not None:
+                        matched_oc_by_bid[bid_k] = (m_res.canonical_jurisdiction_code, m_res.canonical_company_number)
+
+                resolved_oc = resolve_oc_company_principals(conn, list(set(matched_oc_by_bid.values())), max_hops=3)
+                oc_prin_pairs = set()
+                holdco_to_bids = defaultdict(list)
+
+                for bid_k, okey in matched_oc_by_bid.items():
+                    oinfo = resolved_oc.get(okey) or {}
+                    for h_nm in oinfo.get("humans") or ():
+                        if attorney_organizer_re.search(h_nm) or is_ignored_principal(h_nm):
+                            continue
+                        if INSTITUTIONAL_PATTERN.search(h_nm) and not WHITELIST_PATTERN.search(h_nm):
+                            continue
+                        ck = canonicalize_person_name(h_nm)
+                        pid_match = canon_to_pid.get(ck)
+                        if pid_match is not None:
+                            u = get_id(("business", bid_k))
+                            v = get_id(("principal", pid_match))
+                            graph[u].add(v)
+                            graph[v].add(u)
+                            try:
+                                pid_i = int(pid_match)
+                                property_active_principal_ids.add(pid_i)
+                                oc_prin_pairs.add((bid_k, pid_i))
+                            except (TypeError, ValueError):
+                                pass
+
+                    for hold_nm in oinfo.get("holding_entities") or ():
+                        if INSTITUTIONAL_PATTERN.search(hold_nm) or is_excluded_third_party_entity(hold_nm):
+                            continue
+                        h_norm = normalize_business_name(hold_nm)
+                        if h_norm and len(h_norm) >= 6 and h_norm not in SKIP_NAMES:
+                            holdco_to_bids[h_norm].append(bid_k)
+
+                    for hq_addr in oinfo.get("hq_addresses") or ():
+                        if hq_addr and not hq_addr.startswith("PO BOX "):
+                            holdco_to_bids[f"hq:{hq_addr}"].append(bid_k)
+
+                holdco_edges = 0
+                for h_norm, h_bids in holdco_to_bids.items():
+                    uniq_bids = sorted(set(h_bids))
+                    if 2 <= len(uniq_bids) <= 15:
+                        h_hub = get_id(("address", f"oc_holdco:{h_norm}"))
+                        for b_k in uniq_bids:
+                            b_int = get_id(("business", b_k))
+                            graph[b_int].add(h_hub)
+                            graph[h_hub].add(b_int)
+                            holdco_edges += 1
+
+                if oc_prin_pairs:
+                    execute_values(
+                        cur,
+                        "INSERT INTO ct_oc_principal_links (business_id, principal_id) VALUES %s ON CONFLICT DO NOTHING",
+                        sorted(oc_prin_pairs),
+                        page_size=2000,
+                    )
+                logger.info(
+                    "    OpenCorporates CT piercing matched %s owning businesses -> %s human principal links, %s holding-company edges.",
+                    f"{len(matched_oc_by_bid):,}",
+                    f"{len(oc_prin_pairs):,}",
+                    f"{holdco_edges:,}",
+                )
+            cur.execute("RELEASE SAVEPOINT sp_ct_oc_bridges")
+        except Exception as oc_ct_exc:
+            cur.execute("ROLLBACK TO SAVEPOINT sp_ct_oc_bridges")
+            logger.warning("  - Skipping CT OpenCorporates bridge step: %s", oc_ct_exc)
 
         # A2. Same-family co-principal bridges through non-owning businesses.
         #
@@ -505,7 +847,10 @@ def build_graph(conn, skip_emails=False):
         with conn.cursor(name="network_same_family_bridges", cursor_factory=RealDictCursor) as bridge_cur:
             bridge_cur.itersize = 50000
             bridge_cur.execute("""
-                SELECT pbl.business_id, pbl.principal_id, up.name_normalized as p_name, b.name as b_name
+                SELECT pbl.business_id, pbl.principal_id,
+                       up.name_normalized as p_name,
+                       up.representative_name_c as p_rep_name,
+                       b.name as b_name
                 FROM principal_business_links pbl
                 JOIN unique_principals up ON up.principal_id = pbl.principal_id
                 JOIN businesses b ON b.id = pbl.business_id
@@ -523,13 +868,17 @@ def build_graph(conn, skip_emails=False):
                     continue
                 if pid in ambiguous_principal_ids:
                     continue
-                if row['p_name'] in ignore_names or pid in hub_principals:
+                if is_ignored_principal(row['p_name']) or is_ignored_principal(row['p_rep_name']) or pid in hub_principals:
                     continue
 
                 b_name = row['b_name'] or ""
-                is_whitelisted = WHITELIST_PATTERN.search(row['p_name'] or "") or WHITELIST_PATTERN.search(b_name)
+                is_whitelisted = (
+                    WHITELIST_PATTERN.search(row['p_name'] or "")
+                    or WHITELIST_PATTERN.search(row['p_rep_name'] or "")
+                    or WHITELIST_PATTERN.search(b_name)
+                )
                 if not is_whitelisted:
-                    if INSTITUTIONAL_PATTERN.search(row['p_name'] or ""):
+                    if INSTITUTIONAL_PATTERN.search(row['p_name'] or "") or INSTITUTIONAL_PATTERN.search(row['p_rep_name'] or ""):
                         continue
                     if INSTITUTIONAL_PATTERN.search(b_name):
                         continue
@@ -646,7 +995,9 @@ def build_graph(conn, skip_emails=False):
             logger.info("  - Skipped %s high-frequency email key(s) as likely service/agent bridges.", skipped_email_keys)
 
         # C. Shared Mailing Addresses (using coarse normalization)
-        # Re-enabled with robust safeguards: blank-address filtering and junk blacklist.
+        # Safeguards: blank/placeholder filtering, curated registered-agent
+        # blocklist from address_match_rules, and a frequency cap for the
+        # agent offices and virtual mailboxes nobody has listed yet.
         logger.info("  - Loading Shared Mailing Addresses (Coarse Normalization)...")
 
         JUNK_ADDRS = {
@@ -654,29 +1005,157 @@ def build_graph(conn, skip_emails=False):
             'CONNECTICUT', 'CT', 'USA', 'UNITED STATES',
         }
 
-        addr_map = defaultdict(list)
+        registrar_substrings = load_registrar_address_substrings(conn)
+        if registrar_substrings:
+            logger.info(
+                "  - Loaded %s registered-agent address rule(s) from address_match_rules.",
+                f"{len(registrar_substrings):,}",
+            )
+        else:
+            logger.warning(
+                "  - No registered-agent address rules loaded; falling back to the "
+                "hardcoded list only. Shared-address matching will be noisier."
+            )
+
+        LAW_CARE_OF_RE = re.compile(
+            r'\bC\s*/?\s*O\b.*\b(?:LAW\b|ESQ\b|ATTORNEYS?\b|C\.?P\.?A\.?\b)|GREENE\s+LAW',
+            re.IGNORECASE,
+        )
+        LAW_OFFICE_ADDR_RE = re.compile(
+            r'\bLAW\s+(?:PC|P\.C\.|PLLC|FIRM|OFFICES?|GROUP)\b|\bATTORNEYS?\s+AT\s+LAW\b',
+            re.IGNORECASE,
+        )
+        raw_addr_records = []
+        coarse_distinct_units = defaultdict(set)
+        law_office_coarse_addrs = set()
+        third_party_entity_addr_counts = defaultdict(int)
+        skipped_registrar_addresses = set()
         with conn.cursor(name="network_address_businesses", cursor_factory=RealDictCursor) as addr_cur:
             addr_cur.itersize = 50000
-            addr_cur.execute("SELECT id, mail_address, business_address FROM businesses")
+            # City/state/zip live in sibling columns for business_address, so the
+            # address must be composed before normalizing — otherwise every
+            # '70 West Main Street' in the state collapses to one key.
+            addr_cur.execute("""
+                SELECT id, name, mail_address, mail_city, mail_state, mail_zip,
+                       business_address, business_city, business_state, business_zip
+                FROM businesses
+            """)
             for row in addr_cur:
+                b_name = row.get('name') or ''
+                raw_combined = f"{row['mail_address'] or ''} {row['business_address'] or ''}"
+                if LAW_CARE_OF_RE.search(raw_combined):
+                    care_mail = compose_address(row['mail_address'], row['mail_city'],
+                                                row['mail_state'], row['mail_zip'])
+                    care_biz = compose_address(row['business_address'], row['business_city'],
+                                               row['business_state'], row['business_zip'])
+                    stripped_mail = re.sub(r'\bC\s*/?\s*O\b[^,\d]*', ' ', care_mail, flags=re.IGNORECASE)
+                    stripped_biz = re.sub(r'\bC\s*/?\s*O\b[^,\d]*', ' ', care_biz, flags=re.IGNORECASE)
+                    for candidate_addr in (care_mail, care_biz, stripped_mail, stripped_biz):
+                        care_norm = normalize_mailing_address_coarse(candidate_addr)
+                        if care_norm and care_norm not in JUNK_ADDRS and len(care_norm) > 4:
+                            law_office_coarse_addrs.add(care_norm)
+
+                if is_excluded_third_party_entity(b_name):
+                    tp_mail = compose_address(
+                        strip_benign_care_of_prefix(row['mail_address']) or row['mail_address'],
+                        row['mail_city'], row['mail_state'], row['mail_zip'],
+                    )
+                    tp_biz = compose_address(
+                        strip_benign_care_of_prefix(row['business_address']) or row['business_address'],
+                        row['business_city'], row['business_state'], row['business_zip'],
+                    )
+                    tp_norm = first_normalized_mailing_address(tp_mail, tp_biz, coarse=True)
+                    if tp_norm and tp_norm not in JUNK_ADDRS and len(tp_norm) > 4:
+                        third_party_entity_addr_counts[tp_norm] += 1
+                    continue
+
+                if INSTITUTIONAL_PATTERN.search(b_name) and not WHITELIST_PATTERN.search(b_name):
+                    continue
+
                 # Only include property-owning businesses (NOT bridge businesses)
                 # Bridge businesses connect via principal links, not shared addresses
                 if row['id'] not in property_owning_business_ids:
                     continue
-                norm = first_normalized_mailing_address(
-                    row['mail_address'],
-                    row['business_address'],
-                    coarse=True,
+                raw_comp_mail = compose_address(row['mail_address'], row['mail_city'],
+                                                row['mail_state'], row['mail_zip'])
+                raw_comp_biz = compose_address(row['business_address'], row['business_city'],
+                                               row['business_state'], row['business_zip'])
+                comp_mail = compose_address(
+                    strip_benign_care_of_prefix(row['mail_address']) or row['mail_address'],
+                    row['mail_city'], row['mail_state'], row['mail_zip'],
                 )
+                comp_biz = compose_address(
+                    strip_benign_care_of_prefix(row['business_address']) or row['business_address'],
+                    row['business_city'], row['business_state'], row['business_zip'],
+                )
+                norm = first_normalized_mailing_address(comp_mail, comp_biz, coarse=True)
                 # Filter: coarse normalizer already rejects blanks/short/no-letter strings
                 # Additional junk filter for known placeholders
-                if norm and norm not in JUNK_ADDRS and not is_ignored_shared_address(norm) and len(norm) > 4:
-                    addr_map[norm].append(row['id'])
+                if not norm or norm in JUNK_ADDRS or len(norm) <= 4:
+                    continue
+                if is_ignored_shared_address(norm):
+                    continue
+                if is_excluded_third_party_address(f"{raw_comp_mail} ; {raw_comp_biz}", norm, registrar_substrings):
+                    skipped_registrar_addresses.add(norm)
+                    continue
+
+                if LAW_OFFICE_ADDR_RE.search(raw_combined):
+                    law_office_coarse_addrs.add(norm)
+
+                fine_raw = first_normalized_mailing_address(comp_mail, comp_biz, coarse=False)
+                fine_no_zip = re.sub(r'\s+\d{5}\b\s*$', '', fine_raw).strip() if fine_raw else ""
+                fine_no_zip = re.sub(r'\b(\d+)(?:ST|ND|RD|TH)\b', r'\1', fine_no_zip)
+                unit_tokens = tuple(re.findall(r'#\s*([A-Z0-9][A-Z0-9-]*)', fine_no_zip))
+                if unit_tokens:
+                    coarse_distinct_units[norm].add(unit_tokens)
+
+                raw_addr_records.append((row['id'], norm, fine_no_zip, bool(unit_tokens)))
+
+        for tp_addr, tp_cnt in third_party_entity_addr_counts.items():
+            if tp_cnt >= 2:
+                law_office_coarse_addrs.add(tp_addr)
+
+        addr_map = defaultdict(list)
+        multi_unit_buildings = {
+            c for c, units in coarse_distinct_units.items()
+            if len(units) >= MULTI_UNIT_BUILDING_MIN_DISTINCT_UNITS
+        }
+        for bid, norm, fine_no_zip, has_unit in raw_addr_records:
+            if norm in law_office_coarse_addrs:
+                continue
+            if norm in multi_unit_buildings:
+                # Multi-unit office tower / UPS Store / PMB center: only match businesses
+                # sharing the exact same unit/mailbox number; never collapse the building.
+                if has_unit and fine_no_zip:
+                    addr_map[fine_no_zip].append(bid)
+            else:
+                addr_map[norm].append(bid)
+
+        if law_office_coarse_addrs:
+            logger.info(
+                "  - Excluded %s law-office care-of service address(es) from shared-address bridging.",
+                f"{len(law_office_coarse_addrs):,}",
+            )
+        if multi_unit_buildings:
+            logger.info(
+                "  - Preserved unit-level separation at %s multi-unit building / PMB center address(es) (>= %s distinct units).",
+                f"{len(multi_unit_buildings):,}",
+                MULTI_UNIT_BUILDING_MIN_DISTINCT_UNITS,
+            )
 
         addr_membership_edge_count = 0
         addr_pair_equivalent_count = 0
+        skipped_frequent_addresses = 0
         for addr, biz_ids in addr_map.items():
             if len(biz_ids) < 2:
+                continue
+            if len(biz_ids) > SHARED_ADDRESS_MAX_BUSINESSES:
+                skipped_frequent_addresses += 1
+                logger.info(
+                    "    Skipping high-frequency address %s (%s businesses, cap %s) "
+                    "as a likely registered-agent office.",
+                    addr, len(biz_ids), SHARED_ADDRESS_MAX_BUSINESSES,
+                )
                 continue
             addr_node = get_id(('address', addr))
             for bid in biz_ids:
@@ -685,6 +1164,17 @@ def build_graph(conn, skip_emails=False):
                 graph[addr_node].add(biz_node)
                 addr_membership_edge_count += 1
             addr_pair_equivalent_count += len(biz_ids) * (len(biz_ids) - 1) // 2
+
+        if skipped_registrar_addresses:
+            logger.info(
+                "  - Excluded %s known registered-agent address(es) via address_match_rules.",
+                f"{len(skipped_registrar_addresses):,}",
+            )
+        if skipped_frequent_addresses:
+            logger.info(
+                "  - Excluded %s address(es) over the %s-business frequency cap.",
+                f"{skipped_frequent_addresses:,}", SHARED_ADDRESS_MAX_BUSINESSES,
+            )
 
         logger.info(
             "  - Added %s shared-address membership edges from %s unique addresses (equivalent to %s uncapped pair links).",
@@ -834,6 +1324,15 @@ def store_networks_shadow(conn, networks, graph_data=None):
                 biz_to_prins[r['business_id']].append(pid)
             except (ValueError, TypeError):
                 continue
+        cur.execute("SELECT to_regclass('public.ct_oc_principal_links') IS NOT NULL AS has_oc_links")
+        if cur.fetchone()["has_oc_links"]:
+            cur.execute("SELECT principal_id, business_id FROM ct_oc_principal_links")
+            for r in cur:
+                try:
+                    pid = int(r['principal_id'])
+                    biz_to_prins[r['business_id']].append(pid)
+                except (ValueError, TypeError):
+                    continue
 
     def is_human_like(name):
         if not name: return False
@@ -846,6 +1345,23 @@ def store_networks_shadow(conn, networks, graph_data=None):
     owning_principals = set(prin_props.keys())
     owning_businesses = set(biz_props.keys())
 
+    # Load principal ignore list ONCE (order-independent via canonicalize_person_name)
+    with conn.cursor() as cur:
+        cur.execute("SELECT normalized_name FROM principal_ignore_list")
+        ignore_names_raw = {r[0] for r in cur if r[0]}
+    ignore_names_set = set(ignore_names_raw) | {normalize_person_name(n) for n in ignore_names_raw}
+    ignore_canon_set = {canonicalize_person_name(n) for n in ignore_names_raw}
+    ignore_canon_set.discard("")
+
+    def is_ignored_header_principal(name):
+        if not name:
+            return False
+        if INSTITUTIONAL_PATTERN.search(name):
+            return True
+        norm = normalize_person_name(name)
+        return norm in ignore_names_set or canonicalize_person_name(name) in ignore_canon_set
+
+    network_rows = []
     entity_links = []
 
     # Prepare for edge storage
@@ -866,11 +1382,6 @@ def store_networks_shadow(conn, networks, graph_data=None):
         businesses = [n[1] for n in group if n[0] == 'business']
 
         # 2. NAMING LOGIC: Property-Weighted Human Priority
-        # Exclude known agents from the ignore list
-        with conn.cursor() as cur:
-            cur.execute("SELECT normalized_name FROM principal_ignore_list")
-            ignore_names_set = {r[0] for r in cur}
-
         p_weights = defaultdict(int)
         for pid in principals:
             p_weights[pid] += prin_props.get(pid, 0)
@@ -883,8 +1394,8 @@ def store_networks_shadow(conn, networks, graph_data=None):
                     if pid in p_weights: # Only count if the principal is actually in this network
                         p_weights[pid] += b_count
 
-        # Header candidates MUST be active owners (direct or indirect)
-        active_ps = [p for p in principals if p_weights.get(p, 0) > 0 and normalize_person_name(prin_names.get(p)) not in ignore_names_set]
+        # Header candidates MUST be active owners (direct or indirect) and not ignored agents
+        active_ps = [p for p in principals if p_weights.get(p, 0) > 0 and not is_ignored_header_principal(prin_names.get(p))]
 
         # Sort active principals: First by human-likeness, then by property influence
         sorted_ps = sorted(
@@ -906,16 +1417,6 @@ def store_networks_shadow(conn, networks, graph_data=None):
             else:
                 primary_name = "Unknown Network"
 
-        # User Feedback Fix: Force human name if available in network even if business has more direct props
-        # (This is already handled by sorted_ps priority if they have ANY weighted props)
-
-        # 3. Store network record
-        # Visible counts only include active owners
-
-        # Visible counts: Use active_ps for principals (indirect owners included)
-        # For businesses, we keep owning_businesses (direct) because listing all 100 non-owning LLCs might be noisy?
-        # Actually, let's keep business count as owning_only for now to match "Portfolio" logic,
-        # but Principal count MUST be all connected humans who own something indirectly.
         visible_p_count = len(active_ps)
         visible_b_count = len([b for b in businesses if b in owning_businesses])
 
@@ -934,13 +1435,18 @@ def store_networks_shadow(conn, networks, graph_data=None):
         # -----------------------------------------------
 
         # Calculate totals using SQL at the end of Phase 4 to avoid memory-heavy sets
-        net_total_props = 0
-        net_total_value = 0
+        net_id = nid
+        network_rows.append((net_id, primary_name, visible_b_count, visible_p_count, 0, 0))
 
-        with conn.cursor() as cur:
-            cur.execute("INSERT INTO networks_shadow (primary_name, business_count, principal_count, total_properties, total_assessed_value) VALUES (%s, %s, %s, %s, %s) RETURNING id",
-                        (primary_name, visible_b_count, visible_p_count, net_total_props, net_total_value))
-            net_id = cur.fetchone()[0]
+        if len(network_rows) >= 10000:
+            with conn.cursor() as cur:
+                execute_values(
+                    cur,
+                    "INSERT INTO networks_shadow (id, primary_name, business_count, principal_count, total_properties, total_assessed_value) VALUES %s",
+                    network_rows,
+                )
+            conn.commit()
+            network_rows = []
 
         # Identify principals who are connected to owning businesses (indirect ownership)
         principals_via_businesses = set()
@@ -975,45 +1481,33 @@ def store_networks_shadow(conn, networks, graph_data=None):
 
             # 1. Get Int IDs for all nodes in this network group
             group_ints = []
+            addr_ints = []
             node_map = {} # Int -> Name
 
             for node in group:
                 if node in node_to_int:
                     idx = node_to_int[node]
+                    if node[0] == 'address':
+                        addr_ints.append(idx)
+                        continue
                     group_ints.append(idx)
 
                     # Resolve name
                     n_name = None
                     if node[0] == 'business': n_name = biz_names.get(node[1])
-                    else: n_name = prin_names.get(node[1]) # ID is already int or string matching key
+                    elif node[0] == 'principal': n_name = prin_names.get(node[1])
 
                     if n_name: node_map[idx] = n_name
 
-            # 2. Check edges between them
-            # We iterate all pairs or check adjacency. Adjacency is O(E).
+            # 2. Check edges between entity nodes
             for u_idx in group_ints:
                 u_name = node_map.get(u_idx)
                 if not u_name: continue
 
-                # Check neighbors in graph
                 neighbors = graph_map.get(u_idx, [])
                 for v_idx in neighbors:
-                    # Undirected graph, we will see (u,v) and (v,u).
-                    # Store both or canonicalize? App usually expects directed link rows or handles duplication.
-                    # We'll store (u,v) where u < v to save space, OR store all for easiest querying.
-                    if v_idx > u_idx and v_idx in node_map: # Check if neighbor is in THIS network (it should be)
+                    if v_idx > u_idx and v_idx in node_map:
                         v_name = node_map.get(v_idx)
-
-                        # Infer type
-                        # If one is Principal and other Business -> 'principal_link'
-                        # If Business and Business -> 'shared_contact'
-                        # If Principal and Principal -> 'shared_contact' (rare)
-
-                        # We need types from the node tuples, but we only have names in node_map.
-                        # Recover types from group list is slow.
-                        # Let's assume P-B if names are different types... wait names don't have types.
-                        # We can use the graph_data int_to_node to look up types.
-
                         u_node = graph_data[2][u_idx]
                         v_node = graph_data[2][v_idx]
 
@@ -1022,6 +1516,21 @@ def store_networks_shadow(conn, networks, graph_data=None):
                         elif u_node[0] == 'business': l_type = 'shared_contact'
 
                         edges_to_store.append((net_id, u_name, v_name, l_type))
+
+            # 3. Emit star edges for shared-address hub nodes so components stay connected
+            for a_idx in addr_ints:
+                addr_biz_names = []
+                seen_addr_names = set()
+                for v_idx in graph_map.get(a_idx, []):
+                    if v_idx in node_map and graph_data[2][v_idx][0] == 'business':
+                        b_nm = node_map[v_idx]
+                        if b_nm and b_nm not in seen_addr_names:
+                            seen_addr_names.add(b_nm)
+                            addr_biz_names.append(b_nm)
+                if len(addr_biz_names) >= 2:
+                    hub_nm = addr_biz_names[0]
+                    for other_nm in addr_biz_names[1:]:
+                        edges_to_store.append((net_id, hub_nm, other_nm, 'shared_address'))
 
         if len(entity_links) >= 10000:
             with conn.cursor() as cur:
@@ -1032,6 +1541,21 @@ def store_networks_shadow(conn, networks, graph_data=None):
             with conn.cursor() as cur:
                 execute_values(cur, "INSERT INTO ownership_links_shadow (network_id, from_entity, to_entity, link_type) VALUES %s", edges_to_store)
             conn.commit(); edges_to_store = []
+
+    if network_rows:
+        with conn.cursor() as cur:
+            execute_values(
+                cur,
+                "INSERT INTO networks_shadow (id, primary_name, business_count, principal_count, total_properties, total_assessed_value) VALUES %s",
+                network_rows,
+            )
+        conn.commit()
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT setval(pg_get_serial_sequence('networks_shadow', 'id'), COALESCE((SELECT MAX(id) FROM networks_shadow), 1))"
+        )
+    conn.commit()
 
     if entity_links:
         with conn.cursor() as cur:
@@ -1059,10 +1583,6 @@ def store_networks_shadow(conn, networks, graph_data=None):
                     OR (en.entity_type = 'business' AND UPPER(p.owner) = UPPER(en.entity_name))
                     OR (en.entity_type = 'business' AND p.owner_norm = en.normalized_name)
                     OR (en.entity_type = 'principal' AND p.principal_id = en.entity_id)
-                    OR (en.entity_type = 'principal' AND p.owner_norm = en.entity_id)
-                    OR (en.entity_type = 'principal' AND p.co_owner_norm = en.entity_id)
-                    OR (en.entity_type = 'principal' AND p.owner_norm = en.normalized_name)
-                    OR (en.entity_type = 'principal' AND p.co_owner_norm = en.normalized_name)
                 )
                 ORDER BY en.network_id, p.location, p.property_city, p.unit, p.id DESC
             ),

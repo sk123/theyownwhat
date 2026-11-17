@@ -28,7 +28,14 @@ from psycopg2.extras import execute_values
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://user:password@ctdata_db:5432/ctdata")
+def _resolve_database_url() -> str:
+    raw = os.environ.get("DATABASE_URL", "postgresql://user:password@ctdata_db:5432/ctdata")
+    if "@ctdata_db" in raw and not os.path.exists("/.dockerenv"):
+        return raw.replace("@ctdata_db", "@localhost")
+    return raw
+
+
+DATABASE_URL = _resolve_database_url()
 DEFAULT_DATA_FILE = os.environ.get("NHPD_DATA_FILE", "data/Active and Inconclusive Properties.xlsx")
 
 CITY_STATES = {
@@ -42,18 +49,33 @@ CITY_STATES = {
     "miami": "FL",
     "minneapolis": "MN",
     "nj": "NJ",
+    "ma": "MA",
+    "fl": "FL",
+    "ny": "NY",
+    "co": "CO",
+    "vt": "VT",
+    "wi": "WI",
+    "nc": "NC",
+    "ar": "AR",
+    "va": "VA",
 }
 
 STATE_LOCALITY_ALIASES = {
     "DC": ["WASHINGTON"],
-    "NY": ["NEW YORK", "MANHATTAN", "BROOKLYN", "BRONX", "QUEENS", "STATEN ISLAND"],
+    "NY": ["NEW YORK", "MANHATTAN", "BROOKLYN", "BRONX", "QUEENS", "STATEN ISLAND", "BUFFALO", "ROCHESTER", "SYRACUSE", "ALBANY", "YONKERS"],
     "MD": ["BALTIMORE"],
-    "MA": ["BOSTON"],
+    "MA": ["BOSTON", "WORCESTER", "SPRINGFIELD", "CAMBRIDGE", "LOWELL"],
     "MI": ["DETROIT"],
     "PA": ["PHILADELPHIA"],
     "IL": ["CHICAGO"],
-    "FL": ["MIAMI", "MIAMI DADE"],
+    "FL": ["MIAMI", "MIAMI DADE", "ORLANDO", "TAMPA", "JACKSONVILLE", "FORT LAUDERDALE", "ST PETERSBURG", "HIALEAH"],
     "MN": ["MINNEAPOLIS"],
+    "CO": ["DENVER", "COLORADO SPRINGS", "AURORA", "FORT COLLINS", "LAKEWOOD", "BOULDER"],
+    "VT": ["BURLINGTON", "RUTLAND", "BARRE", "MONTPELIER", "BRATTLEBORO"],
+    "WI": ["MILWAUKEE", "MADISON", "GREEN BAY", "KENOSHA", "RACINE"],
+    "NC": ["CHARLOTTE", "RALEIGH", "GREENSBORO", "DURHAM", "WINSTON SALEM", "FAYETTEVILLE", "ASHEVILLE", "WILMINGTON"],
+    "AR": ["LITTLE ROCK", "FAYETTEVILLE", "FORT SMITH", "SPRINGDALE", "JONESBORO", "NORTH LITTLE ROCK", "CONWAY", "BENTONVILLE", "PINE BLUFF"],
+    "VA": ["RICHMOND", "VIRGINIA BEACH", "NORFOLK", "CHESAPEAKE", "NEWPORT NEWS", "ALEXANDRIA", "HAMPTON", "ROANOKE", "PORTSMOUTH", "SUFFOLK", "LYNCHBURG"],
 }
 
 SUBSIDY_PREFIXES = [
@@ -98,6 +120,22 @@ def table_exists(conn, table_name: str) -> bool:
         return bool(cur.fetchone()[0])
 
 
+def table_has_column(conn, table_name: str, column_name: str) -> bool:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = %s
+              AND column_name = %s
+            LIMIT 1
+            """,
+            (table_name, column_name),
+        )
+        return cur.fetchone() is not None
+
+
 def clean_text(value: Any) -> str:
     if value is None or pd.isna(value):
         return ""
@@ -123,6 +161,7 @@ def normalize_zip(value: Any) -> str:
 
 def normalize_city(value: Any) -> str:
     text = clean_text(value).upper()
+    text = re.sub(r"\([^)]*\)", " ", text)
     text = re.sub(r"\b(TOWNSHIP|TWP|BOROUGH|BORO|CITY|TOWN|VILLAGE)\b", "", text)
     text = re.sub(r"[^A-Z0-9 ]", " ", text)
     return re.sub(r"\s+", " ", text).strip()
@@ -348,12 +387,18 @@ def fetch_properties(conn, city: str) -> list[dict[str, Any]]:
 
 
 def ensure_stats_columns(conn, city: str):
-    with conn.cursor() as cur:
-        cur.execute(f"ALTER TABLE {city}_bbl_stats ADD COLUMN IF NOT EXISTS nhpd_subsidy BOOLEAN DEFAULT FALSE")
-        cur.execute(f"ALTER TABLE {city}_bbl_stats ADD COLUMN IF NOT EXISTS nhpd_program TEXT")
-        cur.execute(f"ALTER TABLE {city}_bbl_stats ADD COLUMN IF NOT EXISTS nhpd_expiration DATE")
-        cur.execute(f"ALTER TABLE {city}_bbl_stats ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()")
-    conn.commit()
+    stats_tbl = f"{city}_bbl_stats"
+    ddl_target = "us_bbl_stats" if table_has_column(conn, stats_tbl, "jurisdiction") else stats_tbl
+    for col_name, col_ddl in (
+        ("nhpd_subsidy", "BOOLEAN DEFAULT FALSE"),
+        ("nhpd_program", "TEXT"),
+        ("nhpd_expiration", "DATE"),
+        ("updated_at", "TIMESTAMP DEFAULT NOW()"),
+    ):
+        if not table_has_column(conn, stats_tbl, col_name):
+            with conn.cursor() as cur:
+                cur.execute(f"ALTER TABLE {ddl_target} ADD COLUMN IF NOT EXISTS {col_name} {col_ddl}")
+            conn.commit()
 
 
 def reset_city_nhpd(conn, city: str):
@@ -474,28 +519,54 @@ def enrich_city(conn, city: str, state_code: str, state_records: list[NhpdRecord
 
     matches = list(matches_by_bbl.values())
     if matches:
+        is_partitioned = table_has_column(conn, stats_table, "jurisdiction")
         with conn.cursor() as cur:
-            execute_values(
-                cur,
-                f"""
-                INSERT INTO {stats_table} (
-                    bbl,
-                    nhpd_subsidy,
-                    nhpd_program,
-                    nhpd_expiration,
-                    updated_at
+            if is_partitioned:
+                part_matches = [(city, bbl, sub, prog, exp) for (bbl, sub, prog, exp) in matches]
+                execute_values(
+                    cur,
+                    f"""
+                    INSERT INTO {stats_table} (
+                        jurisdiction,
+                        bbl,
+                        nhpd_subsidy,
+                        nhpd_program,
+                        nhpd_expiration,
+                        updated_at
+                    )
+                    VALUES %s
+                    ON CONFLICT (jurisdiction, bbl) DO UPDATE SET
+                        nhpd_subsidy = EXCLUDED.nhpd_subsidy,
+                        nhpd_program = EXCLUDED.nhpd_program,
+                        nhpd_expiration = EXCLUDED.nhpd_expiration,
+                        updated_at = NOW()
+                    """,
+                    part_matches,
+                    template="(%s, %s, %s, %s, %s, NOW())",
+                    page_size=2000,
                 )
-                VALUES %s
-                ON CONFLICT (bbl) DO UPDATE SET
-                    nhpd_subsidy = EXCLUDED.nhpd_subsidy,
-                    nhpd_program = EXCLUDED.nhpd_program,
-                    nhpd_expiration = EXCLUDED.nhpd_expiration,
-                    updated_at = NOW()
-                """,
-                matches,
-                template="(%s, %s, %s, %s, NOW())",
-                page_size=2000,
-            )
+            else:
+                execute_values(
+                    cur,
+                    f"""
+                    INSERT INTO {stats_table} (
+                        bbl,
+                        nhpd_subsidy,
+                        nhpd_program,
+                        nhpd_expiration,
+                        updated_at
+                    )
+                    VALUES %s
+                    ON CONFLICT (bbl) DO UPDATE SET
+                        nhpd_subsidy = EXCLUDED.nhpd_subsidy,
+                        nhpd_program = EXCLUDED.nhpd_program,
+                        nhpd_expiration = EXCLUDED.nhpd_expiration,
+                        updated_at = NOW()
+                    """,
+                    matches,
+                    template="(%s, %s, %s, %s, NOW())",
+                    page_size=2000,
+                )
     conn.commit()
 
     update_source_status(conn, f"{city.upper()}_NHPD_ENRICHMENT", "success", details)
@@ -533,6 +604,7 @@ def enrich_all_cities(cities: Optional[list[str]] = None, data_file: str = DEFAU
                     dry_run=dry_run,
                 )
             except Exception as exc:
+                conn.rollback()
                 logger.exception("%s NHPD enrichment failed", city.upper())
                 if not dry_run:
                     try:
