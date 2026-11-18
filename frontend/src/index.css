@@ -560,3 +560,129 @@ label.jdx-choice-pill:has(> input:focus-visible) {
     outline-offset: -2px;
   }
 }
+
+/* Size-aware explorer metric cards (modern-web-guidance: card, size-aware-styling) */
+.stat-metric-card {
+  container: stat-card / inline-size;
+}
+
+.stat-metric-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.2rem;
+  padding: 0.55rem 0.6rem;
+  min-inline-size: 0;
+}
+
+.stat-metric-top {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-inline-size: 0;
+}
+
+.stat-metric-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 0.25rem;
+  border-radius: 0.5rem;
+}
+
+.stat-metric-label-full {
+  display: none;
+}
+
+.stat-metric-label-short {
+  display: inline;
+}
+
+.stat-metric-val-compact {
+  display: block;
+}
+
+.stat-metric-val-wide {
+  display: none;
+}
+
+@media (min-width: 640px) {
+  .stat-metric-inner {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.875rem 1rem;
+  }
+  .stat-metric-icon {
+    padding: 0.5rem;
+    border-radius: 0.75rem;
+  }
+  .stat-metric-label-full {
+    display: inline;
+  }
+  .stat-metric-label-short {
+    display: none;
+  }
+  .stat-metric-val-compact {
+    display: none;
+  }
+  .stat-metric-val-wide {
+    display: block;
+  }
+}
+
+@supports (container-type: inline-size) {
+  @media (min-width: 640px) {
+    .stat-metric-inner {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 0.2rem;
+      padding: 0.55rem 0.6rem;
+    }
+    .stat-metric-icon {
+      padding: 0.25rem;
+      border-radius: 0.5rem;
+    }
+    .stat-metric-label-full {
+      display: none;
+    }
+    .stat-metric-label-short {
+      display: inline;
+    }
+    .stat-metric-val-compact {
+      display: block;
+    }
+    .stat-metric-val-wide {
+      display: none;
+    }
+  }
+
+  @container stat-card (inline-size >= 102px) {
+    .stat-metric-label-full {
+      display: inline;
+    }
+    .stat-metric-label-short {
+      display: none;
+    }
+  }
+
+  @container stat-card (inline-size >= 150px) {
+    .stat-metric-inner {
+      flex-direction: row;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0.875rem 1rem;
+    }
+    .stat-metric-icon {
+      padding: 0.5rem;
+      border-radius: 0.75rem;
+    }
+    .stat-metric-val-compact {
+      display: none;
+    }
+    .stat-metric-val-wide {
+      display: block;
+    }
+  }
+}

@@ -514,7 +514,7 @@ const codeCaseCount = (net) => {
   return 0;
 };
 
-const RELIABLE_UNIT_DATASET_KEYS = new Set(['CT', 'NY', 'BALTIMORE', 'PHILADELPHIA', 'MIAMI', 'MINNEAPOLIS', 'NJ', 'MA', 'FL']);
+const RELIABLE_UNIT_DATASET_KEYS = new Set(['CT', 'NY', 'BALTIMORE', 'PHILADELPHIA', 'MIAMI', 'MINNEAPOLIS', 'NJ', 'FL']);
 
 function compactCount(value) {
   const n = Number(value);
@@ -554,8 +554,11 @@ function metricsFor(dataset, stats) {
       ['Open Class C', compactCount(stats.code_data?.open_violations_c)],
     ].filter(([, value]) => value);
   }
+  const unitMetricLabel = dataset.key === 'PHILADELPHIA' || dataset.key === 'MINNEAPOLIS'
+    ? 'Licensed units'
+    : (dataset.key === 'NJ' ? 'Registered units' : 'Units');
   const fourthMetric = RELIABLE_UNIT_DATASET_KEYS.has(dataset.key) && compactCount(stats.units)
-    ? [['Units', compactCount(stats.units)]]
+    ? [[unitMetricLabel, compactCount(stats.units)]]
     : (bldgs && bldgs !== props ? [['Buildings', bldgs]] : []);
   return [
     ['Properties', props],
@@ -697,11 +700,11 @@ function ProminentSnapshotStage({
   return (
     <article className="flex-1 min-w-0 rounded-2xl border border-slate-200/90 bg-white shadow-sm overflow-hidden flex flex-col">
       {/* Prominent Snapshot Header */}
-      <div className="bg-gradient-to-r from-slate-900 via-slate-900 to-blue-950 px-5 py-4 text-white">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="min-w-0">
+      <div className="bg-gradient-to-r from-slate-900 via-slate-900 to-blue-950 px-4 sm:px-5 py-4 sm:py-5 text-white">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <h3 className="text-xl sm:text-2xl font-black tracking-tight text-white">
+              <h3 className="text-2xl sm:text-3xl font-black tracking-tight text-white">
                 {dataset.title}
               </h3>
               <span className="rounded-md bg-white/15 px-2 py-0.5 text-xs font-semibold text-blue-100">
@@ -712,42 +715,52 @@ function ProminentSnapshotStage({
                 <span>{updatedText(dataset, stats, statsStatus)}</span>
               </span>
             </div>
+            <p className="mt-2 text-xs sm:text-sm text-slate-200/90 leading-relaxed max-w-3xl">
+              {dataset.description}
+            </p>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
-            {dataset.maintenance ? (
-              <span className="min-h-[34px] inline-flex items-center gap-1.5 rounded-xl border border-amber-300/60 bg-amber-400/20 px-3.5 py-1.5 text-xs sm:text-sm font-extrabold text-amber-200">
-                <Clock className="h-3.5 w-3.5 text-amber-300" aria-hidden="true" />
-                <span>Maintenance &middot; Back Soon</span>
-              </span>
-            ) : (
-              <>
-                {dataset.rapSheets && onOpenMonitor && (
-                  <button
-                    type="button"
-                    onClick={() => onOpenMonitor(dataset.key)}
-                    className="min-h-[34px] inline-flex items-center gap-1.5 rounded-xl border border-white/20 bg-white/10 hover:bg-white/20 px-3 py-1.5 text-xs font-bold text-rose-200 hover:text-white transition-colors cursor-pointer"
-                  >
-                    <ShieldAlert className="h-3.5 w-3.5 text-rose-300" aria-hidden="true" />
-                    <span>Rap Sheets</span>
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => onSelect(dataset.key)}
-                  className="min-h-[34px] inline-flex items-center gap-1.5 rounded-xl bg-blue-500 hover:bg-blue-400 text-white px-4 py-1.5 text-xs sm:text-sm font-extrabold shadow-xs transition-colors cursor-pointer"
-                >
-                  <span>Explore {dataset.shortLabel}</span>
-                  <ArrowRight className="h-4 w-4" aria-hidden="true" />
-                </button>
-              </>
-            )}
-          </div>
+          {dataset.maintenance ? (
+            <span className="min-h-[38px] inline-flex items-center gap-1.5 rounded-xl border border-amber-300/60 bg-amber-400/20 px-3.5 py-2 text-xs sm:text-sm font-extrabold text-amber-200 shrink-0">
+              <Clock className="h-3.5 w-3.5 text-amber-300" aria-hidden="true" />
+              <span>Maintenance &middot; Back Soon</span>
+            </span>
+          ) : (
+            dataset.rapSheets && onOpenMonitor && (
+              <button
+                type="button"
+                onClick={() => onOpenMonitor(dataset.key)}
+                className="hidden sm:inline-flex min-h-[38px] items-center gap-1.5 rounded-xl border border-white/20 bg-white/10 hover:bg-white/20 px-3.5 py-2 text-xs font-bold text-rose-200 hover:text-white transition-colors cursor-pointer shrink-0"
+              >
+                <ShieldAlert className="h-3.5 w-3.5 text-rose-300" aria-hidden="true" />
+                <span>Rap Sheets</span>
+              </button>
+            )
+          )}
         </div>
 
-        <p className="mt-1.5 text-xs sm:text-sm text-slate-200/90 leading-relaxed max-w-3xl">
-          {dataset.description}
-        </p>
+        {!dataset.maintenance && (
+          <div className="mt-3.5 flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+            <button
+              type="button"
+              onClick={() => onSelect(dataset.key)}
+              className="w-full sm:w-auto min-h-[48px] inline-flex items-center justify-between sm:justify-center gap-3 rounded-xl bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-400 hover:to-indigo-400 text-white px-6 py-3 text-base font-black tracking-tight shadow-lg shadow-blue-950/50 ring-1 ring-white/30 transition-all cursor-pointer active:scale-[0.99]"
+            >
+              <span>Explore {dataset.title}</span>
+              <ArrowRight className="h-5 w-5 shrink-0" aria-hidden="true" />
+            </button>
+            {dataset.rapSheets && onOpenMonitor && (
+              <button
+                type="button"
+                onClick={() => onOpenMonitor(dataset.key)}
+                className="sm:hidden min-h-[40px] inline-flex items-center justify-center gap-1.5 rounded-xl border border-white/20 bg-white/10 hover:bg-white/20 px-4 py-2 text-xs font-bold text-rose-200 hover:text-white transition-colors cursor-pointer"
+              >
+                <ShieldAlert className="h-3.5 w-3.5 text-rose-300" aria-hidden="true" />
+                <span>View {dataset.shortLabel} Rap Sheets</span>
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Snapshot Body */}
@@ -902,6 +915,15 @@ function ProminentSnapshotStage({
               <span>Loading top ownership networks&hellip;</span>
             </div>
           )}
+
+          <button
+            type="button"
+            onClick={() => onSelect(dataset.key)}
+            className="mt-2.5 w-full min-h-[42px] inline-flex items-center justify-center gap-2 rounded-xl border border-blue-200 bg-blue-50/80 hover:bg-blue-600 hover:border-blue-600 text-blue-700 hover:text-white px-4 py-2 text-xs sm:text-sm font-extrabold transition-all cursor-pointer"
+          >
+            <span>Open Full {dataset.title} Explorer</span>
+            <ArrowRight className="h-4 w-4 shrink-0" aria-hidden="true" />
+          </button>
         </div>
         </>
         )}
@@ -1001,6 +1023,21 @@ export default function DatasetLanding({
   const [omniLoading, setOmniLoading] = useState(false);
   const [omniOpen, setOmniOpen] = useState(false);
   const omniRef = useRef(null);
+  const snapshotStageRef = useRef(null);
+
+  const scrollToSnapshotStage = () => {
+    window.requestAnimationFrame(() => {
+      snapshotStageRef.current?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      });
+    });
+  };
+
+  const handleSelectSnapshotJurisdiction = (key) => {
+    setSelectedSnapshotKey(key);
+    scrollToSnapshotStage();
+  };
 
   const baseDatasets = useMemo(() => {
     return DATASETS
@@ -1070,16 +1107,21 @@ export default function DatasetLanding({
             fetch(`/api/autocomplete?q=${qEnc}&type=all&state=CT`, { signal })
               .then((r) => (r.ok ? r.json() : []))
               .then((rows) =>
-                (Array.isArray(rows) ? rows.slice(0, omniScope === 'CT' ? 12 : 5) : []).map((item) => ({
-                  sourceKind: 'ct',
-                  datasetKey: 'CT',
-                  jurisdictionLabel: 'CT',
-                  label: item.label || item.value || String(item),
-                  typeLabel: item.type || 'Record',
-                  context: item.context || '',
-                  raw: item,
-                  exactBoost: String(item.label || item.value || '').toUpperCase().startsWith(qUpper) ? 0 : 1,
-                }))
+                (Array.isArray(rows) ? rows.slice(0, omniScope === 'CT' ? 12 : 5) : []).map((item) => {
+                  const isNet = item.type === 'Ownership Network';
+                  return {
+                    sourceKind: 'ct',
+                    datasetKey: 'CT',
+                    jurisdictionLabel: 'CT',
+                    label: item.label || item.value || String(item),
+                    typeLabel: item.type || 'Record',
+                    context: item.context || '',
+                    raw: item,
+                    isNetwork: isNet,
+                    buildingCount: Number(item.property_count || 0),
+                    exactBoost: String(item.label || item.value || '').toUpperCase().startsWith(qUpper) ? 0 : 1,
+                  };
+                })
               )
               .catch(() => [])
           );
@@ -1099,8 +1141,13 @@ export default function DatasetLanding({
               .then((rows) =>
                 (Array.isArray(rows) ? rows : []).map((row) => {
                   const isNetwork = row.type?.endsWith('_network') || Boolean(row.network_key && !row.bbl);
-                  const display = row.display_name || row.label || row.address || row.owner_name || 'Match';
+                  const display = (isNetwork && row.primary_human_name)
+                    ? row.primary_human_name
+                    : (row.display_name || row.label || row.address || row.owner_name || 'Match');
                   const bldgBits = [];
+                  if (isNetwork && row.primary_human_name && row.display_name && row.display_name !== row.primary_human_name) {
+                    bldgBits.push(formatDisplayName(row.display_name));
+                  }
                   if (row.building_count) bldgBits.push(`${Number(row.building_count).toLocaleString()} bldgs`);
                   if (row.unit_count) bldgBits.push(`${Number(row.unit_count).toLocaleString()} units`);
                   if (row.sublabel) bldgBits.push(row.sublabel);
@@ -1114,7 +1161,9 @@ export default function DatasetLanding({
                     networkKey: row.network_key || null,
                     bbl: row.bbl || null,
                     raw: row,
-                    exactBoost: String(display).toUpperCase().startsWith(qUpper) ? 0 : 1,
+                    isNetwork,
+                    buildingCount: Number(row.building_count || 0),
+                    exactBoost: String(display).toUpperCase().startsWith(qUpper) || String(row.display_name || '').toUpperCase().startsWith(qUpper) ? 0 : 1,
                   };
                 })
               )
@@ -1126,7 +1175,12 @@ export default function DatasetLanding({
         if (signal.aborted) return;
         const merged = settled
           .flat()
-          .sort((a, b) => a.exactBoost - b.exactBoost || a.label.localeCompare(b.label))
+          .sort((a, b) => (
+            a.exactBoost - b.exactBoost
+            || Number(Boolean(b.isNetwork)) - Number(Boolean(a.isNetwork))
+            || (b.buildingCount || 0) - (a.buildingCount || 0)
+            || a.label.localeCompare(b.label)
+          ))
           .slice(0, 14);
         setOmniResults(merged);
       } catch (err) {
@@ -1651,9 +1705,15 @@ export default function DatasetLanding({
                     <label
                       key={ds.key}
                       onClick={(e) => {
-                        // Clicking an already-selected pill opens its full explorer
-                        if (!ds.maintenance && isChecked && e.detail > 0 && e.target.tagName !== 'INPUT') {
-                          onSelect(ds.key);
+                        if (e.target.tagName === 'INPUT') return;
+                        if (isChecked) {
+                          const stageRect = snapshotStageRef.current?.getBoundingClientRect();
+                          const isStageOffscreen = stageRect && stageRect.top > window.innerHeight * 0.55;
+                          if (isStageOffscreen) {
+                            scrollToSnapshotStage();
+                          } else if (!ds.maintenance && e.detail > 0) {
+                            onSelect(ds.key);
+                          }
                         }
                       }}
                       onDoubleClick={() => { if (!ds.maintenance) onSelect(ds.key); }}
@@ -1664,7 +1724,7 @@ export default function DatasetLanding({
                         name="snapshot-jurisdiction"
                         value={ds.key}
                         checked={isChecked}
-                        onChange={() => setSelectedSnapshotKey(ds.key)}
+                        onChange={() => handleSelectSnapshotJurisdiction(ds.key)}
                         className="sr-only-radio"
                       />
                       <span className="truncate">{ds.title}</span>
@@ -1680,25 +1740,27 @@ export default function DatasetLanding({
             </fieldset>
 
             <p className="mt-2.5 pt-2 border-t border-slate-100 px-1 text-[11px] text-slate-400 leading-snug">
-              Click any place to view its live snapshot, or click again to launch its explorer.
+              Click any place to jump to its live snapshot, or click again to launch its explorer.
             </p>
           </div>
 
           {/* Prominent Live Snapshot Stage */}
-          <ProminentSnapshotStage
-            dataset={activeSnapshotDataset}
-            stats={activeStats}
-            statsStatus={activeStatsStatus}
-            topNetworks={activeTopNetworks}
-            rankMode={rankMode}
-            onRankModeChange={setRankMode}
-            showingCodeRank={activeShowingCodeRank}
-            codeSettled={activeCodeSettled}
-            onSelect={onSelect}
-            onOpenMonitor={onOpenMonitor}
-            onOpenCityResult={onOpenCityResult}
-            onOpenEntity={onOpenEntity}
-          />
+          <div ref={snapshotStageRef} className="flex-1 min-w-0 flex flex-col scroll-mt-3">
+            <ProminentSnapshotStage
+              dataset={activeSnapshotDataset}
+              stats={activeStats}
+              statsStatus={activeStatsStatus}
+              topNetworks={activeTopNetworks}
+              rankMode={rankMode}
+              onRankModeChange={setRankMode}
+              showingCodeRank={activeShowingCodeRank}
+              codeSettled={activeCodeSettled}
+              onSelect={onSelect}
+              onOpenMonitor={onOpenMonitor}
+              onOpenCityResult={onOpenCityResult}
+              onOpenEntity={onOpenEntity}
+            />
+          </div>
         </div>
 
         {/* 3. QUIET SINGLE-LINE PROVENANCE & TRANSPARENCY FOOTER */}

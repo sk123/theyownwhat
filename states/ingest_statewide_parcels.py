@@ -30,6 +30,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 import csv
 import datetime as dt
+import gc
 import io
 import json
 import os
@@ -1393,8 +1394,10 @@ def build_and_save_state_networks(conn, jur: str, state_code: str, source_tag: s
         )
 
     registrar_substrings = load_registrar_address_substrings(conn)
-    with conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute(
+    properties: List[Dict[str, Any]] = []
+    with conn.cursor(name=f"state_props_scan_{jur}", cursor_factory=RealDictCursor) as scan_cur:
+        scan_cur.itersize = 50000
+        scan_cur.execute(
             f"""
             SELECT bbl, address, borough, zip_code, owner_name, owner_name_norm,
                    mailing_address, mailing_address_norm, owner_email, owner_email_norm,
@@ -1405,9 +1408,11 @@ def build_and_save_state_networks(conn, jur: str, state_code: str, source_tag: s
             WHERE bbl IS NOT NULL
             """
         )
-        properties = [dict(r) for r in cur.fetchall()]
+        for r in scan_cur:
+            properties.append(dict(r))
 
-        bbl_reg_ids: Dict[str, Set[str]] = defaultdict(set)
+    bbl_reg_ids: Dict[str, Set[str]] = defaultdict(set)
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(f"SELECT bbl, registration_id FROM {jur}_hpd_registrations WHERE bbl IS NOT NULL")
         for r in cur.fetchall():
             if r.get("bbl") and r.get("registration_id"):
@@ -1416,9 +1421,14 @@ def build_and_save_state_networks(conn, jur: str, state_code: str, source_tag: s
     if not properties:
         return 0, 0
 
-    network_groups = run_union_find_clustering(properties, jur, registrar_substrings=registrar_substrings)
+    n_properties = len(properties)
+    n_municipalities = len({p.get("borough") for p in properties if p.get("borough")})
 
-    from api.oc_linker import cluster_with_oc_and_series
+    from api.oc_linker import cluster_with_oc_and_series, load_oc_registered_agent_addresses
+    ra_addrs = load_oc_registered_agent_addresses(conn)
+    network_groups = run_union_find_clustering(
+        properties, jur, registrar_substrings=registrar_substrings, registered_agent_addrs=ra_addrs
+    )
     oc_keys = list({
         (p["oc_jurisdiction_code"], p["oc_company_number"])
         for p in properties
@@ -1433,139 +1443,148 @@ def build_and_save_state_networks(conn, jur: str, state_code: str, source_tag: s
         is_public_fn=is_public_entity,
         generic_owner_names=GENERIC_OWNER_NAMES,
     )
+    del properties
+    gc.collect()
     if oc_merges:
         print(f"  [{jur.upper()}] Corporate registry & series untangling merged {oc_merges:,} multi-entity links.")
 
-    db_networks = []
-    for root_bbl, group in network_groups.items():
-        dedup = {p["bbl"]: p for p in group if p.get("bbl")}
-        group = list(dedup.values())
-        if not group:
-            continue
-
-        owner_counts: Dict[str, int] = {}
-        for p in group:
-            owner_counts[p["owner_name"]] = owner_counts.get(p["owner_name"], 0) + 1
-        display_name = max(owner_counts, key=owner_counts.get)
-
-        human_counts: Dict[str, int] = {
-            nm: cnt for nm, cnt in owner_counts.items() if looks_like_person_owner(nm)
-        }
-        oc_company_ids = set()
-        oc_holding_entities = set()
-        for p in group:
-            oj, on = p.get("oc_jurisdiction_code"), p.get("oc_company_number")
-            if oj and on:
-                oc_company_ids.add(f"{oj}/{on}")
-                info = oc_resolved.get((oj, on), {})
-                for h in info.get("humans", ()):
-                    if looks_like_person_owner(h):
-                        human_counts[h] = human_counts.get(h, 0) + 1
-                oc_holding_entities.update(info.get("holding_entities", ()))
-
-        entity_counts = {
-            nm: cnt for nm, cnt in owner_counts.items() if not looks_like_person_owner(nm)
-        }
-        source_humans = [
-            nm for nm, _ in sorted(human_counts.items(), key=lambda kv: (-kv[1], kv[0]))
-        ]
-        primary_human = source_humans[0] if source_humans else None
-        safe_root = re.sub(r"[^a-z0-9_.-]", "_", root_bbl.lower())
-        network_key = f"network_{jur}_{safe_root}"
-        anchor_type = (
-            "person"
-            if not any(
-                w in display_name.upper()
-                for w in ("LLC", "INC", "CORP", "GROUP", "PARTNERS", "HOLDINGS", "ASSOCIATES", "TRUST", "LP", "REALTY")
-            )
-            else "corp"
+    insert_sql = f"""
+        INSERT INTO {jur}_networks (
+            jurisdiction, network_key, anchor_type, display_name, member_names,
+            member_addresses, registration_ids, bbl_list, building_count, unit_count,
+            borough_summary, connection_signals, oc_company_ids
         )
-        oc_raw_hq_addrs = set()
-        for p in group:
-            oj, on = p.get("oc_jurisdiction_code"), p.get("oc_company_number")
-            if oj and on:
-                oc_raw_hq_addrs.update(oc_resolved.get((oj, on), {}).get("raw_hq_addresses", ()))
-        member_names = sorted({p["owner_name"] for p in group if p.get("owner_name")} | oc_holding_entities)
-        member_addrs = sorted({p["mailing_address"] for p in group if p.get("mailing_address")} | oc_raw_hq_addrs)
-        member_addr_norms = sorted({p["mailing_address_norm"] for p in group if p.get("mailing_address_norm")})
-        bbl_list = [p["bbl"] for p in group]
-        reg_ids_set: Set[str] = set()
-        borough_summary: Dict[str, int] = {}
-        total_units = 0
-        for p in group:
-            reg_ids_set.update(bbl_reg_ids.get(p["bbl"], ()))
-            bname = p.get("borough") or state_code
-            borough_summary[bname] = borough_summary.get(bname, 0) + 1
-            total_units += int(float(p.get("units_res") or 0))
-
-        provenance = [source_tag]
-        if oc_company_ids:
-            provenance.append(f"{state_code}_STATE_CORPORATE_REGISTRY")
-        if reg_ids_set:
-            provenance.append(f"{state_code}_RENTAL_LICENSES")
-
-        connection_signals = {
-            "member_name_count": len(member_names),
-            "member_address_count": len(member_addrs),
-            "member_address_norm_count": len(member_addr_norms),
-            "has_mailing_address_links": bool(member_addr_norms),
-            "oc_matched_companies": sorted(oc_company_ids)[:25],
-            "source_human_names": source_humans[:25],
-            "primary_human_name": primary_human,
-            "primary_entity_name": max(entity_counts, key=entity_counts.get) if entity_counts else None,
-            "principal_status": "source_listed_person" if primary_human else "unresolved_entity",
-            "provenance": provenance,
-            "link_confidence": 0.99 if oc_company_ids else (1.0 if len(member_names) == 1 else 0.88),
-            "data_transparency_note": (
-                f"Assembled strictly from official {state_code} statewide property tax parcels "
-                "and verified corporate/licensing records where present. No values inferred or fabricated."
-            ),
-        }
-        db_networks.append((
-            jur,
-            network_key,
-            anchor_type,
-            display_name,
-            member_names,
-            member_addrs,
-            sorted(reg_ids_set),
-            bbl_list,
-            len(bbl_list),
-            total_units,
-            json.dumps(borough_summary),
-            json.dumps(connection_signals),
-            sorted(oc_company_ids) if oc_company_ids else None,
-        ))
-
+        VALUES %s
+        ON CONFLICT (jurisdiction, network_key) DO NOTHING;
+    """
+    n_networks = 0
+    batch: List[tuple] = []
     with conn.cursor() as cur:
         cur.execute(f"TRUNCATE TABLE {jur}_networks;")
-        execute_values(
-            cur,
-            f"""
-            INSERT INTO {jur}_networks (
-                jurisdiction, network_key, anchor_type, display_name, member_names,
-                member_addresses, registration_ids, bbl_list, building_count, unit_count,
-                borough_summary, connection_signals, oc_company_ids
+        while network_groups:
+            root_bbl, group = network_groups.popitem()
+            dedup = {p["bbl"]: p for p in group if p.get("bbl")}
+            group = list(dedup.values())
+            if not group:
+                continue
+
+            owner_counts: Dict[str, int] = {}
+            for p in group:
+                owner_counts[p["owner_name"]] = owner_counts.get(p["owner_name"], 0) + 1
+            display_name = max(owner_counts, key=owner_counts.get)
+
+            human_counts: Dict[str, int] = {
+                nm: cnt for nm, cnt in owner_counts.items() if looks_like_person_owner(nm)
+            }
+            oc_company_ids = set()
+            oc_holding_entities = set()
+            oc_raw_hq_addrs = set()
+            for p in group:
+                oj, on = p.get("oc_jurisdiction_code"), p.get("oc_company_number")
+                if oj and on:
+                    oc_company_ids.add(f"{oj}/{on}")
+                    info = oc_resolved.get((oj, on), {})
+                    for h in info.get("humans", ()):
+                        if looks_like_person_owner(h):
+                            human_counts[h] = human_counts.get(h, 0) + 1
+                    oc_holding_entities.update(info.get("holding_entities", ()))
+                    oc_raw_hq_addrs.update(info.get("raw_hq_addresses", ()))
+
+            entity_counts = {
+                nm: cnt for nm, cnt in owner_counts.items() if not looks_like_person_owner(nm)
+            }
+            source_humans = [
+                nm for nm, _ in sorted(human_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+            ]
+            primary_human = source_humans[0] if source_humans else None
+            safe_root = re.sub(r"[^a-z0-9_.-]", "_", root_bbl.lower())
+            network_key = f"network_{jur}_{safe_root}"
+            anchor_type = (
+                "person"
+                if not any(
+                    w in display_name.upper()
+                    for w in ("LLC", "INC", "CORP", "GROUP", "PARTNERS", "HOLDINGS", "ASSOCIATES", "TRUST", "LP", "REALTY")
+                )
+                else "corp"
             )
-            VALUES %s
-            ON CONFLICT (jurisdiction, network_key) DO NOTHING;
-            """,
-            db_networks,
-            page_size=2500,
+            member_names = sorted({p["owner_name"] for p in group if p.get("owner_name")} | oc_holding_entities)
+            member_addrs = sorted({p["mailing_address"] for p in group if p.get("mailing_address")} | oc_raw_hq_addrs)
+            member_addr_norms = sorted({p["mailing_address_norm"] for p in group if p.get("mailing_address_norm")})
+            bbl_list = [p["bbl"] for p in group]
+            reg_ids_set: Set[str] = set()
+            borough_summary: Dict[str, int] = {}
+            total_units = 0
+            for p in group:
+                reg_ids_set.update(bbl_reg_ids.get(p["bbl"], ()))
+                bname = p.get("borough") or state_code
+                borough_summary[bname] = borough_summary.get(bname, 0) + 1
+                total_units += int(float(p.get("units_res") or 0))
+
+            provenance = [source_tag]
+            if oc_company_ids:
+                provenance.append(f"{state_code}_STATE_CORPORATE_REGISTRY")
+            if reg_ids_set:
+                provenance.append(f"{state_code}_RENTAL_LICENSES")
+
+            connection_signals = {
+                "member_name_count": len(member_names),
+                "member_address_count": len(member_addrs),
+                "member_address_norm_count": len(member_addr_norms),
+                "has_mailing_address_links": bool(member_addr_norms),
+                "oc_matched_companies": sorted(oc_company_ids)[:25],
+                "source_human_names": source_humans[:25],
+                "primary_human_name": primary_human,
+                "primary_entity_name": max(entity_counts, key=entity_counts.get) if entity_counts else None,
+                "principal_status": "source_listed_person" if primary_human else "unresolved_entity",
+                "provenance": provenance,
+                "link_confidence": 0.99 if oc_company_ids else (1.0 if len(member_names) == 1 else 0.88),
+                "data_transparency_note": (
+                    f"Assembled strictly from official {state_code} statewide property tax parcels "
+                    "and verified corporate/licensing records where present. No values inferred or fabricated."
+                ),
+            }
+            batch.append((
+                jur,
+                network_key,
+                anchor_type,
+                display_name,
+                member_names,
+                member_addrs,
+                sorted(reg_ids_set),
+                bbl_list,
+                len(bbl_list),
+                total_units,
+                json.dumps(borough_summary),
+                json.dumps(connection_signals),
+                sorted(oc_company_ids) if oc_company_ids else None,
+            ))
+            n_networks += 1
+            if len(batch) >= 25000:
+                execute_values(cur, insert_sql, batch, page_size=2500)
+                batch.clear()
+
+        if batch:
+            execute_values(cur, insert_sql, batch, page_size=2500)
+            batch.clear()
+        cur.execute(
+            "DELETE FROM kv_cache WHERE key IN ('completeness_matrix', %s) OR key LIKE %s",
+            (f"city_stats:v1:{jur}", f"city_top_nets:v1:{jur}:%"),
         )
     conn.commit()
+    del oc_resolved
+    gc.collect()
     _record_status(
         conn,
         jur.upper(),
         "state_dataset",
         {
-            "properties_count": len(properties),
-            "networks_count": len(db_networks),
-            "municipalities_loaded": len({p.get("borough") for p in properties if p.get("borough")}),
+            "properties_count": n_properties,
+            "networks_count": n_networks,
+            "municipalities_loaded": n_municipalities,
             "oc_matched_parcels": oc_stats.get("matched", 0),
         },
     )
-    return len(properties), len(db_networks)
+    return n_properties, n_networks
 
 
 def fetch_arkansas_parcels() -> List[Dict[str, Any]]:

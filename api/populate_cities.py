@@ -13,7 +13,9 @@ from api.shared_utils import (
     is_excluded_third_party_entity,
     is_registrar_address,
     load_registrar_address_substrings,
+    looks_like_business_name,
     looks_like_person_owner,
+    normalize_business_name,
     normalize_mailing_address_coarse,
     strip_benign_care_of_prefix,
 )
@@ -237,6 +239,9 @@ def normalize_owner_name(value):
     text = source_text(value)
     if not text:
         return ""
+    if looks_like_business_name(text):
+        bnorm = normalize_business_name(text)
+        return re.sub(r"^THE\s+", "", bnorm).strip() or bnorm
     text = text.upper().replace("&", " AND ")
     text = re.sub(r"[`'\".,]", "", text)
     return re.sub(r"\s+", " ", text).strip()
@@ -1458,8 +1463,9 @@ def fetch_real_minneapolis_properties():
 
     return properties
 
-def run_union_find_clustering(properties, city, registrar_substrings: tuple = ()):
+def run_union_find_clustering(properties, city, registrar_substrings: tuple = (), registered_agent_addrs=None):
     print(f"Running Union-Find ownership network builder for {city}...")
+    ra_addrs = set(registered_agent_addrs or ())
     deduped_properties = {}
     duplicate_count = 0
     for p in properties:
@@ -1505,7 +1511,7 @@ def run_union_find_clustering(properties, city, registrar_substrings: tuple = ()
     excluded_entity_parcels = 0
     for p in all_valid_properties:
         raw_owner = (p.get('owner_name') or '').strip()
-        owner = normalize_owner_name(p.get('owner_name_norm') or raw_owner)
+        owner = normalize_owner_name(raw_owner or p.get('owner_name_norm'))
         raw_mail = p.get('mailing_address') or ''
         clean_mail = strip_benign_care_of_prefix(raw_mail)
         mail = normalize_link_address(clean_mail)
@@ -1572,7 +1578,7 @@ def run_union_find_clustering(properties, city, registrar_substrings: tuple = ()
         if (
             mail
             and len(mail) > 6
-            and (not coarse_mail or coarse_mail not in contaminated_coarse_addrs)
+            and (not coarse_mail or (coarse_mail not in contaminated_coarse_addrs and coarse_mail not in ra_addrs))
             and not is_public_or_generic_address(mail, registrar_substrings, raw_address=raw_mail)
         ):
             by_mail.setdefault(mail, []).append(bbl)
@@ -1595,11 +1601,13 @@ def run_union_find_clustering(properties, city, registrar_substrings: tuple = ()
             skipped_mail_links += 1
             continue
         is_po_box = mail.startswith("PO BOX ")
-        max_fine = PO_BOX_MAX_OWNER_FAMILIES if is_po_box else owner_limit
+        has_dedicated_suite = ("#" in mail) and not is_po_box
+        max_fine = PO_BOX_MAX_OWNER_FAMILIES if is_po_box else (30 if has_dedicated_suite else owner_limit)
+        max_coarse = 30 if has_dedicated_suite else MAIL_LINK_MAX_COARSE_BUILDING_FAMILIES
         distinct_family_count = len(mail_families.get(mail) or ())
         coarse_key = mail_to_coarse.get(mail)
         coarse_family_count = len(coarse_families.get(coarse_key) or ()) if coarse_key else distinct_family_count
-        if distinct_family_count > max_fine or coarse_family_count > MAIL_LINK_MAX_COARSE_BUILDING_FAMILIES:
+        if distinct_family_count > max_fine or coarse_family_count > max_coarse:
             skipped_mail_links += 1
             continue
         first = bbls[0]
@@ -1976,9 +1984,13 @@ def populate_city(conn, city):
         raise ValueError(f"Failed to fetch sufficient real-world data for {city} (only found {len(properties)} properties)")
 
     registrar_substrings = load_registrar_address_substrings(conn)
-    network_groups = run_union_find_clustering(properties, city, registrar_substrings=registrar_substrings)
+    from api.oc_linker import load_oc_registered_agent_addresses
+    ra_addrs = load_oc_registered_agent_addresses(conn)
+    network_groups = run_union_find_clustering(
+        properties, city, registrar_substrings=registrar_substrings, registered_agent_addrs=ra_addrs
+    )
     save_city_data(conn, city, network_groups, all_properties=properties)
-    if any(p.get("extra_contacts") for p in properties):
+    if city in CITY_OC_STATE_MAP or any(p.get("extra_contacts") for p in properties):
         rebuild_city_networks_from_db(conn, city)
 
 
@@ -2003,6 +2015,13 @@ def rebuild_city_networks_from_db(conn, city: str):
         raise ValueError(f"Unsupported city slug for DB network rebuild: {city}")
 
     print(f"Rebuilding {city}_networks in-place from {city}_properties...")
+    if city == "boston":
+        try:
+            from ma.ingest_massgis import cross_enrich_boston_and_ma
+            cross_enrich_boston_and_ma(conn)
+        except Exception as ce_exc:
+            conn.rollback()
+            print(f"  Note: Boston <-> MA cross-enrichment skipped: {ce_exc}")
     oc_state = CITY_OC_STATE_MAP.get(city)
     oc_stats = {"evaluated": 0, "matched": 0}
     if oc_state:
@@ -2049,7 +2068,7 @@ def rebuild_city_networks_from_db(conn, city: str):
         # Also load official registration & owner-contact records when present
         # (e.g., D.C. DLCP Basic Business Rental Licenses, Detroit BSEED, Baltimore DHCD, Minneapolis).
         prop_owner_by_bbl = {
-            p["bbl"]: normalize_owner_name(p.get("owner_name_norm") or p.get("owner_name"))
+            p["bbl"]: normalize_owner_name(p.get("owner_name") or p.get("owner_name_norm"))
             for p in properties
             if p.get("bbl")
         }
@@ -2136,7 +2155,11 @@ def rebuild_city_networks_from_db(conn, city: str):
         print(f"  Skipping {city}: 0 properties in {city}_properties.")
         return 0
 
-    network_groups = run_union_find_clustering(properties, city, registrar_substrings=registrar_substrings)
+    from api.oc_linker import load_oc_registered_agent_addresses
+    ra_addrs = load_oc_registered_agent_addresses(conn)
+    network_groups = run_union_find_clustering(
+        properties, city, registrar_substrings=registrar_substrings, registered_agent_addrs=ra_addrs
+    )
 
     # Second-stage untangling over verified ACTIVE license/registration owner contacts
     # with strict anti-managing-agent, anti-public-entity, and cluster-size caps.

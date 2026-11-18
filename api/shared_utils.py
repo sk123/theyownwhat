@@ -3,51 +3,119 @@ import re
 from functools import lru_cache
 from typing import Set
 
+_TRAILING_COMMA_THE_RE = re.compile(r",\s*THE\s*$")
+_DBA_RE = re.compile(r"\bD\s*/\s*B\s*/\s*A\b")
+_TA_RE = re.compile(r"\bT\s*/\s*A\b")
+_AKA_RE = re.compile(r"\bA\s*/\s*K\s*/\s*A\b")
+_FKA_RE = re.compile(r"\bF\s*/\s*K\s*/\s*A\b")
+_SLASH_RE = re.compile(r"[/\\]+")
+_PUNCT_STRIP_RE = re.compile(r"[,.'`\"]")
+_COOP_RE = re.compile(r"\bCO[\s-]*OP(?:ERATIVE)?\b")
+_VIG_TYPO_RE = re.compile(
+    r"\bVIG\b(?=\s+(?:COOPERATIVE|CONDO|CONDOMINIUM|COMMUNITY|ASSOCIATION|ASSN|INC|INCORPORATED|\d|[IVX]+\b))"
+)
+_SPACED_LLLP_RE = re.compile(r"\bL\s+L\s+L\s+P\b")
+_SPACED_PLLC_RE = re.compile(r"\bP\s+L\s+L\s+C\b")
+_SPACED_LLC_RE = re.compile(r"\bL\s+L\s+C\b")
+_SPACED_LLP_RE = re.compile(r"\bL\s+L\s+P\b")
+_SPACED_LP_RE = re.compile(r"\bL\s+P\b")
+_SPACED_PC_RE = re.compile(r"\bP\s+C\b")
+_SPACED_INC_RE = re.compile(r"\bI\s+N\s+C\b")
+_LEAD_INITIALISM_RE = re.compile(r"^([A-Z])\s+([A-Z])\b(?=\s+[A-Z]{3,})")
+_STANDALONE_CO_RE = re.compile(r"(?<![A-Z0-9-])CO(?![A-Z0-9-])")
+_BIZ_ABBREV_MAP = {
+    'CORP': 'CORPORATION',
+    'CORPORTATION': 'CORPORATION',
+    'CORPORTION': 'CORPORATION',
+    'COPORATION': 'CORPORATION',
+    'INC': 'INCORPORATED',
+    'INCORPORTATED': 'INCORPORATED',
+    'ASSOC': 'ASSOCIATION',
+    'ASSOCIATES': 'ASSOCIATION',
+    'ASSOCIATED': 'ASSOCIATION',
+    'ASSC': 'ASSOCIATION',
+    'ASSN': 'ASSOCIATION',
+    'MGMT': 'MANAGEMENT',
+    'MGT': 'MANAGEMENT',
+    'MANG': 'MANAGEMENT',
+    'MANAGMENT': 'MANAGEMENT',
+    'PROP': 'PROPERTIES',
+    'PROPS': 'PROPERTIES',
+    'PROPERTY': 'PROPERTIES',
+    'SVCS': 'SERVICES',
+    'DEVL': 'DEVELOPMENT',
+    'DEV': 'DEVELOPMENT',
+    'SYS': 'SYSTEM',
+    'SYST': 'SYSTEM',
+    'SYSTS': 'SYSTEM',
+    'HLDG': 'HOLDING',
+    'HLDGS': 'HOLDINGS',
+    'BLDG': 'BUILDING',
+    'BLDRS': 'BUILDERS',
+    'CTR': 'CENTER',
+    'CNTR': 'CENTER',
+    'VLG': 'VILLAGE',
+    'VIL': 'VILLAGE',
+    'APTS': 'APARTMENTS',
+    'GDNS': 'GARDENS',
+    'DISTR': 'DISTRIBUTORS',
+}
+_BIZ_ABBREV_RE = re.compile(r"\b(" + "|".join(sorted(_BIZ_ABBREV_MAP, key=len, reverse=True)) + r")\b")
+_SPURIOUS_MID_AND_RE = re.compile(
+    r"\s+\bAND\s+(?=(?:BORROWER|PROPCO|PORTFOLIO|LLC|LLP|LP|INCORPORATED|CORPORATION|DISTRIBUTORS|[0-9]{1,3}\s+(?:LLC|LP|INCORPORATED|CORPORATION|BORROWER))\b)"
+)
+_NON_ALNUM_BIZ_RE = re.compile(r"[^A-Z0-9\s-]")
+_MULTISPACE_RE = re.compile(r"\s+")
+
+
+@lru_cache(maxsize=65536)
 def normalize_business_name(name: str) -> str:
     """Canonical function to normalize business names for matching."""
-    if not name: return ''
-    normalized = name.upper().strip()
-    normalized = re.sub(r"[,.'`\"]", '', normalized)
+    if not name:
+        return ''
+    normalized = str(name).upper().strip()
+    if not normalized:
+        return ''
 
-    # Standardize conjunctions
-    normalized = normalized.replace('&', ' AND ')
-    normalized = normalized.replace('+', ' AND ')
+    if "," in normalized:
+        normalized = _TRAILING_COMMA_THE_RE.sub("", normalized)
+    if "/" in normalized or "\\" in normalized or "@" in normalized:
+        normalized = _DBA_RE.sub(" DBA ", normalized)
+        normalized = _TA_RE.sub(" TA ", normalized)
+        normalized = _AKA_RE.sub(" AKA ", normalized)
+        normalized = _FKA_RE.sub(" FKA ", normalized)
+        normalized = normalized.replace("@", " AT ")
+        normalized = _SLASH_RE.sub(" ", normalized)
 
-    # Standardize common abbreviations for better cross-matching
-    # Using \b for word boundaries to avoid partial matches
-    abbrevs = {
-        'CO': 'COMPANY',
-        'CORP': 'CORPORATION',
-        'INC': 'INCORPORATED',
-        'ASSOC': 'ASSOCIATION',
-        'ASSOCIATES': 'ASSOCIATION',
-        'ASSOCIATED': 'ASSOCIATION',
-        'ASSC': 'ASSOCIATION',
-        'ASSN': 'ASSOCIATION',
-        'MGMT': 'MANAGEMENT',
-        'MGT': 'MANAGEMENT',
-        'PROP': 'PROPERTIES',
-        'PROPS': 'PROPERTIES',
-        'PROPERTY': 'PROPERTIES',
-        'SVCS': 'SERVICES',
-        'DEVL': 'DEVELOPMENT',
-        'DEV': 'DEVELOPMENT',
-        'SYS': 'SYSTEM',
-        'SYST': 'SYSTEM',
-        'SYSTS': 'SYSTEM',
-        'HLDG': 'HOLDING',
-        'HLDGS': 'HOLDINGS',
-        'BLDG': 'BUILDING',
-        'CTR': 'CENTER',
-        'CNTR': 'CENTER',
-    }
-    for abbr, full in abbrevs.items():
-        normalized = re.sub(rf"\b{abbr}\b", full, normalized)
+    normalized = _PUNCT_STRIP_RE.sub('', normalized)
+    if '&' in normalized:
+        normalized = normalized.replace('&', ' AND ')
+    if '+' in normalized:
+        normalized = normalized.replace('+', ' AND ')
 
-    # Clean up non-alphanumeric (except space and hyphen)
-    normalized = re.sub(r"[^A-Z0-9\s-]", '', normalized)
-    normalized = re.sub(r"\s+", ' ', normalized).strip()
-    return normalized
+    if 'CO' in normalized:
+        normalized = _COOP_RE.sub("COOPERATIVE", normalized)
+    if 'VIG' in normalized:
+        normalized = _VIG_TYPO_RE.sub("VILLAGE", normalized)
+
+    normalized = _SPACED_LLLP_RE.sub("LLLP", normalized)
+    normalized = _SPACED_PLLC_RE.sub("PLLC", normalized)
+    normalized = _SPACED_LLC_RE.sub("LLC", normalized)
+    normalized = _SPACED_LLP_RE.sub("LLP", normalized)
+    normalized = _SPACED_LP_RE.sub("LP", normalized)
+    normalized = _SPACED_PC_RE.sub("PC", normalized)
+    normalized = _SPACED_INC_RE.sub("INC", normalized)
+    normalized = _LEAD_INITIALISM_RE.sub(r"\1\2", normalized)
+
+    if 'CO' in normalized:
+        normalized = _STANDALONE_CO_RE.sub("COMPANY", normalized)
+    normalized = _BIZ_ABBREV_RE.sub(lambda m: _BIZ_ABBREV_MAP[m.group(1)], normalized)
+
+    if ' AND ' in normalized:
+        normalized = _SPURIOUS_MID_AND_RE.sub(" ", normalized)
+
+    normalized = _NON_ALNUM_BIZ_RE.sub('', normalized)
+    return _MULTISPACE_RE.sub(' ', normalized).strip()
 
 def normalize_person_name(name: str) -> str:
     """Canonical function to normalize person names for matching."""
@@ -119,33 +187,63 @@ def normalize_person_name(name: str) -> str:
 
 BUSINESS_ENTITY_TERMS = {
     'APARTMENT', 'APARTMENTS', 'ASSOC', 'ASSOCIATES', 'ASSOCIATION',
-    'AUTHORITY', 'BANK', 'BOARD', 'CENTER', 'CHURCH', 'CLUB', 'COM', 'COMMUNITY',
-    'COMMONWEALTH', 'CONDOMINIUM', 'CONDO', 'COOPERATIVE', 'COUNCIL', 'COUNTY',
-    'CO', 'COMPANY', 'CORP', 'CORPORATION', 'DEVELOPMENT', 'ENTERPRISE',
-    'ENTERPRISES', 'ESTATE', 'FOUNDATION', 'FUND', 'GOVERNMENT', 'GROUP',
-    'HOSPITAL', 'HOUSING', 'HOLDING', 'HOLDINGS', 'INC',
-    'INCORPORATED', 'INVESTMENT', 'INVESTMENTS', 'LLC', 'LLP', 'LP', 'LPS', 'LTD',
-    'MANAGEMENT', 'MINISTRY', 'MUNICIPAL', 'MUSEUM', 'PARTNER', 'PARTNERS',
-    'PARTNERSHIP', 'PROJECT', 'PROPERTIES', 'PROPERTY', 'REALTY', 'REAL',
-    'REDEVELOPMENT', 'SCHOOL', 'SERVICES',
-    'SOCIETY', 'STATE', 'TRUST', 'UNIVERSITY', 'VENTURES'
+    'AUTHORITY', 'BANK', 'BOARD', 'BORROWER', 'BUILDERS', 'CENTER', 'CHURCH',
+    'CLUB', 'COM', 'COMMONS', 'COMMONWEALTH', 'COMMUNITY', 'CONDOMINIUM',
+    'CONDOMINIUMS', 'CONDO', 'CONDOS', 'COOPERATIVE', 'COUNCIL', 'COUNTY',
+    'CO', 'COMPANY', 'CORP', 'CORPORATION', 'DBA', 'DEVELOPMENT', 'DISTRIBUTORS',
+    'ENT', 'ENTERPRISE', 'ENTERPRISES', 'ESTATE', 'ESTATES', 'FOUNDATION',
+    'FUND', 'GARDENS', 'GOVERNMENT', 'GROUP', 'HDFC', 'HOLDCO', 'HOLDING',
+    'HOLDINGS', 'HOMES', 'HOSPITAL', 'HOUSING', 'INC', 'INCORPORATED',
+    'INVESTMENT', 'INVESTMENTS', 'LDHA', 'LLC', 'LLLP', 'LLP', 'LP', 'LPS',
+    'LTD', 'MANAGEMENT', 'MANOR', 'MINISTRY', 'MUNICIPAL', 'MUSEUM', 'MUTUAL',
+    'OPCO', 'PARTNER', 'PARTNERS', 'PARTNERSHIP', 'PC', 'PLAZA', 'PLLC',
+    'PORTFOLIO', 'PROJECT', 'PROPCO', 'PROPERTIES', 'PROPERTY', 'REAL',
+    'REALTY', 'REDEVELOPMENT', 'RENEWAL', 'RESIDENTIAL', 'SCHOOL', 'SERVICES',
+    'SFR', 'SOCIETY', 'STATE', 'TA', 'TOWERS', 'TRUST', 'UNIVERSITY', 'VENTURES',
+    'VILLAGE',
 }
 
+_TRUNCATED_BUSINESS_TAIL_RE = re.compile(
+    r"\s+\b(?:LL|INCORP|INCOR|CORPO|LIMITE|LIMIT|COMPA|PARTNERSHI|PROPERTIE|ASSOCIAT|OWN)$"
+)
 
+
+@lru_cache(maxsize=65536)
 def looks_like_business_name(name: str) -> bool:
     """Return true when an owner string should keep business-style normalization."""
     if not name:
         return False
     cleaned = normalize_business_name(name)
-    return any(part in BUSINESS_ENTITY_TERMS for part in cleaned.split())
+    if any(part in BUSINESS_ENTITY_TERMS for part in cleaned.split()):
+        return True
+    if len(cleaned) >= 20 and _TRUNCATED_BUSINESS_TAIL_RE.search(cleaned):
+        return True
+    return False
 
 
 PERSON_OWNER_ROLE_TERMS = {'TR', 'TRS', 'TS', 'TRUSTEE', 'TRUSTEES'}
+NON_PERSON_COMPLEX_OR_PREPOSITION_TOKENS = {
+    'THE', 'AT', 'OF', 'IN', 'ON', 'FOR', 'BY', 'DBA', 'TA', 'AKA', 'FKA',
+    'ENT', 'BLDRS', 'BUILDERS', 'HOMES', 'GARDENS', 'VILLAGE', 'VILLAS',
+    'ESTATES', 'HEIGHTS', 'WOODS', 'RIDGE', 'SPRINGS', 'MEADOWS', 'MANOR',
+    'COURT', 'SQUARE', 'SQ', 'PLAZA', 'TERRACE', 'TER', 'TOWERS', 'GLEN',
+    'OAKS', 'CEDARS', 'COMMONS', 'CROSSING', 'POINTE', 'LANDING', 'HARBOR',
+    'PARK', 'RESORT', 'CLUB', 'URBAN', 'METRO', 'GLOBAL', 'NATIONAL',
+    'AMERICAN', 'REGIONAL', 'SYSTEM', 'SYSTEMS', 'SOLUTIONS',
+}
 
 
+_TRADE_NAME_RAW_RE = re.compile(r"\b(?:T/A|D/B/A|A/K/A|F/K/A)\b")
+_PERSON_ALPHA_TOKEN_RE = re.compile(r"[A-Z][A-Z-]*")
+
+
+@lru_cache(maxsize=65536)
 def looks_like_person_owner(name: str) -> bool:
     """Conservatively identify a human directly named in an ownership source."""
     if not name:
+        return False
+    raw_up = str(name).upper()
+    if '@' in raw_up or ('/' in raw_up and _TRADE_NAME_RAW_RE.search(raw_up)):
         return False
     cleaned = normalize_business_name(name)
     if not cleaned or any(char.isdigit() for char in cleaned):
@@ -160,12 +258,12 @@ def looks_like_person_owner(name: str) -> bool:
     )
     if any(fragment in cleaned for fragment in organization_fragments):
         return False
-    if any(part in BUSINESS_ENTITY_TERMS for part in parts):
+    if any(part in BUSINESS_ENTITY_TERMS or part in NON_PERSON_COMPLEX_OR_PREPOSITION_TOKENS for part in parts):
         return False
     core_parts = [part for part in parts if part not in PERSON_OWNER_ROLE_TERMS]
     if not 2 <= len(core_parts) <= 5:
         return False
-    return all(re.fullmatch(r"[A-Z][A-Z-]*", part) for part in core_parts)
+    return all(_PERSON_ALPHA_TOKEN_RE.fullmatch(part) for part in core_parts)
 
 
 def normalize_owner_name(name: str) -> str:
@@ -890,8 +988,11 @@ THIRD_PARTY_ENTITY_REGEX_BODY = (
     r"CHICAGO\s+PARK\s+DIST(?:RICT)?|PARK\s+DISTRICT|PUB(?:LIC)?\s+BLDG\s+COMM(?:ISSION)?|PUBLIC\s+BUILDING\s+COMMISSION|"
     r"MEDICAL\s+DIST(?:RICT)?\.?\s+COM|METRO\s+PIER\s+(?:AND|&)\s+EXPO|WESTSIDE\s+HEALTH\s+AUTHOR|"
     r"PARKS\s+(?:AND|&)\s+RECREATION|DEPT\s+OF\s+TRANSPORTATION|DEPARTMENT\s+OF\s+TRANSPORTATION|"
-    r"(?:IL|ILLINOIS|US|U\.?\s*S\.?)\s+DEPT\s+(?:OF\s+)?(?:TRANSPORTATION|HOUSING)|COMM\s+OF\s+MASS|"
-    r"UNITED\s+STATES\s+POSTAL\s+SERVICE|USPS|"
+    r"(?:IL|ILLINOIS|US|U\.?\s*S\.?)\s+DEPT\.?\s+(?:OF\s+)?[A-Z]+|COMM\s+OF\s+MASS|"
+    r"UNITED\s+STATES\s+POSTAL\s+SERVICE|(?:US|U\.?\s*S\.?)\s+POSTAL\s+SERVICE|USPS|"
+    r"(?:US|U\.?\s*S\.?)\s+(?:GENERAL\s+SERV(?:ICES)?\s+ADM(?:IN(?:ISTRATION)?)?|NATIONAL\s+FOREST|FOREST\s+SERVICE|FISH\s+(?:AND|&)\s+WILDLIFE)|"
+    r"U\.?\s*S\.?\s*A\.?\s*-\s*(?:FOREST\s+SERVICE|BLM|CORPS\b)|BUREAU\s+OF\s+LAND\s+MANAGEMENT|NATIONAL\s+FOREST|"
+    r"SUBURBAN\s+IMPROVEMENT\s+DIST(?:RICT)?|JAMES\s+CITY\s+COUNTY|SERVICE\s+AUTHORITY|"
     r"WMATA|WASHINGTON\s+METROPOLITAN\s+AREA\s+TRANSIT|SEPTA|MBTA|NJ\s+TRANSIT|NEW\s+JERSEY\s+TRANSIT|"
     r"MASS(?:ACHUSETTS)?\s+BAY\s+TRANS(?:P(?:ORTATION)?)?\s+AUTH(?:ORITY)?|TRANSIT\s+ADMIN(?:ISTRATION)?|MDOT|RTA\s*/\s*METRA|"
     r"AMTRAK|NATIONAL\s+RAILROAD|RAILROAD\s+PASSENGER|RAILROAD\s+MUSEUM|CSX\s+TRANSPORTATION|NORFOLK\s+SOUTHERN|CONRAIL|METRO[- ]NORTH|CENTRAL\s+LINES\s+LLC|BOSTON\s*(?:&|AND)\s*MAINE\s+CORP|"
@@ -907,8 +1008,8 @@ THIRD_PARTY_ENTITY_REGEX_BODY = (
     r"ELECTRIC\s+COMPANY|POWER\s+COMPANY|POWER\s+CORP(?:ORATION)?|LIGHT\s+AND\s+POWER|GAS\s+(?:AND|&)\s+ELECTRIC|"
     r"MARATHON\s+PETROLEUM|SUNOCO|GLOBAL\s+MONTELLO|ALLIANCE\s+ENERGY|"
     r"WEYERHAEUSER|DELTIC\s+TIMBER|POTLATCH\s+(?:CORP|FOREST|TIMBER)|GREEN\s+BAY\s+PACKAGING|"
-    r"(?:LESTER|TATE)\s+LUMBER|ROANOKE\s+TIMBERLANDS|FOREST\s+INVEST(?:MENT)?\s+REIT|TIMBER\s+OPPORTUNIT(?:Y|IES)|CF\s+HIGHLANDS|"
-    r"CNX\s+GAS|PENN\s+VIRGINIA\s+OPERATING|BLUE\s+ROCK\s+RESOURCES|DOMINION\s+ENERGY|VIRGINIA\s+ELECTRIC\s+(?:AND|&)\s+POWER|APPALACHIAN\s+POWER|"
+    r"(?:LESTER|TATE)\s+LUMBER|ROANOKE\s+TIMBERLANDS|TAMARACK\s+TIMBERCO|FOREST\s+INVEST(?:MENT)?\s+REIT|TIMBER\s+OPPORTUNIT(?:Y|IES)|CF\s+HIGHLANDS|"
+    r"CNX\s+GAS|PENN\s+VIRGINIA\s+OPERATING|BLUE\s+ROCK\s+RESOURCES|DOMINION\s+ENERGY|VIRGINIA\s+ELECTRIC\s+(?:AND|&)\s+POWER|APPALACHIAN\s+POWER|ENTERGY|TELEPHONE\s+OPERATING\s+CO|"
     r"COLONIAL\s+WILLIAMSBURG\s+FOUNDATION|ATLANTIC\s+SHORES\s+COOPERATIVE|"
     r"P\.?O\.?A\.?|BVPOA|FFBCCI|H\.?O\.?A\.?|(?:(?:PROPERTY|HOME|UNIT|RESORT|VILLAGE|CONDO(?:MINIUM)?|TOWNHOUSE|TOWNHOME|LOT)\s+)?OWNERS?\s+ASS(?:OC|OCIATION|N)|HOME\s*OWNERS?\s+ASS(?:OC|OCIATION|N)|PARKS\s*(?:&|AND)\s*REC(?:REATION)?\s+ASS(?:OC|OCIATION|N)|COMMUNITY\s+CLUB|"
     r"CONDO(?:MINIUM)?\s+(?:OWNERS?\s+)?ASS(?:OC|OCIATION|N)|COMMUNITY\s+(?:CONDO(?:MINIUM)?\s+)?ASS(?:OC|OCIATION|N)|LEISURE\s+VIL(?:LAGE)?\s+[A-Z]?\s*ASS(?:OC|OCIATION|N)|THE\s+VILLAGES\s+ASS(?:OC|OCIATION|N)|"
@@ -933,6 +1034,7 @@ THIRD_PARTY_ENTITY_RE = re.compile(THIRD_PARTY_ENTITY_REGEX_BODY, re.IGNORECASE)
 THIRD_PARTY_INSTITUTIONAL_SQL_PATTERN = "(?n)" + THIRD_PARTY_ENTITY_REGEX_BODY.replace(r"\b", r"\y")
 
 
+@lru_cache(maxsize=65536)
 def is_excluded_third_party_entity(name: str | None) -> bool:
     """Return True if `name` is a non-landlord 3rd party (bank, mortgage/RMBS trustee,
     loan servicer, tax processor, commercial registered agent, utility, transit/railroad,
@@ -1118,72 +1220,190 @@ def is_excluded_third_party_address(
     return False
 
 
-_BIZ_SUFFIX_STRIP_RE = re.compile(
-    r"(?:\s*\b(?:LLC|L\.L\.C|INC|INCORPORATED|CORP|CORPORATION|LP|L\.P|LLP|LTD|LIMITED|CO|COMPANY|HDFC)\b)+$",
-    re.IGNORECASE,
+_PURE_LEGAL_SUFFIX_TAIL_RE = re.compile(
+    r"\s*\b(?:PROFESSIONAL\s+LIMITED\s+LIABILITY\s+COMPANY|LIMITED\s+LIABILITY\s+PARTNERSHIP|"
+    r"LIMITED\s+LIABILITY\s+COMPANY|LIMITED\s+PARTNERSHIP|"
+    r"INCORPORATED|INCORP|INCOR|CORPORATION|CORPO|LIMITED|LIMITE|LIMIT|"
+    r"LLLP|PLLC|LLC|LL|LLP|LP|INC|CORP|LTD|PC|HDFC|LDHA)\b$"
 )
-_SERIES_TOKEN_ATOM = (
-    r"(?:[0-9]{1,3}[A-Z]?(?:-[A-Z0-9]+)?|[SBO][0-9]{1,2}|[IVXLC]{1,5}(?:-[A-Z0-9]+)?|[A-Z](?:-[A-Z0-9]+)?)"
+# Entity-container words stripped ONLY when >= 2 stem words remain after stripping
+# (so 'CRESTWOOD VILLAGE COOPERATIVE' -> 'CRESTWOOD VILLAGE', 'WESTFIELD ACRES URBAN RENEWAL ASSOCIATION' -> 'WESTFIELD ACRES',
+# while 'SHELBY COMPANY' and 'CHAMPLAIN HOUSING' never collapse down to 1 generic word).
+_CONTAINER_SUFFIX_TAIL_RE = re.compile(
+    r"\s+\b(?:URBAN\s+RENEWAL|COMMUNITY\s+ASSOCIATION|HOMEOWNERS\s+ASSOCIATION|OWNERS\s+ASSOCIATION|"
+    r"TOWNHOUSE\s+ASSOCIATION|COOPERATIVE|COOP|CONDOMINIUMS?|CONDOS?|ASSOCIATION|COMPANY|COMPA|CO|TRUST)\b$"
 )
-_SERIES_DESIGNATOR_TAIL_RE = re.compile(
-    r"(?:"
-    r"(?:\s+(?:PROPCO|PORTFOLIO|FUND|HOLDINGS?|SERIES|PHASE|TRANCHE|BORROWER|PLEDGOR|EQUITY\s+OWNER))?"
-    rf"(?:\s+(?:SERIES|NO|NUM)?\s*{_SERIES_TOKEN_ATOM})+"
-    r"|(?:\s+(?:PROPCO|PORTFOLIO|TRANCHE|BORROWER|PLEDGOR|EQUITY\s+OWNER))+"
-    r")+$"
+_SPV_ROLE_TAIL_RE = re.compile(
+    r"\s+\b(?:PROPCO|OPCO|HOLDCO|BORROWER|PLEDGOR|EQUITY\s+OWNER|PROGRAM\s+OWNER|OWNER|OWN|"
+    r"PORTFOLIO|PROGRAM|TRANCHE|SERIES|MULTISTATE|MULTI\s+STATE|MULTI\s+ST|MULTI|ASSET\s+MANAGEMENT)\b$"
 )
+_EXPLICIT_PREFIXED_SERIES_TAIL_RE = re.compile(
+    r"\s+\b(?:SEC|SECTION|PHASE|PH|PART|PT|PARCEL|TRACT|NO|NUM|SERIES)\s*"
+    r"(?:20[0-3][0-9](?:[\s-]+[0-9]{1,2}[A-Z]?)?|[0-9]{1,3}[A-Z]?(?:-[A-Z0-9]+)?|"
+    r"(?:I|II|III|IV|V|VI|VII|VIII|IX|X|XI|XII|XIII|XIV|XV|XVI|XVII|XVIII|XIX|XX)(?:-[A-Z0-9]+)?|[A-Z])\b$"
+)
+_BARE_SERIES_TOKEN_TAIL_RE = re.compile(
+    r"\s+\b(?:"
+    r"20[0-3][0-9](?:[\s-]+[0-9]{1,2}[A-Z]?)?"
+    r"|[0-9]{1,3}[A-Z]?(?:-[A-Z0-9]+)?"
+    r"|[A-Z][0-9]{1,2}[A-Z]?"
+    r"|(?:I|II|III|IV|V|VI|VII|VIII|IX|X|XI|XII|XIII|XIV|XV|XVI|XVII|XVIII|XIX|XX)(?:-[A-Z0-9]+)?"
+    r"|(?:ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT|NINE|TEN)"
+    r"|[A-Z]-[A-Z0-9]+"
+    r")\b$"
+)
+_CONTEXTUAL_SINGLE_LETTER_TRANCHE_RE = re.compile(
+    r"\b(PROPCO|SERIES|SFR|PARCEL|PHASE|PORTFOLIO|TRANCHE|BORROWER|FUND|PROGRAM)\s+[A-Z]$"
+)
+_MID_SERIES_BEFORE_AT_RE = re.compile(
+    r"\s+\b(?:[0-9]{1,2}|I|II|III|IV|V|VI|VII|VIII|IX|X)\s+(?=AT\s+[A-Z])"
+)
+_GENERIC_LANDSCAPE_STEM_WORDS = {
+    'NORTH', 'SOUTH', 'EAST', 'WEST', 'CENTRAL', 'UPPER', 'LOWER', 'NEW', 'OLD',
+    'OAK', 'OAKS', 'PINE', 'PINES', 'CEDAR', 'CEDARS', 'MAPLE', 'ELM', 'BIRCH', 'WILLOW',
+    'WOOD', 'WOODS', 'FOREST', 'GROVE', 'GLEN', 'PARK', 'LAKE', 'LAKES', 'RIVER',
+    'CREEK', 'BROOK', 'SPRING', 'SPRINGS', 'VALLEY', 'HILL', 'HILLS', 'RIDGE', 'CREST',
+    'MEADOW', 'MEADOWS', 'VIEW', 'VISTA', 'HARBOR', 'BAY', 'SHORE', 'BEACH', 'ISLAND',
+    'HIGHLAND', 'HERITAGE', 'COLONIAL', 'ROYAL', 'CROWN', 'COUNTRY', 'PLEASANT', 'GREEN',
+    'SHADY', 'SILVER', 'GOLDEN', 'SUNNY', 'HIDDEN', 'CRYSTAL', 'EAGLE', 'FOX', 'DEER',
+    'VILLAGE', 'GARDENS', 'ESTATES', 'MANOR', 'COURT', 'SQUARE', 'PLAZA', 'TERRACE',
+    'TOWERS', 'COMMONS', 'CROSSING', 'POINTE', 'ACRES', 'FARMS', 'HEIGHTS', 'VILLAS',
+    'APARTMENTS', 'HOMES', 'HOUSING', 'PROPERTIES', 'REALTY', 'LAND', 'MANAGEMENT',
+}
+
+
+_GLUED_DIGIT_SUFFIX_RE = re.compile(r"(\d)(LLC|LP|INC|CORP)\b", re.IGNORECASE)
+_LEAD_THE_RE = re.compile(r"^THE\s+")
+_TAIL_THE_RE = re.compile(r"\s+THE$")
+_GLUED_HYPHEN_CODE_RE = re.compile(r"\b([A-Z]{2,5})-[0-9]{1,2}\b")
+_GLUED_SOLID_CODE_RE = re.compile(r"\b([A-Z]{2,5})[0-9]{1,2}\b")
+
+
+@lru_cache(maxsize=65536)
+def _compute_business_family_and_series_flags(raw_owner: str | None) -> tuple[str, bool, bool]:
+    """Internal helper returning `(stem, stripped_series_token, stripped_explicit_prefixed_series)`."""
+    if not raw_owner:
+        return ("", False, False)
+    pre = _GLUED_DIGIT_SUFFIX_RE.sub(r"\1 \2", str(raw_owner))
+    ordered = normalize_business_name(pre)
+    if not ordered:
+        return ("", False, False)
+    ordered = _TAIL_THE_RE.sub("", _LEAD_THE_RE.sub("", ordered)).strip()
+    if not ordered:
+        return ("", False, False)
+
+    # Collapse mid-name numeral before 'AT <PLACE>' ('FOX CHASE II AT TINTON FALLS' -> 'FOX CHASE AT TINTON FALLS')
+    mid_collapsed = _MID_SERIES_BEFORE_AT_RE.sub(" ", ordered)
+    stripped_series = mid_collapsed != ordered
+    stripped_prefixed = False
+    curr = mid_collapsed
+
+    # Collapse glued code+number tokens ('SFR5' -> 'SFR', 'IH2' -> 'IH', 'JV-2' -> 'JV')
+    glued_next = _GLUED_HYPHEN_CODE_RE.sub(r"\1", curr)
+    glued_next = _GLUED_SOLID_CODE_RE.sub(r"\1", glued_next)
+    if glued_next != curr:
+        stripped_series = True
+        curr = glued_next
+
+    # Iterative tail stripping so interleaved suffixes ('CRESTWOOD VIG CO-OP INC 1',
+    # 'ALDERCREST INC SEC 1', 'TRICON SFR 2024-4 BORROWER LLC', 'FKH SFR PROPCO A LP')
+    # converge to the exact same canonical operator stem regardless of suffix order.
+    for _ in range(10):
+        prev = curr
+        m_leg = _PURE_LEGAL_SUFFIX_TAIL_RE.search(curr)
+        if m_leg and curr[: m_leg.start()].strip():
+            curr = curr[: m_leg.start()].strip()
+            continue
+
+        m_pref = _EXPLICIT_PREFIXED_SERIES_TAIL_RE.search(curr)
+        if m_pref and curr[: m_pref.start()].strip():
+            curr = curr[: m_pref.start()].strip()
+            stripped_series = True
+            stripped_prefixed = True
+            continue
+
+        m_let = _CONTEXTUAL_SINGLE_LETTER_TRANCHE_RE.search(curr)
+        if m_let:
+            curr = (curr[: m_let.start()] + m_let.group(1)).strip()
+            stripped_series = True
+            continue
+
+        m_spv = _SPV_ROLE_TAIL_RE.search(curr)
+        if m_spv:
+            cand = curr[: m_spv.start()].strip()
+            if len(cand.split()) >= 2 or (len(cand) >= 6 and stripped_series):
+                curr = cand
+                continue
+
+        m_bare = _BARE_SERIES_TOKEN_TAIL_RE.search(curr)
+        if m_bare:
+            cand = curr[: m_bare.start()].strip()
+            if cand and len(cand) >= 4 and not cand.isdigit():
+                curr = cand
+                stripped_series = True
+                continue
+
+        m_cont = _CONTAINER_SUFFIX_TAIL_RE.search(curr)
+        if m_cont:
+            cand = curr[: m_cont.start()].strip()
+            if len(cand.split()) >= 2:
+                curr = cand
+                continue
+
+        if curr == prev:
+            break
+
+    return (curr, stripped_series, stripped_prefixed)
 
 
 def extract_owner_family_key(raw_owner: str | None) -> str:
     """Normalize an owner name into a coarse 'owner family' stem so numbered corporate
-    series from one operator (e.g. 'BALTIMORE EXCEL 01 LLC'..'BALTIMORE EXCEL S11 LLC',
-    'BALTIMORE SFR PORTFOLIO 1A, LLC'..'BALTIMORE SFR PORTFOLIO VI, LLC',
-    'IH2 PROPERTY FLORIDA LP'..'IH6 PROPERTY FLORIDA LP', 'FKH SFR PROPCO B-HLD LP')
-    count as one owner family, while distinct unrelated LLCs ('DEERA LLC', 'ZAHAV VENTURES LLC',
-    '1811 DUKELAND LLC', '2119 ASHBURTON LLC') remain distinct.
+    series from one operator (e.g. 'CRESTWOOD VIG CO-OP IV INC'..'CRESTWOOD VIG CO-OP INC 1',
+    'BALTIMORE EXCEL 01 LLC'..'BALTIMORE EXCEL S11 LLC', 'TRICON SFR 2024-4 BORROWER LLC',
+    'FKH SFR PROPCO A LP'..'FKH SFR Q LP') count as one owner family, while distinct
+    unrelated LLCs ('DEERA LLC', 'ZAHAV VENTURES LLC', '1811 DUKELAND LLC') remain distinct.
+    """
+    stem, _, _ = _compute_business_family_and_series_flags(raw_owner)
+    return stem
+
+
+def extract_series_stem_info(raw_owner: str | None) -> tuple[str, bool, bool]:
+    """Return `(series_stem, has_explicit_series_token, is_generic_landscape_stem)` for
+    candidate corporate-series clustering (including unnumbered base entities like
+    'SHELBY COMPANY LLC' alongside 'SHELBY COMPANY 2 LLC', and 'CRESTWOOD VIG CO-OP IV INC'
+    alongside 'CRESTWOOD VIG CO-OP INC 1'). Returns `('', False, False)` for street-address
+    LLCs ('1811 DUKELAND LLC', '123 MAIN ST 1 LLC'), persons, or excluded 3rd-party entities.
     """
     if not raw_owner:
-        return ""
-    # Separate glued suffixes like '06LLC' -> '06 LLC' before normalizing
+        return ("", False, False)
     pre = re.sub(r"(\d)(LLC|LP|INC|CORP)\b", r"\1 \2", str(raw_owner), flags=re.IGNORECASE)
-    # Preserve natural word order BEFORE stripping trailing numbered series tokens!
+    if not looks_like_business_name(pre) or is_excluded_third_party_entity(pre):
+        return ("", False, False)
     ordered = normalize_business_name(pre)
-    if not ordered:
-        return ""
-    ordered = _BIZ_SUFFIX_STRIP_RE.sub("", ordered).strip()
-    collapsed = re.sub(r"\b([A-Z]{2,5})\d{1,2}\b", r"\1", ordered)
-    stripped = _SERIES_DESIGNATOR_TAIL_RE.sub("", collapsed).strip()
-    if stripped and len(stripped) >= 4 and not stripped.isdigit():
-        return stripped
-    return collapsed
+    if not ordered or re.match(r"^\d", ordered):
+        return ("", False, False)
+
+    stem, has_series, has_prefixed = _compute_business_family_and_series_flags(raw_owner)
+    if not stem or re.match(r"^\d", stem):
+        return ("", False, False)
+    words = stem.split()
+    # Require >= 2 words (len >= 6), OR 1 distinctive word (>= 8 chars) with explicit SEC/PHASE/SERIES
+    if len(words) < 2:
+        if not (len(words) == 1 and len(stem) >= 8 and stem.isalpha() and has_prefixed):
+            return ("", False, False)
+    elif len(stem) < 6:
+        return ("", False, False)
+    if not any(len(w) >= 3 and w.isalpha() for w in words):
+        return ("", False, False)
+    if words[-1] in STREET_SUFFIX_WORDS or words[-1] in STREET_SUFFIX_MAP:
+        return ("", False, False)
+
+    is_generic_landscape = all(w in _GENERIC_LANDSCAPE_STEM_WORDS for w in words)
+    return (stem, has_series, is_generic_landscape)
 
 
 def extract_corroborated_series_spv_key(raw_owner: str | None) -> str:
-    """Return a strict multi-word corporate-series stem ONLY when `raw_owner` is an
-    unambiguous numbered/lettered corporate series SPV (e.g. 'BALTIMORE SFR PORTFOLIO 1A, LLC',
-    'BALTIMORE SFR PORTFOLIO III, LLC', 'BALTIMORE EXCEL 02 LLC', 'PROGRESS RESIDENTIAL BORROWER 7 LLC'),
-    returning '' for street-named LLCs ('1811 DUKELAND LLC', '123 MAIN ST 1 LLC'),
-    single-word generic stems ('APEX 1 LLC'), or non-series entities ('DEERA LLC').
-    """
-    if not raw_owner:
-        return ""
-    pre = re.sub(r"(\d)(LLC|LP|INC|CORP)\b", r"\1 \2", str(raw_owner), flags=re.IGNORECASE)
-    if not looks_like_business_name(pre) or is_excluded_third_party_entity(pre):
-        return ""
-    ordered = normalize_business_name(pre)
-    if not ordered or re.match(r"^\d", ordered):
-        return ""
-    base = _BIZ_SUFFIX_STRIP_RE.sub("", ordered).strip()
-    if not base:
-        return ""
-    fam = extract_owner_family_key(raw_owner)
-    if not fam or fam == base:
-        return ""
-    words = fam.split()
-    if len(words) < 2 or len(fam) < 8:
-        return ""
-    if not any(len(w) >= 4 and w.isalpha() for w in words):
-        return ""
-    if words[-1] in STREET_SUFFIX_WORDS or words[-1] in STREET_SUFFIX_MAP:
-        return ""
-    return fam
+    """Return a strict corporate-series stem ONLY when `raw_owner` itself carries an
+    explicit numbered/lettered corporate series designator."""
+    stem, has_series, _ = extract_series_stem_info(raw_owner)
+    return stem if (stem and has_series) else ""

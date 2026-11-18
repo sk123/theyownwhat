@@ -327,6 +327,73 @@ class ThirdPartyExclusionTests(unittest.TestCase):
             with self.subTest(real_hq=real_hq):
                 self.assertFalse(is_excluded_third_party_address(real_hq))
 
+    def test_crestwood_coop_and_cross_jurisdiction_sibling_series_unification(self):
+        from api.oc_linker import cluster_with_oc_and_series
+        from api.shared_utils import looks_like_person_owner, normalize_business_name
+
+        # 1. CO-OP must never be mangled into COMPANY-OP, and initialisms/inversions must align
+        self.assertEqual(
+            normalize_business_name("CRESTWOOD VIG CO-OP IV INC"),
+            "CRESTWOOD VILLAGE COOPERATIVE IV INCORPORATED",
+        )
+        self.assertEqual(
+            normalize_business_name("D R HORTON INC"),
+            normalize_business_name("D.R. HORTON, INC"),
+        )
+        self.assertEqual(
+            normalize_business_name("THR FLORIDA LP"),
+            normalize_business_name("THR FLORIDA L P"),
+        )
+        self.assertEqual(
+            normalize_business_name("GREENBRIAR REALTY CORP"),
+            normalize_business_name("GREENBRIAR REALTY CORPORATION, THE"),
+        )
+
+        # 2. Crestwood Village Co-Op 1, 2, 3, IV unify into 1 network while unrelated Crestwood Holdings stays separate
+        nj_props = [
+            {"bbl": "nj-1", "owner_name": "CRESTWOOD VIG CO-OP IV INC", "county": "OCEAN", "mailing_address": "15E MOCCASIN DR, WHITING, NJ, 08759"},
+            {"bbl": "nj-2", "owner_name": "CRESTWOOD VIG CO-OP INC 1", "county": "OCEAN", "mailing_address": "92 FAIRWAY LN, WHITING, NJ, 08759"},
+            {"bbl": "nj-3", "owner_name": "CRESTWOOD VIG CO-OP 2", "county": "OCEAN", "mailing_address": "470 ROUTE 530, WHITING, NJ, 08759"},
+            {"bbl": "nj-4", "owner_name": "CRESTWOOD VIG CO-OP 3", "county": "OCEAN", "mailing_address": "250 SCHOOLHOUSE RD, WHITING, NJ, 08759"},
+            {"bbl": "nj-5", "owner_name": "CRESTWOOD HOLDINGS LLC", "county": "MIDDLESEX", "mailing_address": "112 HILLSIDE AVE, SOUTH PLAINFIELD, NJ, 07080"},
+            # Cross-county generic landscape homonyms must NOT merge across Bergen vs Middlesex
+            {"bbl": "nj-6", "owner_name": "NORTH VILLAGE 1 LLC", "county": "BERGEN", "mailing_address": "100 CANAL POINTE BLVD, PRINCETON, NJ, 08540"},
+            {"bbl": "nj-7", "owner_name": "NORTH VILLAGE ASSOC", "county": "MIDDLESEX", "mailing_address": "911 VILLAGE DR EAST, NORTH BRUNSWICK, NJ, 08902"},
+            # Base unnumbered entity + numbered series SPVs unify cleanly
+            {"bbl": "md-1", "owner_name": "SHELBY COMPANY LLC", "borough": "WARD 15", "mailing_address": ""},
+            {"bbl": "md-2", "owner_name": "SHELBY COMPANY 2 LLC", "borough": "WARD 15", "mailing_address": ""},
+            {"bbl": "md-3", "owner_name": "SHELBY COMPANY 3 LLC", "borough": "WARD 15", "mailing_address": ""},
+            # 4-digit year tranches + single-letter PROPCO tranches + truncated CAMA 'LL'
+            {"bbl": "fl-1", "owner_name": "TRICON SFR 2024-4 BORROWER LLC", "borough": "HILLSBOROUGH", "mailing_address": ""},
+            {"bbl": "fl-2", "owner_name": "TRICON SFR 2020-2 BORROWER LLC", "borough": "ORANGE", "mailing_address": ""},
+            {"bbl": "pa-1", "owner_name": "PHILADELPHIA LOTUS 04A LLC", "borough": "PHILADELPHIA", "mailing_address": ""},
+            {"bbl": "pa-2", "owner_name": "PHILADELPHIA LOTUS 03A LL", "borough": "PHILADELPHIA", "mailing_address": ""},
+        ]
+        initial_groups = {p["bbl"]: [p] for p in nj_props}
+        merged, _ = cluster_with_oc_and_series(nj_props, initial_groups, {})
+        bbl_sets = [frozenset(p["bbl"] for p in grp) for grp in merged.values()]
+
+        self.assertIn(frozenset({"nj-1", "nj-2", "nj-3", "nj-4"}), bbl_sets)
+        self.assertIn(frozenset({"nj-5"}), bbl_sets)
+        self.assertIn(frozenset({"nj-6"}), bbl_sets)
+        self.assertIn(frozenset({"nj-7"}), bbl_sets)
+        self.assertIn(frozenset({"md-1", "md-2", "md-3"}), bbl_sets)
+        self.assertIn(frozenset({"fl-1", "fl-2"}), bbl_sets)
+        self.assertIn(frozenset({"pa-1", "pa-2"}), bbl_sets)
+
+        # 3. Complex / trade-name strings must never be classified as human principals
+        for non_person in (
+            "THE CEDARS AT BASKING RIDGE",
+            "EAGLE RIDGE AT W ORANGE",
+            "DAVIS ENT",
+            "RUTGERS BUILDERS T/A RUTGERSVILLAGE",
+            "COVENTRY SQ",
+            "WOODMERE AT EATONTOWN",
+        ):
+            self.assertFalse(looks_like_person_owner(non_person), non_person)
+        self.assertTrue(looks_like_person_owner("RAMAN KHOSLA"))
+        self.assertTrue(looks_like_person_owner("WILLIAM CHRISTOPHER SMITH"))
+
 
 if __name__ == "__main__":
     unittest.main()

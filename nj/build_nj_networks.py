@@ -201,21 +201,25 @@ def build_groups(
     properties: Iterable[dict],
     registrar_substrings: Optional[tuple] = None,
     oc_principals_by_key: Optional[Dict[tuple, dict]] = None,
+    registered_agent_addrs: Optional[set] = None,
 ) -> tuple[Dict[str, List[dict]], dict]:
     all_props = [p for p in properties if p.get("bbl")]
     excluded_coarse_counts: Dict[str, int] = defaultdict(int)
     props: List[dict] = []
     excluded_parcels = 0
     oc_map = oc_principals_by_key or {}
+    ra_addrs = set(registered_agent_addrs or ())
     attorney_re = re.compile(r"\b(?:ESQ|ESQUIRE|CPA|C\.P\.A\.|ATTORNEY)\b", re.IGNORECASE)
 
     for prop in all_props:
         raw_owner = (prop.get("owner_name") or "").strip()
-        owner_norm = normalize_owner_name(prop.get("owner_name_norm") or raw_owner)
+        owner_norm = normalize_owner_name(raw_owner or prop.get("owner_name_norm"))
+        if looks_like_business_name(raw_owner):
+            owner_norm = re.sub(r"^THE\s+", "", owner_norm).strip() or owner_norm
         prop["owner_name_norm"] = owner_norm
         raw_mail = (prop.get("mailing_address") or "").strip()
         clean_mail = strip_benign_care_of_prefix(raw_mail)
-        address_norm = (prop.get("mailing_address_norm") or normalize_mailing_address(clean_mail) or "").strip()
+        address_norm = (normalize_mailing_address(clean_mail) or prop.get("mailing_address_norm") or "").strip()
         coarse_mail = normalize_mailing_address_coarse(clean_mail)
         prop["mailing_address_norm"] = address_norm
         prop["_coarse_mail"] = coarse_mail
@@ -254,7 +258,7 @@ def build_groups(
         by_owner[owner_norm].append(bbl)
         if (
             not is_generic_address(address_norm)
-            and (not coarse_mail or coarse_mail not in contaminated_coarse)
+            and (not coarse_mail or (coarse_mail not in contaminated_coarse and coarse_mail not in ra_addrs))
             and not is_excluded_third_party_address(raw_mail, address_norm, registrar_substrings or ())
         ):
             by_owner_address[address_norm].append(bbl)
@@ -371,7 +375,7 @@ def format_network_rows(
                 oc_ids.add(f"{oj}/{oc}")
                 info = oc_map.get((oj, oc)) or {}
                 for h_nm in info.get("humans") or ():
-                    if not is_public_or_generic_owner(h_nm):
+                    if looks_like_person_owner(h_nm) and not is_public_or_generic_owner(h_nm):
                         human_counts[h_nm] += 1
                 for he in info.get("holding_entities") or ():
                     if not is_public_or_generic_owner(he):
@@ -433,7 +437,12 @@ def update_status(conn, status: str, details: dict):
             """,
             (status, json.dumps(details, default=str)),
         )
-        cur.execute("DELETE FROM kv_cache WHERE key = 'completeness_matrix'")
+        if status == "success":
+            cur.execute(
+                "DELETE FROM kv_cache WHERE key IN ('completeness_matrix', 'city_stats:v1:nj') OR key LIKE 'city_top_nets:v1:nj:%'"
+            )
+        else:
+            cur.execute("DELETE FROM kv_cache WHERE key = 'completeness_matrix'")
     conn.commit()
 
 
@@ -477,10 +486,13 @@ def build_nj_networks(conn=None):
                 conn.rollback()
                 LOGGER.warning("NJ OC principal resolution skipped: %s", oc_exc)
 
+        from api.oc_linker import load_oc_registered_agent_addresses
+        ra_addrs = load_oc_registered_agent_addresses(conn)
         groups, metadata = build_groups(
             properties,
             registrar_substrings=registrar_substrings,
             oc_principals_by_key=oc_principals_by_key,
+            registered_agent_addrs=ra_addrs,
         )
         metadata["oc_matched_buildings"] = oc_stats.get("matched", 0)
         rows = format_network_rows(groups, oc_principals_by_key=oc_principals_by_key)

@@ -9,6 +9,7 @@ import time
 import json
 import logging
 import html
+import re
 from urllib.parse import urlencode
 from typing import Optional, List
 
@@ -36,7 +37,7 @@ VALID_CITIES = {
     "chicago", "miami", "minneapolis", "nj",
     "ma", "fl", "ny", "co", "vt", "wi", "nc", "ar", "va",
 }
-RELIABLE_UNIT_CITIES = {"nyc", "baltimore", "philadelphia", "miami", "minneapolis", "nj", "ma", "fl"}
+RELIABLE_UNIT_CITIES = {"nyc", "baltimore", "philadelphia", "miami", "minneapolis", "nj", "fl"}
 # Python `re` pattern (\b word boundaries) exported for Python callers & battery checks;
 # PostgreSQL `!~*` queries use INSTITUTIONAL_NETWORK_SQL_PATTERN (\y word boundaries).
 INSTITUTIONAL_NETWORK_PATTERN = THIRD_PARTY_ENTITY_REGEX_BODY
@@ -329,7 +330,8 @@ _networks_ts: dict = {}
 _bg_refresh_inflight: set[str] = set()
 _bg_refresh_lock = threading.Lock()
 _city_stats_locks: dict[str, threading.Lock] = {}
-STATS_TTL = 86400  # 24 hours (cached daily)
+STATS_TTL = 86400  # 24 hours (persisted in kv_cache)
+L1_MEM_TTL = 15    # 15s L1 RAM cache so external kv_cache invalidations propagate immediately
 
 
 def _kv_get(cache_key: str) -> tuple[dict | list | None, bool]:
@@ -405,7 +407,7 @@ def city_stats(city: str, force_refresh: bool = False):
     cache_key = f"city_stats:v1:{c}"
     now = time.time()
     if not force_refresh:
-        if cache_key in _stats_cache and cache_key in _stats_ts and now - _stats_ts[cache_key] < STATS_TTL:
+        if cache_key in _stats_cache and cache_key in _stats_ts and now - _stats_ts[cache_key] < L1_MEM_TTL:
             return _stats_cache[cache_key]
         kv_val, is_fresh = _kv_get(cache_key)
         if kv_val is not None:
@@ -421,7 +423,7 @@ def city_stats(city: str, force_refresh: bool = False):
     with city_lock:
         if not force_refresh:
             now = time.time()
-            if cache_key in _stats_cache and cache_key in _stats_ts and now - _stats_ts[cache_key] < STATS_TTL:
+            if cache_key in _stats_cache and cache_key in _stats_ts and now - _stats_ts[cache_key] < L1_MEM_TTL:
                 return _stats_cache[cache_key]
             kv_val, is_fresh = _kv_get(cache_key)
             if kv_val is not None:
@@ -682,14 +684,43 @@ def city_search(
 ):
     c = _validate_city(city)
     term = q.strip().upper()
-    term_like = f"%{term}%"
-    
-    # Split search terms permutation-agnostically, stripping commas/punctuation
-    clean_term = term.replace(',', ' ')
+    # Collapse dotted initialisms ("W.C." -> "WC", "D.R." -> "DR") then split on punctuation/spaces
+    collapsed_term = re.sub(r"\b([A-Z])\.\s*([A-Z])\.?(?=\s|$)", r"\1\2", term)
+    clean_term = re.sub(r"[,.;]+", " ", collapsed_term)
     terms = [t for t in clean_term.split() if t]
     if not terms:
         return []
-        
+
+    term_like = f"%{' '.join(terms)}%"
+    multi_word = len(terms) >= 2
+
+    def _term_clause(expr: str, word: str) -> tuple[str, str]:
+        if multi_word and len(word) == 2 and word.isalpha():
+            # Match literal "WC"/"DR" OR initial-expanded "W. C." / "WILLIAM CHRISTOPHER" / "D R"
+            pat = rf"(?:{re.escape(word)}|\y{re.escape(word[0])}[A-Z.]*\s+{re.escape(word[1])}[A-Z.]*\y)"
+            return f"{expr} ~* %s", pat
+        return f"{expr} ILIKE %s", f"%{word}%"
+
+    def _build_where(expr: str) -> tuple[str, list[str]]:
+        clauses = []
+        params = []
+        for word in terms:
+            cl, prm = _term_clause(expr, word)
+            clauses.append(cl)
+            params.append(prm)
+        return " AND ".join(clauses), params
+
+    def _py_matches_all(text: str) -> bool:
+        up = (text or "").upper()
+        for word in terms:
+            if multi_word and len(word) == 2 and word.isalpha():
+                pat = rf"(?:{re.escape(word)}|\b{re.escape(word[0])}[A-Z.]*\s+{re.escape(word[1])}[A-Z.]*\b)"
+                if not re.search(pat, up):
+                    return False
+            elif word not in up:
+                return False
+        return True
+
     results = []
 
     def append_network_result(row, match_context=None):
@@ -698,8 +729,11 @@ def city_search(
             row.get("display_name"), row.get("member_names"), row.get("connection_signals")
         )
         context = match_context
-        if not context and matched_member_names:
-            context = "Matched network member: " + ", ".join(matched_member_names[:3])
+        if not context:
+            if identity.get("primary_human_name") and _py_matches_all(identity["primary_human_name"]):
+                context = f"Matched principal: {identity['primary_human_name']}"
+            elif matched_member_names:
+                context = "Matched network member: " + ", ".join(matched_member_names[:3])
 
         results.append({
             "type":          f"{c}_network",
@@ -715,8 +749,9 @@ def city_search(
             "sublabel":      _borough_summary_text(row["borough_summary"]),
         })
 
-    # 1. Direct network name matches. Keep this fast and highly relevant.
-    where_net = " AND ".join(["display_name ILIKE %s" for _ in terms])
+    # 1. Direct network name or primary OpenCorporates/registration principal matches.
+    # Split `display_name` from `primary_human_name` so `*_networks_display_trgm_idx` is always used.
+    where_disp, disp_params = _build_where("display_name")
     direct_net_rows = _query(f"""
         SELECT
             network_key,
@@ -727,21 +762,133 @@ def city_search(
             member_names,
             connection_signals
         FROM {c}_networks
-        WHERE {where_net}
+        WHERE {where_disp}
         ORDER BY building_count DESC NULLS LAST, display_name
         LIMIT %s
-    """, [f"%{word}%" for word in terms] + [limit])
+    """, disp_params + [limit])
 
+    seen_network_keys = {r["network_key"] for r in direct_net_rows}
+    if len(direct_net_rows) < limit:
+        where_human, human_params = _build_where("COALESCE(connection_signals::jsonb->>'primary_human_name', '')")
+        rem_direct = limit - len(direct_net_rows)
+        human_net_rows = _query(f"""
+            SELECT
+                network_key,
+                display_name,
+                building_count,
+                unit_count,
+                borough_summary,
+                member_names,
+                connection_signals
+            FROM {c}_networks
+            WHERE COALESCE(building_count, 0) >= 2
+              AND (connection_signals::jsonb->>'primary_human_name') IS NOT NULL
+              AND ({where_human})
+            ORDER BY building_count DESC NULLS LAST, display_name
+            LIMIT %s
+        """, human_params + [rem_direct])
+        for hr in human_net_rows:
+            if hr["network_key"] not in seen_network_keys:
+                seen_network_keys.add(hr["network_key"])
+                direct_net_rows.append(hr)
+
+        if not direct_net_rows:
+            single_human_rows = _query(f"""
+                SELECT
+                    network_key,
+                    display_name,
+                    building_count,
+                    unit_count,
+                    borough_summary,
+                    member_names,
+                    connection_signals
+                FROM {c}_networks
+                WHERE COALESCE(building_count, 0) = 1
+                  AND (connection_signals::jsonb->>'primary_human_name') IS NOT NULL
+                  AND ({where_human})
+                LIMIT %s
+            """, human_params + [min(limit, 8)])
+            for hr in single_human_rows:
+                if hr["network_key"] not in seen_network_keys:
+                    seen_network_keys.add(hr["network_key"])
+                    direct_net_rows.append(hr)
+
+    direct_net_rows.sort(key=lambda r: (-(int(r.get("building_count") or 0)), r.get("display_name") or ""))
     seen_network_keys = set()
-    for r in direct_net_rows:
+    for r in direct_net_rows[:limit]:
         seen_network_keys.add(r["network_key"])
-        append_network_result(r, "Matched network name")
+        ctx = "Matched network name" if _py_matches_all(r.get("display_name") or "") else None
+        append_network_result(r, ctx)
 
-    # 2. Property address/owner matches (if fewer than limit results).
+    # 2. Multi-entity network member / corporate officer matches (up to 8 slots before
+    # single-parcel property rows so prominent shell-LLC portfolios like WC Smith surface first).
+    member_net_cap = min(max(0, 8 - len(results)), limit - len(results))
+    if member_net_cap > 0:
+        where_hidden_exists, hidden_params = _build_where("n")
+        where_member_like, member_params = _build_where("member_name")
+
+        hidden_net_rows = _query(f"""
+            SELECT
+                network_key,
+                display_name,
+                building_count,
+                unit_count,
+                borough_summary,
+                member_names,
+                connection_signals,
+                ARRAY(
+                    SELECT member_name
+                    FROM (
+                        SELECT unnest(COALESCE(member_names, ARRAY[]::text[])) AS member_name
+                        UNION
+                        SELECT jsonb_array_elements_text(
+                            CASE
+                                WHEN jsonb_typeof(connection_signals::jsonb->'source_human_names') = 'array'
+                                THEN connection_signals::jsonb->'source_human_names'
+                                ELSE '[]'::jsonb
+                            END
+                        ) AS member_name
+                    ) all_m
+                    WHERE {where_member_like}
+                    ORDER BY length(member_name), member_name
+                    LIMIT 5
+                ) AS matched_member_names
+            FROM {c}_networks
+            WHERE COALESCE(building_count, 0) >= 2
+              AND (
+                    COALESCE(array_length(member_names, 1), 0) > 1
+                    OR connection_signals::text LIKE '%%source_human_names%%'
+                  )
+              AND NOT (network_key = ANY(%s))
+              AND (
+                  EXISTS (
+                      SELECT 1 FROM unnest(COALESCE(member_names, ARRAY[]::text[])) AS n
+                      WHERE {where_hidden_exists}
+                  )
+                  OR EXISTS (
+                      SELECT 1 FROM jsonb_array_elements_text(
+                          CASE
+                              WHEN jsonb_typeof(connection_signals::jsonb->'source_human_names') = 'array'
+                              THEN connection_signals::jsonb->'source_human_names'
+                              ELSE '[]'::jsonb
+                          END
+                      ) AS n
+                      WHERE {where_hidden_exists}
+                  )
+              )
+            ORDER BY building_count DESC NULLS LAST, display_name
+            LIMIT %s
+        """, member_params + [list(seen_network_keys)] + hidden_params + hidden_params + [member_net_cap])
+
+        for r in hidden_net_rows:
+            seen_network_keys.add(r["network_key"])
+            append_network_result(r)
+
+    # 3. Property address/municipality/owner matches for remaining slots.
     remaining = limit - len(results)
     if remaining > 0:
-        where_addr = " AND ".join(["p.address ILIKE %s" for _ in terms])
-        where_owner = " AND ".join(["p.owner_name ILIKE %s" for _ in terms])
+        where_paddr, paddr_params = _build_where("p.address")
+        where_owner, owner_params = _build_where("p.owner_name")
         prop_rows = _query(f"""
             WITH matched_props AS (
                 SELECT
@@ -752,7 +899,7 @@ def city_search(
                     p.owner_name,
                     p.units_res
                 FROM {c}_properties p
-                WHERE ({where_addr})
+                WHERE ({where_paddr})
                    OR ({where_owner})
                 ORDER BY
                     CASE WHEN p.address ILIKE %s THEN 0
@@ -783,15 +930,55 @@ def city_search(
                 ORDER BY net.building_count DESC NULLS LAST
                 LIMIT 1
             ) n ON TRUE
-        """, [f"%{word}%" for word in terms] + [f"%{word}%" for word in terms] + [term_like, term_like, remaining])
+        """, paddr_params + owner_params + [term_like, term_like, remaining])
+
+        if not prop_rows and not results:
+            where_addr_boro, addr_boro_params = _build_where("CONCAT_WS(' ', p.address, p.borough)")
+            prop_rows = _query(f"""
+                WITH matched_props AS (
+                    SELECT
+                        p.bbl,
+                        p.address,
+                        p.borough,
+                        p.zip_code,
+                        p.owner_name,
+                        p.units_res
+                    FROM {c}_properties p
+                    WHERE {where_addr_boro}
+                    ORDER BY p.units_res DESC NULLS LAST, p.address
+                    LIMIT %s
+                )
+                SELECT
+                    mp.bbl,
+                    mp.address,
+                    mp.borough,
+                    mp.zip_code,
+                    mp.owner_name,
+                    mp.units_res,
+                    n.network_key,
+                    n.display_name AS network_name,
+                    n.building_count
+                FROM matched_props mp
+                LEFT JOIN LATERAL (
+                    SELECT
+                        net.network_key,
+                        net.display_name,
+                        net.building_count
+                    FROM {c}_networks net
+                    WHERE ARRAY[mp.bbl]::text[] <@ net.bbl_list
+                    ORDER BY net.building_count DESC NULLS LAST
+                    LIMIT 1
+                ) n ON TRUE
+            """, addr_boro_params + [remaining])
 
         for r in prop_rows:
             owner_name = r["owner_name"] or ""
             address = r["address"] or ""
+            borough = r["borough"] or ""
             match_context = None
-            if all(word in address.upper() for word in terms):
+            if _py_matches_all(f"{address} {borough}"):
                 match_context = "Matched address"
-            elif all(word in owner_name.upper() for word in terms):
+            elif _py_matches_all(owner_name):
                 match_context = f"Matched owner: {owner_name}"
 
             results.append({
@@ -809,46 +996,6 @@ def city_search(
                 "sublabel":      f"{r['borough']} · {r['owner_name'] or 'Unknown owner'}",
                 "match_context": match_context,
             })
-
-    # 3. Hidden network member matches last. These explain indirect-looking
-    # network hits without letting them crowd out direct name/address matches.
-    remaining = limit - len(results)
-    if remaining > 0:
-        where_hidden_exists = " AND ".join(["n ILIKE %s" for _ in terms])
-        where_member_like = " AND ".join(["member_name ILIKE %s" for _ in terms])
-        where_display_not_like = " AND ".join(["display_name ILIKE %s" for _ in terms])
-
-        hidden_net_rows = _query(f"""
-            SELECT
-                network_key,
-                display_name,
-                building_count,
-                unit_count,
-                borough_summary,
-                member_names,
-                connection_signals,
-                ARRAY(
-                    SELECT member_name
-                    FROM unnest(COALESCE(member_names, ARRAY[]::text[])) AS member_name
-                    WHERE {where_member_like}
-                    ORDER BY length(member_name), member_name
-                    LIMIT 5
-                ) AS matched_member_names
-            FROM {c}_networks
-            WHERE COALESCE(array_length(member_names, 1), 0) > 1
-              AND NOT (network_key = ANY(%s))
-              AND NOT ({where_display_not_like})
-              AND EXISTS (
-                  SELECT 1 FROM unnest(COALESCE(member_names, ARRAY[]::text[])) AS n
-                  WHERE {where_hidden_exists}
-              )
-            ORDER BY building_count DESC NULLS LAST, display_name
-            LIMIT %s
-        """, [f"%{word}%" for word in terms] + [list(seen_network_keys)] + [f"%{word}%" for word in terms] + [f"%{word}%" for word in terms] + [remaining])
-
-        for r in hidden_net_rows:
-            seen_network_keys.add(r["network_key"])
-            append_network_result(r)
 
     return results
 
@@ -884,7 +1031,7 @@ def city_top_networks(
     net_cache_key = f"city_top_nets:v1:{c}:{sort_col}:{limit}:{min_buildings}:{int(bool(include_institutional))}"
     now = time.time()
     if limit <= 25 and not force_refresh:
-        if net_cache_key in _networks_cache and net_cache_key in _networks_ts and now - _networks_ts[net_cache_key] < STATS_TTL:
+        if net_cache_key in _networks_cache and net_cache_key in _networks_ts and now - _networks_ts[net_cache_key] < L1_MEM_TTL:
             return _networks_cache[net_cache_key]
         kv_nets, is_fresh = _kv_get(net_cache_key)
         if kv_nets is not None:
@@ -1044,6 +1191,128 @@ def city_top_networks(
         _networks_ts[net_cache_key] = time.time()
         _kv_set(net_cache_key, results)
     return results
+
+
+SIBLING_EXPLORER_PAIRS = {
+    "nyc": ("ny", "NY State (Outside NYC)"),
+    "ny": ("nyc", "New York City (5 Boroughs)"),
+    "boston": ("ma", "Massachusetts Statewide"),
+    "ma": ("boston", "Boston Neighborhood View"),
+    "miami": ("fl", "Florida Statewide"),
+    "fl": ("miami", "Miami-Dade All-Parcels"),
+}
+
+
+def _find_sibling_portfolios(
+    city: str,
+    display_name: Optional[str],
+    member_names: Optional[List[str]],
+    primary_human_name: Optional[str],
+    oc_cids: Optional[List[str]],
+) -> List[dict]:
+    pair = SIBLING_EXPLORER_PAIRS.get(city)
+    if not pair:
+        return []
+    sib_jur, sib_label = pair
+    found_by_key: dict = {}
+
+    try:
+        # 1. Exact OpenCorporates entity match (`oc_jurisdiction_code`, `oc_company_number`)
+        sib_prop_cols = _get_property_columns(sib_jur)
+        if oc_cids and "oc_company_number" in sib_prop_cols:
+            jurs, nums = [], []
+            for cid in oc_cids[:25]:
+                if isinstance(cid, str) and "/" in cid:
+                    j, n = cid.split("/", 1)
+                    if j and n:
+                        jurs.append(j)
+                        nums.append(n)
+            if jurs:
+                bbl_rows = _query(f"""
+                    SELECT DISTINCT p.bbl
+                    FROM unnest(%s::text[], %s::text[]) AS k(j, n)
+                    JOIN {sib_jur}_properties p
+                      ON p.oc_jurisdiction_code = k.j AND p.oc_company_number = k.n
+                    WHERE p.bbl IS NOT NULL
+                    LIMIT 50
+                """, (jurs, nums))
+                matched_bbls = [r["bbl"] for r in bbl_rows if r.get("bbl")]
+                if matched_bbls:
+                    oc_rows = _query(f"""
+                        SELECT
+                            n.network_key,
+                            n.display_name,
+                            n.building_count,
+                            n.unit_count,
+                            n.connection_signals::jsonb ->> 'primary_human_name' AS primary_human_name
+                        FROM {sib_jur}_networks n
+                        WHERE n.bbl_list && %s::text[]
+                        ORDER BY n.building_count DESC
+                        LIMIT 3
+                    """, (matched_bbls,))
+                    for r in oc_rows:
+                        found_by_key[r["network_key"]] = {**r, "match_basis": "corporate_registry"}
+
+        # 2. Exact source-listed human principal match (indexed via `idx_*_nets_primary_human_upper`)
+        if primary_human_name and len(primary_human_name.split()) >= 2:
+            h_up = primary_human_name.strip().upper()
+            if not is_excluded_third_party_entity(h_up):
+                h_rows = _query(f"""
+                    SELECT
+                        network_key,
+                        display_name,
+                        building_count,
+                        unit_count,
+                        connection_signals::jsonb ->> 'primary_human_name' AS primary_human_name
+                    FROM {sib_jur}_networks
+                    WHERE UPPER(connection_signals::jsonb ->> 'primary_human_name') = %s
+                    ORDER BY building_count DESC
+                    LIMIT 3
+                """, (h_up,))
+                for r in h_rows:
+                    found_by_key.setdefault(r["network_key"], {**r, "match_basis": "source_principal"})
+
+        # 3. Exact registered entity / deed owner display_name match (indexed B-tree)
+        cand_names = []
+        for nm in [display_name, *(member_names or ())[:20]]:
+            if nm and isinstance(nm, str):
+                s = nm.strip()
+                if len(s) >= 5 and not is_excluded_third_party_entity(s):
+                    cand_names.append(s)
+        if cand_names:
+            d_rows = _query(f"""
+                SELECT
+                    network_key,
+                    display_name,
+                    building_count,
+                    unit_count,
+                    connection_signals::jsonb ->> 'primary_human_name' AS primary_human_name
+                FROM {sib_jur}_networks
+                WHERE display_name = ANY(%s)
+                ORDER BY building_count DESC
+                LIMIT 3
+            """, (list(dict.fromkeys(cand_names)),))
+            for r in d_rows:
+                found_by_key.setdefault(r["network_key"], {**r, "match_basis": "entity_name"})
+    except Exception as exc:
+        logger.warning("Sibling portfolio lookup skipped for %s -> %s: %s", city, sib_jur, exc)
+        return []
+
+    ranked = sorted(found_by_key.values(), key=lambda x: int(x.get("building_count") or 0), reverse=True)[:2]
+    return [
+        {
+            "jurisdiction": sib_jur,
+            "jurisdiction_label": sib_label,
+            "network_key": r["network_key"],
+            "display_name": r["display_name"],
+            "primary_human_name": r.get("primary_human_name"),
+            "building_count": int(r.get("building_count") or 0),
+            "unit_count": int(r["unit_count"] or 0) if sib_jur in RELIABLE_UNIT_CITIES else None,
+            "match_basis": r["match_basis"],
+        }
+        for r in ranked
+        if int(r.get("building_count") or 0) > 0
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -1329,6 +1598,14 @@ def city_network_detail(city: str, network_key: str):
                 existing_person_names.add(nm_upper)
             formatted_contacts.append(occ)
 
+    sibling_portfolios = _find_sibling_portfolios(
+        c,
+        net.get("display_name"),
+        net.get("member_names"),
+        identity.get("primary_human_name"),
+        conn_signals.get("oc_matched_companies"),
+    )
+
     return {
         "network_key":    net["network_key"],
         "anchor_type":    net["anchor_type"],
@@ -1339,6 +1616,7 @@ def city_network_detail(city: str, network_key: str):
         "member_names":   net["member_names"],
         "member_addresses": net["member_addresses"],
         "connection_signals": conn_signals,
+        "sibling_portfolios": sibling_portfolios,
         **identity,
         "updated_at":     str(net["updated_at"]) if net["updated_at"] else None,
         "portfolio_stats": {

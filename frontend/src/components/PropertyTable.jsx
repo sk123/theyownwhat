@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { ArrowUpDown, Map, List, Grid3X3, X, Check, Building2, MapPin, ChevronRight, ChevronDown, LayoutGrid, Sparkles, Download, Share2, ExternalLink, Copy, AlertCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { getAddressBadgeInfo, getJurisdictionConfig, getPropertyState } from '../utils/jurisdiction';
+import { getAddressBadgeInfo, getCtPropertyUnitCount, getJurisdictionConfig, getPropertyState } from '../utils/jurisdiction';
 import { getPropertySubsidyRecords, hasPropertySubsidy } from '../utils/subsidies';
 
 // Helper Components
@@ -357,12 +357,16 @@ export default function PropertyTable({
                     return uA.localeCompare(uB, undefined, { numeric: true, sensitivity: 'base' });
                 });
 
+                const hasOwnedMember = g.units.some(u => u.is_network_member !== false && u.is_in_network !== false);
+
                 g.units.forEach(u => {
                     const assessed = parseFloat(String(u.assessed_value || '0').replace(/[^0-9.-]+/g, "")) || 0;
                     const appraised = parseFloat(String(u.appraised_value || '0').replace(/[^0-9.-]+/g, "")) || 0;
                     totalAssessed += assessed;
                     totalAppraised += appraised;
-                    totalUnits += parseInt(u.number_of_units || u.unit_count || 1);
+                    if (!hasOwnedMember || (u.is_network_member !== false && u.is_in_network !== false)) {
+                        totalUnits += getCtPropertyUnitCount(u);
+                    }
                     totalViolations += parseInt(u.violation_count || 0);
                     totalEvictions += parseInt(u.eviction_count || 0);
                 });
@@ -393,7 +397,7 @@ export default function PropertyTable({
                 });
             } else {
                 const p = g.units[0];
-                const unitCount = parseInt(p.number_of_units || p.unit_count || 1);
+                const unitCount = getCtPropertyUnitCount(p);
                 result.push({
                     ...p,
                     unit_count: unitCount,
@@ -957,29 +961,29 @@ export default function PropertyTable({
             <div
                 className="bg-gradient-to-r from-blue-600 to-indigo-600 p-3 md:p-4 border-b border-white/10 flex flex-col gap-2 md:gap-4 shadow-sm shrink-0"
             >
-                <div className="flex items-center justify-between cursor-pointer lg:cursor-default" onClick={toggleExpand}>
-                    <div className="flex items-center gap-3">
-                        <h3 className="font-bold text-white">Properties</h3>
-                        <div className="flex items-center gap-1">
-                            <span className="text-xs font-bold text-white/90 bg-white/20 px-2 py-1 rounded-md">
-                                {properties.filter(p => p.is_in_network !== false).length} Parcels
+                <div className="flex flex-wrap items-center justify-between gap-2 cursor-pointer lg:cursor-default" onClick={toggleExpand}>
+                    <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="font-bold text-white mr-1">Properties</h3>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="text-xs font-bold text-white/95 bg-white/20 px-2 py-0.5 rounded-md tabular-nums">
+                                {properties.filter(p => p.is_in_network !== false && p.is_network_member !== false).length.toLocaleString()} Parcels
                             </span>
-                            <span className="text-xs font-bold text-white/90 bg-white/20 px-2 py-1 rounded-md">
-                                {properties.filter(p => p.is_in_network !== false).reduce((acc, p) => acc + (parseInt(p.number_of_units || p.unit_count || 1)), 0)} Units
+                            <span className="text-xs font-bold text-white/95 bg-white/20 px-2 py-0.5 rounded-md tabular-nums">
+                                {properties.filter(p => p.is_in_network !== false && p.is_network_member !== false).reduce((acc, p) => acc + getCtPropertyUnitCount(p), 0).toLocaleString()} Units
                             </span>
                             {groupedProperties.length < properties.length && (
-                                <span className="text-xs font-bold text-white bg-indigo-500/30 px-2 py-1 rounded-md">
-                                    {groupedProperties.length} Buildings
+                                <span className="text-xs font-bold text-white bg-indigo-500/30 px-2 py-0.5 rounded-md tabular-nums">
+                                    {groupedProperties.length.toLocaleString()} Buildings
                                 </span>
                             )}
                         </div>
 
                         {!isMultiSelectActive && (
-                            <>
+                            <div className="flex items-center gap-1.5 ml-auto sm:ml-1">
                                 {onAiDigest && (
                                     <button
                                         onClick={(e) => { e.stopPropagation(); onAiDigest(); }}
-                                        className="ml-2 px-2 py-1 bg-white border border-gray-300 text-indigo-600 text-xs font-bold rounded shadow-sm hover:bg-indigo-50 transition-colors flex items-center gap-1"
+                                        className="px-2 py-1 bg-white border border-gray-300 text-indigo-600 text-xs font-bold rounded shadow-sm hover:bg-indigo-50 transition-colors flex items-center gap-1"
                                     >
                                         <Sparkles size={14} />
                                         <span className="hidden sm:inline">AI Digest</span>
@@ -987,20 +991,21 @@ export default function PropertyTable({
                                 )}
                                 <button
                                     onClick={(e) => { e.stopPropagation(); setIsMultiSelectActive(true); }}
-                                    className="ml-2 px-2 py-1 bg-white border border-gray-300 text-gray-700 text-xs font-bold rounded shadow-sm hover:bg-gray-50 transition-colors flex items-center gap-1"
+                                    className="px-2 py-1 bg-white border border-gray-300 text-gray-700 text-xs font-bold rounded shadow-sm hover:bg-gray-50 transition-colors flex items-center gap-1"
+                                    title="Select multiple properties to map"
                                 >
                                     <CheckSquare size={14} className="text-gray-500" />
                                     <span className="hidden sm:inline">Map Multiple</span>
                                 </button>
                                 <button
                                     onClick={(e) => { e.stopPropagation(); handleExportCSV(); }}
-                                    className="ml-2 px-2 py-1 bg-white border border-gray-300 text-gray-700 text-xs font-bold rounded shadow-sm hover:bg-gray-50 transition-colors flex items-center gap-1"
+                                    className="px-2 py-1 bg-white border border-gray-300 text-gray-700 text-xs font-bold rounded shadow-sm hover:bg-gray-50 transition-colors flex items-center gap-1"
                                     title="Download CSV"
                                 >
                                     <Download size={14} className="text-gray-500" />
                                     <span className="hidden sm:inline">Export CSV</span>
                                 </button>
-                            </>
+                            </div>
                         )}
                         {isMultiSelectActive && (
                             <div className="flex items-center gap-2 ml-2 animate-in fade-in zoom-in duration-200">

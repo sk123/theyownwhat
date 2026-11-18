@@ -12,11 +12,11 @@ import ToolboxDashboard from './components/ToolboxDashboard';
 import StatCard from './components/StatCard';
 import BackgroundGrid from './components/BackgroundGrid';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Sparkles, Loader2, Search, ArrowRight, ArrowUp, Building2, TrendingUp, Users, ShieldAlert, ChevronRight, List, CircleAlert, X } from 'lucide-react';
+import { Sparkles, Loader2, Search, ArrowRight, ArrowUp, ArrowDown, Building2, TrendingUp, Users, ShieldAlert, ChevronRight, List, CircleAlert, X } from 'lucide-react';
 import LandlordMonitor from './components/LandlordMonitor';
 import CityExplorer from './components/CityExplorer';
 import DatasetLanding from './components/DatasetLanding';
-import { getJurisdictionConfig, isPropertyInActiveJurisdiction } from './utils/jurisdiction';
+import { getCtPropertyUnitCount, getJurisdictionConfig, isPropertyInActiveJurisdiction } from './utils/jurisdiction';
 const BurstDetector = React.lazy(() => import('./components/BurstDetector'));
 
 const PropertyDetailsModal = React.lazy(() => import('./components/PropertyDetailsModal'));
@@ -223,29 +223,49 @@ function updatePageSeo(config) {
 
 function NetworkJumpBar({ propertyCount, businessCount, principalCount, activeTarget, onJump }) {
   const items = [
-    { id: 'properties', label: 'Properties', count: propertyCount, icon: Building2 },
-    { id: 'businesses', label: 'Businesses', count: businessCount, icon: List },
-    { id: 'principals', label: 'Principals', count: principalCount, icon: Users },
+    { id: 'properties', label: 'Properties', count: propertyCount, icon: Building2, primary: true },
+    { id: 'businesses', label: 'Businesses', count: businessCount, icon: List, primary: false },
+    { id: 'principals', label: 'Principals', count: principalCount, icon: Users, primary: false },
   ];
 
   return (
-    <div className="flex items-center gap-1.5 w-full py-0.5">
-      {items.map(({ id, label, count, icon: Icon }) => {
+    <div role="tablist" aria-label="Network portfolio sections" className="flex items-stretch gap-1.5 w-full py-0.5">
+      {items.map(({ id, label, count, icon: Icon, primary }) => {
         const isActive = activeTarget === id;
         return (
           <button
             key={id}
             type="button"
+            role="tab"
+            aria-selected={isActive}
             onClick={() => onJump(id)}
-            className={`flex-1 min-w-0 flex items-center justify-center gap-1 sm:gap-1.5 rounded-lg border py-2 px-1.5 text-[10px] font-black uppercase tracking-wide sm:tracking-wider transition-all shadow-2xs ${
+            className={`${primary ? 'flex-[1.18]' : 'flex-1'} min-w-0 min-h-[38px] flex items-center justify-center gap-1 sm:gap-1.5 rounded-xl py-2 px-2 text-[10px] font-black uppercase tracking-wide transition-all cursor-pointer ${
               isActive
-                ? 'border-blue-500 bg-blue-50 text-blue-700 font-extrabold shadow-sm ring-1 ring-blue-500/20'
-                : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                ? primary
+                  ? 'bg-blue-600 text-white shadow-md ring-1 ring-blue-700/30'
+                  : 'bg-slate-900 text-white shadow-md'
+                : primary
+                  ? 'border-2 border-blue-400 bg-white text-blue-950 shadow-sm hover:bg-blue-50'
+                  : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900 shadow-2xs'
             }`}
           >
-            <Icon size={12} aria-hidden="true" className={`shrink-0 hidden min-[380px]:inline ${isActive ? 'text-blue-600' : 'text-slate-400'}`} />
+            <Icon
+              size={12}
+              aria-hidden="true"
+              className={`shrink-0 hidden min-[370px]:inline ${
+                isActive ? 'text-white' : primary ? 'text-blue-600' : 'text-slate-400'
+              }`}
+            />
             <span className="truncate">{label}</span>
-            <span className={`rounded-md px-1.5 py-px text-[9px] font-extrabold shrink-0 ${isActive ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-600'}`}>
+            <span
+              className={`rounded-full px-1.5 py-0.5 text-[9.5px] font-black shrink-0 tabular-nums ${
+                isActive
+                  ? 'bg-white/25 text-white'
+                  : primary
+                    ? 'bg-blue-100 text-blue-800'
+                    : 'bg-slate-100 text-slate-600'
+              }`}
+            >
               {(count || 0).toLocaleString()}
             </span>
           </button>
@@ -328,11 +348,20 @@ function App() {
   // Dashboard Scroll & State
   const dashboardScrollRef = useRef(null);
   const [isScrolledPastCards, setIsScrolledPastCards] = useState(false);
+  const [isAtDashboardTop, setIsAtDashboardTop] = useState(true);
 
   const handleDashboardScroll = useCallback(() => {
-    if (dashboardScrollRef.current) {
-      const st = dashboardScrollRef.current.scrollTop;
-      // When user scrolls down past the summary cards (> 250px), show jump-back button
+    const scroller = dashboardScrollRef.current;
+    if (!scroller) return;
+    const st = scroller.scrollTop;
+    setIsAtDashboardTop(st <= 20);
+
+    const mobilePanelsEl = document.getElementById('mobile-network-panels');
+    if (mobilePanelsEl && window.matchMedia('(max-width: 1023px)').matches) {
+      const scrollerRect = scroller.getBoundingClientRect();
+      const panelsRect = mobilePanelsEl.getBoundingClientRect();
+      setIsScrolledPastCards(panelsRect.top - scrollerRect.top <= 160);
+    } else {
       setIsScrolledPastCards(st > 250);
     }
   }, []);
@@ -619,6 +648,10 @@ function App() {
         }, 0);
 
         const ownedCount = newData.properties.filter(p => p.is_network_member !== false).length;
+        const totalUnits = newData.properties.reduce((acc, p) => {
+          if (p.is_network_member === false || p.is_in_network === false) return acc;
+          return acc + getCtPropertyUnitCount(p);
+        }, 0);
 
         // Calculate Principal Breakdown
         let hCount = 0;
@@ -634,6 +667,7 @@ function App() {
         setStats({
           totalProperties: newData.properties.length, // All fetched properties (including neighbors)
           ownedProperties: ownedCount, // Only explicit network members
+          totalUnits,
           totalValue: totalVal,
           totalAppraised: totalApp,
           humanCount: hCount,
@@ -642,6 +676,8 @@ function App() {
 
         setStreamingStatus(prev => ({ ...prev, active: false }));
         setActiveMobileTab('properties');
+        setIsAtDashboardTop(true);
+        setIsScrolledPastCards(false);
         setView('dashboard');
         setLoading(false);
         window.requestAnimationFrame(() => {
@@ -805,10 +841,15 @@ function App() {
       return acc + val;
     }, 0);
     const ownedCount = scopedProperties.filter(p => p.is_network_member !== false && p.is_in_network !== false).length;
+    const totalUnits = scopedProperties.reduce((acc, p) => {
+      if (p.is_network_member === false || p.is_in_network === false) return acc;
+      return acc + getCtPropertyUnitCount(p);
+    }, 0);
     return {
       ...stats,
       totalProperties: scopedProperties.length,
       ownedProperties: ownedCount,
+      totalUnits,
       totalValue: totalVal,
       totalAppraised: totalApp
     };
@@ -926,26 +967,28 @@ function App() {
   }, [allCities, selectedCity]);
 
   const handleNetworkJump = (target) => {
-    handleTabChange(target);
+    setActiveMobileTab(target);
 
     window.requestAnimationFrame(() => {
-      const isMobile = window.matchMedia('(max-width: 1023px)').matches;
-      if (isMobile) {
-        document.getElementById('mobile-network-panels')?.scrollIntoView({
-          behavior: 'smooth',
-          block: 'start'
-        });
-      } else {
-        const elementId = target === 'properties' ? 'properties-panel' : 'entities-panel';
-        const el = document.getElementById(elementId);
-        if (el && dashboardScrollRef.current) {
-          const topOffset = el.offsetTop - 85;
-          dashboardScrollRef.current.scrollTo({
-            top: Math.max(0, topOffset),
-            behavior: 'smooth'
+      window.requestAnimationFrame(() => {
+        const isMobile = window.matchMedia('(max-width: 1023px)').matches;
+        if (isMobile) {
+          document.getElementById('mobile-network-panels')?.scrollIntoView({
+            behavior: 'smooth',
+            block: 'start'
           });
+        } else {
+          const elementId = target === 'properties' ? 'properties-panel' : 'entities-panel';
+          const el = document.getElementById(elementId);
+          if (el && dashboardScrollRef.current) {
+            const topOffset = el.offsetTop - 85;
+            dashboardScrollRef.current.scrollTo({
+              top: Math.max(0, topOffset),
+              behavior: 'smooth'
+            });
+          }
         }
-      }
+      });
     });
   };
 
@@ -1294,10 +1337,35 @@ function App() {
                 </AnimatePresence>
 
                 {/* --- MOBILE TAB LAYOUT (lg:hidden) --- */}
-                <div id="mobile-network-panels" className="flex flex-col lg:hidden relative border border-slate-200 rounded-xl bg-white shadow-sm mt-1 scroll-mt-2 min-h-[calc(100dvh-80px)] shrink-0">
+                <div id="mobile-network-panels" className="flex flex-col lg:hidden relative mt-1 scroll-mt-2 min-h-[calc(100dvh-80px)] shrink-0">
+                  <div className="mb-2 rounded-2xl bg-slate-200/80 border border-slate-300/80 p-1.5 shadow-xs">
+                    <NetworkJumpBar
+                      propertyCount={filteredProperties.length}
+                      businessCount={networkData.businesses.length}
+                      principalCount={networkData.principals.length}
+                      activeTarget={activeMobileTab}
+                      onJump={(tab) => handleTabChange(tab)}
+                    />
+                  </div>
+
+                  {activeMobileTab !== 'properties' && filteredProperties.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => handleTabChange('properties')}
+                      className="mb-2 w-full flex items-center justify-between gap-2 rounded-xl border border-blue-200 bg-blue-50/90 hover:bg-blue-100 px-3.5 py-2.5 text-left transition-colors cursor-pointer shadow-2xs"
+                    >
+                      <span className="flex items-center gap-2 min-w-0 text-xs font-bold text-blue-950">
+                        <Building2 size={15} className="text-blue-600 shrink-0" aria-hidden="true" />
+                        <span>
+                          View all <strong>{filteredProperties.length.toLocaleString()} properties &amp; addresses</strong>
+                        </span>
+                      </span>
+                      <ChevronRight size={15} className="text-blue-600 shrink-0" aria-hidden="true" />
+                    </button>
+                  )}
 
                   {/* Content Area - Auto Height for Page Scroll */}
-                  <div className={`bg-white min-h-[500px] transition-opacity duration-200 ${isPending ? 'opacity-50' : 'opacity-100'}`}>
+                  <div className={`border border-slate-200 rounded-xl bg-white shadow-sm overflow-hidden min-h-[500px] transition-opacity duration-200 ${isPending ? 'opacity-50' : 'opacity-100'}`}>
                     {activeMobileTab === 'properties' && (
                       <div className="flex flex-col">
                         <PropertyTable
@@ -1401,22 +1469,43 @@ function App() {
                   </div>
                 </div>
 
-                {/* Floating Jump to Cards Button (Mobile only) */}
-                <AnimatePresence>
-                  {isScrolledPastCards && (
+                {/* Floating Jump to Properties / Jump to Cards Pill (Mobile only) */}
+                <AnimatePresence mode="wait">
+                  {isScrolledPastCards ? (
                     <motion.button
+                      key="jump-to-cards"
+                      type="button"
                       initial={{ opacity: 0, scale: 0.85, y: 15 }}
                       animate={{ opacity: 1, scale: 1, y: 0 }}
                       exit={{ opacity: 0, scale: 0.85, y: 15 }}
-                      transition={{ duration: 0.2 }}
+                      transition={{ duration: 0.18 }}
                       onClick={handleScrollToTop}
                       className="fixed bottom-[calc(4.75rem+env(safe-area-inset-bottom,0px))] md:bottom-6 right-4 md:right-6 z-40 bg-slate-900/90 hover:bg-blue-600 text-white shadow-2xl backdrop-blur-md px-4 py-2.5 rounded-full text-xs font-black uppercase tracking-wider flex lg:hidden items-center gap-1.5 transition-all border border-white/15 cursor-pointer active:scale-95"
                       title="Jump back to summary cards at top"
                     >
-                      <ArrowUp size={14} className="text-blue-400 shrink-0" />
+                      <ArrowUp size={14} className="text-blue-400 shrink-0" aria-hidden="true" />
                       <span>Jump to Cards</span>
                     </motion.button>
-                  )}
+                  ) : isAtDashboardTop && filteredProperties.length > 0 ? (
+                    <motion.button
+                      key="jump-to-properties"
+                      type="button"
+                      initial={{ opacity: 0, scale: 0.85, y: 15 }}
+                      animate={{ opacity: 1, scale: 1, y: 0 }}
+                      exit={{ opacity: 0, scale: 0.85, y: 15 }}
+                      transition={{ duration: 0.18 }}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        handleNetworkJump('properties');
+                      }}
+                      className="fixed bottom-[calc(4.75rem+env(safe-area-inset-bottom,0px))] md:bottom-6 right-4 md:right-6 z-40 bg-blue-600 hover:bg-blue-700 text-white shadow-2xl px-4 py-2.5 rounded-full text-xs font-black uppercase tracking-wide flex lg:hidden items-center gap-1.5 transition-all ring-2 ring-white/80 cursor-pointer active:scale-95"
+                      title="Open properties tab and scroll to property list"
+                    >
+                      <ArrowDown size={14} className="text-blue-200 shrink-0" aria-hidden="true" />
+                      <span>View {filteredProperties.length.toLocaleString()} Properties</span>
+                    </motion.button>
+                  ) : null}
                 </AnimatePresence>
               </motion.div>
             )
@@ -1459,6 +1548,10 @@ function App() {
                 city={activeState === 'NY' ? 'nyc' : activeState === 'NYS' ? 'ny' : activeState.toLowerCase()}
                 onBack={() => showDatasetPicker()}
                 onMapSelected={setSelectedMapProperties}
+                onOpenSiblingNetwork={(sibJur, sibNetworkKey) => {
+                  const targetState = sibJur === 'nyc' ? 'NY' : sibJur === 'ny' ? 'NYS' : sibJur.toUpperCase();
+                  openDataset(targetState, { initialTarget: { networkKey: sibNetworkKey } });
+                }}
                 initialNetworkKey={cityInitialTarget?.networkKey || null}
                 initialBbl={cityInitialTarget?.bbl || null}
                 initialQuery={cityInitialTarget?.query || null}
@@ -1487,6 +1580,7 @@ function App() {
           property={selectedProperty}
           networkData={networkData}
           onViewEntity={(entity, type) => setSelectedDetailEntity({ entity, type })}
+          onSelectProperty={setSelectedProperty}
           onClose={() => setSelectedProperty(null)}
           onOpenFeedback={handleOpenFeedback}
         />

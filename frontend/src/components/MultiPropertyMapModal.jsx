@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { X, Map as MapIcon, Loader2, AlertCircle, User, DollarSign, Building2, Sliders, Search, Layers, Eye, ShieldAlert } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
@@ -65,17 +66,25 @@ function MapBounds({ markers }) {
 }
 
 export default function MultiPropertyMapModal({ properties, onClose }) {
-    if (!properties) return null;
-
     const [markers, setMarkers] = useState([]);
     const [geoStatus, setGeoStatus] = useState({ total: 0, current: 0, completed: false, errors: 0 });
     const [loading, setLoading] = useState(true);
+    const [showMobileControls, setShowMobileControls] = useState(false);
 
     // Map customization options
     const [baseMap, setBaseMap] = useState('dark'); // 'standard' | 'dark' | 'satellite'
     const [colorMode, setColorMode] = useState('owner'); // 'standard' | 'owner' | 'valuation' | 'evictions' | 'network'
     const [clustering, setClustering] = useState(true);
     const [filterText, setFilterText] = useState('');
+
+    useEffect(() => {
+        if (!properties) return undefined;
+        const onKeyDown = (e) => {
+            if (e.key === 'Escape') onClose?.();
+        };
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, [properties, onClose]);
 
     useEffect(() => {
         if (!properties || properties.length === 0) return;
@@ -265,6 +274,8 @@ export default function MultiPropertyMapModal({ properties, onClose }) {
         }
     };
 
+    if (!properties) return null;
+
     const tileDetails = getTileLayerDetails();
 
     const firstValidProp = properties.find(p => coordsFromProperty(p));
@@ -273,9 +284,9 @@ export default function MultiPropertyMapModal({ properties, onClose }) {
         ? [firstValidCoords.lat, firstValidCoords.lon] 
         : [41.5623, -72.8252];
 
-    return (
+    const modalMarkup = (
         <AnimatePresence>
-            <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+            <div className="fixed inset-0 z-[220] flex items-center justify-center p-2 sm:p-4" role="dialog" aria-modal="true" aria-labelledby="multi-property-map-title">
                 <motion.div
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
@@ -288,30 +299,45 @@ export default function MultiPropertyMapModal({ properties, onClose }) {
                     initial={{ opacity: 0, scale: 0.95 }}
                     animate={{ opacity: 1, scale: 1 }}
                     exit={{ opacity: 0, scale: 0.95 }}
-                    className="relative bg-white rounded-2xl shadow-2xl w-full max-w-6xl h-[85vh] flex flex-col overflow-hidden border border-slate-100"
+                    className="relative bg-white rounded-2xl shadow-2xl w-full max-w-6xl h-[88dvh] flex flex-col overflow-hidden border border-slate-100"
                 >
                     {/* Header */}
-                    <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50 shrink-0">
-                        <div>
-                            <h2 className="text-lg font-black text-slate-900 flex items-center gap-2">
-                                <MapIcon size={20} className="text-blue-600" />
-                                Interactive Network Portfolio Map
+                    <div className="px-3.5 py-3 sm:p-4 border-b border-slate-100 flex items-center justify-between gap-2 bg-slate-50/50 shrink-0">
+                        <div className="min-w-0">
+                            <h2 id="multi-property-map-title" className="text-sm sm:text-lg font-black text-slate-900 flex items-center gap-2 truncate">
+                                <MapIcon size={18} className="text-blue-600 shrink-0" />
+                                <span className="truncate">Interactive Network Portfolio Map</span>
                             </h2>
-                            <p className="text-xs text-slate-500 font-semibold uppercase tracking-wider mt-0.5">
+                            <p className="text-[10px] sm:text-xs text-slate-500 font-semibold uppercase tracking-wider mt-0.5 truncate">
                                 Showing {filteredMarkers.length} of {markers.length} properties
                                 {loading && ` • Geocoding ${geoStatus.current}/${geoStatus.total}...`}
                             </p>
                         </div>
-                        <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full text-slate-400 hover:text-slate-600 transition-colors">
-                            <X size={20} />
-                        </button>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                                type="button"
+                                onClick={() => setShowMobileControls((v) => !v)}
+                                className="md:hidden inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-bold text-slate-700 hover:bg-slate-50"
+                            >
+                                <Sliders size={14} />
+                                <span>{showMobileControls ? 'Hide Filters' : 'Filters'}</span>
+                            </button>
+                            <button
+                                type="button"
+                                aria-label="Close portfolio map"
+                                onClick={onClose}
+                                className="p-2 hover:bg-slate-100 rounded-full text-slate-400 hover:text-slate-600 transition-colors"
+                            >
+                                <X size={20} />
+                            </button>
+                        </div>
                     </div>
 
                     {/* Main Split Layout */}
                     <div className="flex-1 flex flex-col md:flex-row overflow-hidden relative">
                         
                         {/* Left Customization and Filter Control Sidebar */}
-                        <div className="w-full md:w-80 border-r border-slate-100 flex flex-col bg-slate-50 overflow-y-auto p-4 shrink-0 space-y-5">
+                        <div className={`${showMobileControls ? 'flex max-h-[42dvh] border-b' : 'hidden'} md:flex md:max-h-none w-full md:w-80 border-slate-100 md:border-b-0 md:border-r flex-col bg-slate-50 overflow-y-auto p-3.5 sm:p-4 shrink-0 space-y-4 sm:space-y-5`}>
                             
                             {/* Search Box */}
                             <div className="space-y-1.5">
@@ -631,4 +657,6 @@ export default function MultiPropertyMapModal({ properties, onClose }) {
             </div>
         </AnimatePresence>
     );
+
+    return typeof document !== 'undefined' ? createPortal(modalMarkup, document.body) : modalMarkup;
 }

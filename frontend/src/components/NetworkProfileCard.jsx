@@ -1,9 +1,11 @@
 import React, { useMemo, useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Users, Info, Sparkles, X, Loader2, Gavel, FileText, Settings, Edit3, Save, CheckCircle, Calendar, GitMerge, ArrowLeft, ArrowUp, Building2, ExternalLink, ShieldAlert, BarChart3, ClipboardList, Database, Home, Newspaper, ArrowUpRight, ArrowDownRight, Repeat2, TrendingUp } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { formatDisplayName } from '../utils/formatName';
+import { getCtPropertyUnitCount } from '../utils/jurisdiction';
 
 const reportMarkdownComponents = {
     h1: ({ node, ...props }) => (
@@ -238,7 +240,7 @@ const InvestigativeReportView = ({ content }) => {
 };
 
 export default function NetworkProfileCard({
-    networkData,
+    networkData: rawNetworkData,
     stats,
     networkName,
     initialEntityName,
@@ -252,6 +254,7 @@ export default function NetworkProfileCard({
     isScrolled = false,
     onScrollToTop,
 }) {
+    const networkData = rawNetworkData || {};
     const [showReport, setShowReport] = useState(false);
     const [reportLoading, setReportLoading] = useState(false);
     const [reportContent, setReportContent] = useState(null);
@@ -267,7 +270,6 @@ export default function NetworkProfileCard({
     const [showTxModal, setShowTxModal] = useState(false);
     const [txModalFilter, setTxModalFilter] = useState('all'); // 'all' | 'acquired' | 'disposed' | 'intra' | 'inter'
     const [txSearch, setTxSearch] = useState('');
-    if (!networkData) return null;
 
     const handleOpenReportModal = () => {
         setShowReport(true);
@@ -430,7 +432,14 @@ export default function NetworkProfileCard({
     const safeStats = stats || networkData.stats || {};
     const complexesCount = safeStats.totalComplexes || safeStats.total_complexes || networkData.properties?.length || 0;
     const parcelsCount = safeStats.totalParcels || safeStats.total_parcels || networkData.properties?.length || 0;
-    const unitsCount = safeStats.totalUnits || safeStats.total_units || 0;
+    const computedUnitsFallback = useMemo(() => {
+        if (!Array.isArray(networkData?.properties) || networkData.properties.length === 0) return 0;
+        return networkData.properties.reduce((acc, p) => {
+            if (p.is_network_member === false || p.is_in_network === false) return acc;
+            return acc + getCtPropertyUnitCount(p);
+        }, 0);
+    }, [networkData?.properties]);
+    const unitsCount = safeStats.totalUnits || safeStats.total_units || networkData.unit_count || computedUnitsFallback || 0;
 
     const totalValStr = safeStats.totalValue >= 1000000000
         ? `$${(safeStats.totalValue / 1000000000).toFixed(1)}B`
@@ -566,6 +575,8 @@ export default function NetworkProfileCard({
         }
         return list;
     }, [allTxns, txModalFilter, txSearch]);
+
+    if (!rawNetworkData) return null;
 
     return (
         <>
@@ -1052,27 +1063,27 @@ export default function NetworkProfileCard({
                     </div>
 
             {/* AI Report Modal */}
-            {showReport && (
-                <div className="fixed inset-0 z-[200] bg-slate-900/60 backdrop-blur-md p-4 flex justify-center items-center">
-                    <div className="bg-white text-slate-900 rounded-3xl w-full max-w-6xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden border border-slate-200">
-                        <div className="p-6 md:p-8 shrink-0 flex items-center justify-between border-b border-slate-100">
-                            <div className="flex items-center gap-3">
-                                <div className="p-2 bg-amber-100 text-amber-600 rounded-xl">
-                                        <Sparkles size={24} />
+            {showReport && typeof document !== 'undefined' && createPortal(
+                <div className="fixed inset-0 z-[240] bg-slate-900/60 backdrop-blur-md p-2 sm:p-4 flex justify-center items-center" role="dialog" aria-modal="true" aria-labelledby="ai-report-modal-title">
+                    <div className="bg-white text-slate-900 rounded-2xl sm:rounded-3xl w-full max-w-6xl shadow-2xl flex flex-col max-h-[92dvh] overflow-hidden border border-slate-200">
+                        <div className="p-4 sm:p-6 md:p-8 shrink-0 flex items-center justify-between gap-2 border-b border-slate-100">
+                            <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+                                <div className="p-2 bg-amber-100 text-amber-600 rounded-xl shrink-0">
+                                        <Sparkles size={20} />
                                     </div>
-                                    <div>
-                                        <h3 className="text-xl md:text-2xl font-black tracking-tight leading-tight">Investigative Report</h3>
-                                        <p className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-widest">{managerName}</p>
+                                    <div className="min-w-0">
+                                        <h3 id="ai-report-modal-title" className="text-base sm:text-xl md:text-2xl font-black tracking-tight leading-tight truncate">Investigative Report</h3>
+                                        <p className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-widest truncate">{managerName}</p>
                                     </div>
                                 </div>
-                                <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
                                     {!reportConfig && !reportLoading && reportContent && (
                                         <>
                                             {isEditing ? (
                                                 <button
                                                     onClick={handleSaveEdit}
                                                     disabled={saveStatus === 'saving'}
-                                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold rounded-lg transition-colors disabled:opacity-50"
+                                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs sm:text-sm font-bold rounded-lg transition-colors disabled:opacity-50"
                                                 >
                                                     {saveStatus === 'saving' ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
                                                     {saveStatus === 'saving' ? 'Saving...' : 'Save Changes'}
@@ -1080,7 +1091,7 @@ export default function NetworkProfileCard({
                                             ) : (
                                                 <button
                                                     onClick={() => setIsEditing(true)}
-                                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-bold rounded-lg transition-colors"
+                                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs sm:text-sm font-bold rounded-lg transition-colors"
                                                 >
                                                     <Edit3 size={16} />
                                                     Edit
@@ -1094,10 +1105,12 @@ export default function NetworkProfileCard({
                                         </>
                                     )}
                                     <button
+                                        type="button"
+                                        aria-label="Close investigative report"
                                         onClick={() => setShowReport(false)}
-                                        className="p-2 hover:bg-slate-100 rounded-full transition-colors ml-2"
+                                        className="p-2 hover:bg-slate-100 rounded-full transition-colors ml-1"
                                     >
-                                        <X size={24} className="text-slate-400" />
+                                        <X size={20} className="text-slate-400" />
                                     </button>
                                 </div>
                             </div>
@@ -1205,28 +1218,31 @@ export default function NetworkProfileCard({
                                 )}
                             </div>
                         </div>
-                    </div>
+                    </div>,
+                    document.body
                 )
             }
 
             {/* Recent Transactions Full Modal */}
-            {showTxModal && (
-                <div className="fixed inset-0 z-[250] bg-slate-900/60 backdrop-blur-sm p-4 flex justify-center items-center">
-                    <div className="bg-white text-slate-900 rounded-3xl w-full max-w-4xl shadow-2xl flex flex-col max-h-[85vh] overflow-hidden border border-slate-200">
+            {showTxModal && typeof document !== 'undefined' && createPortal(
+                <div className="fixed inset-0 z-[250] bg-slate-900/60 backdrop-blur-sm p-2 sm:p-4 flex justify-center items-center" role="dialog" aria-modal="true" aria-labelledby="network-tx-modal-title">
+                    <div className="bg-white text-slate-900 rounded-2xl sm:rounded-3xl w-full max-w-4xl shadow-2xl flex flex-col max-h-[88dvh] overflow-hidden border border-slate-200">
                         {/* Modal Header */}
-                        <div className="p-5 md:p-6 shrink-0 flex items-center justify-between border-b border-slate-100 bg-slate-50/50">
-                            <div className="flex items-center gap-3">
-                                <div className="p-2.5 bg-amber-100 text-amber-700 rounded-xl">
-                                    <TrendingUp size={22} />
+                        <div className="p-4 sm:p-5 md:p-6 shrink-0 flex items-center justify-between gap-2 border-b border-slate-100 bg-slate-50/50">
+                            <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+                                <div className="p-2 sm:p-2.5 bg-amber-100 text-amber-700 rounded-xl shrink-0">
+                                    <TrendingUp size={20} />
                                 </div>
-                                <div>
-                                    <h3 className="text-xl font-black tracking-tight text-slate-900">Network Recent Transactions</h3>
-                                    <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mt-0.5">{managerName}</p>
+                                <div className="min-w-0">
+                                    <h3 id="network-tx-modal-title" className="text-base sm:text-xl font-black tracking-tight text-slate-900 truncate">Network Recent Transactions</h3>
+                                    <p className="text-[11px] sm:text-xs font-bold text-slate-400 uppercase tracking-widest mt-0.5 truncate">{managerName}</p>
                                 </div>
                             </div>
                             <button
+                                type="button"
+                                aria-label="Close recent transactions"
                                 onClick={() => setShowTxModal(false)}
-                                className="p-2 hover:bg-slate-200/60 rounded-full transition-colors"
+                                className="p-2 hover:bg-slate-200/60 rounded-full transition-colors shrink-0"
                             >
                                 <X size={20} className="text-slate-500" />
                             </button>
@@ -1348,7 +1364,8 @@ export default function NetworkProfileCard({
                             )}
                         </div>
                     </div>
-                </div>
+                </div>,
+                document.body
             )}
         </>
     );

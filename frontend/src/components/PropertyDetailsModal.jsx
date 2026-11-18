@@ -1,73 +1,206 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
-import { X, Building2, MapPin, DollarSign, User, ExternalLink, Link as LinkIcon, Copy, Check, FolderPlus, Loader2, List as ListIcon, AlertCircle, Gavel, Image as ImageIcon, Navigation } from 'lucide-react';
+import {
+    X, Building2, MapPin, ExternalLink, Copy, Check, FolderPlus,
+    Loader2, List as ListIcon, AlertCircle, Gavel, Navigation, ChevronRight
+} from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import PropertyPublicDetails from './property_public_details.jsx';
+import PropertyPublicDetails, { formatCurrencyValue } from './property_public_details.jsx';
 
-// Helper to safely render a detail field
-function DetailItem({ icon: Icon, label, value }) {
-    if (!value) return null;
-    return (
-        <div className="flex flex-col gap-1 p-3 bg-gray-50 rounded-lg border border-gray-100">
-            <div className="flex items-center gap-1.5 text-[10px] font-bold text-gray-400 uppercase tracking-wider">
-                {Icon && <Icon size={12} />}
-                {label}
-            </div>
-            <div className="font-semibold text-gray-900 text-sm">{value}</div>
-        </div>
-    );
+function shouldAppendUnitLabel(address, unitLabel) {
+    if (!unitLabel) return false;
+    const unit = String(unitLabel).trim();
+    if (!unit) return false;
+    if (!address) return true;
+    const addrUpper = String(address).toUpperCase();
+    const unitUpper = unit.toUpperCase().replace(/^#+/, '').trim();
+    if (!unitUpper) return false;
+    const escaped = unitUpper.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // Match existing "Unit 0102", "Apt 0102", "Ste 0102", "#0102", or trailing token "0102"
+    const alreadyPresent = new RegExp(`(?:\\b(?:UNIT|APT|APARTMENT|STE|SUITE|FL|RM)|#)\\s*${escaped}\\b|\\b${escaped}$`, 'i');
+    return !alreadyPresent.test(addrUpper);
 }
 
-export default function PropertyDetailsModal({ property, networkData = {}, onClose, onViewEntity, onOpenFeedback }) {
-    if (!property) return null;
+function getSubsidyBadgeText(sub) {
+    const type = (sub?.subsidy_type || '').toUpperCase();
+    switch (type) {
+        case 'S8': return 'Section 8';
+        case 'LIHTC': return 'LIHTC';
+        case 'HOME': return 'HOME';
+        case 'PH': return 'Public Housing';
+        case 'FHA': return 'FHA';
+        case 'RHS515': return 'RHS 515';
+        case 'RHS538': return 'RHS 538';
+        case 'STATE': return 'State Subsidy';
+        case 'PBV': return 'PBV';
+        case 'MR': return 'Mod Rental';
+        case 'NHTF': return 'NHTF';
+        default: return sub?.subsidy_type || 'Subsidized';
+    }
+}
 
-    const isComplex = property.isComplex;
-    const details = property.details || {};
+export default function PropertyDetailsModal({
+    property,
+    networkData = {},
+    onClose,
+    onViewEntity,
+    onOpenFeedback,
+    onSelectProperty,
+}) {
+    // All hooks MUST execute unconditionally before any early return to satisfy Rules of Hooks
+    const [userGroups, setUserGroups] = React.useState([]);
+    const [showGroupSelector, setShowGroupSelector] = React.useState(false);
+    const [isAdding, setIsAdding] = React.useState(false);
+    const [addedSuccess, setAddedSuccess] = React.useState(false);
+    const [enforcements, setEnforcements] = React.useState([]);
+    const [enforcementLoading, setEnforcementLoading] = React.useState(false);
+    const [enforcementError, setEnforcementError] = React.useState(null);
+    const [evictions, setEvictions] = React.useState([]);
+    const [photoFailed, setPhotoFailed] = React.useState(false);
+    const [copied, setCopied] = React.useState(false);
 
-    // Property (location) address
-    const propertyAddress = property.address || property.location || details.location || null;
-    // Owner mailing address
-    const mailingAddress =
-        details.mail_address ||
-        details.mailing_address ||
-        details.owner_address ||
-        (networkData.businesses?.find(b => {
-            const bid = property.details?.business_id;
-            if (bid && String(b.id) === String(bid)) return true;
-            const ownerName = property.owner || '';
-            return b.name && ownerName && b.name.toUpperCase().trim() === ownerName.toUpperCase().trim();
-        })?.mail_address || null);
+    const details = property?.details || {};
+    const cityName = property
+        ? (property.city || property.property_city || details.city || details.property_city || '')
+        : '';
+    const isHartfordProperty = cityName.toUpperCase() === 'HARTFORD';
 
-    // Find related business and principals using IDs
-    const relatedBusiness = networkData.businesses?.find(b => {
-        const bid = property.details?.business_id;
-        if (bid && String(b.id) === String(bid)) return true;
-        // Fallback to name matching
-        const ownerName = property.owner || '';
-        return b.name && ownerName && b.name.toUpperCase().trim() === ownerName.toUpperCase().trim();
-    });
+    React.useEffect(() => {
+        if (!property) return undefined;
+        const onKeyDown = (e) => {
+            if (e.key === 'Escape') onClose?.();
+        };
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, [property, onClose]);
 
-    // Find related principals - try principal_id, then business_id links
-    const relatedPrincipals = networkData.principals?.filter(p => {
-        // 1. Direct link to property
-        const pid = property.details?.principal_id;
-        if (pid && String(p.id) === String(pid)) return true;
+    React.useEffect(() => {
+        setPhotoFailed(false);
+        setCopied(false);
+        setShowGroupSelector(false);
+    }, [property]);
 
-        // 2. Link via business
-        if (relatedBusiness) {
-            const businessId = String(relatedBusiness.id || '');
-            const principalBusinessId = String(p.business_id || p.details?.business_id || '');
-            if (businessId && principalBusinessId && businessId === principalBusinessId) {
-                return true;
-            }
+    React.useEffect(() => {
+        if (!property) {
+            setEnforcements([]);
+            setEnforcementError(null);
+            setEnforcementLoading(false);
+            setEvictions([]);
+            return undefined;
         }
 
-        return false;
-    }) || [];
+        let cancelled = false;
+        const propDetails = property.details || {};
 
+        fetch('/api/auth/me')
+            .then(res => (res.ok ? res.json() : null))
+            .then(data => {
+                if (!cancelled && data?.authenticated) {
+                    fetch('/api/groups')
+                        .then(res => (res.ok ? res.json() : []))
+                        .then(groups => {
+                            if (!cancelled && Array.isArray(groups)) setUserGroups(groups);
+                        })
+                        .catch(() => {});
+                }
+            })
+            .catch(() => {});
 
-    const cityName = property.city || property.property_city || details.city || details.property_city || '';
-    const isHartfordProperty = cityName.toUpperCase() === 'HARTFORD';
+        const collectPropertyIds = () => {
+            const ids = new Set();
+            const addId = (value) => {
+                if (value === null || value === undefined) return;
+                const text = String(value).trim();
+                if (/^\d+$/.test(text)) ids.add(text);
+            };
+            addId(property.id);
+            addId(propDetails.id);
+
+            const candidateCollections = [
+                property.units,
+                property.subProperties,
+                property.properties,
+                propDetails.units,
+                propDetails.subProperties,
+            ];
+            candidateCollections.forEach((items) => {
+                if (!Array.isArray(items)) return;
+                items.forEach((item) => {
+                    addId(item?.id);
+                    addId(item?.property_id);
+                    addId(item?.details?.id);
+                });
+            });
+            return Array.from(ids);
+        };
+
+        const propertyIds = collectPropertyIds();
+
+        // Fetch Hartford Code Enforcement details from official city data
+        setEnforcements([]);
+        setEnforcementError(null);
+        if (isHartfordProperty && propertyIds.length > 0) {
+            setEnforcementLoading(true);
+            Promise.all(
+                propertyIds.map((id) =>
+                    fetch(`/api/properties/${id}/enforcement`)
+                        .then((res) => (res.ok ? res.json() : []))
+                        .catch(() => [])
+                )
+            )
+                .then((results) => {
+                    if (cancelled) return;
+                    const seen = new Set();
+                    const merged = results.flat().filter((record) => {
+                        const key = [
+                            record.case_number,
+                            record.record_name,
+                            record.date_opened,
+                            record.record_type,
+                        ].filter(Boolean).join('|');
+                        if (!key || seen.has(key)) return false;
+                        seen.add(key);
+                        return true;
+                    });
+                    setEnforcements(merged);
+                })
+                .catch((err) => {
+                    if (!cancelled) {
+                        console.error('Failed to fetch enforcement data', err);
+                        setEnforcementError('Unable to load Hartford code enforcement records.');
+                    }
+                })
+                .finally(() => {
+                    if (!cancelled) setEnforcementLoading(false);
+                });
+        } else {
+            setEnforcementLoading(false);
+        }
+
+        // Fetch Eviction data (statewide)
+        const evictionId = propertyIds[0];
+        if (evictionId) {
+            fetch(`/api/evictions?property_id=${evictionId}`)
+                .then(res => (res.ok ? res.json() : []))
+                .then((rows) => {
+                    if (!cancelled && Array.isArray(rows)) setEvictions(rows);
+                })
+                .catch(err => console.error('Failed to fetch eviction data', err));
+        } else {
+            setEvictions([]);
+        }
+
+        return () => {
+            cancelled = true;
+        };
+    }, [property, isHartfordProperty]);
+
+    if (!property) return null;
+
+    const isComplex = Boolean(property.isComplex || property.is_complex);
+    const propertyAddress = (property.address || property.location || details.location || '').trim() || null;
+    const unitLabel = property.unit || property.derivedUnit || details.unit || null;
+    const appendUnit = !isComplex && shouldAppendUnitLabel(propertyAddress, unitLabel);
 
     // Helper to find first valid external HTTP(S) URL (never returns internal image proxy)
     const getValidExternalUrl = (...args) => {
@@ -91,36 +224,30 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
                 }
             }
         }
-        // If Hartford and no valid photo, use proxy endpoint
         if (isHartfordProperty) {
             let pid = details.account_number || property.account_number || details.link || property.link || property.id;
             if (pid) {
                 pid = pid.toString().replace(/[^0-9]/g, '');
-                return `/api/hartford/image/${pid}`;
+                if (pid) return `/api/hartford/image/${pid}`;
             }
         }
         return null;
     };
 
-    // CORRECTED: Use cama_site_link and building_photo from details.
-    // Construct URLs if we only have IDs (e.g. 52070-24675 for New Haven)
     const getCamaUrl = (link) => {
         const upperCity = cityName.toUpperCase();
         if (link && typeof link === 'string' && link.trim().startsWith('http')) {
             return link.trim();
         }
 
-        // New Haven VGSI ID format (e.g. 52070-24675 -> Pid=24675)
         if (upperCity === 'NEW HAVEN' && link && link.includes('-')) {
             const pid = link.split('-')[1];
             if (pid) return `https://gis.vgsi.com/newhavenct/Parcel.aspx?Pid=${encodeURIComponent(pid)}`;
         }
 
-        // Hartford Patriot Properties format
         if (upperCity === 'HARTFORD') {
             let pid = details.link || property.link;
             if (pid) {
-                // In DB, link is often missing dashes (142588122)
                 pid = pid.toString().trim();
                 if (!pid.startsWith('http')) {
                     if (!pid.includes('-') && pid.length === 9) {
@@ -145,6 +272,7 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
         details.image_url,
         details.link
     );
+    const showPhotoCard = Boolean(imageUrl) && !photoFailed;
 
     const rawLat = Number(property.latitude ?? details.latitude);
     const rawLon = Number(property.longitude ?? details.longitude);
@@ -152,7 +280,6 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
         ? `https://geodata.ct.gov/datasets/ctmaps::connecticut-cama-and-parcel-layer/explore?location=${rawLat.toFixed(6)},${rawLon.toFixed(6)},18`
         : 'https://geodata.ct.gov/datasets/ctmaps::connecticut-cama-and-parcel-layer/explore';
 
-    // Prioritize constructed municipal CAMA URL, then direct external GIS URLs, then official CT Geodata Parcel Explorer
     const gisUrl = getCamaUrl(details.cama_site_link || property.cama_site_link) || getValidExternalUrl(
         property.gis_url,
         details.gis_url,
@@ -161,151 +288,55 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
         details.link,
         property.link
     ) || ctStateParcelFallback;
-    const unitLabel = property.unit || property.derivedUnit || details.unit;
+
+    const formattedHeadlineAddress = propertyAddress
+        ? `${propertyAddress}${appendUnit ? ` #${String(unitLabel).replace(/^#+/, '').trim()}` : ''}`
+        : 'Unaddressed Property';
+
     const mapAddress = propertyAddress ? [propertyAddress, cityName, 'CT'].filter(Boolean).join(', ') : null;
     const clipboardAddress = [
-        propertyAddress ? `${propertyAddress}${!isComplex && unitLabel ? ` #${unitLabel}` : ''}` : null,
+        propertyAddress ? formattedHeadlineAddress : null,
         cityName,
-        'CT'
+        'CT',
     ].filter(Boolean).join(', ');
+
     const mapSearchUrl = mapAddress
         ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mapAddress)}`
         : null;
     const mapEmbedUrl = mapAddress
         ? `https://maps.google.com/maps?q=${encodeURIComponent(mapAddress)}&output=embed`
         : null;
-    const unitCount = property.unit_count || property.number_of_units || details.number_of_units || (isComplex ? property.subProperties?.length : null);
-    const assessedValue = property.assessed_value || details.assessed_value;
-    const appraisedValue = property.appraised_value || details.appraised_value;
 
-    // Handler to view entity details
+    const unitCount = property.unit_count || property.number_of_units || details.number_of_units || (isComplex ? property.subProperties?.length : null);
+    const parcelIdentifier = property.parcel_id || details.serial_number || property.serial_number || details.gis_tag || details.account_number || details.link || null;
+
+    const subsidyPrograms = Array.isArray(property.subsidies) && property.subsidies.length > 0
+        ? [...new Set(property.subsidies.map(getSubsidyBadgeText).filter(Boolean))]
+        : [];
+
+    const handleCopyAddress = () => {
+        if (!clipboardAddress) return;
+        navigator.clipboard?.writeText(clipboardAddress).then(() => {
+            setCopied(true);
+            window.setTimeout(() => setCopied(false), 1500);
+        }).catch(() => {});
+    };
+
     const handleViewEntity = (entity, type) => {
         if (onViewEntity) {
-            onClose(); // Close property modal
-            setTimeout(() => onViewEntity(entity, type), 100); // Small delay for smooth transition
+            onClose();
+            setTimeout(() => onViewEntity(entity, type), 100);
         }
     };
 
-    // Toolbox State
-    const [userGroups, setUserGroups] = React.useState([]);
-    const [showGroupSelector, setShowGroupSelector] = React.useState(false);
-    const [isAdding, setIsAdding] = React.useState(false);
-    const [addedSuccess, setAddedSuccess] = React.useState(false);
-
-    const [enforcements, setEnforcements] = React.useState([]);
-    const [enforcementLoading, setEnforcementLoading] = React.useState(false);
-    const [enforcementError, setEnforcementError] = React.useState(null);
-    const [evictions, setEvictions] = React.useState([]);
-
-    React.useEffect(() => {
-        if (property) {
-            let cancelled = false;
-            fetch('/api/auth/me')
-                .then(res => res.json())
-                .then(data => {
-                    if (data.authenticated) {
-                        fetch('/api/groups')
-                            .then(res => res.json())
-                            .then(setUserGroups);
-                    }
-                });
-
-            const collectPropertyIds = () => {
-                const ids = new Set();
-                const addId = (value) => {
-                    if (value === null || value === undefined) return;
-                    const text = String(value).trim();
-                    if (/^\d+$/.test(text)) ids.add(text);
-                };
-                addId(property.id);
-                addId(details.id);
-
-                const candidateCollections = [
-                    property.units,
-                    property.subProperties,
-                    property.properties,
-                    details.units,
-                    details.subProperties,
-                ];
-                candidateCollections.forEach((items) => {
-                    if (!Array.isArray(items)) return;
-                    items.forEach((item) => {
-                        addId(item?.id);
-                        addId(item?.property_id);
-                        addId(item?.details?.id);
-                    });
-                });
-                return Array.from(ids);
-            };
-
-            const propertyIds = collectPropertyIds();
-
-            // Fetch Hartford Code Enforcement details from official city data.
-            setEnforcements([]);
-            setEnforcementError(null);
-            if (isHartfordProperty && propertyIds.length > 0) {
-                setEnforcementLoading(true);
-                Promise.all(
-                    propertyIds.map((id) =>
-                        fetch(`/api/properties/${id}/enforcement`)
-                            .then((res) => (res.ok ? res.json() : []))
-                            .catch(() => [])
-                    )
-                )
-                    .then((results) => {
-                        if (cancelled) return;
-                        const seen = new Set();
-                        const merged = results.flat().filter((record) => {
-                            const key = [
-                                record.case_number,
-                                record.record_name,
-                                record.date_opened,
-                                record.record_type,
-                            ].filter(Boolean).join('|');
-                            if (!key || seen.has(key)) return false;
-                            seen.add(key);
-                            return true;
-                        });
-                        setEnforcements(merged);
-                    })
-                    .catch((err) => {
-                        if (!cancelled) {
-                            console.error("Failed to fetch enforcement data", err);
-                            setEnforcementError('Unable to load Hartford code enforcement records.');
-                        }
-                    })
-                    .finally(() => {
-                        if (!cancelled) setEnforcementLoading(false);
-                    });
-            } else {
-                setEnforcementLoading(false);
-            }
-
-            // Fetch Eviction data (statewide)
-            const evictionId = propertyIds[0];
-            if (evictionId) {
-                fetch(`/api/evictions?property_id=${evictionId}`)
-                    .then(res => res.json())
-                    .then((rows) => {
-                        if (!cancelled) setEvictions(rows);
-                    })
-                    .catch(err => console.error("Failed to fetch eviction data", err));
-            } else {
-                setEvictions([]);
-            }
-
-            return () => {
-                cancelled = true;
-            };
-        }
-    }, [property, isHartfordProperty]);
-
     const formatRecordDate = (value) => {
-        if (!value) return '-';
+        if (!value) return '—';
         try {
-            return new Date(value).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+            const d = new Date(value);
+            if (Number.isNaN(d.getTime())) return String(value);
+            return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
         } catch {
-            return value;
+            return String(value);
         }
     };
 
@@ -319,13 +350,17 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
         return status && !status.includes('closed') && !status.includes('complete');
     }).length;
 
+    const sortedEvictions = [...evictions].sort(
+        (a, b) => (new Date(b.filing_date || 0).getTime() || 0) - (new Date(a.filing_date || 0).getTime() || 0)
+    );
+
     const handleAddToGroup = async (groupId) => {
         setIsAdding(true);
         try {
             const res = await fetch(`/api/groups/${groupId}/properties`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ property_id: property.id })
+                body: JSON.stringify({ property_id: property.id }),
             });
             if (res.ok) {
                 setAddedSuccess(true);
@@ -335,11 +370,17 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
                 }, 2000);
             }
         } catch (err) {
-            console.error("Failed to add to group", err);
+            console.error('Failed to add to group', err);
         } finally {
             setIsAdding(false);
         }
     };
+
+    const showComplexEyebrow = Boolean(
+        property.complex_name &&
+        property.complex_name.trim() &&
+        property.complex_name.trim().toUpperCase() !== (propertyAddress || '').toUpperCase()
+    );
 
     const modalContent = (
         <AnimatePresence>
@@ -353,246 +394,156 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
                 <motion.div
                     role="dialog"
                     aria-modal="true"
-                    aria-label={propertyAddress ? `Property details for ${propertyAddress}` : 'Property details'}
+                    aria-label={`Property details for ${formattedHeadlineAddress}`}
                     initial={{ x: '100%' }}
                     animate={{ x: 0 }}
                     exit={{ x: '100%' }}
                     transition={{ type: 'spring', damping: 30, stiffness: 300 }}
-                    className="fixed top-0 right-0 h-full w-full max-w-3xl bg-white shadow-2xl overflow-hidden flex flex-col"
+                    className="fixed top-0 right-0 h-dvh w-full max-w-2xl bg-white shadow-2xl overflow-hidden flex flex-col"
                     onClick={e => e.stopPropagation()}
                 >
-                    {/* Header */}
-                    <div className="px-5 py-4 border-b border-gray-100 flex justify-between items-start bg-white shrink-0">
-                        <div className="flex items-start gap-4 min-w-0 flex-1">
-                            <div className={`p-3 rounded-lg ${isComplex ? 'bg-indigo-100 text-indigo-600' : 'bg-blue-100 text-blue-600'}`}>
-                                {isComplex ? <Building2 size={24} /> : <MapPin size={24} />}
-                            </div>
-                            <div className="min-w-0">
-                                {property.complex_name && (
-                                    <div className="text-sm font-medium text-gray-500 mb-1">{property.complex_name}</div>
-                                )}
-                                <div className="flex flex-col gap-1">
-                                    <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Property Address</span>
-                                    <span className="text-lg font-bold text-gray-900 flex items-start gap-2 min-w-0">
-                                        <span className="min-w-0 break-words">
-                                            {propertyAddress || 'N/A'}
-                                            {!isComplex && unitLabel && (
-                                                <span className="ml-2 text-blue-500">#{unitLabel}</span>
-                                            )}
-                                        </span>
-                                        <button
-                                            onClick={(e) => {
-                                                navigator.clipboard.writeText(clipboardAddress);
-                                                const el = e.currentTarget;
-                                                const original = el.innerHTML;
-                                                el.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
-                                                setTimeout(() => { if (el) el.innerHTML = original; }, 1000);
-                                            }}
-                                            className="p-1 hover:bg-gray-100 rounded text-gray-400 hover:text-blue-600 transition-colors shrink-0"
-                                            title="Copy Full Address"
-                                        >
-                                            <Copy size={16} />
-                                        </button>
+                    {/* Compact Two-Row Header — never squeezes address on narrow mobile screens */}
+                    <div className="px-4 sm:px-5 py-3.5 border-b border-slate-200/80 bg-white shrink-0">
+                        <div className="flex items-center justify-between gap-2 mb-1.5">
+                            <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+                                {cityName && (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200 uppercase tracking-wide">
+                                        <span className="w-1.5 h-1.5 rounded-full bg-blue-500" aria-hidden="true" />
+                                        {cityName}
                                     </span>
-                                    <span className="text-xs font-bold text-gray-400 uppercase tracking-wider mt-2">Owner Mailing Address</span>
-                                    <span className="text-sm text-gray-700">{mailingAddress || 'N/A'}</span>
-                                </div>
-                                <div className="flex flex-col md:flex-row md:items-center gap-2 mt-2">
-                                    <div className="flex items-center gap-2 flex-wrap">
-                                        <span className="text-sm font-medium text-gray-500">{property.city}</span>
-                                        {isComplex && unitCount && (
-                                            <span className="text-xs font-bold text-white bg-indigo-500 px-2 py-0.5 rounded-full">
-                                                {unitCount} Units
-                                            </span>
-                                        )}
-                                        {property.subsidies && property.subsidies.length > 0 && (() => {
-                                            const getSubsidyBadgeText = (sub) => {
-                                                const type = (sub.subsidy_type || '').toUpperCase();
-                                                switch (type) {
-                                                    case 'S8': return 'Section 8';
-                                                    case 'LIHTC': return 'LIHTC';
-                                                    case 'HOME': return 'HOME';
-                                                    case 'PH': return 'Public Housing';
-                                                    case 'FHA': return 'FHA';
-                                                    case 'RHS515': return 'RHS 515';
-                                                    case 'RHS538': return 'RHS 538';
-                                                    case 'STATE': return 'State Subsidy';
-                                                    case 'PBV': return 'PBV';
-                                                    case 'MR': return 'Mod Rental';
-                                                    case 'NHTF': return 'NHTF';
-                                                    default: return sub.subsidy_type || 'Subsidized';
-                                                }
-                                            };
-                                            const programs = [...new Set(property.subsidies.map(getSubsidyBadgeText).filter(Boolean))];
-                                            return programs.map((prog, idx) => (
-                                                <span key={idx} className="text-xs font-bold text-white bg-amber-500 px-2 py-0.5 rounded-full uppercase">
-                                                    {prog}
-                                                </span>
-                                            ));
-                                        })()}
-                                        {property.nhpd_subsidy && (
-                                            <span className="text-xs font-bold text-white bg-purple-600 px-2 py-0.5 rounded-full uppercase">
-                                                {property.nhpd_program || 'Subsidized'}
-                                            </span>
-                                        )}
+                                )}
+                                {isComplex && unitCount && (
+                                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 border border-indigo-200">
+                                        {unitCount} Units
+                                    </span>
+                                )}
+                                {subsidyPrograms.map((prog, idx) => (
+                                    <span key={idx} className="text-[10px] font-bold text-amber-800 bg-amber-100 border border-amber-200 px-2 py-0.5 rounded-full uppercase">
+                                        {prog}
+                                    </span>
+                                ))}
+                                {property.nhpd_subsidy && subsidyPrograms.length === 0 && (
+                                    <span className="text-[10px] font-bold text-purple-800 bg-purple-100 border border-purple-200 px-2 py-0.5 rounded-full uppercase">
+                                        {property.nhpd_program || 'Subsidized'}
+                                    </span>
+                                )}
+                            </div>
 
-                                    </div>
-                                    {mapSearchUrl && (
-                                        <a
-                                            href={mapSearchUrl}
-                                            target="_blank"
-                                            rel="noreferrer"
-                                            className="text-[10px] text-blue-600 hover:text-blue-800 font-bold uppercase tracking-widest flex items-center gap-1 group"
+                            <div className="flex items-center gap-1.5 shrink-0">
+                                {userGroups.length > 0 && (
+                                    <div className="relative">
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowGroupSelector(!showGroupSelector)}
+                                            className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg font-bold text-xs transition-all border ${
+                                                addedSuccess
+                                                    ? 'bg-emerald-600 text-white border-emerald-700'
+                                                    : 'bg-white text-blue-600 border-blue-200 hover:bg-blue-50'
+                                            }`}
                                         >
-                                            <MapPin size={10} />
-                                            View Map
-                                            <ExternalLink size={10} className="opacity-0 group-hover:opacity-100 transition-opacity" />
-                                        </a>
-                                    )}
-                                </div>
+                                            {addedSuccess
+                                                ? <Check size={14} aria-hidden="true" />
+                                                : (isAdding ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <FolderPlus size={14} aria-hidden="true" />)}
+                                            <span className="hidden sm:inline">{addedSuccess ? 'Added!' : 'Add to Group'}</span>
+                                        </button>
+
+                                        <AnimatePresence>
+                                            {showGroupSelector && !addedSuccess && (
+                                                <motion.div
+                                                    initial={{ opacity: 0, y: 8, scale: 0.96 }}
+                                                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                                                    exit={{ opacity: 0, y: 8, scale: 0.96 }}
+                                                    className="absolute right-0 mt-1.5 w-60 bg-white rounded-xl shadow-2xl border border-slate-200 p-2 z-[60]"
+                                                >
+                                                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest p-2 border-b border-slate-100 mb-1">
+                                                        Select Group
+                                                    </div>
+                                                    <div className="max-h-56 overflow-y-auto overscroll-contain">
+                                                        {userGroups.map(group => (
+                                                            <button
+                                                                key={group.id}
+                                                                type="button"
+                                                                onClick={() => handleAddToGroup(group.id)}
+                                                                className="w-full text-left px-2.5 py-2 hover:bg-slate-50 rounded-lg transition-colors flex items-center gap-2.5 group"
+                                                            >
+                                                                <div className="w-7 h-7 bg-blue-50 rounded-lg flex items-center justify-center text-blue-600 text-xs font-bold group-hover:bg-blue-100 shrink-0">
+                                                                    {(group.name || '?')[0].toUpperCase()}
+                                                                </div>
+                                                                <div className="flex-1 min-w-0">
+                                                                    <div className="text-xs font-bold text-slate-900 truncate">{group.name}</div>
+                                                                    <div className="text-[10px] text-slate-400">{group.property_count || 0} properties</div>
+                                                                </div>
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                </motion.div>
+                                            )}
+                                        </AnimatePresence>
+                                    </div>
+                                )}
+
+                                {onOpenFeedback && (
+                                    <button
+                                        type="button"
+                                        onClick={() => onOpenFeedback({
+                                            id: property.id || property.location,
+                                            name: formattedHeadlineAddress,
+                                            type: 'Property',
+                                            city: cityName || 'CT',
+                                        })}
+                                        className="px-2 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-lg text-[11px] font-bold transition-colors inline-flex items-center gap-1"
+                                        title="Report a data error, wrong owner association, or missing detail"
+                                    >
+                                        <AlertCircle size={13} className="text-amber-600 shrink-0" aria-hidden="true" />
+                                        <span className="hidden sm:inline">See something wrong?</span>
+                                        <span className="sm:hidden">Report</span>
+                                    </button>
+                                )}
+
+                                <button
+                                    type="button"
+                                    aria-label="Close property details"
+                                    onClick={onClose}
+                                    className="p-1.5 hover:bg-slate-100 rounded-lg transition-colors text-slate-400 hover:text-slate-700"
+                                >
+                                    <X size={18} aria-hidden="true" />
+                                </button>
                             </div>
                         </div>
-                        <div className="flex items-center gap-2 shrink-0">
-                            {userGroups.length > 0 && (
-                                <div className="relative">
-                                    <button
-                                        onClick={() => setShowGroupSelector(!showGroupSelector)}
-                                        className={`flex items-center gap-2 px-3 py-2 rounded-lg font-bold text-sm transition-all shadow-sm border ${addedSuccess ? 'bg-green-500 text-white border-green-600' : 'bg-white text-blue-600 border-blue-100 hover:bg-blue-50'}`}
-                                    >
-                                        {addedSuccess ? <Check size={18} /> : (isAdding ? <Loader2 size={18} className="animate-spin" /> : <FolderPlus size={18} />)}
-                                        {addedSuccess ? 'Added!' : 'Add to Group'}
-                                    </button>
 
-                                    <AnimatePresence>
-                                        {showGroupSelector && !addedSuccess && (
-                                            <motion.div
-                                                initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                                                animate={{ opacity: 1, y: 0, scale: 1 }}
-                                                exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                                                className="absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-2xl border border-slate-100 p-2 z-[60]"
-                                            >
-                                                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest p-2 border-b border-slate-50 mb-1">
-                                                    Select Group
-                                                </div>
-                                                <div className="max-h-60 overflow-y-auto">
-                                                    {userGroups.map(group => (
-                                                        <button
-                                                            key={group.id}
-                                                            onClick={() => handleAddToGroup(group.id)}
-                                                            className="w-full text-left px-3 py-2.5 hover:bg-slate-50 rounded-lg transition-colors flex items-center gap-3 group"
-                                                        >
-                                                            <div className="w-8 h-8 bg-blue-50 rounded-lg flex items-center justify-center text-blue-600 font-bold group-hover:bg-blue-100">
-                                                                {group.name[0].toUpperCase()}
-                                                            </div>
-                                                            <div className="flex-1 min-w-0">
-                                                                <div className="text-sm font-bold text-slate-900 truncate">{group.name}</div>
-                                                                <div className="text-[10px] text-slate-400">{group.property_count || 0} properties</div>
-                                                            </div>
-                                                        </button>
-                                                    ))}
-                                                </div>
-                                            </motion.div>
-                                        )}
-                                    </AnimatePresence>
-                                </div>
-                            )}
-                            {onOpenFeedback && (
+                        {showComplexEyebrow && (
+                            <div className="text-xs font-semibold text-slate-500 truncate mb-0.5">
+                                {property.complex_name}
+                            </div>
+                        )}
+
+                        <div className="flex items-start justify-between gap-2 min-w-0">
+                            <h2 className="text-base sm:text-lg font-black text-slate-900 leading-snug break-words min-w-0">
+                                {propertyAddress || 'Unaddressed Property'}
+                                {appendUnit && (
+                                    <span className="ml-1.5 text-blue-600 font-extrabold">
+                                        #{String(unitLabel).replace(/^#+/, '').trim()}
+                                    </span>
+                                )}
+                            </h2>
+                            {clipboardAddress && (
                                 <button
-                                    onClick={() => onOpenFeedback({
-                                        id: property.id || property.location,
-                                        name: propertyAddress || property.location || 'Property',
-                                        type: 'Property',
-                                        city: property.city || 'CT'
-                                    })}
-                                    className="px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5"
-                                    title="Report a data error, wrong owner association, or missing detail"
+                                    type="button"
+                                    onClick={handleCopyAddress}
+                                    aria-label="Copy full address"
+                                    title={copied ? 'Copied!' : 'Copy full address'}
+                                    className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-blue-600 transition-colors shrink-0"
                                 >
-                                    <AlertCircle size={14} className="text-amber-600 shrink-0" />
-                                    <span>See something wrong?</span>
+                                    {copied
+                                        ? <Check size={15} className="text-emerald-600" aria-hidden="true" />
+                                        : <Copy size={15} aria-hidden="true" />}
                                 </button>
                             )}
-                            <button
-                                onClick={onClose}
-                                className="p-2 hover:bg-gray-100 rounded-lg transition-colors text-gray-500"
-                            >
-                                <X size={20} />
-                            </button>
                         </div>
                     </div>
 
-                    {/* Content */}
-                    <div className="flex-1 overflow-y-auto p-5 space-y-5">
-                        <div className="grid grid-cols-1 md:grid-cols-[1.2fr_0.8fr] gap-3">
-                            <div className="relative min-h-[220px] aspect-[4/3] bg-slate-100 rounded-lg overflow-hidden border border-slate-200">
-                                {imageUrl ? (
-                                    <img
-                                        src={imageUrl}
-                                        alt={propertyAddress || 'Property photo'}
-                                        className="h-full w-full object-cover"
-                                        onError={(e) => {
-                                            e.target.style.display = 'none';
-                                            const fallback = e.target.parentElement?.querySelector('[data-photo-fallback]');
-                                            if (fallback) fallback.classList.remove('hidden');
-                                        }}
-                                    />
-                                ) : null}
-                                <div data-photo-fallback className={`${imageUrl ? 'hidden' : ''} absolute inset-0 flex flex-col items-center justify-center gap-2 bg-slate-50 text-slate-400`}>
-                                    <ImageIcon size={28} />
-                                    <span className="text-xs font-bold uppercase tracking-wide">No Source Photo</span>
-                                </div>
-                                <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 via-black/25 to-transparent p-4 text-white">
-                                    <div className="text-[10px] font-bold uppercase tracking-wide text-white/75">{cityName || 'Connecticut'}</div>
-                                    <div className="text-lg font-black leading-tight">{propertyAddress || 'Property'}</div>
-                                    <div className="mt-2 flex flex-wrap gap-1.5">
-                                        {unitCount && (
-                                            <span className="rounded bg-white/90 px-2 py-0.5 text-[10px] font-bold uppercase text-slate-800">
-                                                {unitCount} Units
-                                            </span>
-                                        )}
-                                        {assessedValue && (
-                                            <span className="rounded bg-emerald-50 px-2 py-0.5 text-[10px] font-bold uppercase text-emerald-700">
-                                                {assessedValue} Assessed
-                                            </span>
-                                        )}
-                                        {appraisedValue && (
-                                            <span className="rounded bg-blue-50 px-2 py-0.5 text-[10px] font-bold uppercase text-blue-700">
-                                                {appraisedValue} Appraised
-                                            </span>
-                                        )}
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div className="relative min-h-[220px] aspect-[4/3] bg-slate-100 rounded-lg overflow-hidden border border-slate-200">
-                                {mapEmbedUrl ? (
-                                    <>
-                                        <iframe
-                                            src={mapEmbedUrl}
-                                            title={`${propertyAddress || 'Property'} map`}
-                                            className="h-full w-full border-0"
-                                            loading="lazy"
-                                            sandbox="allow-scripts allow-same-origin allow-forms"
-                                            referrerPolicy="no-referrer"
-                                        />
-                                        <a
-                                            href={mapSearchUrl}
-                                            target="_blank"
-                                            rel="noreferrer"
-                                            className="absolute right-2 top-2 inline-flex h-8 w-8 items-center justify-center rounded-lg bg-white/95 text-blue-600 shadow-sm border border-white/80 hover:bg-blue-50"
-                                            title="Open in Google Maps"
-                                        >
-                                            <Navigation size={14} />
-                                        </a>
-                                    </>
-                                ) : (
-                                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-slate-50 text-slate-400">
-                                        <MapPin size={28} />
-                                        <span className="text-xs font-bold uppercase tracking-wide">Map Unavailable</span>
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-
+                    {/* Scrollable Body */}
+                    <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-4 sm:p-5 space-y-4 sm:space-y-5">
                         <PropertyPublicDetails
                             property={property}
                             networkData={networkData}
@@ -600,34 +551,114 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
                             hideImage
                         />
 
+                        {/* Photo (only when available) + Embedded Map */}
+                        {(showPhotoCard || mapEmbedUrl) && (
+                            <div className={`grid grid-cols-1 ${showPhotoCard && mapEmbedUrl ? 'sm:grid-cols-2' : ''} gap-3`}>
+                                {showPhotoCard && (
+                                    <div className="relative h-48 sm:h-52 bg-slate-100 rounded-xl overflow-hidden border border-slate-200">
+                                        <img
+                                            src={imageUrl}
+                                            alt={formattedHeadlineAddress}
+                                            className="h-full w-full object-cover"
+                                            loading="lazy"
+                                            onError={() => setPhotoFailed(true)}
+                                        />
+                                    </div>
+                                )}
+
+                                {mapEmbedUrl && (
+                                    <div className="rounded-xl border border-slate-200 overflow-hidden bg-slate-100 flex flex-col">
+                                        <div className="relative h-48 sm:h-52 w-full">
+                                            <iframe
+                                                src={mapEmbedUrl}
+                                                title={`${formattedHeadlineAddress} map`}
+                                                className="h-full w-full border-0 block"
+                                                loading="lazy"
+                                                sandbox="allow-scripts allow-same-origin allow-forms"
+                                                referrerPolicy="no-referrer"
+                                            />
+                                            {mapSearchUrl && (
+                                                <a
+                                                    href={mapSearchUrl}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    aria-label="Open location in Google Maps"
+                                                    className="absolute right-2 top-2 inline-flex h-8 w-8 items-center justify-center rounded-lg bg-white/95 text-blue-600 shadow-sm border border-slate-200/80 hover:bg-blue-50"
+                                                    title="Open in Google Maps"
+                                                >
+                                                    <Navigation size={14} aria-hidden="true" />
+                                                </a>
+                                            )}
+                                        </div>
+                                        {mapSearchUrl && (
+                                            <div className="flex items-center justify-between px-3 py-1.5 bg-slate-50 border-t border-slate-200/70">
+                                                <span className="text-[10px] text-slate-400 truncate">{mapAddress}</span>
+                                                <a
+                                                    href={mapSearchUrl}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    className="text-[10px] font-bold text-blue-600 hover:text-blue-800 inline-flex items-center gap-0.5 shrink-0 ml-2"
+                                                >
+                                                    Open <ExternalLink size={9} aria-hidden="true" />
+                                                </a>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
                         {/* Complex Sub-Units List */}
                         {isComplex && property.subProperties && property.subProperties.length > 0 && (
-                            <div className="space-y-3 mt-6">
+                            <div className="space-y-2">
                                 <div className="flex justify-between items-center">
-                                    <h3 className="text-xs font-bold text-gray-900 uppercase tracking-wider flex items-center gap-2">
-                                        <ListIcon size={14} /> Units in Complex
+                                    <h3 className="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                                        <ListIcon size={13} aria-hidden="true" /> Units in Complex
                                     </h3>
-                                    <span className="text-xs font-bold bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">{property.subProperties.length} Units</span>
+                                    <span className="text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-100 px-2 py-0.5 rounded-full">
+                                        {property.subProperties.length} Units
+                                    </span>
                                 </div>
-                                <div className="border border-gray-200 rounded-xl overflow-hidden bg-white shadow-sm">
-                                    <div className="max-h-[300px] overflow-y-auto divide-y divide-gray-100">
-                                        {property.subProperties.map((sub, idx) => (
-                                            <div key={idx} className="p-3 hover:bg-gray-50 flex justify-between items-center text-sm group transition-colors">
-                                                <div className="font-medium text-gray-700 flex items-center gap-2">
-                                                    <span className="w-1.5 h-1.5 rounded-full bg-indigo-300 group-hover:bg-indigo-500 transition-colors"></span>
-                                                    Unit {sub.derivedUnit || sub.unit}
-                                                </div>
-                                                <div className="flex items-center gap-4 text-right">
-                                                    <div className="flex flex-col items-end">
-                                                        <span className="font-mono text-gray-600 text-xs font-bold">{sub.assessed_value}</span>
-                                                        <span className="text-[9px] text-gray-400">Assessed</span>
+                                <div className="border border-slate-200 rounded-xl overflow-hidden bg-white shadow-2xs">
+                                    <div className="max-h-64 overflow-y-auto overscroll-contain divide-y divide-slate-100">
+                                        {property.subProperties.map((sub, idx) => {
+                                            const subUnit = sub.derivedUnit || sub.unit || `#${idx + 1}`;
+                                            const subAssessed = formatCurrencyValue(sub.assessed_value);
+                                            if (onSelectProperty) {
+                                                return (
+                                                    <button
+                                                        key={sub.id || idx}
+                                                        type="button"
+                                                        onClick={() => onSelectProperty(sub)}
+                                                        className="w-full px-3.5 py-2.5 hover:bg-indigo-50/50 flex justify-between items-center gap-2 text-left text-xs sm:text-sm group transition-colors"
+                                                    >
+                                                        <div className="font-semibold text-slate-800 flex items-center gap-2 min-w-0">
+                                                            <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 group-hover:bg-indigo-600 shrink-0" aria-hidden="true" />
+                                                            <span className="truncate">Unit {subUnit}</span>
+                                                        </div>
+                                                        <div className="flex items-center gap-2.5 shrink-0">
+                                                            <div className="text-right">
+                                                                <div className="font-mono text-slate-700 text-xs font-bold">{subAssessed}</div>
+                                                                <div className="text-[9px] text-slate-400">Assessed</div>
+                                                            </div>
+                                                            <ChevronRight size={14} className="text-slate-300 group-hover:text-indigo-500" aria-hidden="true" />
+                                                        </div>
+                                                    </button>
+                                                );
+                                            }
+                                            return (
+                                                <div key={sub.id || idx} className="px-3.5 py-2.5 flex justify-between items-center gap-2 text-xs sm:text-sm">
+                                                    <div className="font-semibold text-slate-700 flex items-center gap-2 min-w-0">
+                                                        <span className="w-1.5 h-1.5 rounded-full bg-indigo-300 shrink-0" aria-hidden="true" />
+                                                        <span className="truncate">Unit {subUnit}</span>
                                                     </div>
-                                                    <div className="hidden sm:block text-gray-400 text-xs truncate max-w-[150px] text-right">
-                                                        {sub.owner}
+                                                    <div className="text-right shrink-0">
+                                                        <div className="font-mono text-slate-700 text-xs font-bold">{subAssessed}</div>
+                                                        <div className="text-[9px] text-slate-400">Assessed</div>
                                                     </div>
                                                 </div>
-                                            </div>
-                                        ))}
+                                            );
+                                        })}
                                     </div>
                                 </div>
                             </div>
@@ -635,78 +666,79 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
 
                         {/* Hartford Code Cases & Complaints */}
                         {isHartfordProperty && (
-                            <div className="space-y-3 mt-6">
-                                <div className="flex items-center justify-between gap-3">
-                                    <h3 className="text-xs font-bold text-red-600 uppercase tracking-wider flex items-center gap-2">
-                                        <AlertCircle size={14} /> Hartford Code Cases & Complaints
+                            <div className="space-y-2.5">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <h3 className="text-[11px] font-bold text-red-600 uppercase tracking-wider flex items-center gap-1.5">
+                                        <AlertCircle size={13} aria-hidden="true" /> Hartford Code Cases &amp; Complaints
                                     </h3>
-                                    <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-wider">
-                                        <span className="rounded-full bg-red-50 px-2 py-1 text-red-700 border border-red-100">
+                                    <div className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider">
+                                        <span className="rounded-full bg-red-50 px-2 py-0.5 text-red-700 border border-red-100">
                                             {enforcementRows.length} Records
                                         </span>
-                                        <span className="rounded-full bg-slate-50 px-2 py-1 text-slate-500 border border-slate-100">
+                                        <span className="rounded-full bg-slate-50 px-2 py-0.5 text-slate-500 border border-slate-200">
                                             {openEnforcementCount} Open
                                         </span>
                                     </div>
                                 </div>
-                                <div className="border border-red-100 rounded-xl overflow-hidden bg-white shadow-sm">
+                                <div className="border border-red-100 rounded-xl overflow-hidden bg-white shadow-2xs">
                                     {enforcementLoading ? (
-                                        <div className="flex items-center justify-center gap-2 px-4 py-8 text-sm font-semibold text-slate-500">
-                                            <Loader2 size={16} className="animate-spin" />
-                                            Loading Hartford records
+                                        <div className="flex items-center justify-center gap-2 px-4 py-6 text-xs sm:text-sm font-semibold text-slate-500">
+                                            <Loader2 size={15} className="animate-spin" aria-hidden="true" />
+                                            Loading Hartford records…
                                         </div>
                                     ) : enforcementError ? (
-                                        <div className="px-4 py-5 text-sm text-red-600">{enforcementError}</div>
+                                        <div className="px-4 py-4 text-xs sm:text-sm text-red-600">{enforcementError}</div>
                                     ) : enforcementRows.length === 0 ? (
-                                        <div className="px-4 py-5 text-sm text-slate-500">
+                                        <div className="px-4 py-4 text-xs sm:text-sm text-slate-500">
                                             No Hartford code cases or complaints matched this parcel in the loaded city source data.
                                         </div>
                                     ) : (
-                                        <div className="max-h-80 overflow-auto">
-                                            <table className="w-full text-sm divide-y divide-gray-100">
-                                                <thead className="bg-red-50/40 sticky top-0">
-                                                    <tr className="text-left text-[10px] font-bold text-red-700 uppercase tracking-widest">
-                                                        <th className="px-4 py-2">Opened</th>
-                                                        <th className="px-4 py-2">Record</th>
-                                                        <th className="px-4 py-2">Status</th>
-                                                        <th className="px-4 py-2">Type</th>
+                                        <div className="max-h-72 overflow-auto overscroll-contain">
+                                            <table className="w-full text-xs divide-y divide-slate-100">
+                                                <thead className="bg-red-50/50 sticky top-0">
+                                                    <tr className="text-left text-[10px] font-bold text-red-700 uppercase tracking-wider">
+                                                        <th className="px-3 py-2">Opened</th>
+                                                        <th className="px-3 py-2">Record</th>
+                                                        <th className="px-3 py-2">Status</th>
+                                                        <th className="px-3 py-2">Type</th>
                                                     </tr>
                                                 </thead>
-                                                <tbody className="divide-y divide-gray-50">
+                                                <tbody className="divide-y divide-slate-50">
                                                     {enforcementRows.map((e, idx) => (
-                                                        <tr key={`${e.case_number || 'record'}-${idx}`} className="hover:bg-red-50/10 transition-colors">
-                                                            <td className="px-4 py-2 text-gray-500 whitespace-nowrap">
+                                                        <tr key={`${e.case_number || 'record'}-${idx}`} className="hover:bg-red-50/15 transition-colors">
+                                                            <td className="px-3 py-2 text-slate-500 whitespace-nowrap">
                                                                 {formatRecordDate(e.date_opened)}
                                                             </td>
-                                                            <td className="px-4 py-2 font-medium text-gray-900">
+                                                            <td className="px-3 py-2 font-medium text-slate-900">
                                                                 {e.record_name || 'N/A'}
-                                                                <div className="text-[10px] text-gray-400 font-mono mt-0.5">
+                                                                <div className="text-[10px] text-slate-400 font-mono mt-0.5">
                                                                     {e.case_number ? (
-                                                                        <a 
+                                                                        <a
                                                                             href="https://aca-prod.accela.com/HARTFORD/Default.aspx?culture=en-US"
-                                                                            target="_blank" 
+                                                                            target="_blank"
                                                                             rel="noopener noreferrer"
                                                                             className="text-blue-600 hover:text-blue-800 hover:underline inline-flex items-center gap-0.5"
                                                                             title="Search for this record on Hartford Accela Citizen Access"
                                                                         >
                                                                             {e.case_number}
-                                                                            <ExternalLink size={10} />
+                                                                            <ExternalLink size={9} aria-hidden="true" />
                                                                         </a>
                                                                     ) : (
                                                                         'No case number'
                                                                     )}
                                                                 </div>
                                                             </td>
-                                                            <td className="px-4 py-2">
-                                                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${(e.record_status || '').toLowerCase().includes('closed')
-                                                                    ? 'bg-gray-100 text-gray-500'
-                                                                    : 'bg-red-100 text-red-700'
-                                                                    }`}>
+                                                            <td className="px-3 py-2">
+                                                                <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                                                                    (e.record_status || '').toLowerCase().includes('closed')
+                                                                        ? 'bg-slate-100 text-slate-500'
+                                                                        : 'bg-red-100 text-red-700'
+                                                                }`}>
                                                                     {e.record_status || 'Unknown'}
                                                                 </span>
                                                             </td>
-                                                            <td className="px-4 py-2 text-xs text-gray-600">
-                                                                {e.record_type || e.inspection_type || '-'}
+                                                            <td className="px-3 py-2 text-slate-600">
+                                                                {e.record_type || e.inspection_type || '—'}
                                                             </td>
                                                         </tr>
                                                     ))}
@@ -715,87 +747,88 @@ export default function PropertyDetailsModal({ property, networkData = {}, onClo
                                         </div>
                                     )}
                                 </div>
-                                <p className="text-[10px] text-gray-400 italic">
-                                    Source: Hartford Open Data code cases and complaints matched to parcel IDs. Statuses and types are provided as-is from city records.
-                                    {' '}
+                                <p className="text-[10px] text-slate-400 italic leading-relaxed">
+                                    Source: Hartford Open Data code cases and complaints matched to parcel IDs. Statuses and types are provided as-is from city records.{' '}
                                     <a
                                         href="https://aca-prod.accela.com/HARTFORD/Default.aspx?culture=en-US"
                                         target="_blank"
                                         rel="noopener noreferrer"
-                                        className="text-blue-500 hover:text-blue-700 underline inline-flex items-center gap-0.5 font-medium not-italic"
+                                        className="text-blue-600 hover:text-blue-800 underline inline-flex items-center gap-0.5 font-semibold not-italic"
                                     >
-                                        Search official records on Accela Citizen Access <ExternalLink size={10} />
+                                        Search official records on Accela Citizen Access <ExternalLink size={10} aria-hidden="true" />
                                     </a>
                                 </p>
                             </div>
                         )}
 
                         {/* Eviction Metrics */}
-                        {evictions && evictions.length > 0 && (
-                            <div className="mt-6 p-4 bg-indigo-50/50 rounded-2xl border border-indigo-100 flex items-center justify-between">
-                                <div className="flex items-center gap-4">
-                                    <div className="p-3 bg-indigo-100 text-indigo-600 rounded-xl">
-                                        <Gavel size={24} />
+                        {sortedEvictions.length > 0 && (
+                            <div className="p-3.5 sm:p-4 bg-indigo-50/50 rounded-xl border border-indigo-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                                <div className="flex items-center gap-3">
+                                    <div className="p-2.5 bg-indigo-100 text-indigo-600 rounded-xl shrink-0">
+                                        <Gavel size={20} aria-hidden="true" />
                                     </div>
                                     <div>
-                                        <div className="text-xl font-black text-slate-900">{evictions.length}</div>
-                                        <div className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest">Total Eviction Filings</div>
+                                        <div className="text-lg sm:text-xl font-black text-slate-900 leading-none">{sortedEvictions.length}</div>
+                                        <div className="text-[10px] font-bold text-indigo-500 uppercase tracking-wider mt-0.5">Total Eviction Filings</div>
                                     </div>
                                 </div>
-                                <div className="text-right">
-                                    <div className="text-xs font-bold text-slate-600">
-                                        Last Filing: {evictions.sort((a, b) => new Date(b.filing_date) - new Date(a.filing_date))[0].filing_date}
+                                <div className="sm:text-right">
+                                    <div className="text-xs font-bold text-slate-700">
+                                        Last Filing: {formatRecordDate(sortedEvictions[0]?.filing_date)}
                                     </div>
-                                    <div className={`text-[10px] font-bold uppercase mt-1 ${evictions.some(e => !e.status || !e.status.toLowerCase().includes('disposed'))
-                                            ? 'text-red-500'
+                                    <div className={`text-[10px] font-bold uppercase mt-0.5 ${
+                                        sortedEvictions.some(e => !e.status || !e.status.toLowerCase().includes('disposed'))
+                                            ? 'text-red-600'
                                             : 'text-slate-400'
-                                        }`}>
-                                        {evictions.some(e => !e.status || !e.status.toLowerCase().includes('disposed'))
-                                            ? '⚠️ ACTIVE FILINGS DETECTED'
+                                    }`}>
+                                        {sortedEvictions.some(e => !e.status || !e.status.toLowerCase().includes('disposed'))
+                                            ? 'Active Filings Detected'
                                             : 'All Cases Disposed'}
                                     </div>
-                                    <div className="text-[10px] text-slate-400 mt-1">
+                                    <div className="text-[10px] text-slate-400 mt-0.5">
                                         Statewide filing timeline only. No tenant-identifying data is shown.
                                     </div>
                                 </div>
                             </div>
                         )}
 
-                        {/* Metadata / Debug */}
-                        <div className="pt-4 border-t border-gray-100 mt-6">
-                            <div className="grid grid-cols-2 gap-4 text-[10px] text-gray-400 font-mono">
-                                <div>ID: {property.id}</div>
-                                <div>PARCEL: {property.parcel_id || 'N/A'}</div>
+                        {/* Metadata */}
+                        <div className="pt-3 border-t border-slate-100">
+                            <div className="grid grid-cols-2 gap-3 text-[10px] text-slate-400 font-mono">
+                                <div className="truncate">ID: {property.id || 'N/A'}</div>
+                                <div className="truncate text-right" title={parcelIdentifier || undefined}>
+                                    PARCEL: {parcelIdentifier || 'N/A'}
+                                </div>
                             </div>
                         </div>
                     </div>
 
-                    {/* Footer Action */}
-                    <div className="p-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-2 shrink-0">
+                    {/* Sticky Footer Actions */}
+                    <div className="px-4 sm:px-5 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))] border-t border-slate-200/80 bg-slate-50 flex items-center justify-end gap-2 shrink-0">
                         {gisUrl && (
                             <a
                                 href={gisUrl}
                                 target="_blank"
-                                rel="noreferrer"
-                                className="px-4 py-2 bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 text-sm font-bold rounded-lg shadow-sm transition-colors flex items-center gap-2"
+                                rel="noopener noreferrer"
+                                className="flex-1 sm:flex-initial justify-center px-3.5 py-2 bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 text-xs sm:text-sm font-bold rounded-xl shadow-2xs transition-colors inline-flex items-center gap-1.5"
                             >
-                                <ExternalLink size={16} />
-                                <span className="hidden sm:inline">View</span> Official Record
+                                <ExternalLink size={14} className="shrink-0" aria-hidden="true" />
+                                <span>Official Record</span>
                             </a>
                         )}
                         {mapSearchUrl && (
                             <a
                                 href={mapSearchUrl}
                                 target="_blank"
-                                rel="noreferrer"
-                                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold rounded-lg shadow-sm transition-colors flex items-center gap-2"
+                                rel="noopener noreferrer"
+                                className="flex-1 sm:flex-initial justify-center px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs sm:text-sm font-bold rounded-xl shadow-2xs transition-colors inline-flex items-center gap-1.5"
                             >
-                                <MapPin size={16} />
-                                Google Maps
+                                <MapPin size={14} className="shrink-0" aria-hidden="true" />
+                                <span>Google Maps</span>
                             </a>
                         )}
                     </div>
-
                 </motion.div>
             </motion.div>
         </AnimatePresence>

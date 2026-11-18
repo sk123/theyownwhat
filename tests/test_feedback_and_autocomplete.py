@@ -214,6 +214,24 @@ class TestFeedbackAndAutocomplete(unittest.TestCase):
                 self.assertIsNotNone(ctx)
                 self.assertNotIn(ctx.upper(), ["NULL", "NONE", "N/A", "UNKNOWN"])
 
+    def test_city_search_initialisms_and_opencorporates_principals(self):
+        """Verify initialism queries like 'WC Smith' (DC) and 'DR Horton' (VA) match corporate/principal networks."""
+        for city, query, min_bldgs in (
+            ("dc", "WC Smith", 50),
+            ("va", "DR Horton", 200),
+            ("baltimore", "Baltimore SFR", 500),
+        ):
+            url = f"{API_BASE_URL}/api/{city}/search?q={urllib.parse.quote(query)}&limit=8"
+            with urllib.request.urlopen(url) as resp:
+                self.assertEqual(resp.status, 200)
+                results = json.loads(resp.read().decode("utf-8"))
+                net_hits = [r for r in results if str(r.get("type", "")).endswith("_network")]
+                self.assertTrue(
+                    len(net_hits) > 0,
+                    f"Expected network hit for {query!r} in {city}, got: {results[:3]}",
+                )
+                self.assertGreaterEqual(net_hits[0].get("building_count", 0), min_bldgs)
+
 
 if __name__ == "__main__":
     unittest.main()

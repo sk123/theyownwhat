@@ -466,10 +466,10 @@ export default function Header({ onHome, onDatasets, onReset, onAbout, onShowUpg
                 <div className="mx-auto w-full max-w-[1720px] px-3 sm:px-5 h-14 md:h-16 flex items-center justify-between gap-3">
                     <div className="flex items-center gap-3 md:gap-4 min-w-0 flex-1">
                         <div
-                            className="flex items-center gap-2.5 md:gap-3 cursor-pointer group shrink-0"
+                            className="flex items-center gap-2.5 md:gap-3 cursor-pointer group min-w-0 lg:shrink-0"
                             onClick={onHome}
                         >
-                            <div className="w-9 h-9 md:w-10 md:h-10 bg-gradient-to-br from-blue-50 to-indigo-50/50 rounded-xl flex items-center justify-center group-hover:from-blue-100 group-hover:to-indigo-100 transition-all duration-300 shadow-sm border border-slate-100 group-hover:border-blue-200">
+                            <div className="w-9 h-9 md:w-10 md:h-10 shrink-0 bg-gradient-to-br from-blue-50 to-indigo-50/50 rounded-xl flex items-center justify-center group-hover:from-blue-100 group-hover:to-indigo-100 transition-all duration-300 shadow-sm border border-slate-100 group-hover:border-blue-200">
                                 <svg viewBox="0 0 24 24" className="w-5.5 h-5.5 md:w-6 md:h-6" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                                     {/* The isometric hexagonal shape representing a building outline */}
                                     <path d="M12 2L2 7l10 5 10-5-10-5z" stroke="url(#logo-grad-blue)" fill="url(#logo-grad-blue-light)" />
@@ -508,18 +508,18 @@ export default function Header({ onHome, onDatasets, onReset, onAbout, onShowUpg
                                     </defs>
                                 </svg>
                             </div>
-                            <div>
-                                <h1 className="font-black text-xl md:text-2xl leading-tight text-gray-900 tracking-tight">they own <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-indigo-600">WHAT??</span></h1>
+                            <div className="min-w-0">
+                                <h1 className="font-black text-xl md:text-2xl leading-tight text-gray-900 tracking-tight truncate">they own <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-indigo-600">WHAT??</span></h1>
                                  {isDatasetLanding ? (
-                                     <p className="text-[10px] md:text-xs text-gray-500 font-medium tracking-wide">LANDLORD / PROPERTY EXPLORER <span className="text-[9px] text-slate-400 font-semibold">v0.2.0</span></p>
+                                     <p className="text-[10px] md:text-xs text-gray-500 font-medium tracking-wide truncate">LANDLORD / PROPERTY EXPLORER <span className="text-[9px] text-slate-400 font-semibold">v0.2.0</span></p>
                                  ) : activeState === 'CT' ? (
-                                     <p className="text-[10px] md:text-xs text-gray-500 font-medium tracking-wide">CONNECTICUT LANDLORD / PROPERTY EXPLORER <span className="text-[9px] text-slate-400 font-semibold">v0.2.0</span></p>
+                                     <p className="text-[10px] md:text-xs text-gray-500 font-medium tracking-wide truncate">CONNECTICUT <span className="hidden sm:inline">LANDLORD / PROPERTY </span>EXPLORER <span className="text-[9px] text-slate-400 font-semibold">v0.2.0</span></p>
                                  ) : (
-                                     <p className="text-[10px] md:text-xs text-gray-500 font-medium tracking-wide flex items-center gap-1.5">
-                                         <span>
-                                             {HEADER_STATE_TITLES[activeState] || (activeState === 'CHICAGO' ? 'CHICAGO' : activeState)} LANDLORD / PROPERTY EXPLORER
+                                     <p className="text-[10px] md:text-xs text-gray-500 font-medium tracking-wide flex items-center gap-1.5 min-w-0">
+                                         <span className="truncate">
+                                             {HEADER_STATE_TITLES[activeState] || (activeState === 'CHICAGO' ? 'CHICAGO' : activeState)} <span className="hidden sm:inline">LANDLORD / PROPERTY </span>EXPLORER
                                          </span>
-                                         <span className="text-[8px] font-black bg-violet-100 text-violet-700 px-1 py-0.5 rounded uppercase tracking-wider">Beta</span>
+                                         <span className="text-[8px] font-black bg-violet-100 text-violet-700 px-1 py-0.5 rounded uppercase tracking-wider shrink-0">Beta</span>
                                      </p>
                                  )}
                              </div>
@@ -676,7 +676,7 @@ export default function Header({ onHome, onDatasets, onReset, onAbout, onShowUpg
                     {onShowFreshness && (
                         <MobileNavItem
                             icon={Database}
-                            label="Data Completeness"
+                            label="Data"
                             onClick={onShowFreshness}
                             accent="teal"
                         />

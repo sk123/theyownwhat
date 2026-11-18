@@ -207,16 +207,38 @@ def main() -> int:
             raise RuntimeError("Connecticut safe_network_refresh shadow validation failed or lock busy!")
         print(f"  ✓ [ct] shadow-validated & swapped in {time.time() - t_ct:.1f}s", flush=True)
 
-    # 5. Statewide `us_*` partitions (`max_workers=2` for RAM safety on 2M-3.9M parcel states)
+    # 5. Statewide `us_*` partitions (`max_workers=1` for strict RAM safety on 2M-3.9M parcel states)
     if not args.skip_states:
         states_to_run = [s for s in ALL_STATES if (only_set is None or s[0] in only_set)]
         if states_to_run:
-            print(f"\n=== Phase 5: Rebuilding {len(states_to_run)} statewide `us_*` partitions (workers=2) ===", flush=True)
-            with ProcessPoolExecutor(max_workers=min(2, len(states_to_run))) as pool:
+            print(f"\n=== Phase 5: Rebuilding {len(states_to_run)} statewide `us_*` partitions (workers=1) ===", flush=True)
+            with ProcessPoolExecutor(max_workers=1) as pool:
                 futs = {pool.submit(_rebuild_state_worker, (*st_cfg, db_url)): st_cfg[0] for st_cfg in states_to_run}
                 for fut in as_completed(futs):
                     s_done, el = fut.result()
                     print(f"  ✓ [{s_done}] statewide partition rebuilt in {el:.1f}s", flush=True)
+
+    # 6. Refresh kv_cache top-network caches & landing_snapshot:v1 atomically
+    print("\n=== Phase 6: Refreshing cached insights & landing snapshot ===", flush=True)
+    try:
+        conn_cache = psycopg2.connect(db_url)
+        try:
+            with conn_cache.cursor() as cur:
+                cur.execute("DELETE FROM kv_cache WHERE key = 'completeness_matrix'")
+                for jur_slug in [*ALL_CITIES, "nj", "nyc", *(s[0] for s in ALL_STATES)]:
+                    if only_set is None or jur_slug in only_set:
+                        cur.execute(
+                            "DELETE FROM kv_cache WHERE key = %s OR key LIKE %s",
+                            (f"city_stats:v1:{jur_slug}", f"city_top_nets:v1:{jur_slug}:%"),
+                        )
+            conn_cache.commit()
+            from api.landing_cache import build_and_store_landing_snapshot
+            build_and_store_landing_snapshot(conn=conn_cache)
+            print("  ✓ Refreshed kv_cache city stats/top-networks & landing_snapshot:v1", flush=True)
+        finally:
+            conn_cache.close()
+    except Exception as cache_exc:
+        print(f"  ! Warning: landing snapshot refresh encountered an error: {cache_exc}", flush=True)
 
     after = snapshot_metrics(db_url)
     report = {

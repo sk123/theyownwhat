@@ -388,3 +388,24 @@ function getPropertyStateForJurisdiction(activeState) {
   if (activeState === 'VA') return 'VA';
   return 'CT';
 }
+
+const PURE_NON_RESIDENTIAL_TYPE_RE = /storage|commercial|industrial|vacant|hotel|motel|nursing|assisted|office|retail|warehouse|outbuilding|bank/i;
+const RESIDENTIAL_SIGNAL_TYPE_RE = /apt|apartment|res|family|condo|duplex|dwelling|home|house|ranch|colonial|cape|split|bungalow|row/i;
+
+export function getCtPropertyUnitCount(p) {
+  if (!p) return 0;
+  if (p.unit?.includes('CNDASC') || p.location?.includes('CNDASC')) return 0;
+  const propType = String(p.property_type || p.details?.property_type || '').trim();
+  if (
+    propType &&
+    PURE_NON_RESIDENTIAL_TYPE_RE.test(propType) &&
+    !RESIDENTIAL_SIGNAL_TYPE_RE.test(propType)
+  ) {
+    return 0;
+  }
+  const raw = Number(p.number_of_units ?? p.unit_count ?? p.details?.number_of_units);
+  if (Number.isFinite(raw) && raw > 0) {
+    return Math.round(raw);
+  }
+  return 1;
+}

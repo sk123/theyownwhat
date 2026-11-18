@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import datetime as dt
+import gc
 import json
 import os
 import re
@@ -350,7 +351,7 @@ def fetch_massgis_parcels(towns: Optional[Sequence[str]] = None, full_statewide:
             lo = min_oid + idx * step
             hi = max_oid if idx == num_shards - 1 else (lo + step - 1)
             shards.append((
-                f"OBJECTID >= {lo} AND OBJECTID <= {hi} AND (USE_CODE IS NULL OR (USE_CODE NOT LIKE '9%' AND USE_CODE NOT LIKE '13%'))",
+                f"OBJECTID >= {lo} AND OBJECTID <= {hi} AND (USE_CODE IS NULL OR ((USE_CODE NOT LIKE '9%' OR USE_CODE LIKE '95%') AND USE_CODE NOT LIKE '13%'))",
                 f"MA-Shard-{idx+1}",
             ))
         all_rows: List[Dict[str, Any]] = []
@@ -372,16 +373,191 @@ def fetch_massgis_parcels(towns: Optional[Sequence[str]] = None, full_statewide:
     return all_rows
 
 
+def cross_enrich_boston_and_ma(conn) -> Dict[str, int]:
+    """Bidirectional best-of-both enrichment across `boston_*` and `ma_*` via the exact
+    1-to-1 parcel crosswalk (`m.bbl = 'M035-' || LPAD(b.bbl, 10, '0')`):
+      1. Backfills missing `latitude`, `longitude`, `units_res`, and `units_total` onto
+         `boston_properties` from `ma_properties` (MassGIS L3).
+      2. Inserts non-government, non-condo-master (`land_use != 'CM'`) Boston parcels missing
+         from `ma_properties` (such as `EA`/`E` Community Land Trust & charitable housing like
+         Dudley Neighbors Inc, missing condos, and residential land) into `ma_properties`.
+      3. Syncs Boston ISD code violations (`boston_bbl_stats`) onto `ma_bbl_stats`.
+    """
+    summary = {"boston_coords_units_updated": 0, "ma_parcels_inserted": 0, "ma_isd_stats_upserted": 0}
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT to_regclass('public.boston_properties') IS NOT NULL,
+                   to_regclass('public.ma_properties') IS NOT NULL,
+                   to_regclass('public.boston_bbl_stats') IS NOT NULL,
+                   to_regclass('public.ma_bbl_stats') IS NOT NULL
+            """
+        )
+        has_bos, has_ma, has_bos_stats, has_ma_stats = cur.fetchone()
+        if not (has_bos and has_ma):
+            return summary
+
+        # 1. MassGIS (`ma_properties`) -> `boston_properties` (coordinates & missing residential unit counts)
+        cur.execute(
+            """
+            UPDATE boston_properties b
+            SET latitude = COALESCE(b.latitude, m.latitude),
+                longitude = COALESCE(b.longitude, m.longitude),
+                units_res = CASE
+                    WHEN COALESCE(b.units_res, 0) = 0 AND COALESCE(m.units_res, 0) > 0 THEN m.units_res
+                    ELSE b.units_res
+                END,
+                units_total = CASE
+                    WHEN COALESCE(b.units_total, 0) = 0 AND COALESCE(m.units_total, 0) > 0 THEN m.units_total
+                    ELSE b.units_total
+                END
+            FROM ma_properties m
+            WHERE m.bbl = 'M035-' || LPAD(b.bbl, 10, '0')
+              AND (
+                  (b.latitude IS NULL AND m.latitude IS NOT NULL)
+                  OR (COALESCE(b.units_res, 0) = 0 AND COALESCE(m.units_res, 0) > 0)
+              )
+            """
+        )
+        summary["boston_coords_units_updated"] = cur.rowcount
+
+    # 2. `boston_properties` -> `ma_properties` (missing private/CLT/nonprofit housing & residential parcels)
+    with conn.cursor(cursor_factory=RealDictCursor) as rcur:
+        rcur.execute(
+            """
+            SELECT b.bbl, b.address, b.zip_code, b.owner_name, b.mailing_address,
+                   b.land_use, b.bld_class, b.num_floors, b.units_res, b.units_total,
+                   b.year_built, b.assessed_total, b.last_sale_date, b.last_sale_price,
+                   b.latitude, b.longitude
+            FROM boston_properties b
+            WHERE b.bbl IS NOT NULL
+              AND b.owner_name IS NOT NULL
+              AND COALESCE(b.land_use, '') != 'CM'
+              AND NOT EXISTS (
+                  SELECT 1 FROM ma_properties m
+                  WHERE m.bbl = 'M035-' || LPAD(b.bbl, 10, '0')
+              )
+            """
+        )
+        missing_rows = rcur.fetchall()
+
+    to_insert = []
+    for r in missing_rows:
+        raw_owner = source_text(r.get("owner_name"))
+        if not raw_owner or is_public_entity(raw_owner):
+            continue
+        ma_bbl = f"M035-{str(r['bbl']).strip().zfill(10)}"
+        raw_mail = source_text(r.get("mailing_address")) or ""
+        dem = demangle_assessor_owner(raw_owner, mailing_address=raw_mail, col_max_len=40)
+        cleaned_owner = dem.cleaned_owner or raw_owner
+        clean_mail = strip_benign_care_of_prefix(raw_mail)
+        to_insert.append((
+            "ma",
+            ma_bbl,
+            source_text(r.get("address")) or f"PARCEL {r['bbl']}",
+            "BOSTON",
+            _clean_ma_zip(r.get("zip_code")),
+            cleaned_owner,
+            dem.owner_norm or normalize_owner_name(cleaned_owner),
+            dem.care_of_entity,
+            dem.is_truncated,
+            raw_mail or None,
+            normalize_link_address(clean_mail) if clean_mail else None,
+            normalize_mailing_address_coarse(clean_mail) if clean_mail else None,
+            dem.mailing_state,
+            source_text(r.get("land_use")),
+            source_text(r.get("bld_class")),
+            r.get("num_floors"),
+            r.get("units_res"),
+            r.get("units_total"),
+            r.get("year_built"),
+            r.get("assessed_total"),
+            r.get("last_sale_date"),
+            r.get("last_sale_price"),
+            r.get("latitude"),
+            r.get("longitude"),
+            "BOSTON_ASSESSOR_CROSS_ENRICH",
+        ))
+
+    with conn.cursor() as cur:
+        if to_insert:
+            execute_values(
+                cur,
+                """
+                INSERT INTO ma_properties (
+                    jurisdiction, bbl, address, borough, zip_code, owner_name, owner_name_norm,
+                    owner_co_name, owner_is_truncated, mailing_address, mailing_address_norm,
+                    mailing_address_coarse, mailing_state, land_use, bld_class, num_floors,
+                    units_res, units_total, year_built, assessed_total, last_sale_date,
+                    last_sale_price, latitude, longitude, source_system
+                )
+                VALUES %s
+                ON CONFLICT (jurisdiction, bbl) DO NOTHING;
+                """,
+                to_insert,
+                page_size=2000,
+            )
+            summary["ma_parcels_inserted"] = len(to_insert)
+
+        # 3. `boston_bbl_stats` -> `ma_bbl_stats` (Boston ISD code violations)
+        if has_bos_stats and has_ma_stats:
+            cur.execute(
+                """
+                INSERT INTO ma_bbl_stats (
+                    jurisdiction, bbl, violations_total, violations_open,
+                    violations_class_c, violations_class_b, violations_class_a, violations_open_c,
+                    last_violation_date, updated_at
+                )
+                SELECT
+                    'ma',
+                    'M035-' || LPAD(s.bbl, 10, '0'),
+                    COALESCE(s.violations_total, 0),
+                    COALESCE(s.violations_open, 0),
+                    COALESCE(s.violations_class_c, 0),
+                    COALESCE(s.violations_class_b, 0),
+                    COALESCE(s.violations_class_a, 0),
+                    COALESCE(s.violations_open_c, 0),
+                    s.last_violation_date,
+                    NOW()
+                FROM boston_bbl_stats s
+                JOIN ma_properties m ON m.bbl = 'M035-' || LPAD(s.bbl, 10, '0')
+                WHERE COALESCE(s.violations_total, 0) > 0 OR COALESCE(s.violations_open, 0) > 0
+                ON CONFLICT (jurisdiction, bbl) DO UPDATE SET
+                    violations_total = GREATEST(COALESCE(ma_bbl_stats.violations_total, 0), EXCLUDED.violations_total),
+                    violations_open = GREATEST(COALESCE(ma_bbl_stats.violations_open, 0), EXCLUDED.violations_open),
+                    violations_class_c = GREATEST(COALESCE(ma_bbl_stats.violations_class_c, 0), EXCLUDED.violations_class_c),
+                    violations_class_b = GREATEST(COALESCE(ma_bbl_stats.violations_class_b, 0), EXCLUDED.violations_class_b),
+                    violations_class_a = GREATEST(COALESCE(ma_bbl_stats.violations_class_a, 0), EXCLUDED.violations_class_a),
+                    violations_open_c = GREATEST(COALESCE(ma_bbl_stats.violations_open_c, 0), EXCLUDED.violations_open_c),
+                    last_violation_date = COALESCE(EXCLUDED.last_violation_date, ma_bbl_stats.last_violation_date),
+                    updated_at = NOW();
+                """
+            )
+            summary["ma_isd_stats_upserted"] = cur.rowcount
+
+    conn.commit()
+    if any(summary.values()):
+        print(
+            f"  [Boston <-> MA Cross-Enrich] boston coords/units updated={summary['boston_coords_units_updated']:,}, "
+            f"ma missing Boston parcels inserted={summary['ma_parcels_inserted']:,}, "
+            f"ma Boston ISD violation rows synced={summary['ma_isd_stats_upserted']:,}."
+        )
+    return summary
+
+
 def build_and_save_ma_networks(conn) -> Tuple[int, int]:
     """Run OpenCorporates 5-tier deterministic linking (if OC data loaded) and guarded
     Union-Find + corporate-principal network clustering over `ma_properties`."""
+    cross_enrich_boston_and_ma(conn)
     oc_stats = link_jurisdiction_parcels_to_oc(conn, "ma", "MA", col_max_len=40)
     if oc_stats["evaluated"]:
         print(f"  OpenCorporates linker evaluated {oc_stats['evaluated']:,} MA business parcels -> {oc_stats['matched']:,} matched.")
 
     registrar_substrings = load_registrar_address_substrings(conn)
-    with conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute(
+    properties: List[Dict[str, Any]] = []
+    with conn.cursor(name="ma_props_scan", cursor_factory=RealDictCursor) as scan_cur:
+        scan_cur.itersize = 50000
+        scan_cur.execute(
             """
             SELECT bbl, address, borough, zip_code, owner_name, owner_name_norm,
                    mailing_address, mailing_address_norm, owner_email, owner_email_norm,
@@ -392,16 +568,20 @@ def build_and_save_ma_networks(conn) -> Tuple[int, int]:
             WHERE bbl IS NOT NULL
             """
         )
-        properties = [dict(r) for r in cur.fetchall()]
+        for r in scan_cur:
+            properties.append(dict(r))
 
     if not properties:
         return 0, 0
 
-    network_groups = run_union_find_clustering(properties, "ma", registrar_substrings=registrar_substrings)
+    n_properties = len(properties)
+    n_municipalities = len({p.get("borough") for p in properties if p.get("borough")})
 
-    # Second-stage OpenCorporates corporate/branch/beneficial-principal untangling
-    # (active immediately whenever `oc_companies` / `oc_officers` are populated on Nov. 17)
-    from api.oc_linker import cluster_with_oc_and_series
+    from api.oc_linker import cluster_with_oc_and_series, load_oc_registered_agent_addresses
+    ra_addrs = load_oc_registered_agent_addresses(conn)
+    network_groups = run_union_find_clustering(
+        properties, "ma", registrar_substrings=registrar_substrings, registered_agent_addrs=ra_addrs
+    )
     oc_keys = list({
         (p["oc_jurisdiction_code"], p["oc_company_number"])
         for p in properties
@@ -416,114 +596,128 @@ def build_and_save_ma_networks(conn) -> Tuple[int, int]:
         is_public_fn=is_public_entity,
         generic_owner_names=GENERIC_OWNER_NAMES,
     )
+    del properties
+    gc.collect()
     if oc_merges:
         print(f"  [MA] Corporate registry & series untangling merged {oc_merges:,} multi-entity links.")
 
-    db_networks = []
-    for root_bbl, group in network_groups.items():
-        dedup = {p["bbl"]: p for p in group if p.get("bbl")}
-        group = list(dedup.values())
-        if not group:
-            continue
-
-        owner_counts: Dict[str, int] = {}
-        for p in group:
-            owner_counts[p["owner_name"]] = owner_counts.get(p["owner_name"], 0) + 1
-        display_name = max(owner_counts, key=owner_counts.get)
-
-        human_counts: Dict[str, int] = {
-            nm: cnt for nm, cnt in owner_counts.items() if looks_like_person_owner(nm)
-        }
-        oc_company_ids = set()
-        oc_holding_entities = set()
-        for p in group:
-            oj, on = p.get("oc_jurisdiction_code"), p.get("oc_company_number")
-            if oj and on:
-                oc_company_ids.add(f"{oj}/{on}")
-                info = oc_resolved.get((oj, on), {})
-                for h in info.get("humans", ()):
-                    human_counts[h] = human_counts.get(h, 0) + 1
-                oc_holding_entities.update(info.get("holding_entities", ()))
-
-        entity_counts = {
-            nm: cnt for nm, cnt in owner_counts.items() if not looks_like_person_owner(nm)
-        }
-        source_humans = [
-            nm for nm, _ in sorted(human_counts.items(), key=lambda kv: (-kv[1], kv[0]))
-        ]
-        primary_human = source_humans[0] if source_humans else None
-
-        network_key = f"network_ma_{root_bbl.lower().replace(' ', '_')}"
-        anchor_type = (
-            "person"
-            if not any(
-                w in display_name.upper()
-                for w in ("LLC", "INC", "CORP", "GROUP", "PARTNERS", "HOLDINGS", "ASSOCIATES", "TRUST", "LP", "REALTY")
-            )
-            else "corp"
+    insert_sql = """
+        INSERT INTO ma_networks (
+            jurisdiction, network_key, anchor_type, display_name, member_names,
+            member_addresses, registration_ids, bbl_list, building_count, unit_count,
+            borough_summary, connection_signals, oc_company_ids
         )
-        member_names = sorted({p["owner_name"] for p in group if p.get("owner_name")} | oc_holding_entities)
-        member_addrs = sorted({p["mailing_address"] for p in group if p.get("mailing_address")})
-        member_addr_norms = sorted({p["mailing_address_norm"] for p in group if p.get("mailing_address_norm")})
-        bbl_list = [p["bbl"] for p in group]
-        borough_summary: Dict[str, int] = {}
-        total_units = 0
-        for p in group:
-            bname = p.get("borough") or "MASSACHUSETTS"
-            borough_summary[bname] = borough_summary.get(bname, 0) + 1
-            total_units += int(float(p.get("units_res") or 0))
-
-        provenance = ["MASSGIS_L3_ASSESSORS_PARCELS"]
-        if oc_company_ids:
-            provenance.append("OPENCORPORATES_BULK_REGISTRY")
-        connection_signals = {
-            "member_name_count": len(member_names),
-            "member_address_count": len(member_addrs),
-            "member_address_norm_count": len(member_addr_norms),
-            "has_mailing_address_links": bool(member_addr_norms),
-            "oc_matched_companies": sorted(oc_company_ids)[:25],
-            "source_human_names": source_humans[:25],
-            "primary_human_name": primary_human,
-            "primary_entity_name": max(entity_counts, key=entity_counts.get) if entity_counts else None,
-            "principal_status": "source_listed_person" if primary_human else "unresolved_entity",
-            "provenance": provenance,
-            "link_confidence": 0.99 if oc_company_ids else (1.0 if len(member_names) == 1 else 0.88),
-            "data_transparency_note": (
-                "Assembled strictly from official MassGIS Level 3 municipal tax-assessor parcels "
-                "and verified corporate registry links where present. No values inferred or fabricated."
-            ),
-        }
-        db_networks.append((
-            "ma",
-            network_key,
-            anchor_type,
-            display_name,
-            member_names,
-            member_addrs,
-            [],
-            bbl_list,
-            len(bbl_list),
-            total_units,
-            json.dumps(borough_summary),
-            json.dumps(connection_signals),
-            sorted(oc_company_ids) if oc_company_ids else None,
-        ))
-
+        VALUES %s
+        ON CONFLICT (jurisdiction, network_key) DO NOTHING;
+    """
+    n_networks = 0
+    batch: List[tuple] = []
     with conn.cursor() as cur:
         cur.execute("TRUNCATE TABLE ma_networks;")
-        execute_values(
-            cur,
-            """
-            INSERT INTO ma_networks (
-                jurisdiction, network_key, anchor_type, display_name, member_names,
-                member_addresses, registration_ids, bbl_list, building_count, unit_count,
-                borough_summary, connection_signals, oc_company_ids
+        while network_groups:
+            root_bbl, group = network_groups.popitem()
+            dedup = {p["bbl"]: p for p in group if p.get("bbl")}
+            group = list(dedup.values())
+            if not group:
+                continue
+
+            owner_counts: Dict[str, int] = {}
+            for p in group:
+                owner_counts[p["owner_name"]] = owner_counts.get(p["owner_name"], 0) + 1
+            display_name = max(owner_counts, key=owner_counts.get)
+
+            human_counts: Dict[str, int] = {
+                nm: cnt for nm, cnt in owner_counts.items() if looks_like_person_owner(nm)
+            }
+            oc_company_ids = set()
+            oc_holding_entities = set()
+            oc_raw_hq_addrs = set()
+            for p in group:
+                oj, on = p.get("oc_jurisdiction_code"), p.get("oc_company_number")
+                if oj and on:
+                    oc_company_ids.add(f"{oj}/{on}")
+                    info = oc_resolved.get((oj, on), {})
+                    for h in info.get("humans", ()):
+                        if looks_like_person_owner(h):
+                            human_counts[h] = human_counts.get(h, 0) + 1
+                    oc_holding_entities.update(info.get("holding_entities", ()))
+                    oc_raw_hq_addrs.update(info.get("raw_hq_addresses", ()))
+
+            entity_counts = {
+                nm: cnt for nm, cnt in owner_counts.items() if not looks_like_person_owner(nm)
+            }
+            source_humans = [
+                nm for nm, _ in sorted(human_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+            ]
+            primary_human = source_humans[0] if source_humans else None
+
+            safe_root = re.sub(r"[^a-z0-9_.-]", "_", root_bbl.lower())
+            network_key = f"network_ma_{safe_root}"
+            anchor_type = (
+                "person"
+                if not any(
+                    w in display_name.upper()
+                    for w in ("LLC", "INC", "CORP", "GROUP", "PARTNERS", "HOLDINGS", "ASSOCIATES", "TRUST", "LP", "REALTY")
+                )
+                else "corp"
             )
-            VALUES %s
-            ON CONFLICT (jurisdiction, network_key) DO NOTHING;
-            """,
-            db_networks,
-            page_size=2000,
+            member_names = sorted({p["owner_name"] for p in group if p.get("owner_name")} | oc_holding_entities)
+            member_addrs = sorted({p["mailing_address"] for p in group if p.get("mailing_address")} | oc_raw_hq_addrs)
+            member_addr_norms = sorted({p["mailing_address_norm"] for p in group if p.get("mailing_address_norm")})
+            bbl_list = [p["bbl"] for p in group]
+            borough_summary: Dict[str, int] = {}
+            total_units = 0
+            for p in group:
+                bname = p.get("borough") or "MASSACHUSETTS"
+                borough_summary[bname] = borough_summary.get(bname, 0) + 1
+                total_units += int(float(p.get("units_res") or 0))
+
+            provenance = ["MASSGIS_L3_ASSESSORS_PARCELS"]
+            if oc_company_ids:
+                provenance.append("OPENCORPORATES_BULK_REGISTRY")
+            connection_signals = {
+                "member_name_count": len(member_names),
+                "member_address_count": len(member_addrs),
+                "member_address_norm_count": len(member_addr_norms),
+                "has_mailing_address_links": bool(member_addr_norms),
+                "oc_matched_companies": sorted(oc_company_ids)[:25],
+                "source_human_names": source_humans[:25],
+                "primary_human_name": primary_human,
+                "primary_entity_name": max(entity_counts, key=entity_counts.get) if entity_counts else None,
+                "principal_status": "source_listed_person" if primary_human else "unresolved_entity",
+                "provenance": provenance,
+                "link_confidence": 0.99 if oc_company_ids else (1.0 if len(member_names) == 1 else 0.88),
+                "data_transparency_note": (
+                    "Assembled strictly from official MassGIS Level 3 municipal tax-assessor parcels, "
+                    "Boston municipal assessment/ISD enrichments, and verified corporate registry links where present. "
+                    "No values inferred or fabricated."
+                ),
+            }
+            batch.append((
+                "ma",
+                network_key,
+                anchor_type,
+                display_name,
+                member_names,
+                member_addrs,
+                [],
+                bbl_list,
+                len(bbl_list),
+                total_units,
+                json.dumps(borough_summary),
+                json.dumps(connection_signals),
+                sorted(oc_company_ids) if oc_company_ids else None,
+            ))
+            n_networks += 1
+            if len(batch) >= 25000:
+                execute_values(cur, insert_sql, batch, page_size=2500)
+                batch.clear()
+
+        if batch:
+            execute_values(cur, insert_sql, batch, page_size=2500)
+            batch.clear()
+        cur.execute(
+            "DELETE FROM kv_cache WHERE key IN ('completeness_matrix', 'city_stats:v1:ma') OR key LIKE 'city_top_nets:v1:ma:%'"
         )
         cur.execute(
             """
@@ -539,16 +733,18 @@ def build_and_save_ma_networks(conn) -> Tuple[int, int]:
             """,
             (
                 json.dumps({
-                    "properties_count": len(properties),
-                    "networks_count": len(db_networks),
-                    "municipalities_loaded": len({p.get("borough") for p in properties if p.get("borough")}),
+                    "properties_count": n_properties,
+                    "networks_count": n_networks,
+                    "municipalities_loaded": n_municipalities,
                     "oc_matched_parcels": oc_stats.get("matched", 0),
                 }),
             ),
         )
         cur.execute("DELETE FROM kv_cache WHERE key = 'completeness_matrix' OR key LIKE '%ma%'")
     conn.commit()
-    return len(properties), len(db_networks)
+    del oc_resolved
+    gc.collect()
+    return n_properties, n_networks
 
 
 def ingest_massachusetts(

@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback, useId } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Building, Building2, Users, MapPin, ChevronRight, ChevronDown, Search, X,
-  ArrowLeft, ArrowUpRight, ExternalLink, Home, TrendingUp, Loader2,
+  ArrowLeft, ArrowUp, ArrowDown, ArrowUpRight, ExternalLink, Home, TrendingUp, Loader2,
   Info, Scale, Gavel, TriangleAlert, GitMerge,
   Hash, Calendar, DollarSign, Layers, ArrowUpDown, Filter, Map as MapIcon
 } from 'lucide-react';
@@ -76,6 +76,23 @@ const getArkansasAssessorPortal = (p) => {
 };
 
 const fmt = (n) => n != null ? Number(n).toLocaleString() : '—';
+const fmtCompact = (n) => {
+  if (n == null) return '—';
+  const num = Number(n);
+  if (!Number.isFinite(num)) return '—';
+  const abs = Math.abs(num);
+  if (abs >= 1_000_000) {
+    return `${(num / 1_000_000).toFixed(abs >= 100_000_000 ? 0 : 1).replace(/\.0$/, '')}M`;
+  }
+  if (abs >= 1_000) {
+    const kVal = num / 1_000;
+    if (Math.round(kVal * 10) >= 10_000) {
+      return `${(num / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
+    }
+    return `${kVal.toFixed(abs >= 100_000 ? 0 : 1).replace(/\.0$/, '')}K`;
+  }
+  return num.toLocaleString();
+};
 const fmtMoney = (n) => n ? `$${Number(n).toLocaleString(undefined, { maximumFractionDigits: 0 })}` : '—';
 const fmtDateShort = (value) => {
   if (!value) return null;
@@ -283,7 +300,7 @@ const CITY_CONFIG = {
     recordLabel: 'buildings',
     boroughLabel: 'Borough',
     dataSourceDesc: 'Data sourced from HPD Multiple Dwelling Registrations, NY DOS Active Corporations (n9v6-gdp6), MapPLUTO, and the National Housing Preservation Database (residential lots only). Ownership networks are clustered from shared officer/CEO names and non-registrar addresses.',
-    quickSearches: ['Rudin', 'Chestnut Holdings', 'TF Cornerstone', 'Williamsburg', 'BRONX LLC'],
+    quickSearches: ['Chestnut Holdings', 'Rudin', 'Glen Brown', 'Joseph Zitolo', 'Gary Grinberg'],
     defaultSearchQuery: 'management',
     evictionNote: 'NYC evictions are DOI marshal-executed (2017+), whereas CT displays court filings.',
     codeRecordLabel: 'Open HPD Records',
@@ -346,9 +363,9 @@ const CITY_CONFIG = {
     reliableUnits: false,
     recordLabel: 'parcels',
     boroughLabel: 'Ward',
-    dataSourceDesc: 'Data sourced from D.C. GIS Computer Assisted Mass Appraisal records and DLCP Basic Business Rental Housing Licenses. Ownership networks are clustered from source owner names, licensed rental owners, and non-registrar mailing addresses.',
-    coverageNote: 'DLCP rental housing licenses identify owners behind licensed rental properties; corporate-principal filings for unlicensed LLCs are not bulk-loaded yet.',
-    quickSearches: ['Daro', 'Bernstein', 'WC Smith', 'Columbia Heights', 'APARTMENTS LLC'],
+    dataSourceDesc: 'Data sourced from D.C. GIS Computer Assisted Mass Appraisal records, DLCP Basic Business Rental Housing Licenses, and OpenCorporates (opencorporates.com) D.C. & foreign-parent corporate filings.',
+    coverageNote: 'Networks link D.C. CAMA deed owners, active DLCP rental license owners, and multi-hop OpenCorporates corporate/officer filings; passive beneficial owners not listed in public filings remain unresolved.',
+    quickSearches: ['WC Smith', 'Daro Realty', 'Parklands Community', 'Skyland', 'Bernstein'],
     defaultSearchQuery: 'management',
     evictionNote: 'Code cases & complaints are populated from DOB enforcement records. Ownership networks are clustered from Square-Suffix-Lot assessment registers.',
     officialRecords: [
@@ -405,7 +422,7 @@ const CITY_CONFIG = {
     boroughLabel: 'Ward',
     dataSourceDesc: 'Data sourced from Baltimore City GIS ownership records and DHCD rental registrations & multi-family licenses. Ownership networks are clustered from source owner names and mailing addresses.',
     coverageNote: 'Human-principal names are not consistently available in the city ownership feed; Maryland business records should be checked for resident agents, officers, and filing history behind entity owners.',
-    quickSearches: ['Westminster', 'Kushner', 'Chase Street', 'Broadway', 'PROPERTIES LLC'],
+    quickSearches: ['Baltimore SFR', 'Baltimore Excel', 'Diversified Residential', 'Westminster', 'Kushner'],
     defaultSearchQuery: 'properties',
     evictionNote: 'Court and code-enforcement records appear only where loaded.',
     officialRecords: [
@@ -443,7 +460,7 @@ const CITY_CONFIG = {
   boston: {
     name: 'Boston',
     title: 'Boston Landlord Networks',
-    subTitle: 'Assessor data',
+    subTitle: 'Boston assessments, MassGIS coordinates/units & ISD code violations',
     beta: true,
     idLabel: 'Parcel ID',
     idDesc: '10-digit assessor parcel identifier',
@@ -459,9 +476,9 @@ const CITY_CONFIG = {
     reliableUnits: false,
     recordLabel: 'parcels',
     boroughLabel: 'Neighborhood',
-    dataSourceDesc: 'Data sourced from the Analyze Boston assessing database. Ownership networks are clustered from source owner names and mailing addresses.',
-    coverageNote: 'Human-principal names are not consistently available in the assessor feed; Massachusetts corporate records should be checked behind LLC and trust owners. Residential-unit counts are omitted because the assessor field is populated for only about 6% of loaded parcels.',
-    quickSearches: ['Tremont', 'Dorchester', 'Boylston', 'Brighton', 'PROPERTIES LLC'],
+    dataSourceDesc: 'Data sourced from Analyze Boston Property Assessments, cross-enriched 1:1 with MassGIS Level 3 parcel coordinates & unit counts, Boston ISD code violations, and OpenCorporates Massachusetts corporate/LLC filings.',
+    coverageNote: 'Neighborhood-level Boston view (Dorchester, Roxbury, Allston, etc.) including charitable Community Land Trusts and ISD code violations. Switch to Massachusetts for 351-town statewide cross-municipality portfolios.',
+    quickSearches: ['Dudley Neighbors', 'Alp Kantar', 'Seaport Realty', 'Tanya Hahnel', 'Marketplace Lofts'],
     defaultSearchQuery: 'properties',
     evictionNote: 'Court and code-enforcement records appear only where loaded.',
     officialRecords: [
@@ -523,7 +540,7 @@ const CITY_CONFIG = {
     boroughLabel: 'Ward',
     dataSourceDesc: 'Data sourced from Detroit City GIS, assessment, rental registration, compliance, and blight records. Ownership networks are clustered from taxpayer names and mailing addresses.',
     coverageNote: 'Human-principal names are not consistently available in this source, so network totals should be treated as under-counts.',
-    quickSearches: ['Woodward', 'Grand River', 'Jefferson', 'Detroit Land Bank', 'PROPERTIES LLC'],
+    quickSearches: ['Hantz Woodlands', 'Matthew Tatarian', 'Indumich Realty', 'Crown Enterprises', 'William Hester'],
     defaultSearchQuery: 'properties',
     evictionNote: 'Blight tickets are populated from BSEED cases. Subsidy flags show Wayne County National Housing Preservation Database records.',
     officialRecords: [
@@ -598,11 +615,13 @@ const CITY_CONFIG = {
     shortOpenCodeLabel: 'Open L&I',
     openRecordChipLabel: 'open L&I cases',
     reliableUnits: true,
+    unitsStatLabel: 'Licensed Rental Units',
+    unitsTooltip: 'Dwelling units reported on active Philadelphia L&I Rental Licenses (93,580 licensed properties; unlicensed owner-occupied OPA parcels omit unit counts)',
     recordLabel: 'parcels',
     boroughLabel: 'Ward',
     dataSourceDesc: 'Data sourced from Philadelphia Office of Property Assessment (OPA) parcels, L&I active rental licenses, PA Department of State business Governor/Officer filings (xvd7-5r2c), and L&I code violations. Landlord networks are clustered from taxpayer names, PA DOS Governors, guarded off-site mailing addresses, and verified non-agent rental license owner contacts.',
     coverageNote: 'Philadelphia managing agents flagged on L&I rental licenses and commercial PA registered agents are quarantined so third-party intermediaries never merge unrelated portfolios.',
-    quickSearches: ['Broad St', 'Market St', 'Girard Ave', 'REALTY LLC', 'PROPERTIES LLC'],
+    quickSearches: ['Eyal Guigui', 'Philly SFR', 'Eyal Greenberg', 'OKH-PH Owner', 'Marine Club'],
     defaultSearchQuery: 'properties',
     evictionNote: 'L&I code violations (including Unsafe / Imminently Dangerous priority counts) are joined directly by OPA account number.',
     officialRecords: [
@@ -656,8 +675,8 @@ const CITY_CONFIG = {
     recordLabel: 'parcels',
     boroughLabel: 'Community Area',
     dataSourceDesc: 'Data sourced from Cook County Assessor Parcel Addresses, Parcel Universe, and Assessed Values for the City of Chicago. Ownership networks are clustered from taxpayer/assessee names and guarded off-site mailing addresses, bypassing mortgage-escrow servicers.',
-    coverageNote: 'Illinois LLC principal filings will be linked via OpenCorporates corporate registry data to connect multi-LLC portfolios without shared taxpayer mailing addresses.',
-    quickSearches: ['Michigan Ave', 'State St', 'Lincoln Ave', 'Kedzie Ave', 'PROPERTIES LLC'],
+    coverageNote: 'Illinois corporate & LLC officer/manager filings from OpenCorporates (us_il + foreign parent registries) are linked alongside taxpayer names and non-servicer mailing addresses.',
+    quickSearches: ['Gregory Fowler', 'Woodland Park Chicago', 'Terrazio', '401 N. Wabash', 'LG III Wave'],
     defaultSearchQuery: 'properties',
     evictionNote: 'Court and code-enforcement records appear only where loaded.',
     officialRecords: [
@@ -713,7 +732,7 @@ const CITY_CONFIG = {
     boroughLabel: 'City',
     dataSourceDesc: 'Data sourced from Miami-Dade County parcel ownership records, bulk Florida Sunbiz corporate officer & LLC manager filings, and Florida DBPR Ch. 509 active apartment licenses.',
     coverageNote: 'Commercial registered-agent hubs (>=15 entities) and mortgage-escrow servicers are quarantined so multi-LLC landlord networks merge only on genuine officers, managers, DBPR licensees, or private business addresses.',
-    quickSearches: ['Biscayne Blvd', 'Flagler St', 'Collins Ave', 'Mana', 'INVESTMENTS LLC'],
+    quickSearches: ['Lennar Homes', 'FKH SFR', 'Mark Solls', 'DR Horton', 'Mana'],
     defaultSearchQuery: 'properties',
     evictionNote: 'Court and code-enforcement records appear only where loaded.',
     officialRecords: [
@@ -761,12 +780,14 @@ const CITY_CONFIG = {
     shortOpenCodeLabel: 'Open Violations',
     openRecordChipLabel: 'open code violations',
     reliableUnits: true,
+    unitsStatLabel: 'Licensed Rental Units',
+    buildingsStatLabel: 'Licensed Buildings',
     recordLabel: 'rental licenses',
     boroughLabel: 'Neighborhood',
     dataSourceDesc: 'Data sourced from Minneapolis Active Rental Licenses and MapIT GIS property records. Ownership networks are clustered by shared addresses and owner email addresses.',
     statusBadge: 'Rental licenses',
-    coverageNote: 'Loaded data covers active rental licenses, not all parcels. Human-principal names are not bulk-loaded, so portfolios remain split until Minnesota business filings are joined.',
-    quickSearches: ['Hennepin', 'Lake St', 'Nicollet', 'Gurevitch', 'PROPERTIES LLC'],
+    coverageNote: 'Loaded data covers active rental licenses and linked OpenCorporates (us_mn + foreign parent) corporate filings, not non-licensed owner-occupied parcels.',
+    quickSearches: ['Kari Jacobsen', 'Chad Kraft', 'David Hornig', 'Todd Gorelick', 'James Eischens'],
     defaultSearchQuery: 'properties',
     evictionNote: 'Court and code-enforcement records appear only where loaded.',
     officialRecords: [
@@ -820,12 +841,14 @@ const CITY_CONFIG = {
     shortOpenCodeLabel: 'Open BHI',
     openRecordChipLabel: 'open BHI cases',
     reliableUnits: true,
+    unitsStatLabel: 'Registered Units',
+    buildingsStatLabel: 'Registered Buildings',
     recordLabel: 'registered buildings',
     boroughLabel: 'County',
     dataSourceDesc: 'Data sourced from New Jersey DCA Bureau of Housing Inspection active-building OPRA records. It covers BHI-registered active buildings, not every New Jersey parcel.',
     coverageNote: 'NJGIN parcel owner names are redacted under Daniel’s Law. Networks here use BHI registered primary owner names and primary-owner mailing addresses; authorized agents are shown but not used as ownership edges.',
     statusBadge: 'BHI registrations',
-    quickSearches: ['Newark', 'Jersey City', 'Lakewood', 'Urban Renewal', 'PROPERTIES LLC'],
+    quickSearches: ['Raman Khosla', 'Crestwood', 'SDK Village Green', 'North Branch Land', 'Hilton Apts'],
     defaultSearchQuery: 'properties',
     evictionNote: 'Court eviction/case-level data is not open bulk in this setup; this view currently focuses on BHI registration ownership.',
     officialRecords: [
@@ -867,25 +890,25 @@ const CITY_CONFIG = {
   ma: {
     name: 'Massachusetts',
     title: 'Massachusetts Landlord Networks',
-    subTitle: 'MassGIS Level 3 municipal tax-assessor parcels',
+    subTitle: '351-town MassGIS parcels, Boston CLT/ISD enrichments & MA corporate filings',
     beta: true,
     idLabel: 'Parcel ID',
     idDesc: 'MassGIS standardized municipal parcel card identifier',
-    agencyLabel: 'MassGIS / Municipal Assessors',
+    agencyLabel: 'MassGIS / ISD',
     hasViolationClasses: false,
     registrationBadge: 'Tax Parcel',
     filingLabel: 'filing',
     filingsLabel: 'filings',
     filingsStatLabel: 'Filings',
-    codeRecordLabel: 'Open Code Cases',
-    shortOpenCodeLabel: 'Open Cases',
-    openRecordChipLabel: 'open code cases',
-    reliableUnits: true,
+    codeRecordLabel: 'Open ISD / Code Cases',
+    shortOpenCodeLabel: 'Open ISD',
+    openRecordChipLabel: 'open code violations',
+    reliableUnits: false,
     recordLabel: 'parcels',
     boroughLabel: 'Municipality',
-    dataSourceDesc: 'Data sourced from MassGIS Level 3 Property Tax Parcels standardized across all 351 Massachusetts cities and towns, linked to NHPD federal housing subsidies.',
-    coverageNote: 'Covers all 351 Massachusetts municipalities. Massachusetts Secretary of the Commonwealth corporate officer/LLC manager filings are not free open bulk data ($4,800/yr statutory extract), so LLC networks currently cluster via owner names, C/O lines, and guarded non-servicer mailing addresses.',
-    quickSearches: ['Worcester', 'Springfield', 'Cambridge', 'Lowell', 'REALTY TRUST'],
+    dataSourceDesc: 'Data sourced from MassGIS Level 3 Property Tax Parcels across all 351 Massachusetts cities and towns, cross-enriched with Boston Assessing Community Land Trust parcels & Boston ISD code violations, OpenCorporates Massachusetts corporate/LLC filings, and NHPD.',
+    coverageNote: 'Covers all 351 Massachusetts municipalities, including Boston ISD code violations and charitable/CLT housing. Private Massachusetts nominee trust schedules of beneficiaries not filed with the Corporations Division remain undisclosed.',
+    quickSearches: ['Pulte Homes', 'Todd Sheldon', 'Oak Realty', 'Old Colony Realty', 'Obsidian ML'],
     defaultSearchQuery: 'realty',
     evictionNote: 'Massachusetts Housing Court case records appear only where parcel crosswalks are loaded.',
     officialRecords: [
@@ -942,7 +965,7 @@ const CITY_CONFIG = {
     boroughLabel: 'County / City',
     dataSourceDesc: 'Data sourced from FloridaGIO / FDOR Statewide Parcels (non-homestead residential, multifamily, condo, mixed-use, and mobile-home park parcels across all 67 counties), bulk Florida Sunbiz corporate officer & LLC manager filings, DBPR Ch. 509 active apartment licenses, and NHPD.',
     coverageNote: 'Homesteaded owner-occupied single-family residences are excluded to focus on non-homestead residential, rental, and multifamily ownership networks while quarantining commercial registered agents.',
-    quickSearches: ['Orlando', 'Tampa', 'Jacksonville', 'Fort Lauderdale', 'APARTMENTS LLC'],
+    quickSearches: ['Progress Residential', 'Invitation Homes', 'FKH SFR', 'AMH Development', 'Marc Toscano'],
     defaultSearchQuery: 'apartments',
     evictionNote: 'DBPR Ch. 509 active apartment licenses and NHPD federal subsidies are joined where matched.',
     officialRecords: [
@@ -987,8 +1010,8 @@ const CITY_CONFIG = {
   },
   ny: {
     name: 'NY State',
-    title: 'New York State Landlord Networks (33 Counties)',
-    subTitle: 'NYS GIS tax parcels, NY DOS corps & Buffalo enforcement',
+    title: 'New York State Landlord Networks (Outside NYC)',
+    subTitle: '33 non-NYC NYS GIS counties, NY DOS corps & Buffalo enforcement · Switch to NYC for 5 boroughs',
     beta: true,
     idLabel: 'SWIS-SBL',
     idDesc: 'NYS Municipal SWIS & Section-Block-Lot identifier',
@@ -1006,7 +1029,7 @@ const CITY_CONFIG = {
     boroughLabel: 'Municipality (County)',
     dataSourceDesc: 'Data sourced from NYS GIS Clearinghouse Public Tax Parcels across 33 participating non-NYC counties, NY DOS Active Corporations (n9v6-gdp6), OpenData Buffalo rental registrations, code violations & Housing Court dockets, and NHPD.',
     coverageNote: 'Covers the 33 non-NYC counties that authorize public parcel redistribution in NYS GIS (for NYC 5-borough HPD & PLUTO data, switch to NYC). 24 counties withhold public GIS redistribution.',
-    quickSearches: ['Buffalo', 'Albany', 'Syracuse', 'Yonkers', 'PROPERTIES LLC'],
+    quickSearches: ['Sky Harbor Property', 'Whitman Village', 'Bryant Property', 'Limestone Ridge', 'Nikola Grishaj'],
     defaultSearchQuery: 'properties',
     evictionNote: 'Buffalo code violations and Housing Court cases are joined for Erie County / Buffalo parcels.',
     officialRecords: [
@@ -1062,7 +1085,7 @@ const CITY_CONFIG = {
     boroughLabel: 'County / City',
     dataSourceDesc: 'Data sourced from Colorado GeoData Statewide Public Parcels, Colorado Secretary of State Business Entities & True Name disclosures, Denver Active Residential Rental Licenses, and NHPD.',
     coverageNote: 'CO SOS bulk data discloses entity status, registered agents, and True Name filings, while multi-member LLC principal rosters without True Name filings are not published in bulk.',
-    quickSearches: ['Denver', 'Aurora', 'Boulder', 'Colorado Springs', 'HOLDINGS LLC'],
+    quickSearches: ['Toll West', 'LGI Homes', 'Clayton Properties', 'Meritage Homes', 'KB Home'],
     defaultSearchQuery: 'properties',
     evictionNote: 'Denver active residential rental license numbers are linked to matching Denver parcels.',
     officialRecords: [
@@ -1126,7 +1149,7 @@ const CITY_CONFIG = {
     boroughLabel: 'County / Municipality',
     dataSourceDesc: 'Data sourced from NC OneMap Standardized Parcels across all 100 North Carolina counties, linked to NHPD federal housing subsidies.',
     coverageNote: 'Ownership networks are clustered from primary/secondary deed owner names and guarded off-site tax mailing addresses. NC Secretary of State bulk principal rosters require paid licensing.',
-    quickSearches: ['Charlotte', 'Raleigh', 'Durham', 'Greensboro', 'PROPERTIES LLC'],
+    quickSearches: ['AMH NC Properties', 'Progress Residential', 'BSFR', 'FKH SFR', 'Lennar Carolinas'],
     defaultSearchQuery: 'properties',
     evictionNote: 'NHPD federal subsidy records are linked across all 100 North Carolina counties.',
     officialRecords: [
@@ -1176,7 +1199,7 @@ const CITY_CONFIG = {
     boroughLabel: 'Municipality / County',
     dataSourceDesc: 'Data sourced from the Wisconsin Statewide Parcel Map Initiative (V11) residential & commercial/multifamily rolls across all 72 counties, linked to NHPD federal housing subsidies.',
     coverageNote: 'City of Milwaukee redacts owner names in the statewide GIS submission under municipal policy (falling back to tax-bill mailing addresses where populated). Wisconsin DFI corporate principal extracts are not free open bulk data.',
-    quickSearches: ['Madison', 'Green Bay', 'Kenosha', 'Racine', 'PROPERTIES LLC'],
+    quickSearches: ['VB One', 'Ruesch Properties', 'Brenton Wolter', 'Ft. Atkinson LLC', 'Residential Properties'],
     defaultSearchQuery: 'properties',
     evictionNote: 'NHPD federal subsidy records are linked statewide.',
     officialRecords: [
@@ -1226,7 +1249,7 @@ const CITY_CONFIG = {
     boroughLabel: 'Town / City',
     dataSourceDesc: 'Data sourced from Vermont Center for Geographic Information (VCGI) Standardized Parcels joined with municipal Grand List assessment rolls and NHPD federal housing subsidies.',
     coverageNote: 'Networks link primary/secondary Grand List owners and guarded off-site tax mailing addresses. Vermont Secretary of State bulk LLC principal rosters are not free open bulk downloads.',
-    quickSearches: ['Burlington', 'Rutland', 'Brattleboro', 'Montpelier', 'PROPERTIES LLC'],
+    quickSearches: ['William Bissonette', 'Anthony Handy', 'Douglas Spates', 'Barbara Giancola', 'SWB LLC'],
     defaultSearchQuery: 'properties',
     evictionNote: 'NHPD federal subsidy records are linked across Vermont municipalities.',
     officialRecords: [
@@ -1276,7 +1299,7 @@ const CITY_CONFIG = {
     boroughLabel: 'County',
     dataSourceDesc: 'Data sourced from Arkansas GIS Office Statewide Parcels across all 75 counties and OpenCorporates (opencorporates.com) Arkansas Secretary of State corporate & LLC officer filings.',
     coverageNote: 'Networks link deed owners and multi-hop corporate/LLC officers from OpenCorporates (us_ar + foreign parent registries).',
-    quickSearches: ['Little Rock', 'Fayetteville', 'Bentonville', 'Fort Smith', 'PROPERTIES LLC'],
+    quickSearches: ['BSFR III', 'Schuber Mitchell', 'Cherokee Village', 'MWF IV Texarkana', 'Dustin Goins'],
     defaultSearchQuery: 'properties',
     evictionNote: 'Statewide parcel assessments and corporate officer networks are loaded across all 75 counties.',
     officialRecords: [
@@ -1338,7 +1361,7 @@ const CITY_CONFIG = {
     boroughLabel: 'Locality',
     dataSourceDesc: 'Data sourced from Virginia VGIN 2026 Q3 Local Schema Tables, Hampton Roads Regional GIS (HRGeo), Henrico & Prince William CAMA rolls, and OpenCorporates (opencorporates.com) Virginia State Corporation Commission corporate & officer filings.',
     coverageNote: 'Networks link deed owners, corporate HQ addresses, and multi-hop corporate/LLC officers from OpenCorporates (us_va + foreign parent registries). Note: Fairfax, Arlington, and Loudoun withhold bulk owner names.',
-    quickSearches: ['Richmond', 'Virginia Beach', 'Norfolk', 'Henrico', 'Alexandria'],
+    quickSearches: ['DR Horton', 'NVR Inc', 'Stanley Martin', 'RP Homes', 'Eastwood Homes'],
     defaultSearchQuery: 'properties',
     evictionNote: 'Parcel assessments, recorded sales where published, and corporate officer networks are loaded across ~88 Virginia counties and independent cities.',
     officialRecords: [
@@ -2326,103 +2349,272 @@ function PrincipalDrawer({ c, onClose, onSearch, onContact, contacts = [], prope
 // ---------------------------------------------------------------------------
 function StatsBar({ stats, config }) {
   if (!stats) return null;
+  const buildingsLabel = config.buildingsStatLabel || (config.recordLabel === 'parcels' ? 'Tracked Parcels' : 'Tracked Buildings');
+  const buildingsShort = config.recordLabel === 'parcels' ? 'Parcels' : 'Buildings';
+  const unitsLabel = config.unitsStatLabel || 'Residential Units';
+  const unitsShort = config.unitsStatLabel === 'Licensed Rental Units'
+    ? 'Licensed Units'
+    : (config.unitsStatLabel === 'Registered Units' ? 'Reg. Units' : 'Units');
   const items = [
-    { label: 'Ownership Networks', value: fmt(stats.networks), icon: Users, color: 'text-violet-600', tooltip: 'Groups of properties linked by shared owners, LLCs, principals, or mailing addresses' },
-    { label: 'Tracked Buildings',  value: fmt(stats.buildings), icon: Building2, color: 'text-blue-600', tooltip: 'All records in the loaded municipal ownership source' },
-    ...(config.reliableUnits ? [{ label: 'Residential Units', value: fmt(stats.units), icon: Home, color: 'text-emerald-600', tooltip: 'Dwelling units reported by the source' }] : []),
-    { label: 'Large Portfolios', value: fmt(stats.large_networks), icon: TrendingUp, color: 'text-amber-600', tooltip: 'Ownership networks with 10 or more tracked buildings' },
+    {
+      label: 'Ownership Networks',
+      shortLabel: 'Networks',
+      value: fmtCompact(stats.networks),
+      exactValue: fmt(stats.networks),
+      icon: Users,
+      color: 'text-violet-600',
+      tooltip: 'Groups of properties linked by shared owners, LLCs, principals, or mailing addresses',
+    },
+    {
+      label: buildingsLabel,
+      shortLabel: buildingsShort,
+      value: fmtCompact(stats.buildings),
+      exactValue: fmt(stats.buildings),
+      icon: Building2,
+      color: 'text-blue-600',
+      tooltip: 'All records in the loaded ownership source',
+    },
+    ...(config.reliableUnits ? [{
+      label: unitsLabel,
+      shortLabel: unitsShort,
+      value: fmtCompact(stats.units),
+      exactValue: fmt(stats.units),
+      icon: Home,
+      color: 'text-emerald-600',
+      tooltip: config.unitsTooltip || 'Dwelling units reported by the source',
+    }] : []),
+    {
+      label: 'Large Portfolios',
+      shortLabel: 'Portfolios',
+      value: fmtCompact(stats.large_networks),
+      exactValue: fmt(stats.large_networks),
+      icon: TrendingUp,
+      color: 'text-amber-600',
+      tooltip: 'Ownership networks with 10 or more tracked properties',
+    },
   ];
   return (
-    <div className={`grid grid-cols-2 ${items.length === 3 ? 'sm:grid-cols-3' : 'sm:grid-cols-4'} gap-3 mb-6`}>
-      {items.map(({ label, value, icon: Icon, color, tooltip }) => (
-        <div key={label} className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 flex items-center gap-3 cursor-default" title={tooltip}>
-          <div className={`p-2 rounded-xl bg-slate-50 ${color}`}>
-            <Icon size={18} />
+    <div className={`grid ${items.length === 3 ? 'grid-cols-3 gap-2 sm:gap-3' : 'grid-cols-4 gap-1.5 sm:gap-3'} mb-3`}>
+      {items.map(({ label, shortLabel, value, exactValue, icon: Icon, color, tooltip }) => (
+        <article
+          key={label}
+          className="stat-metric-card bg-white rounded-xl sm:rounded-2xl border border-slate-200 shadow-xs cursor-default"
+          title={`${exactValue} ${label} — ${tooltip}`}
+        >
+          <div className="stat-metric-inner">
+            <div className="stat-metric-top">
+              <div className={`stat-metric-icon bg-slate-50 ${color}`}>
+                <Icon className="w-3.5 h-3.5 sm:w-[18px] sm:h-[18px]" aria-hidden="true" />
+              </div>
+              <div className="stat-metric-val-compact text-[clamp(0.95rem,0.8rem+1vw,1.25rem)] font-black text-slate-900 tabular-nums leading-none">
+                {value}
+              </div>
+            </div>
+            <div className="min-w-0">
+              <div className="stat-metric-val-wide text-xl font-black text-slate-900 tabular-nums leading-tight">
+                {value}
+              </div>
+              <div className="text-[9px] sm:text-[10px] font-bold text-slate-400 uppercase tracking-wide leading-tight">
+                <span className="stat-metric-label-full">{label}</span>
+                <span className="stat-metric-label-short">{shortLabel}</span>
+              </div>
+            </div>
           </div>
-          <div>
-            <div className="text-xl font-black text-slate-900">{value}</div>
-            <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide">{label}</div>
-          </div>
-        </div>
+        </article>
       ))}
     </div>
   );
 }
 
-function LimitationsPanel({ limitation }) {
-  const [isExpanded, setIsExpanded] = useState(false);
-  if (!limitation) return null;
+function SourcesAndLimitationsBar({ config, limitation, cityKey }) {
+  const [activePanel, setActivePanel] = useState(null); // 'sources' | 'limitations' | null
+  const baseId = useId();
+  const sourcesBtnId = `${baseId}-sources-btn`;
+  const sourcesPanelId = `${baseId}-sources-panel`;
+  const limitsBtnId = `${baseId}-limits-btn`;
+  const limitsPanelId = `${baseId}-limits-panel`;
+  const containerRef = useRef(null);
+  const sourcesPanelRef = useRef(null);
+  const limitsPanelRef = useRef(null);
+
+  useEffect(() => {
+    setActivePanel(null);
+  }, [cityKey]);
+
+  // Keep hidden="until-found" synchronized on inactive panels so native Find-in-Page
+  // can still match source/limitation copy while both panels stay collapsed by default.
+  useEffect(() => {
+    const sEl = sourcesPanelRef.current;
+    if (sEl) {
+      if (activePanel === 'sources') {
+        sEl.removeAttribute('hidden');
+      } else {
+        sEl.setAttribute('hidden', 'until-found');
+      }
+    }
+    const lEl = limitsPanelRef.current;
+    if (lEl) {
+      if (activePanel === 'limitations') {
+        lEl.removeAttribute('hidden');
+      } else {
+        lEl.setAttribute('hidden', 'until-found');
+      }
+    }
+  }, [activePanel, limitation, cityKey]);
+
+  useEffect(() => {
+    const root = containerRef.current;
+    if (!root) return undefined;
+    const onBeforeMatch = (e) => {
+      const target = e.target;
+      if (sourcesPanelRef.current && sourcesPanelRef.current.contains(target)) {
+        if (limitsPanelRef.current) limitsPanelRef.current.setAttribute('hidden', 'until-found');
+        setActivePanel('sources');
+      } else if (limitsPanelRef.current && limitsPanelRef.current.contains(target)) {
+        if (sourcesPanelRef.current) sourcesPanelRef.current.setAttribute('hidden', 'until-found');
+        setActivePanel('limitations');
+      }
+    };
+    root.addEventListener('beforematch', onBeforeMatch);
+    return () => root.removeEventListener('beforematch', onBeforeMatch);
+  }, []);
+
+  const isSourcesOpen = activePanel === 'sources';
+  const isLimitsOpen = activePanel === 'limitations';
 
   return (
-    <div className="mb-6 rounded-xl border border-slate-100 bg-slate-50/50 px-4 py-2.5 text-xs leading-5 text-slate-500 shadow-none transition-all">
-      <button
-        type="button"
-        onClick={() => setIsExpanded(!isExpanded)}
-        className="flex w-full items-center justify-between font-bold text-slate-400 hover:text-slate-600 transition-colors"
-      >
-        <span className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider">
-          <Info size={13} className="text-slate-400" />
-          Limitations
-        </span>
-        <span className="text-[10px] font-bold underline decoration-dotted underline-offset-2">
-          {isExpanded ? 'Hide Info' : 'Show Details'}
-        </span>
-      </button>
-      
-      {isExpanded && (
-        <div className="mt-3 border-t border-slate-200/60 pt-2.5 space-y-2 text-slate-500">
-          <p>{limitation.gap}</p>
-          <p>
-            To close remaining gaps, {limitation.needed} are needed.
-          </p>
-          {limitation.cost && (
+    <div ref={containerRef} className="mb-4">
+      <div className={`grid ${limitation ? 'grid-cols-2' : 'grid-cols-1'} gap-2`}>
+        <button
+          type="button"
+          id={sourcesBtnId}
+          aria-expanded={isSourcesOpen}
+          aria-controls={sourcesPanelId}
+          onClick={() => setActivePanel(prev => (prev === 'sources' ? null : 'sources'))}
+          className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-2 text-left transition-colors cursor-pointer ${
+            isSourcesOpen
+              ? 'border-violet-300 bg-violet-50/90 text-violet-800 shadow-xs'
+              : 'border-slate-200/80 bg-white/80 text-slate-500 hover:border-slate-300 hover:text-slate-700'
+          }`}
+        >
+          <span className="flex items-center gap-1.5 min-w-0">
+            <ChevronDown
+              size={13}
+              aria-hidden="true"
+              className={`shrink-0 motion-safe:transition-transform duration-200 ${
+                isSourcesOpen ? 'rotate-0 text-violet-600' : '-rotate-90 text-slate-400'
+              }`}
+            />
+            <Layers size={13} aria-hidden="true" className={isSourcesOpen ? 'shrink-0 text-violet-600' : 'shrink-0 text-slate-400'} />
+            <span className="text-[10px] sm:text-[11px] font-black uppercase tracking-wider truncate">
+              Data Sources
+            </span>
+          </span>
+          <span className="hidden sm:inline text-[10px] font-bold underline decoration-dotted underline-offset-2 shrink-0">
+            {isSourcesOpen ? 'Hide' : 'Details'}
+          </span>
+        </button>
+
+        {limitation && (
+          <button
+            type="button"
+            id={limitsBtnId}
+            aria-expanded={isLimitsOpen}
+            aria-controls={limitsPanelId}
+            onClick={() => setActivePanel(prev => (prev === 'limitations' ? null : 'limitations'))}
+            className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-2 text-left transition-colors cursor-pointer ${
+              isLimitsOpen
+                ? 'border-slate-300 bg-slate-100/90 text-slate-800 shadow-xs'
+                : 'border-slate-200/80 bg-white/80 text-slate-500 hover:border-slate-300 hover:text-slate-700'
+            }`}
+          >
+            <span className="flex items-center gap-1.5 min-w-0">
+              <ChevronDown
+                size={13}
+                aria-hidden="true"
+                className={`shrink-0 motion-safe:transition-transform duration-200 ${
+                  isLimitsOpen ? 'rotate-0 text-slate-700' : '-rotate-90 text-slate-400'
+                }`}
+              />
+              <Info size={13} aria-hidden="true" className={isLimitsOpen ? 'shrink-0 text-slate-700' : 'shrink-0 text-slate-400'} />
+              <span className="text-[10px] sm:text-[11px] font-black uppercase tracking-wider truncate">
+                Limitations
+              </span>
+            </span>
+            <span className="hidden sm:inline text-[10px] font-bold underline decoration-dotted underline-offset-2 shrink-0">
+              {isLimitsOpen ? 'Hide' : 'Details'}
+            </span>
+          </button>
+        )}
+      </div>
+
+      {/* Single shared dynamic content slot: borders/padding/backgrounds live on nested wrappers
+          so hidden="until-found" containers leave zero visual footprint when collapsed */}
+      <div ref={sourcesPanelRef} id={sourcesPanelId} role="region" aria-labelledby={sourcesBtnId} hidden={!isSourcesOpen}>
+        <div className="mt-2 flex items-start gap-2 rounded-xl border border-violet-200 bg-violet-50 px-3.5 py-3 text-xs leading-5 text-violet-900">
+          <Info size={14} aria-hidden="true" className="shrink-0 mt-0.5 text-violet-500" />
+          <span>
+            {config.dataSourceDesc} {config.coverageNote ? `${config.coverageNote} ` : ''}Not legal advice.
+          </span>
+        </div>
+      </div>
+
+      {limitation && (
+        <div ref={limitsPanelRef} id={limitsPanelId} role="region" aria-labelledby={limitsBtnId} hidden={!isLimitsOpen}>
+          <div className="mt-2 rounded-xl border border-slate-200/80 bg-white px-3.5 py-3 text-xs leading-5 text-slate-600 space-y-2 shadow-xs">
+            <p>{limitation.gap}</p>
             <p>
-              <span className="font-semibold text-slate-600">Cost &amp; sources: </span>
-              {limitation.cost}{' '}
-              {limitation.sourceUrl && (
-                <a
-                  href={limitation.sourceUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-0.5 font-semibold text-blue-500 hover:underline"
-                >
-                  Official source <ExternalLink size={10} />
-                </a>
-              )}
-              {limitation.ocRegisterUrl && (
-                <>
-                  {' · '}
+              To close remaining gaps, {limitation.needed} are needed.
+            </p>
+            {limitation.cost && (
+              <p>
+                <span className="font-semibold text-slate-700">Cost &amp; sources: </span>
+                {limitation.cost}{' '}
+                {limitation.sourceUrl && (
                   <a
-                    href={limitation.ocRegisterUrl}
+                    href={limitation.sourceUrl}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex items-center gap-0.5 font-semibold text-blue-600 hover:underline"
                   >
-                    from OpenCorporates <ExternalLink size={10} />
+                    Official source <ExternalLink size={10} />
                   </a>
-                  {' · '}
-                  <a
-                    href="https://opendatacommons.org/licenses/odbl/1-0/"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="font-semibold text-blue-600 hover:underline"
-                  >
-                    ODbL v1.0
-                  </a>
-                </>
-              )}
-            </p>
-          )}
-          {limitation.sponsor && (
-            <a
-              href={SPONSOR_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-0.5 font-bold text-rose-500 hover:underline"
-            >
-              Sponsor this data <ExternalLink size={10} />
-            </a>
-          )}
+                )}
+                {limitation.ocRegisterUrl && (
+                  <>
+                    {' · '}
+                    <a
+                      href={limitation.ocRegisterUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-0.5 font-semibold text-blue-600 hover:underline"
+                    >
+                      from OpenCorporates <ExternalLink size={10} />
+                    </a>
+                    {' · '}
+                    <a
+                      href="https://opendatacommons.org/licenses/odbl/1-0/"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-semibold text-blue-600 hover:underline"
+                    >
+                      ODbL v1.0
+                    </a>
+                  </>
+                )}
+              </p>
+            )}
+            {limitation.sponsor && (
+              <a
+                href={SPONSOR_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-0.5 font-bold text-rose-500 hover:underline"
+              >
+                Sponsor this data <ExternalLink size={10} />
+              </a>
+            )}
+          </div>
         </div>
       )}
     </div>
@@ -3177,10 +3369,15 @@ function NetworkTransactionsDialog({ isOpen, onClose, managerName, transactions,
 // ---------------------------------------------------------------------------
 // Network Detail View
 // ---------------------------------------------------------------------------
-function NetworkDetail({ networkKey, onBack, onSearchTrigger, onMapSelected, apiBase, config }) {
+function NetworkDetail({ networkKey, onBack, onSearchTrigger, onMapSelected, onOpenSiblingNetwork, apiBase, config, activeTab: controlledTab, onActiveTabChange, onPropertyCountChange }) {
   const [data, setData]   = useState(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('buildings');
+  const [internalTab, setInternalTab] = useState('buildings');
+  const activeTab = controlledTab ?? internalTab;
+  const setActiveTab = useCallback((nextTab) => {
+    setInternalTab(nextTab);
+    onActiveTabChange?.(nextTab);
+  }, [onActiveTabChange]);
   const [selBuilding, setSelBuilding] = useState(null);
   const [selContact, setSelContact]   = useState(null);
   const [error, setError]             = useState(null);
@@ -3366,9 +3563,18 @@ function NetworkDetail({ networkKey, onBack, onSearchTrigger, onMapSelected, api
     setExpandedGroups(prev => ({ ...prev, [groupKey]: (prev[groupKey] || 50) + 100 }));
   };
   const recordNoun = config.recordLabel || 'buildings';
+  const propertiesCountBadge = hasActiveFilters
+    ? `${fmt(matchedRecordCount)}/${fmt(data?.building_count)}`
+    : fmt(data?.building_count ?? matchedRecordCount);
   const buildingsTabTitle = hasActiveFilters
-    ? `Buildings (${fmt(matchedRecordCount)}/${fmt(data?.building_count)})`
-    : `Buildings (${fmt(data?.building_count ?? matchedRecordCount)})`;
+    ? `Properties (${fmt(matchedRecordCount)}/${fmt(data?.building_count)})`
+    : `Properties (${fmt(data?.building_count ?? matchedRecordCount)})`;
+
+  useEffect(() => {
+    if (data && onPropertyCountChange) {
+      onPropertyCountChange(Number(data.building_count) || matchedRecordCount || 0);
+    }
+  }, [data, matchedRecordCount, onPropertyCountChange]);
 
   const toggleSort = k => { if (sortKey===k) setSortDir(d=>-d); else {setSortKey(k); setSortDir(1);} };
   const toggleViolationsFilter = () => {
@@ -3575,24 +3781,43 @@ function NetworkDetail({ networkKey, onBack, onSearchTrigger, onMapSelected, api
                 Connected ownership record: {formatDisplayName(data.registered_entity_name)}
               </div>
             )}
+            {onOpenSiblingNetwork && Array.isArray(data.sibling_portfolios) && data.sibling_portfolios.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                {data.sibling_portfolios.map((sib) => (
+                  <button
+                    key={`${sib.jurisdiction}:${sib.network_key}`}
+                    type="button"
+                    onClick={() => onOpenSiblingNetwork(sib.jurisdiction, sib.network_key)}
+                    className="inline-flex items-center gap-1 min-h-[28px] px-2.5 py-1 rounded-full bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 text-[10.5px] font-extrabold transition-colors cursor-pointer"
+                    title={`Open linked ${sib.jurisdiction_label} portfolio (${fmt(sib.building_count)} properties)`}
+                  >
+                    <GitMerge size={11} className="shrink-0 text-indigo-600" aria-hidden="true" />
+                    <span>
+                      Also in {sib.jurisdiction_label}: {fmt(sib.building_count)} {sib.building_count === 1 ? 'property' : 'properties'}
+                    </span>
+                    <ArrowUpRight size={11} className="shrink-0 text-indigo-600" aria-hidden="true" />
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 
-        {/* Mobile quick jump bar directly to Buildings or People & Entities */}
+        {/* Mobile quick jump bar directly to Properties or People & Entities */}
         <div className="flex lg:hidden items-center gap-1.5 w-full pt-2 border-t border-slate-100">
           <button
             type="button"
             onClick={() => handleMobilePanelJump('buildings')}
-            className={`flex-1 min-w-0 flex items-center justify-center gap-1.5 rounded-lg border py-2 px-2 text-[10px] font-black uppercase tracking-wide transition-all ${
+            className={`flex-[1.12] min-w-0 flex items-center justify-center gap-1.5 rounded-lg border py-2 px-2.5 text-[10px] font-black uppercase tracking-wide transition-all cursor-pointer ${
               activeTab === 'buildings' || !hasPeopleEntities
-                ? 'border-violet-500 bg-violet-50 text-violet-700 shadow-sm ring-1 ring-violet-500/20'
-                : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                ? 'border-violet-600 bg-violet-600 text-white shadow-sm'
+                : 'border-violet-300 bg-violet-50/70 text-violet-900 hover:bg-violet-100'
             }`}
           >
-            <Building2 size={12} aria-hidden="true" className="shrink-0" />
-            <span className="truncate">Buildings</span>
-            <span className={`rounded-md px-1.5 py-px text-[9px] font-extrabold shrink-0 ${
-              activeTab === 'buildings' || !hasPeopleEntities ? 'bg-violet-100 text-violet-700' : 'bg-slate-100 text-slate-600'
+            <Building2 size={13} aria-hidden="true" className={activeTab === 'buildings' || !hasPeopleEntities ? 'shrink-0 text-white' : 'shrink-0 text-violet-600'} />
+            <span className="truncate">Properties</span>
+            <span className={`rounded-full px-1.5 py-0.5 text-[9.5px] font-black shrink-0 tabular-nums ${
+              activeTab === 'buildings' || !hasPeopleEntities ? 'bg-white/20 text-white' : 'bg-violet-200/80 text-violet-900'
             }`}>
               {matchedRecordCount.toLocaleString()}
             </span>
@@ -3601,16 +3826,16 @@ function NetworkDetail({ networkKey, onBack, onSearchTrigger, onMapSelected, api
             <button
               type="button"
               onClick={() => handleMobilePanelJump('entities')}
-              className={`flex-1 min-w-0 flex items-center justify-center gap-1.5 rounded-lg border py-2 px-2 text-[10px] font-black uppercase tracking-wide transition-all ${
+              className={`flex-1 min-w-0 flex items-center justify-center gap-1.5 rounded-lg border py-2 px-2 text-[10px] font-black uppercase tracking-wide transition-all cursor-pointer ${
                 activeTab === 'entities'
-                  ? 'border-violet-500 bg-violet-50 text-violet-700 shadow-sm ring-1 ring-violet-500/20'
+                  ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
                   : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900'
               }`}
             >
               <Users size={12} aria-hidden="true" className="shrink-0" />
               <span className="truncate">People &amp; Entities</span>
-              <span className={`rounded-md px-1.5 py-px text-[9px] font-extrabold shrink-0 ${
-                activeTab === 'entities' ? 'bg-violet-100 text-violet-700' : 'bg-slate-100 text-slate-600'
+              <span className={`rounded-full px-1.5 py-0.5 text-[9.5px] font-extrabold shrink-0 tabular-nums ${
+                activeTab === 'entities' ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600'
               }`}>
                 {totalPeopleEntities.toLocaleString()}
               </span>
@@ -3692,7 +3917,14 @@ function NetworkDetail({ networkKey, onBack, onSearchTrigger, onMapSelected, api
                   {config.reliableUnits && (
                     <div className="flex flex-col">
                       <span className="text-[10px] font-bold text-slate-400 uppercase leading-none mb-1">Units</span>
-                      <span className="text-2xl font-black text-slate-800 leading-none">{fmt(data.unit_count)}</span>
+                      <span className="text-2xl font-black text-slate-800 leading-none">
+                        {fmt(
+                          data.unit_count ??
+                            (Array.isArray(data.properties)
+                              ? data.properties.reduce((sum, prop) => sum + (Number(prop?.units_res) || 0), 0)
+                              : null)
+                        )}
+                      </span>
                     </div>
                   )}
                   {allTxns.length > 0 && (
@@ -3956,53 +4188,86 @@ function NetworkDetail({ networkKey, onBack, onSearchTrigger, onMapSelected, api
 
       {(() => {
         const mobilePanelTabStrip = hasPeopleEntities ? (
-          <div className="flex lg:hidden border-b border-slate-100">
+          <div role="tablist" aria-label="Network portfolio sections" className="flex lg:hidden items-stretch gap-1.5 rounded-2xl bg-slate-200/80 border border-slate-300/80 p-1.5 shadow-xs">
             <button
               type="button"
+              role="tab"
+              aria-selected={activeTab === 'buildings'}
               onClick={() => setActiveTab('buildings')}
-              className={`flex-1 min-w-0 px-2 py-3 text-[11px] font-bold uppercase tracking-wide transition-colors ${
+              className={`flex-[1.15] min-w-0 min-h-[42px] px-3 py-2 rounded-xl text-xs font-black uppercase tracking-wide flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
                 activeTab === 'buildings'
-                  ? 'bg-violet-50 text-violet-700 border-b-2 border-violet-500'
-                  : 'text-slate-400 hover:text-slate-600'
+                  ? 'bg-violet-600 text-white shadow-md ring-1 ring-violet-700/30'
+                  : 'bg-white text-violet-950 border-2 border-violet-400 shadow-sm hover:bg-violet-50'
               }`}
             >
-              {buildingsTabTitle}
+              <Building2 size={14} aria-hidden="true" className={activeTab === 'buildings' ? 'shrink-0 text-white' : 'shrink-0 text-violet-600'} />
+              <span className="truncate">Properties</span>
+              <span className={`rounded-full px-2 py-0.5 text-[10.5px] font-black shrink-0 tabular-nums ${
+                activeTab === 'buildings' ? 'bg-white/25 text-white' : 'bg-violet-100 text-violet-800'
+              }`}>
+                {propertiesCountBadge}
+              </span>
             </button>
             <button
               type="button"
+              role="tab"
+              aria-selected={activeTab === 'entities'}
               onClick={() => setActiveTab('entities')}
-              className={`flex-1 min-w-0 px-2 py-3 text-[11px] font-bold uppercase tracking-wide transition-colors ${
+              className={`flex-1 min-w-0 min-h-[42px] px-2.5 py-2 rounded-xl text-[11px] font-extrabold uppercase tracking-wide flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
                 activeTab === 'entities'
-                  ? 'bg-violet-50 text-violet-700 border-b-2 border-violet-500'
-                  : 'text-slate-400 hover:text-slate-600'
+                  ? 'bg-slate-900 text-white shadow-md'
+                  : 'bg-white/90 text-slate-700 border border-slate-200/90 hover:bg-white shadow-2xs'
               }`}
             >
-              People &amp; Entities ({fmt(totalPeopleEntities)})
+              <Users size={13} aria-hidden="true" className={activeTab === 'entities' ? 'shrink-0 text-white' : 'shrink-0 text-slate-500'} />
+              <span className="truncate sm:hidden">Entities</span>
+              <span className="truncate hidden sm:inline">People &amp; LLCs</span>
+              <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-black shrink-0 tabular-nums ${
+                activeTab === 'entities' ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-700'
+              }`}>
+                {fmt(totalPeopleEntities)}
+              </span>
             </button>
           </div>
         ) : null;
 
         return (
-          <div id="city-network-panels" className={`grid grid-cols-1 ${hasPeopleEntities ? 'lg:grid-cols-2' : ''} gap-4 items-start scroll-mt-3`}>
-            {hasPeopleEntities && (
-              <div className={`${activeTab === 'entities' ? 'block' : 'hidden'} lg:block min-w-0`}>
-                <PeopleEntitiesSection
-                  model={peopleEntitiesModel}
-                  onContact={c => setSelContact(c)}
-                  onSearch={onSearchTrigger || (() => {})}
-                  config={config}
-                  mobilePanelTabs={mobilePanelTabStrip}
-                />
+          <div id="city-network-panels" className="scroll-mt-3">
+            {mobilePanelTabStrip && (
+              <div className="lg:hidden sticky top-2 z-20 mb-2.5">
+                {mobilePanelTabStrip}
               </div>
             )}
 
-            <div className={`${!hasPeopleEntities || activeTab === 'buildings' ? 'block' : 'hidden'} lg:block min-w-0 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden`}>
-              {mobilePanelTabStrip}
-              <div className={`${hasPeopleEntities ? 'hidden lg:flex' : 'flex'} border-b border-slate-100`}>
-                <div className="flex-1 py-3 px-4 text-center text-xs font-bold uppercase tracking-wide bg-violet-50 text-violet-700 border-b-2 border-violet-500">
-                  {buildingsTabTitle}
+            <div className={`grid grid-cols-1 ${hasPeopleEntities ? 'lg:grid-cols-2' : ''} gap-4 items-start`}>
+              {hasPeopleEntities && (
+                <div className={`${activeTab === 'entities' ? 'block' : 'hidden'} lg:block min-w-0`}>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('buildings')}
+                    className="lg:hidden mb-2.5 w-full flex items-center justify-between gap-2 rounded-xl border border-violet-200 bg-violet-50/90 hover:bg-violet-100 px-3.5 py-2.5 text-left transition-colors cursor-pointer shadow-2xs"
+                  >
+                    <span className="flex items-center gap-2 min-w-0 text-xs font-bold text-violet-950">
+                      <Building2 size={15} className="text-violet-600 shrink-0" aria-hidden="true" />
+                      <span>View all <strong>{fmt(matchedRecordCount)} properties &amp; addresses</strong></span>
+                    </span>
+                    <ChevronRight size={15} className="text-violet-600 shrink-0" aria-hidden="true" />
+                  </button>
+                  <PeopleEntitiesSection
+                    model={peopleEntitiesModel}
+                    onContact={c => setSelContact(c)}
+                    onSearch={onSearchTrigger || (() => {})}
+                    config={config}
+                  />
                 </div>
-              </div>
+              )}
+
+              <div className={`${!hasPeopleEntities || activeTab === 'buildings' ? 'block' : 'hidden'} lg:block min-w-0 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden`}>
+                <div className={`${hasPeopleEntities ? 'hidden lg:flex' : 'flex'} border-b border-slate-100`}>
+                  <div className="flex-1 py-3 px-4 text-center text-xs font-bold uppercase tracking-wide bg-violet-50 text-violet-700 border-b-2 border-violet-500">
+                    {buildingsTabTitle}
+                  </div>
+                </div>
 
               <div className="flex flex-wrap items-center gap-2 px-3 sm:px-4 py-2 bg-slate-50 border-b border-slate-100">
                 <Filter size={12} aria-hidden="true" className="text-slate-400 shrink-0"/>
@@ -4228,6 +4493,7 @@ function NetworkDetail({ networkKey, onBack, onSearchTrigger, onMapSelected, api
                 )}
               </div>
             </div>
+            </div>
           </div>
         );
       })()}
@@ -4238,13 +4504,17 @@ function NetworkDetail({ networkKey, onBack, onSearchTrigger, onMapSelected, api
 // ---------------------------------------------------------------------------
 // Main City Explorer Component
 // ---------------------------------------------------------------------------
-export default function CityExplorer({ city = "nyc", onBack, onMapSelected, initialNetworkKey = null, initialBbl = null, initialQuery = null, onInitialConsumed }) {
+export default function CityExplorer({ city = "nyc", onBack, onMapSelected, onOpenSiblingNetwork = null, initialNetworkKey = null, initialBbl = null, initialQuery = null, onInitialConsumed }) {
   const [stats, setStats]           = useState(null);
   const [selectedNetwork, setSelectedNetwork] = useState(initialNetworkKey || null);
   const [topNetworks, setTopNetworks] = useState([]);
   const [loadingTop, setLoadingTop]   = useState(true);
   const [crossSearch, setCrossSearch] = useState(initialQuery || null);
   const explorerScrollRef             = useRef(null);
+  const [isAtNetworkTop, setIsAtNetworkTop] = useState(true);
+  const [isScrolledPastCityCards, setIsScrolledPastCityCards] = useState(false);
+  const [activeNetworkTab, setActiveNetworkTab] = useState('buildings');
+  const [networkPropertyCount, setNetworkPropertyCount] = useState(null);
 
   const cityKey = city.toLowerCase();
   const baseConfig = CITY_CONFIG[cityKey] || CITY_CONFIG.nyc;
@@ -4252,10 +4522,54 @@ export default function CityExplorer({ city = "nyc", onBack, onMapSelected, init
   const limitation = CITY_LIMITATIONS[cityKey] || null;
   const apiBase = `/api/${cityKey}`;
 
+  const handleExplorerScroll = useCallback(() => {
+    const scroller = explorerScrollRef.current;
+    if (!scroller) return;
+    const st = scroller.scrollTop;
+    setIsAtNetworkTop(st <= 20);
+
+    const panelsEl = document.getElementById('city-network-panels');
+    if (panelsEl) {
+      const scrollerRect = scroller.getBoundingClientRect();
+      const panelsRect = panelsEl.getBoundingClientRect();
+      setIsScrolledPastCityCards(panelsRect.top - scrollerRect.top <= 160);
+    } else {
+      setIsScrolledPastCityCards(false);
+    }
+  }, []);
+
+  const handleCityJumpToProperties = useCallback((e) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    setActiveNetworkTab('buildings');
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        document.getElementById('city-network-panels')?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start',
+        });
+      });
+    });
+  }, []);
+
+  const handleCityScrollToTop = useCallback((e) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    explorerScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+  }, []);
+
   useEffect(() => {
     if (explorerScrollRef.current) {
       explorerScrollRef.current.scrollTop = 0;
     }
+    setIsAtNetworkTop(true);
+    setIsScrolledPastCityCards(false);
+    setActiveNetworkTab('buildings');
+    setNetworkPropertyCount(null);
   }, [selectedNetwork, cityKey]);
 
   useEffect(() => {
@@ -4362,32 +4676,38 @@ export default function CityExplorer({ city = "nyc", onBack, onMapSelected, init
   }
 
   return (
-    <div ref={explorerScrollRef} className="h-full overflow-y-auto overscroll-y-contain bg-slate-50">
+    <div ref={explorerScrollRef} onScroll={handleExplorerScroll} className="h-full overflow-y-auto overscroll-y-contain bg-slate-50">
       <div className={`${selectedNetwork ? 'max-w-[1920px]' : 'max-w-4xl'} mx-auto px-3 sm:px-4 md:px-6 lg:px-8 pt-4 pb-[calc(5.5rem+env(safe-area-inset-bottom,0px))] md:py-6`}>
 
         {/* Header */}
-        <div className={`${selectedNetwork ? 'hidden md:flex' : 'flex'} items-center gap-3 mb-6`}>
+        <div className={`${selectedNetwork ? 'hidden md:flex' : 'flex'} items-start gap-2.5 sm:gap-3 mb-4`}>
           {onBack && (
             <button
+              type="button"
               onClick={selectedNetwork ? () => setSelectedNetwork(null) : onBack}
               aria-label={selectedNetwork ? "Back to city directory" : "Back to all jurisdictions"}
-              className="p-2 rounded-xl hover:bg-white border border-transparent hover:border-slate-200 text-slate-400 hover:text-slate-700 transition-all"
+              className="shrink-0 -ml-1.5 mt-0.5 p-1.5 sm:p-2 rounded-xl hover:bg-white border border-transparent hover:border-slate-200 text-slate-400 hover:text-slate-700 transition-all cursor-pointer"
             >
               <ArrowLeft size={18} aria-hidden="true" />
             </button>
           )}
-          <div>
-            <div className="flex items-center gap-2">
-              <div className="p-1.5 rounded-lg bg-gradient-to-br from-violet-500 to-indigo-600">
-                <Building2 size={16} className="text-white" />
-              </div>
-              <h1 className="text-2xl font-black text-slate-900">{config.title}</h1>
-              {config.beta && <span className="text-[10px] font-black bg-violet-100 text-violet-700 px-2 py-0.5 rounded-full uppercase tracking-wider">Beta</span>}
-              {config.statusBadge && <span className="text-[10px] font-black bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full uppercase tracking-wider">{config.statusBadge}</span>}
+          <div className="hidden sm:flex shrink-0 mt-1 p-1.5 rounded-lg bg-gradient-to-br from-violet-500 to-indigo-600">
+            <Building2 size={16} className="text-white" aria-hidden="true" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <h1 className="text-[clamp(1.15rem,0.95rem+1.1vw,1.5rem)] font-black tracking-tight leading-snug text-slate-900 [text-wrap:balance]">
+              {config.title}
+            </h1>
+            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs sm:text-sm text-slate-500">
+              {config.statusBadge && (
+                <span className="shrink-0 whitespace-nowrap rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-emerald-700">
+                  {config.statusBadge}
+                </span>
+              )}
+              <span>
+                {config.subTitle} · {stats ? `${fmt(stats.buildings)} ${config.recordLabel || 'records'} tracked` : 'Loading…'}
+              </span>
             </div>
-            <p className="text-sm text-slate-500 mt-0.5">
-              {config.subTitle} · {stats ? `${fmt(stats.buildings)} ${config.recordLabel || 'records'} tracked` : 'Loading…'}
-            </p>
           </div>
         </div>
 
@@ -4399,8 +4719,12 @@ export default function CityExplorer({ city = "nyc", onBack, onMapSelected, init
               onBack={() => setSelectedNetwork(null)}
               onSearchTrigger={handleSearchTrigger}
               onMapSelected={onMapSelected}
+              onOpenSiblingNetwork={onOpenSiblingNetwork}
               apiBase={apiBase}
               config={config}
+              activeTab={activeNetworkTab}
+              onActiveTabChange={setActiveNetworkTab}
+              onPropertyCountChange={setNetworkPropertyCount}
             />
           ) : (
             <motion.div key="home" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
@@ -4408,7 +4732,7 @@ export default function CityExplorer({ city = "nyc", onBack, onMapSelected, init
               <StatsBar stats={stats} config={config} />
 
               {/* Search */}
-              <div className="mb-6">
+              <div className="mb-3">
                 <CitySearchBox
                   onSelect={handleSelect}
                   externalQuery={crossSearch}
@@ -4418,23 +4742,16 @@ export default function CityExplorer({ city = "nyc", onBack, onMapSelected, init
                 />
               </div>
 
-              {/* Data source note */}
+              {/* Data source & limitations compact side-by-side disclosure */}
               {stats?.is_refreshing && (
-                <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 mb-4 text-xs text-amber-900">
+                <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 mb-3 text-xs text-amber-900">
                   <Loader2 size={14} className="shrink-0 mt-0.5 text-amber-600 animate-spin" />
                   <span>
                     {config.name} network data is refreshing. Search remains available, but network counts, code totals, and saved network links may shift while the cache is recalculated.
                   </span>
                 </div>
               )}
-              <div className="flex items-start gap-2 bg-violet-50 border border-violet-200 rounded-xl px-4 py-3 mb-6 text-xs text-violet-800">
-                <Info size={14} className="shrink-0 mt-0.5 text-violet-500" />
-                <span>
-                  {config.dataSourceDesc} {config.coverageNote ? `${config.coverageNote} ` : ''}Not legal advice.
-                </span>
-              </div>
-
-              <LimitationsPanel limitation={limitation} />
+              <SourcesAndLimitationsBar config={config} limitation={limitation} cityKey={cityKey} />
 
               {cityKey === 'nyc' && stats?.code_data?.open_violations > 0 && (
                 <div className="mb-6 rounded-xl border border-red-200 bg-red-50 px-4 py-4 shadow-sm">
@@ -4577,6 +4894,45 @@ export default function CityExplorer({ city = "nyc", onBack, onMapSelected, init
             </motion.div>
           )}
         </AnimatePresence>
+
+        {selectedNetwork && typeof document !== 'undefined' && createPortal(
+          <AnimatePresence mode="wait">
+            {isScrolledPastCityCards ? (
+              <motion.button
+                key="city-jump-to-cards"
+                type="button"
+                initial={{ opacity: 0, scale: 0.85, y: 15 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.85, y: 15 }}
+                transition={{ duration: 0.18 }}
+                onClick={handleCityScrollToTop}
+                className="fixed bottom-[calc(4.75rem+env(safe-area-inset-bottom,0px))] md:bottom-6 right-4 md:right-6 z-40 bg-slate-900/95 hover:bg-violet-600 text-white shadow-2xl backdrop-blur-md px-4 py-2.5 rounded-full text-xs font-black uppercase tracking-wider flex lg:hidden items-center gap-1.5 transition-all border border-white/15 cursor-pointer active:scale-95"
+                title="Jump back to summary cards at top"
+              >
+                <ArrowUp size={14} className="text-violet-400 shrink-0" aria-hidden="true" />
+                <span>Jump to Cards</span>
+              </motion.button>
+            ) : isAtNetworkTop ? (
+              <motion.button
+                key="city-jump-to-properties"
+                type="button"
+                initial={{ opacity: 0, scale: 0.85, y: 15 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.85, y: 15 }}
+                transition={{ duration: 0.18 }}
+                onClick={handleCityJumpToProperties}
+                className="fixed bottom-[calc(4.75rem+env(safe-area-inset-bottom,0px))] md:bottom-6 right-4 md:right-6 z-40 bg-violet-600 hover:bg-violet-700 text-white shadow-2xl px-4 py-2.5 rounded-full text-xs font-black uppercase tracking-wide flex lg:hidden items-center gap-1.5 transition-all ring-2 ring-white/80 cursor-pointer active:scale-95"
+                title="Open properties tab and scroll to property list"
+              >
+                <ArrowDown size={14} className="text-violet-200 shrink-0" aria-hidden="true" />
+                <span>
+                  {networkPropertyCount > 0 ? `View ${fmt(networkPropertyCount)} Properties` : 'View Properties'}
+                </span>
+              </motion.button>
+            ) : null}
+          </AnimatePresence>,
+          document.body
+        )}
       </div>
     </div>
   );

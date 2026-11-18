@@ -135,7 +135,7 @@ export default function UnitDetailModal({ property, group, onClose, onUpdate }) 
                                 <Info className="w-5 h-5 text-blue-600" />
                                 <h3 className="text-sm font-black text-slate-800 uppercase tracking-widest">Public Record Info</h3>
                             </div>
-                            <property_public_details property={property} />
+                            <PropertyPublicDetails property={property} />
                         </div>
 
                         {/* Right Column: User Data & Org Info */}

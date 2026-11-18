@@ -334,6 +334,66 @@ class TestOCMultiHopResolutionIntegration(unittest.TestCase):
             conn.rollback()
             conn.close()
 
+    def test_nonprofit_volunteer_board_and_foreign_branch_registered_office_isolation(self):
+        import os
+        import psycopg2
+        from api.oc_linker import resolve_oc_company_principals
+
+        db_url = os.environ.get("DATABASE_URL", "postgresql://user:password@127.0.0.1:5432/ctdata")
+        try:
+            conn = psycopg2.connect(db_url, connect_timeout=3)
+        except Exception:
+            conn = psycopg2.connect("postgresql://user:password@ctdata_db:5432/ctdata", connect_timeout=3)
+
+        try:
+            with conn.cursor() as cur:
+                # 1) Nonprofit with >2 volunteer trustees must NOT export board humans to bridge private corps,
+                #    while preserving its own domestic HQ address.
+                # 2) Out-of-state foreign branch (`us_pa`) must NOT export its PA statutory `registered_address_raw`
+                #    as a corporate HQ address, while preserving its `mailing_address_raw` HQ.
+                cur.execute(
+                    """
+                    INSERT INTO oc_companies (
+                        jurisdiction_code, company_number, name, name_norm, is_active, is_nonprofit,
+                        registered_address_raw, mailing_address_raw,
+                        home_jurisdiction_code, home_company_number
+                    ) VALUES
+                        ('us_ma', 'TEST-NP-BOARD', 'ROXBURY HOPE CHARITY INC', 'ROXBURY HOPE CHARITY INCORPORATED',
+                         TRUE, TRUE, '550 DUDLEY ST, ROXBURY, MA, 02119', '550 DUDLEY ST, ROXBURY, MA, 02119', NULL, NULL),
+                        ('us_ma', 'TEST-CORP-HOME', 'ACME MEDTECH CORP', 'ACME MEDTECH CORPORATION',
+                         TRUE, FALSE, '269 MILL RD, CHELMSFORD, MA, 01824', '269 MILL RD, CHELMSFORD, MA, 01824', NULL, NULL),
+                        ('us_pa', 'TEST-PA-FOREIGN', 'ACME MEDTECH CORP', 'ACME MEDTECH CORPORATION',
+                         TRUE, FALSE, '5235 N FRONT ST, HARRISBURG, PA, 17110', '269 MILL RD, CHELMSFORD, MA, 01824', 'us_ma', 'TEST-CORP-HOME')
+                    """
+                )
+                cur.execute(
+                    """
+                    INSERT INTO oc_officers (
+                        jurisdiction_code, company_number, name, name_norm,
+                        position, role_class, is_corporate_officer, is_current
+                    ) VALUES
+                        ('us_ma', 'TEST-NP-BOARD', 'ALICE TRUSTEE', 'ALICE TRUSTEE', 'Director', 'beneficial_principal', FALSE, TRUE),
+                        ('us_ma', 'TEST-NP-BOARD', 'BOB TRUSTEE', 'BOB TRUSTEE', 'Director', 'beneficial_principal', FALSE, TRUE),
+                        ('us_ma', 'TEST-NP-BOARD', 'CAROL TRUSTEE', 'CAROL TRUSTEE', 'Director', 'beneficial_principal', FALSE, TRUE),
+                        ('us_ma', 'TEST-NP-BOARD', 'DAVE TRUSTEE', 'DAVE TRUSTEE', 'Director', 'beneficial_principal', FALSE, TRUE)
+                    """
+                )
+            resolved = resolve_oc_company_principals(
+                conn,
+                [("us_ma", "TEST-NP-BOARD"), ("us_ma", "TEST-CORP-HOME")],
+                max_hops=3,
+            )
+            np_info = resolved[("us_ma", "TEST-NP-BOARD")]
+            self.assertEqual(np_info["humans"], [])
+            self.assertIn("550 DUDLEY STREET ROXBURY MA", np_info["hq_addresses"])
+
+            corp_info = resolved[("us_ma", "TEST-CORP-HOME")]
+            self.assertIn("269 MILL ROAD CHELMSFORD MA", corp_info["hq_addresses"])
+            self.assertNotIn("5235 NORTH FRONT STREET HARRISBURG PA", corp_info["hq_addresses"])
+        finally:
+            conn.rollback()
+            conn.close()
+
 
 class TestAssessorPlaceholderAndInstitutionalHygiene(unittest.TestCase):
     def test_illinois_land_trusts_cook_placeholders_and_massgis_inverted_towns(self):

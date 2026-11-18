@@ -1,133 +1,168 @@
 import React from 'react';
-import { X, User, Building, MapPin, Calendar, Hash, Link as LinkIcon, AlertCircle, Info } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { X, User, Building, MapPin, Link as LinkIcon, AlertCircle, Info, ChevronRight } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { formatCurrencyValue } from './property_public_details.jsx';
+
+function shouldAppendUnitLabel(address, unitLabel) {
+    if (!unitLabel) return false;
+    const unit = String(unitLabel).trim();
+    if (!unit) return false;
+    if (!address) return true;
+    const addrUpper = String(address).toUpperCase();
+    const unitUpper = unit.toUpperCase().replace(/^#+/, '').trim();
+    if (!unitUpper) return false;
+    const escaped = unitUpper.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const alreadyPresent = new RegExp(`(?:\\b(?:UNIT|APT|APARTMENT|STE|SUITE|FL|RM)|#)\\s*${escaped}\\b|\\b${escaped}$`, 'i');
+    return !alreadyPresent.test(addrUpper);
+}
 
 export default function EntityDetailsModal({ entity, type, networkData, onNavigate, onViewProperty, onClose, onOpenFeedback }) {
+    React.useEffect(() => {
+        if (!entity) return undefined;
+        const onKeyDown = (e) => {
+            if (e.key === 'Escape') onClose?.();
+        };
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, [entity, onClose]);
+
     if (!entity) return null;
 
     const d = entity.details || {};
     const isPrincipal = type === 'principal';
+    const entityTitle = entity.name || entity.name_c || 'Unknown Entity';
+    const entityAddress = d.address || d.principal_address || d.business_address || null;
 
-    // Helper to format keys
     const formatKey = (key) => {
         return key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
     };
 
-    // Find related properties
-    // Find related properties using precise ID matching
     const relatedProperties = networkData?.properties?.filter(p => {
         const entityIdStr = String(entity.id);
         if (isPrincipal) {
-            // Match principal by ID
-            return String(p.details?.principal_id) === entityIdStr;
-        } else {
-            // Match business by ID
-            return String(p.details?.business_id) === entityIdStr;
+            return String(p.details?.principal_id || p.principal_id) === entityIdStr;
         }
+        return String(p.details?.business_id || p.business_id) === entityIdStr;
     }) || [];
 
-    return (
+    const detailEntries = Object.entries(d).filter(([k, v]) => {
+        if (['id', 'name', 'name_c', 'address', 'principal_address', 'business_address', 'principal_id', 'business_id', 'owner_norm', 'co_owner_norm'].includes(k)) {
+            return false;
+        }
+        return v !== null && v !== undefined && v !== '';
+    });
+
+    const modalContent = (
         <AnimatePresence>
-            <div className="fixed inset-0 z-[200] p-4 flex justify-center items-center">
+            <div className="fixed inset-0 z-[200] p-3 sm:p-4 flex justify-center items-end sm:items-center">
                 {/* Backdrop */}
                 <motion.div
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
                     onClick={onClose}
-                    className="fixed inset-0 bg-black/60 backdrop-blur-sm"
+                    className="fixed inset-0 bg-black/50 backdrop-blur-[2px]"
                 />
 
                 {/* Modal Container */}
                 <motion.div
-                    initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label={`${isPrincipal ? 'Principal' : 'Business'} details for ${entityTitle}`}
+                    initial={{ opacity: 0, scale: 0.96, y: 16 }}
                     animate={{ opacity: 1, scale: 1, y: 0 }}
-                    exit={{ opacity: 0, scale: 0.95, y: 20 }}
-                    className="relative bg-white rounded-2xl shadow-2xl border border-gray-100 w-full max-w-2xl max-h-[85vh] overflow-hidden flex flex-col z-10"
+                    exit={{ opacity: 0, scale: 0.96, y: 16 }}
+                    className="relative bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-2xl max-h-[88dvh] overflow-hidden flex flex-col z-10"
                 >
-                    {/* Header */}
-                    <div className="p-6 border-b border-gray-100 flex items-start justify-between bg-gradient-to-r from-gray-50 to-white">
-                        <div className="flex items-center gap-3">
-                            <div className={`p-3 rounded-xl ${isPrincipal ? 'bg-indigo-50 text-indigo-600' : 'bg-blue-50 text-blue-600'}`}>
-                                {isPrincipal ? <User size={24} /> : <Building size={24} />}
-                            </div>
-                            <div>
-                                <span className={`text-xs font-bold uppercase tracking-wider ${isPrincipal ? 'text-indigo-500' : 'text-blue-500'}`}>
-                                    {isPrincipal ? 'Business Principal' : 'Business Entity'}
-                                </span>
-                                <h2 className="text-xl font-bold text-gray-900 leading-tight">
-                                    {entity.name || entity.name_c || 'Unknown Entity'}
-                                </h2>
-                                <p className="text-xs text-gray-500 flex items-center gap-1 mt-0.5">
-                                    <MapPin size={12} />
-                                    {d.address || d.principal_address || d.business_address || 'No Address Listed'}
-                                </p>
-                            </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                            {onOpenFeedback && (
+                    {/* Compact Two-Row Responsive Header */}
+                    <div className="px-4 sm:px-6 py-3.5 sm:py-4 border-b border-slate-200/80 bg-gradient-to-r from-slate-50 to-white shrink-0">
+                        <div className="flex items-center justify-between gap-2 mb-1.5">
+                            <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border ${
+                                isPrincipal
+                                    ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                                    : 'bg-blue-50 text-blue-700 border-blue-200'
+                            }`}>
+                                {isPrincipal ? <User size={11} aria-hidden="true" /> : <Building size={11} aria-hidden="true" />}
+                                {isPrincipal ? 'Business Principal' : 'Business Entity'}
+                            </span>
+
+                            <div className="flex items-center gap-1.5 shrink-0">
+                                {onOpenFeedback && (
+                                    <button
+                                        type="button"
+                                        onClick={() => onOpenFeedback({
+                                            id: entity.id || entity.principal_id || entity.business_id,
+                                            name: entityTitle,
+                                            type: isPrincipal ? 'Business Principal' : 'Business',
+                                            city: entity.city || entity.business_city || 'CT',
+                                        })}
+                                        className="px-2 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-lg text-[11px] font-bold transition-colors inline-flex items-center gap-1"
+                                        title="Report a data error, wrong owner association, or missing detail"
+                                    >
+                                        <AlertCircle size={13} className="text-amber-600 shrink-0" aria-hidden="true" />
+                                        <span className="hidden sm:inline">See something wrong?</span>
+                                        <span className="sm:hidden">Report</span>
+                                    </button>
+                                )}
                                 <button
-                                    onClick={() => onOpenFeedback({
-                                        id: entity.id || entity.principal_id || entity.business_id,
-                                        name: entity.name || entity.name_c || 'Entity',
-                                        type: isPrincipal ? 'Business Principal' : 'Business',
-                                        city: entity.city || entity.business_city || 'CT'
-                                    })}
-                                    className="px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5"
-                                    title="Report a data error, wrong owner association, or missing detail"
+                                    type="button"
+                                    aria-label="Close entity details"
+                                    onClick={onClose}
+                                    className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
                                 >
-                                    <AlertCircle size={14} className="text-amber-600 shrink-0" />
-                                    <span>See something wrong?</span>
+                                    <X size={18} aria-hidden="true" />
                                 </button>
-                            )}
-                            <button
-                                onClick={onClose}
-                                className="p-2 bg-white rounded-full text-gray-400 hover:text-gray-600 hover:bg-gray-100 border border-gray-200 transition-all"
-                            >
-                                <X size={20} />
-                            </button>
+                            </div>
                         </div>
+
+                        <h2 className="text-base sm:text-xl font-black text-slate-900 leading-snug break-words">
+                            {entityTitle}
+                        </h2>
+                        <p className="text-xs text-slate-500 flex items-start gap-1 mt-1 break-words">
+                            <MapPin size={12} className="shrink-0 mt-0.5 text-slate-400" aria-hidden="true" />
+                            <span>{entityAddress || 'No Address Listed'}</span>
+                        </p>
                     </div>
 
-                    <div className="flex-1 overflow-y-auto p-6">
-                        <div className="space-y-6">
+                    <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-4 sm:p-6 pb-[calc(1rem+env(safe-area-inset-bottom,0px))]">
+                        <div className="space-y-4 sm:space-y-5">
                             {/* Info Grid */}
-                            <div className="bg-gray-50 rounded-xl p-4 border border-gray-100 text-sm space-y-3">
-                                <h3 className="font-bold text-gray-900 flex items-center gap-2">
-                                    <AlertCircle size={16} className="text-blue-500" />
+                            <div className="bg-slate-50 rounded-xl p-3.5 sm:p-4 border border-slate-200/80 text-sm space-y-3">
+                                <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                                    <AlertCircle size={14} className="text-blue-500 shrink-0" aria-hidden="true" />
                                     {isPrincipal ? 'Principal Details' : 'Business Details'}
                                 </h3>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    {/* Render all detail fields except internal ones */}
-                                    {Object.entries(d).map(([k, v]) => {
-                                        if (['id', 'name', 'name_c', 'address', 'principal_address', 'business_address', 'principal_id', 'business_id', 'owner_norm', 'co_owner_norm'].includes(k)) return null;
-                                        if (!v) return null;
-                                        return (
-                                            <div key={k}>
-                                                <span className="block text-gray-500 text-xs mb-1 uppercase tracking-wide">{formatKey(k)}</span>
-                                                <span className="font-semibold text-gray-900 break-words">{String(v)}</span>
+                                {detailEntries.length > 0 ? (
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                        {detailEntries.map(([k, v]) => (
+                                            <div key={k} className="min-w-0">
+                                                <span className="block text-slate-400 text-[10px] font-bold mb-0.5 uppercase tracking-wider">
+                                                    {formatKey(k)}
+                                                </span>
+                                                <span className="font-semibold text-slate-900 text-xs sm:text-sm break-words">
+                                                    {String(v)}
+                                                </span>
                                             </div>
-                                        )
-                                    })}
-                                    {/* Show nothing if empty? */}
-                                    {Object.keys(d).length <= 2 && (
-                                        <div className="text-gray-400 italic">No additional details available.</div>
-                                    )}
-                                </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <div className="text-xs text-slate-400 italic">No additional registry fields available.</div>
+                                )}
                             </div>
 
                             {type === 'business' && (
-                                <div className="flex items-center gap-2 p-3 bg-blue-50 text-blue-800 rounded-lg text-sm">
-                                    <Info size={16} />
+                                <div className="flex items-center gap-2 px-3.5 py-2.5 bg-blue-50 text-blue-800 border border-blue-100 rounded-xl text-xs sm:text-sm">
+                                    <Info size={15} className="shrink-0" aria-hidden="true" />
                                     <span>Business Status: <strong>{entity.status || d.status || 'Unknown'}</strong></span>
                                 </div>
                             )}
 
                             {/* Related Entities Section */}
                             {networkData && (
-                                <div className="bg-gray-50 rounded-xl p-4 border border-gray-100 text-sm space-y-3">
-                                    <h3 className="font-bold text-gray-900 flex items-center gap-2">
-                                        <LinkIcon size={16} className="text-purple-500" />
+                                <div className="bg-slate-50 rounded-xl p-3.5 sm:p-4 border border-slate-200/80 text-sm space-y-2.5">
+                                    <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                                        <LinkIcon size={14} className="text-purple-500 shrink-0" aria-hidden="true" />
                                         {isPrincipal ? 'Related Businesses' : 'Related Principals'}
                                     </h3>
                                     <div className="flex flex-wrap gap-2">
@@ -135,20 +170,14 @@ export default function EntityDetailsModal({ entity, type, networkData, onNaviga
                                             const relatedIds = new Set();
                                             const myId = String(entity.id);
 
-                                            // Find connections in links
                                             networkData.links?.forEach((l) => {
                                                 const s = String(l.source);
                                                 const t = String(l.target);
 
-                                                // Helper for canonical matching (sorted name parts)
-                                                const canonMatch = (linkKey, myId) => {
+                                                const canonMatch = (linkKey, targetId) => {
                                                     const cleanKey = linkKey.replace(/^(principal_|business_)/, '');
-                                                    const cleanMyId = myId.replace(/^(principal_|business_)/, '');
-
-                                                    // Direct ID match
+                                                    const cleanMyId = targetId.replace(/^(principal_|business_)/, '');
                                                     if (cleanKey === cleanMyId) return true;
-
-                                                    // Name-based match with sorting (matching backend's canonicalize_person_name)
                                                     if (isPrincipal && entity.name) {
                                                         const myCanon = entity.name.toUpperCase().trim().replace(/[`"'.]/g, '').replace(/\s+/g, ' ').split(' ').sort().join(' ');
                                                         if (cleanKey === myCanon) return true;
@@ -163,13 +192,10 @@ export default function EntityDetailsModal({ entity, type, networkData, onNaviga
                                                 }
                                             });
 
-                                            // Filter actual entities
                                             const targetList = isPrincipal ? networkData.businesses : networkData.principals;
                                             const relatedEntities = targetList?.filter(item => {
                                                 const sId = String(item.id);
                                                 if (relatedIds.has(sId)) return true;
-
-                                                // Fallback: If it's a principal, check for name-based match (canonical)
                                                 if (!isPrincipal && item.name) {
                                                     const canon = item.name.toUpperCase().trim().replace(/[`"'.]/g, '').replace(/\s+/g, ' ').split(' ').sort().join(' ');
                                                     if (relatedIds.has(canon)) return true;
@@ -178,17 +204,18 @@ export default function EntityDetailsModal({ entity, type, networkData, onNaviga
                                             }) || [];
 
                                             if (relatedEntities.length === 0) {
-                                                return <div className="text-gray-400 italic">No related records found.</div>;
+                                                return <div className="text-xs text-slate-400 italic">No related records found.</div>;
                                             }
 
                                             return relatedEntities.map(rel => (
                                                 <button
                                                     key={rel.id}
+                                                    type="button"
                                                     onClick={() => onNavigate && onNavigate(rel, isPrincipal ? 'business' : 'principal')}
-                                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-200 rounded-lg hover:border-blue-400 hover:text-blue-700 transition-colors shadow-sm text-gray-700"
+                                                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg hover:border-blue-400 hover:text-blue-700 transition-colors shadow-2xs text-xs font-semibold text-slate-700 text-left break-words"
                                                 >
-                                                    {isPrincipal ? <Building size={12} /> : <User size={12} />}
-                                                    <span className="font-medium">{rel.name || rel.name_c}</span>
+                                                    {isPrincipal ? <Building size={12} className="shrink-0" aria-hidden="true" /> : <User size={12} className="shrink-0" aria-hidden="true" />}
+                                                    <span>{rel.name || rel.name_c}</span>
                                                 </button>
                                             ));
                                         })()}
@@ -198,35 +225,48 @@ export default function EntityDetailsModal({ entity, type, networkData, onNaviga
 
                             {/* Related Properties Section */}
                             {relatedProperties.length > 0 && (
-                                <div className="bg-gray-50 rounded-xl p-4 border border-gray-100 text-sm space-y-3">
-                                    <h3 className="font-bold text-gray-900 flex items-center gap-2">
-                                        <MapPin size={16} className="text-green-500" />
+                                <div className="bg-slate-50 rounded-xl p-3.5 sm:p-4 border border-slate-200/80 text-sm space-y-2.5">
+                                    <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                                        <MapPin size={14} className="text-emerald-600 shrink-0" aria-hidden="true" />
                                         Associated Properties ({relatedProperties.length})
                                     </h3>
-                                    <div className="space-y-2 max-h-60 overflow-y-auto">
-                                        {relatedProperties.map((prop, idx) => (
-                                            <div
-                                                key={idx}
-                                                className="flex items-start justify-between p-2 bg-white rounded-lg border border-gray-200 hover:border-blue-300 hover:shadow-sm cursor-pointer transition-all group"
-                                                onClick={() => {
-                                                    if (onViewProperty) {
-                                                        onClose();
-                                                        setTimeout(() => onViewProperty(prop), 100);
-                                                    }
-                                                }}
-                                            >
-                                                <div className="flex-1">
-                                                    <div className="font-medium text-gray-900 text-sm group-hover:text-blue-600 transition-colors">
-                                                        {prop.address || prop.location}
-                                                        {(prop.unit || prop.derivedUnit) && <span className="text-blue-500 ml-1">#{prop.unit || prop.derivedUnit}</span>}
+                                    <div className="space-y-1.5 max-h-60 overflow-y-auto overscroll-contain">
+                                        {relatedProperties.map((prop, idx) => {
+                                            const addr = prop.address || prop.location || 'Property';
+                                            const u = prop.unit || prop.derivedUnit;
+                                            const appendU = shouldAppendUnitLabel(addr, u);
+                                            return (
+                                                <button
+                                                    key={prop.id || idx}
+                                                    type="button"
+                                                    onClick={() => {
+                                                        if (onViewProperty) {
+                                                            onClose();
+                                                            setTimeout(() => onViewProperty(prop), 100);
+                                                        }
+                                                    }}
+                                                    className="w-full text-left flex items-center justify-between gap-2 px-3 py-2 bg-white rounded-lg border border-slate-200 hover:border-blue-300 hover:bg-blue-50/40 cursor-pointer transition-all group"
+                                                >
+                                                    <div className="flex-1 min-w-0">
+                                                        <div className="font-semibold text-slate-900 text-xs sm:text-sm group-hover:text-blue-600 transition-colors break-words">
+                                                            {addr}
+                                                            {appendU && (
+                                                                <span className="text-blue-600 ml-1 font-bold">
+                                                                    #{String(u).replace(/^#+/, '').trim()}
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                        <div className="text-[11px] text-slate-500">{prop.city || prop.property_city}</div>
                                                     </div>
-                                                    <div className="text-xs text-gray-500">{prop.city}</div>
-                                                </div>
-                                                <div className="text-right">
-                                                    <div className="text-xs font-mono font-bold text-gray-700">{prop.assessed_value}</div>
-                                                </div>
-                                            </div>
-                                        ))}
+                                                    <div className="flex items-center gap-1.5 shrink-0">
+                                                        <span className="text-xs font-mono font-bold text-slate-700">
+                                                            {formatCurrencyValue(prop.assessed_value)}
+                                                        </span>
+                                                        <ChevronRight size={14} className="text-slate-300 group-hover:text-blue-500" aria-hidden="true" />
+                                                    </div>
+                                                </button>
+                                            );
+                                        })}
                                     </div>
                                 </div>
                             )}
@@ -236,4 +276,6 @@ export default function EntityDetailsModal({ entity, type, networkData, onNaviga
             </div>
         </AnimatePresence>
     );
+
+    return typeof document !== 'undefined' ? createPortal(modalContent, document.body) : modalContent;
 }

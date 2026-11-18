@@ -25,7 +25,7 @@ logger = logging.getLogger("landing-cache")
 
 LANDING_CACHE_KEY = "landing_snapshot:v1"
 DAILY_TTL_SECONDS = 86400  # 24 hours
-MEMORY_CHECK_TTL_SECONDS = 300  # Re-check DB created_at every 5 minutes
+MEMORY_CHECK_TTL_SECONDS = 15  # Re-check DB created_at every 15s so rebuilds appear immediately
 
 DATASET_KEY_TO_CITY_PREFIX = {
     "NY": "nyc",
