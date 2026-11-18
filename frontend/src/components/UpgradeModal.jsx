@@ -16,12 +16,12 @@ const BEFORE_NOW_ROWS = [
   {
     area: 'Geographic Coverage',
     before: 'Connecticut only (municipal assessments + CT business filings).',
-    now: '20 live jurisdictions: Statewide CT (all 169 towns), FL (67 counties), MA (351 municipalities), VA (VGIN + regional/county CAMA), NY State (33 participating counties), NC (100 counties), AR (75 counties), WI (72 counties), CO, VT (250+ towns), and NJ (DCA BHI) alongside NYC, Chicago, Philadelphia, Miami-Dade, Detroit, Baltimore, Boston, Washington, D.C., and Minneapolis.',
+    now: '19 live jurisdictions: Statewide CT (all 169 towns), MA (all 351 municipalities including Boston Assessing & 112 municipal CAMA portals), FL (67 counties), VA (VGIN + regional/county CAMA), NY State (33 participating counties), NC (100 counties), AR (75 counties), WI (72 counties), CO, VT (250+ towns), and NJ (DCA BHI) alongside NYC, Chicago, Philadelphia, Miami-Dade, Detroit, Baltimore, Washington, D.C., and Minneapolis.',
   },
   {
     area: 'Enforcement, Evictions & Subsidies',
     before: 'Parcel assessments and basic corporate lookups; limited enforcement context.',
-    now: 'Landlord Rap Sheets & portfolio rankings across court evictions (CT Judicial, NYC DOI, Baltimore, Buffalo Housing Court), housing code cases (NYC HPD Open & Class C, Philadelphia L&I, Hartford, D.C. DOB, Boston, Detroit blight, Baltimore, Minneapolis, Buffalo), recent parcel transaction histories where GIS rolls publish sale dates/prices, and NHPD federal/state subsidy expirations across all 20 datasets.',
+    now: 'Owner Rap Sheets & portfolio rankings across court evictions (CT Judicial, NYC DOI, Baltimore, Buffalo Housing Court), housing code cases (NYC HPD Open & Class C, Philadelphia L&I, Hartford, D.C. DOB, Boston ISD, Detroit blight, Baltimore, Minneapolis, Buffalo), recent parcel transaction histories where GIS rolls publish sale dates/prices, and NHPD federal/state subsidy expirations across all datasets.',
   },
   {
     area: 'Entity Untangling & Graph Accuracy',
@@ -42,7 +42,7 @@ const UNTANGLING_UPDATES = [
   },
   {
     title: 'Registered-Agent, Managing-Agent & HDFC Firewalls',
-    body: 'Shared addresses only indicate shared control when they belong to the landlord. More than 217,000 empirical commercial registered-agent hubs (such as CT Corp, CSC, Northwest, and LegalInc), third-party managing agents representing unrelated owners, "c/o" strings, and nonprofit/municipal transfer intermediaries (such as NYC HPD and Neighborhood Restore HDFC) are excluded from ownership clustering.',
+    body: 'Shared addresses only indicate shared control when they belong to the property owner. More than 217,000 empirical commercial registered-agent hubs (such as CT Corp, CSC, Northwest, and LegalInc), third-party managing agents representing unrelated owners, "c/o" strings, and nonprofit/municipal transfer intermediaries (such as NYC HPD and Neighborhood Restore HDFC) are excluded from ownership clustering.',
   },
   {
     title: 'Recent Parcel Transactions + Link Provenance',
@@ -140,7 +140,7 @@ export default function UpgradeModal({
             <h3>Primary Purpose of the Tool</h3>
           </div>
           <p className="mt-2 text-sm text-slate-700 leading-relaxed">
-            Property investors frequently place every building into its own single-purpose LLC (<em>&ldquo;123 Main St LLC&rdquo;</em>, <em>&ldquo;456 Oak Ave LLC&rdquo;</em>). Standard municipal assessor, court, and code-enforcement portals look up one parcel or entity at a time—making a 150-building operation look like dozens of unrelated small landlords.
+            Property investors frequently place every building into its own single-purpose LLC (<em>&ldquo;123 Main St LLC&rdquo;</em>, <em>&ldquo;456 Oak Ave LLC&rdquo;</em>). Standard municipal assessor, court, and code-enforcement portals look up one parcel or entity at a time—making a 150-building operation look like dozens of unrelated small owners.
           </p>
           <p className="mt-2 text-sm text-slate-700 leading-relaxed">
             <strong className="font-semibold text-slate-900">they own WHAT??</strong> links public property assessments, corporate officer filings, rental licenses, mailing addresses, housing code violations, court eviction records, and National Housing Preservation Database (NHPD) subsidies so tenants, legal-aid attorneys, organizers, and journalists can inspect the full connected portfolio behind an address or LLC.
@@ -265,7 +265,7 @@ export default function UpgradeModal({
               className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2 text-xs font-bold text-rose-700 hover:bg-rose-100 transition-colors"
             >
               <ShieldAlert className="h-3.5 w-3.5 text-rose-600" aria-hidden="true" />
-              <span>Open Landlord Rap Sheets</span>
+              <span>Open Owner Rap Sheets</span>
             </button>
           )}
         </div>

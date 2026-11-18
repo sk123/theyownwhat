@@ -4609,6 +4609,46 @@ def _get_or_compute_ct_prop_stats(cursor, force_refresh: bool = False) -> List[D
     return ct_prop_rows
 
 
+def _get_or_compute_ma_prop_stats(cursor, force_refresh: bool = False) -> List[Dict[str, Any]]:
+    if not force_refresh:
+        cursor.execute("SELECT value FROM kv_cache WHERE key = 'ma_prop_stats:v1'")
+        ma_cache_row = cursor.fetchone()
+        if ma_cache_row and ma_cache_row.get('value'):
+            return ma_cache_row['value']
+
+    cursor.execute("SELECT to_regclass('public.ma_properties') IS NOT NULL AS exists")
+    if not (cursor.fetchone() or {}).get("exists"):
+        return []
+
+    cursor.execute(
+        """
+        SELECT
+            COALESCE(TRIM(UPPER(borough)), 'UNKNOWN') AS town,
+            COUNT(*)::int AS total_properties,
+            COUNT(CASE WHEN building_photo_url IS NOT NULL THEN 1 END)::int AS with_photos,
+            COUNT(CASE WHEN cama_site_link IS NOT NULL THEN 1 END)::int AS with_cama,
+            COUNT(CASE WHEN latitude IS NOT NULL THEN 1 END)::int AS with_coords,
+            COUNT(CASE WHEN owner_name IS NOT NULL AND UPPER(owner_name) NOT LIKE 'CURRENT OWNER%%' THEN 1 END)::int AS with_owner,
+            COUNT(CASE WHEN year_built IS NOT NULL THEN 1 END)::int AS with_year_built,
+            MAX(CASE WHEN last_sale_date <= CURRENT_DATE THEN last_sale_date END) AS max_sale_date,
+            MAX(source_fy)::int AS max_source_fy
+        FROM ma_properties
+        WHERE borough IS NOT NULL AND TRIM(borough) != ''
+        GROUP BY TRIM(UPPER(borough))
+        ORDER BY TRIM(UPPER(borough))
+        """
+    )
+    ma_prop_rows = [dict(r) for r in cursor.fetchall()]
+    cursor.execute(
+        """
+        INSERT INTO kv_cache (key, value, created_at) VALUES ('ma_prop_stats:v1', %s::jsonb, NOW())
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, created_at = NOW()
+        """,
+        (json.dumps(ma_prop_rows, default=json_converter),),
+    )
+    return ma_prop_rows
+
+
 def _calculate_ct_dashboard_summary(cursor, city: str) -> Dict[str, Any]:
     selected_city = (city or "STATEWIDE").strip().upper()
     is_statewide = selected_city == "STATEWIDE"
@@ -4860,17 +4900,118 @@ def get_dashboard_summary(city: str = "STATEWIDE", refresh: bool = False, conn=D
 # --- NEW: Data Completeness Report ---
 
 
+STATEWIDE_PARCEL_PROVENANCE: Dict[str, Dict[str, Any]] = {
+    "MA": {
+        "source_url": "https://www.mass.gov/info-details/massgis-data-property-tax-parcels",
+        "message": (
+            "All 351 Massachusetts cities & towns: baseline from MassGIS Level 3 Standardized Property Tax Parcels "
+            "(certified annually by MA DOR), actively enriched via municipal CAMA scrapers across 112 live town portals "
+            "(78 Vision/VGSI, 31 MapGeo, Analyze Boston FY2026 Assessing & ISD Violations, Cambridge FY2027 Assessing Open Data, "
+            "and Ashland ActDataScout) plus MA Corporations Division / OpenCorporates filings."
+        ),
+        "sources": [
+            {
+                "source": "MassGIS Level 3 Standardized Property Tax Parcels (All 351 Cities & Towns)",
+                "url": "https://www.mass.gov/info-details/massgis-data-property-tax-parcels",
+            },
+            {
+                "source": "Massachusetts Municipal CAMA Portals (78 Vision/VGSI + 31 MapGeo + Cambridge FY2027 + Ashland)",
+                "url": "https://www.vgsi.com/massachusetts-online-database/",
+            },
+            {
+                "source": "Analyze Boston FY2026 Property Assessment & Dual-Owner Nominee Realty Trust Cross-Enrichment",
+                "url": "https://data.boston.gov/dataset/property-assessment",
+            },
+            {
+                "source": "MA Secretary of the Commonwealth Corporations Division / OpenCorporates (us_ma)",
+                "url": "https://corp.sec.state.ma.us/corpweb/CorpSearch/CorpSearch.aspx",
+            },
+        ],
+    },
+    "FL": {
+        "source_url": "https://geodata.floridagio.gov/datasets/FGIO::florida-statewide-cadastral/about",
+        "message": "FloridaGIO / Florida Dept. of Revenue (FDOR) Statewide Cadastral Parcels across all 67 counties (non-homestead residential, multifamily, condo, mixed-use, and mobile-home parks), linked to Florida Sunbiz & DBPR Ch. 509 apartment licenses.",
+        "sources": [
+            {"source": "FloridaGIO / FDOR 67-County Statewide Cadastral Parcels", "url": "https://geodata.floridagio.gov/datasets/FGIO::florida-statewide-cadastral/about"},
+            {"source": "Florida Division of Corporations (Sunbiz) & OpenCorporates (us_fl)", "url": "https://dos.fl.gov/sunbiz/"},
+        ],
+    },
+    "NY": {
+        "source_url": "https://data.gis.ny.gov/datasets/sharegisny::nys-tax-parcels-public/about",
+        "message": "NYS ITS Geospatial Services / ORPTS Public Tax Parcels across 33 participating non-NYC counties, linked to NY Dept. of State corporate filings, Buffalo rental/code/Housing Court feeds, and OpenCorporates (us_ny).",
+        "sources": [
+            {"source": "NYS GIS / ORPTS Public Tax Parcels (Non-NYC Participating Counties)", "url": "https://data.gis.ny.gov/datasets/sharegisny::nys-tax-parcels-public/about"},
+            {"source": "NY Department of State Corporations & OpenCorporates (us_ny)", "url": "https://apps.dos.ny.gov/publicInquiry/"},
+        ],
+    },
+    "CO": {
+        "source_url": "https://geodata.colorado.gov/datasets/colorado-public-parcels",
+        "message": "Colorado Governor's Office of IT (OIT) Statewide Public Parcels across participating county assessors, linked to CO Secretary of State business/True Name filings, Denver active rental licenses, and OpenCorporates (us_co).",
+        "sources": [
+            {"source": "Colorado OIT Statewide Public Parcels", "url": "https://geodata.colorado.gov/datasets/colorado-public-parcels"},
+            {"source": "Colorado Secretary of State Business Registry & OpenCorporates (us_co)", "url": "https://www.sos.state.co.us/biz/BusinessEntityCriteriaExt.do"},
+        ],
+    },
+    "VT": {
+        "source_url": "https://geodata.vermont.gov/pages/parcels",
+        "message": "Vermont Center for Geographic Information (VCGI) Standardized Grand List Parcels across 250+ municipalities, linked to VT Secretary of State & OpenCorporates (us_vt) filings.",
+        "sources": [
+            {"source": "Vermont VCGI Standardized Grand List Property Parcels", "url": "https://geodata.vermont.gov/pages/parcels"},
+            {"source": "Vermont Secretary of State Corporations & OpenCorporates (us_vt)", "url": "https://bizfilings.vermont.gov/online/BusinessInquire"},
+        ],
+    },
+    "WI": {
+        "source_url": "https://www.sco.wisc.edu/parcels/data/",
+        "message": "Wisconsin Dept. of Administration / State Cartographer's Office V11 Statewide Parcel Database across all 72 counties, linked to WI DFI & OpenCorporates (us_wi) filings.",
+        "sources": [
+            {"source": "Wisconsin DOA / SCO V11 Statewide Parcel Database (All 72 Counties)", "url": "https://www.sco.wisc.edu/parcels/data/"},
+            {"source": "Wisconsin DFI Corporate Records & OpenCorporates (us_wi)", "url": "https://apps.dfi.wi.gov/apps/corpsearch/search.aspx"},
+        ],
+    },
+    "NC": {
+        "source_url": "https://www.nconemap.gov/pages/parcels",
+        "message": "NC OneMap / NC CGIA Standardized Statewide Parcels across all 100 North Carolina counties, linked to NC Secretary of State & OpenCorporates (us_nc) filings.",
+        "sources": [
+            {"source": "NC OneMap Standardized Parcels (All 100 Counties)", "url": "https://www.nconemap.gov/pages/parcels"},
+            {"source": "NC Secretary of State Business Registration & OpenCorporates (us_nc)", "url": "https://www.sosnc.gov/online_services/search/by_title/_Business_Registration"},
+        ],
+    },
+    "AR": {
+        "source_url": "https://gis.arkansas.gov/product/parcels-polygon/",
+        "message": "Arkansas GIS Office Standardized County Assessor Parcels across all 75 counties, linked to AR Secretary of State & OpenCorporates (us_ar) filings.",
+        "sources": [
+            {"source": "Arkansas GIS Office Statewide Parcels (All 75 Counties)", "url": "https://gis.arkansas.gov/product/parcels-polygon/"},
+            {"source": "Arkansas Secretary of State Business Entity Search & OpenCorporates (us_ar)", "url": "https://www.ark.org/corp-search/"},
+        ],
+    },
+    "VA": {
+        "source_url": "https://vgin.vdem.virginia.gov/pages/parcels",
+        "message": "Virginia Geographic Information Network (VGIN) Statewide Parcels combined with Hampton Roads HRGeo and Northern/Central Virginia county CAMA assessment feeds across ~88 localities, linked to VA State Corporation Commission & OpenCorporates (us_va) filings.",
+        "sources": [
+            {"source": "Virginia VGIN Statewide Parcels + County/Independent City Open CAMA Feeds", "url": "https://vgin.vdem.virginia.gov/pages/parcels"},
+            {"source": "Hampton Roads Regional Parcel & Assessment Dataset (HRGeo)", "url": "https://www.hrgeo.org/"},
+            {"source": "Virginia State Corporation Commission (SCC CIS) & OpenCorporates (us_va)", "url": "https://cis.scc.virginia.gov/"},
+        ],
+    },
+}
+
+
 def _calculate_completeness_matrix(conn):
     """
     Calculates the data completeness matrix for all municipalities.
     """
     logger.info("Calculating Data Completeness Matrix...")
+    try:
+        from ma.ma_municipal_config import MA_MUNICIPAL_DATA_SOURCES, ma_muni_status_key
+    except Exception:
+        MA_MUNICIPAL_DATA_SOURCES = {}
+        ma_muni_status_key = lambda t: f"MA_MUNI_{(t or '').strip().upper()}"
 
     with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        # Check active cities & statewide partitions
+        # Check active cities & statewide partitions (Boston is unified into MA)
         active_cities = []
         for city in [
-            "nyc", "dc", "baltimore", "boston", "detroit", "philadelphia",
+            "nyc", "dc", "baltimore", "detroit", "philadelphia",
             "chicago", "miami", "minneapolis", "nj",
             "ma", "fl", "ny", "co", "vt", "wi", "nc", "ar", "va",
         ]:
@@ -4885,12 +5026,15 @@ def _calculate_completeness_matrix(conn):
 
         union_subqueries = []
         for city in active_cities:
+            has_cama_cols = city in ("ma", "fl", "ny", "co", "vt", "wi", "nc", "ar", "va")
+            photos_expr = "COUNT(CASE WHEN building_photo_url IS NOT NULL THEN 1 END)" if has_cama_cols else "0"
+            cama_expr = "COUNT(CASE WHEN cama_site_link IS NOT NULL THEN 1 END)" if has_cama_cols else "0"
             union_subqueries.append(f"""
                 SELECT
                     '{city.upper()}' as town,
                     COUNT(*) as total_properties,
-                    0 as with_photos,
-                    0 as with_cama,
+                    {photos_expr} as with_photos,
+                    {cama_expr} as with_cama,
                     COUNT(CASE WHEN latitude IS NOT NULL THEN 1 END) as with_coords,
                     COUNT(CASE WHEN owner_name IS NOT NULL AND UPPER(owner_name) NOT LIKE 'CURRENT OWNER%' THEN 1 END) as with_owner,
                     COUNT(CASE WHEN year_built IS NOT NULL THEN 1 END) as with_year_built,
@@ -4899,6 +5043,7 @@ def _calculate_completeness_matrix(conn):
             """)
 
         ct_prop_rows = _get_or_compute_ct_prop_stats(cursor)
+        ma_muni_rows = _get_or_compute_ma_prop_stats(cursor) if "ma" in active_cities else []
         conn.commit()
 
         city_prop_rows = []
@@ -4909,6 +5054,7 @@ def _calculate_completeness_matrix(conn):
         cursor.execute("""
             SELECT
                 source_name,
+                source_type,
                 CASE
                     WHEN refresh_status = 'running' AND last_refreshed_at < NOW() - INTERVAL '6 hours' THEN 'failure'
                     ELSE refresh_status
@@ -4952,14 +5098,13 @@ def _calculate_completeness_matrix(conn):
             "NY": ["NY", "NY_DOS", "BUFFALO", "OC_US_NY"],
             "DC": ["DC", "OC_US_DC"],
             "BALTIMORE": ["BALTIMORE", "OC_US_MD"],
-            "BOSTON": ["BOSTON", "OC_US_MA"],
             "DETROIT": ["DETROIT", "OC_US_MI"],
             "PHILADELPHIA": ["PHILADELPHIA", "PA_DOS", "OC_US_PA"],
             "CHICAGO": ["CHICAGO", "OC_US_IL"],
             "MIAMI": ["MIAMI", "FL_SUNBIZ", "FL_DBPR", "OC_US_FL"],
             "MINNEAPOLIS": ["MINNEAPOLIS", "OC_US_MN"],
             "NJ": ["NJ", "OC_US_NJ"],
-            "MA": ["MA", "OC_US_MA"],
+            "MA": ["MA", "BOSTON", "OC_US_MA"],
             "FL": ["FL", "FL_SUNBIZ", "FL_DBPR", "OC_US_FL"],
             "CO": ["CO", "DENVER", "OC_US_CO"],
             "VT": ["VT", "OC_US_VT"],
@@ -4972,7 +5117,8 @@ def _calculate_completeness_matrix(conn):
             SELECT source_name, source_type, external_last_updated, last_refreshed_at,
                    refresh_status, details
             FROM data_source_status
-            WHERE source_name LIKE 'NYC%%'
+            WHERE (
+                  source_name LIKE 'NYC%%'
                OR source_name = 'NY' OR source_name LIKE 'NY_%%'
                OR source_name LIKE 'BUFFALO_%%'
                OR source_name LIKE 'DC%%'
@@ -4995,12 +5141,24 @@ def _calculate_completeness_matrix(conn):
                OR source_name = 'AR' OR source_name LIKE 'AR_%%'
                OR source_name = 'VA' OR source_name LIKE 'VA_%%'
                OR source_name LIKE 'OC_%%'
+            )
+            AND source_name NOT LIKE 'MA_MUNI_%%'
             ORDER BY source_name
         """)
         city_dataset_rows = cursor.fetchall()
+        all_ds_names_upper = {(r.get("source_name") or "").upper() for r in city_dataset_rows}
         city_datasets: Dict[str, List[Dict[str, Any]]] = {key: [] for key in city_dataset_prefixes}
         for ds in city_dataset_rows:
             source_name = (ds.get("source_name") or "").upper()
+            # Skip legacy <CITY>_ENFORCEMENT aliases when <CITY>_CODE_ENFORCEMENT exists
+            if source_name.endswith("_ENFORCEMENT") and not source_name.endswith("_CODE_ENFORCEMENT"):
+                prefix_base = source_name[: -len("_ENFORCEMENT")]
+                if f"{prefix_base}_CODE_ENFORCEMENT" in all_ds_names_upper:
+                    continue
+            # Under unified MA, MA_NHPD_ENRICHMENT already covers all 351 towns including Boston
+            if source_name == "BOSTON_NHPD_ENRICHMENT" and "MA_NHPD_ENRICHMENT" in all_ds_names_upper:
+                continue
+
             matched_city_keys = [
                 city
                 for city, prefixes in city_dataset_prefixes.items()
@@ -5017,20 +5175,25 @@ def _calculate_completeness_matrix(conn):
                     details = json.loads(details)
                 except Exception:
                     details = {"message": details}
-            props_count = (
+
+            stype = (ds.get("source_type") or "").lower()
+            is_corp_registry = stype == "corporate_registry" or source_name.startswith("OC_")
+            prov = STATEWIDE_PARCEL_PROVENANCE.get(source_name, {})
+
+            props_count = None if is_corp_registry else (
                 details.get("properties_count")
                 or details.get("properties_loaded")
                 or details.get("deduped_buildings")
                 or details.get("features_processed")
-                or details.get("companies_count")
             )
             matched_props = (
                 details.get("matched_properties")
                 or details.get("matched_parcels")
+                or details.get("oc_matched_parcels")
                 or details.get("matched_licenses")
                 or details.get("buffalo_active_rental_registrations")
             )
-            source_recs = (
+            source_recs = None if is_corp_registry else (
                 details.get("source_records")
                 or props_count
                 or details.get("csv_rows_processed")
@@ -5039,15 +5202,28 @@ def _calculate_completeness_matrix(conn):
                 or details.get("registrations")
                 or details.get("nhpd_processed")
             )
-            matched_recs = (
+            matched_recs = None if is_corp_registry else (
                 details.get("matched_records")
                 or details.get("matched_source_records")
-                or details.get("officers_count")
                 or details.get("buffalo_matched_code_violations")
                 or matched_props
                 or details.get("blight_matched")
                 or details.get("nhpd_matched")
             )
+
+            msg = (
+                details.get("message")
+                or details.get("eviction_note")
+                or details.get("join_note")
+                or prov.get("message")
+            )
+            if not msg and is_corp_registry and details.get("license"):
+                snap_lbl = details.get("snapshot")
+                msg = f"Bulk corporate & beneficial-officer registry ({details.get('license')}{f', snapshot {snap_lbl}' if snap_lbl else ''})."
+            elif source_name == "BOSTON":
+                msg = msg or "Analyze Boston FY2026 Property Assessment CAMA roll (untruncated owner names, dual-owner nominee realty trusts & CLT parcels fused into Massachusetts statewide)."
+
+            src_list = details.get("sources") if isinstance(details.get("sources"), list) and details.get("sources") else prov.get("sources", [])
 
             entry_payload = {
                 "source_name": ds.get("source_name"),
@@ -5055,18 +5231,18 @@ def _calculate_completeness_matrix(conn):
                 "status": ds.get("refresh_status") or "unknown",
                 "external_last_updated": ds.get("external_last_updated").isoformat() if ds.get("external_last_updated") else None,
                 "last_refreshed_at": ds.get("last_refreshed_at").isoformat() if ds.get("last_refreshed_at") else None,
-                "source_url": details.get("source_url") or details.get("source_dataset") or details.get("sam_crosswalk_source"),
+                "source_url": details.get("source_url") or details.get("url") or details.get("source_dataset") or details.get("sam_crosswalk_source") or prov.get("source_url"),
                 "source_records": source_recs,
                 "matched_records": matched_recs,
-                "matched_parcels": details.get("matched_parcels") or matched_props,
+                "matched_parcels": details.get("matched_parcels") or details.get("oc_matched_parcels") or matched_props,
                 "properties_count": props_count,
                 "properties_examined": details.get("properties_examined"),
                 "matched_properties": matched_props,
                 "unique_subsidies": details.get("unique_nhpd_properties_matched"),
                 "state_subsidies": details.get("nhpd_state_records"),
                 "match_methods": details.get("match_methods"),
-                "message": details.get("message") or details.get("eviction_note") or details.get("join_note"),
-                "sources": details.get("sources") if isinstance(details.get("sources"), list) else [],
+                "message": msg,
+                "sources": src_list,
                 "details": details
             }
             for city_key in matched_city_keys:
@@ -5087,10 +5263,6 @@ def _calculate_completeness_matrix(conn):
                      portal_url = f"https://{cfg['domain']}"
                 elif 'url' in cfg:
                      portal_url = cfg['url']
-
-            # Default fallback for Vision
-            if not portal_url:
-                portal_url = None
 
             # Determine Source Date Display
             external_date = row['external_last_updated']
@@ -5127,9 +5299,6 @@ def _calculate_completeness_matrix(conn):
             elif town_upper == "PHILADELPHIA":
                 state = "PA"
                 portal_url = "https://openphilly.org/"
-            elif town_upper == "BOSTON":
-                state = "MA"
-                portal_url = "https://data.boston.gov/"
             elif town_upper == "DETROIT":
                 state = "MI"
                 portal_url = "https://data.detroitmi.gov/"
@@ -5182,13 +5351,14 @@ def _calculate_completeness_matrix(conn):
                 "portal_url": portal_url,
                 "state": state,
                 "type": "city" if state != "CT" else "state",
+                "is_state_overview": bool(town_upper == "MA" and ma_muni_rows),
                 "datasets": city_datasets.get(town_upper, []) if state != "CT" else [],
                 "metrics": {
                     "photos": row['with_photos'],
                     "cama_links": row['with_cama'],
                     "coords": row['with_coords'],
                     "owner": row['with_owner'],
-                    "details": row['with_year_built']  # Proxy for general details
+                    "details": row['with_year_built']
                 },
                 "percentages": {
                     "photos": round((row['with_photos'] / row['total_properties']) * 100, 1) if row['total_properties'] else 0,
@@ -5196,6 +5366,73 @@ def _calculate_completeness_matrix(conn):
                     "coords": round((row['with_coords'] / row['total_properties']) * 100, 1) if row['total_properties'] else 0,
                     "details": round((row['with_year_built'] / row['total_properties']) * 100, 1) if row['total_properties'] else 0
                 }
+            })
+
+        # Append all 351 Massachusetts municipality freshness & CAMA coverage rows (CT-style transparency)
+        ma_parent_ds = ds_by_name.get("MA", {})
+        ma_parent_refreshed = ma_parent_ds.get("last_refreshed_at")
+        for mrow in ma_muni_rows:
+            mtown = (mrow.get("town") or "").strip().upper()
+            if not mtown:
+                continue
+            mds = ds_by_name.get(ma_muni_status_key(mtown), {})
+            mcfg = MA_MUNICIPAL_DATA_SOURCES.get(mtown, {})
+            mdetails = mds.get("details") if isinstance(mds.get("details"), dict) else {}
+
+            mstatus = mds.get("refresh_status") or ("cama_queued" if mcfg else "massgis_l3")
+            mlast_ref = mds.get("last_refreshed_at") or ma_parent_refreshed
+            mext_dt = mds.get("external_last_updated") or mrow.get("max_sale_date")
+            mfreq = mcfg.get("frequency") or mdetails.get("frequency")
+            mtype = mcfg.get("type") or mdetails.get("cama_type") or "massgis_l3"
+            mfy = mrow.get("max_source_fy") or mdetails.get("source_fy")
+
+            mportal = (
+                mcfg.get("portal_url")
+                or mcfg.get("url")
+                or mdetails.get("portal_url")
+                or "https://maps.massgis.digital.mass.gov/MassMapper/MassMapper.html"
+            )
+
+            if mstatus == "success":
+                eff_str = mlast_ref.strftime("%Y-%m-%d") if hasattr(mlast_ref, "strftime") else str(mlast_ref or "")[:10]
+                if mtype in ("cambridge_socrata", "boston_assessing") and mfy:
+                    msrc_date = f"{mfreq or 'Weekly'} · FY{mfy} ({eff_str})"
+                elif mfreq in ("Nightly", "Daily", "Weekly") and eff_str:
+                    msrc_date = f"{mfreq} ({eff_str})"
+                elif mext_dt:
+                    msrc_date = f"{mfreq or 'CAMA'} ({mext_dt})"
+                else:
+                    msrc_date = mfreq or eff_str or "CAMA"
+            elif mstatus == "cama_queued":
+                lbl = "Vision CAMA" if mtype == "vision_appraisal" else "MapGeo CAMA" if mtype == "mapgeo" else "Municipal CAMA"
+                msrc_date = f"{lbl} ({mext_dt})" if mext_dt else f"{lbl} (Queued)"
+            else:
+                msrc_date = f"MassGIS L3 (Deeds ≤ {mext_dt})" if mext_dt else "MassGIS L3 (Annual)"
+
+            tot = int(mrow.get("total_properties") or 0)
+            sources.append({
+                "municipality": mtown,
+                "status": mstatus,
+                "last_updated": mlast_ref,
+                "source_date": msrc_date,
+                "total_properties": tot,
+                "portal_url": mportal,
+                "state": "MA",
+                "type": "ma_town",
+                "datasets": [],
+                "metrics": {
+                    "photos": mrow.get("with_photos", 0),
+                    "cama_links": mrow.get("with_cama", 0),
+                    "coords": mrow.get("with_coords", 0),
+                    "owner": mrow.get("with_owner", 0),
+                    "details": mrow.get("with_year_built", 0),
+                },
+                "percentages": {
+                    "photos": round((mrow.get("with_photos", 0) / tot) * 100, 1) if tot else 0,
+                    "cama_links": round((mrow.get("with_cama", 0) / tot) * 100, 1) if tot else 0,
+                    "coords": round((mrow.get("with_coords", 0) / tot) * 100, 1) if tot else 0,
+                    "details": round((mrow.get("with_year_built", 0) / tot) * 100, 1) if tot else 0,
+                },
             })
 
         # Return composite object (frontend must handle)

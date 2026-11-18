@@ -15,12 +15,14 @@
     }
   },
   "currentCycle": 1,
-  "nextCohortIndex": 1,
-  "lastRunAt": "2026-11-15T03:40:14Z",
-  "lastAdvancedAt": "2026-11-15T03:40:14Z",
+  "nextCohortIndex": 2,
+  "lastRunAt": "2026-11-18T11:31:13Z",
+  "lastAdvancedAt": "2026-11-18T11:31:13Z",
   "completedJurisdictionsInCycle": [
     "CT",
-    "NYC"
+    "NYC",
+    "NJ",
+    "DC"
   ],
   "cohorts": [
     {
@@ -227,7 +229,7 @@
         },
         {
           "code": "CHICAGO",
-          "name": "Chicago, IL (Cook County Assessor Parcels — Staged)",
+          "name": "Chicago, IL (Cook County Assessor Parcels \u2014 Staged)",
           "kind": "city",
           "apiCity": "chicago",
           "productionHidden": true,
@@ -240,7 +242,7 @@
         },
         {
           "code": "MA",
-          "name": "Massachusetts (All 351 Municipalities — MassGIS L3 + MA SOC)",
+          "name": "Massachusetts (All 351 Municipalities \u2014 MassGIS L3 + MA SOC)",
           "kind": "city",
           "apiCity": "ma",
           "minProperties": 2000000,
@@ -277,12 +279,12 @@
     },
     {
       "id": "cohort-06-fl-nys",
-      "label": "High-Tier Statewide Registries — Florida (67 Counties) & New York State (33 Counties)",
+      "label": "High-Tier Statewide Registries \u2014 Florida (67 Counties) & New York State (33 Counties)",
       "tier": "core",
       "jurisdictions": [
         {
           "code": "FL",
-          "name": "Florida (All 67 Counties — FloridaGIO + Sunbiz + DBPR Ch. 509)",
+          "name": "Florida (All 67 Counties \u2014 FloridaGIO + Sunbiz + DBPR Ch. 509)",
           "kind": "city",
           "apiCity": "fl",
           "minProperties": 2500000,
@@ -310,7 +312,7 @@
     },
     {
       "id": "cohort-07-co-nc-wi-vt",
-      "label": "Multi-Region Statewide Cadastres — Colorado, North Carolina, Wisconsin & Vermont",
+      "label": "Multi-Region Statewide Cadastres \u2014 Colorado, North Carolina, Wisconsin & Vermont",
       "tier": "core",
       "jurisdictions": [
         {
@@ -328,7 +330,7 @@
         },
         {
           "code": "NC",
-          "name": "North Carolina (All 100 Counties — NC OneMap Parcels)",
+          "name": "North Carolina (All 100 Counties \u2014 NC OneMap Parcels)",
           "kind": "city",
           "apiCity": "nc",
           "minProperties": 1500000,
@@ -340,7 +342,7 @@
         },
         {
           "code": "WI",
-          "name": "Wisconsin (All 72 Counties — SCO/DOA V11 Parcels)",
+          "name": "Wisconsin (All 72 Counties \u2014 SCO/DOA V11 Parcels)",
           "kind": "city",
           "apiCity": "wi",
           "minProperties": 1800000,
@@ -352,7 +354,7 @@
         },
         {
           "code": "VT",
-          "name": "Vermont (250+ Municipalities — VCGI Grand List)",
+          "name": "Vermont (250+ Municipalities \u2014 VCGI Grand List)",
           "kind": "city",
           "apiCity": "vt",
           "minProperties": 200000,
@@ -367,12 +369,12 @@
     },
     {
       "id": "cohort-08-va-ar",
-      "label": "Mid-South & Commonwealth Statewide Cadastres — Virginia & Arkansas",
+      "label": "Mid-South & Commonwealth Statewide Cadastres \u2014 Virginia & Arkansas",
       "tier": "core",
       "jurisdictions": [
         {
           "code": "VA",
-          "name": "Virginia (~88 Counties & Cities — VGIN Local Schemas + HRGeo + County CAMA + VA SCC)",
+          "name": "Virginia (~88 Counties & Cities \u2014 VGIN Local Schemas + HRGeo + County CAMA + VA SCC)",
           "kind": "city",
           "apiCity": "va",
           "minProperties": 1800000,
@@ -385,7 +387,7 @@
         },
         {
           "code": "AR",
-          "name": "Arkansas (All 75 Counties — Arkansas GIS Statewide Parcels + AR SOS)",
+          "name": "Arkansas (All 75 Counties \u2014 Arkansas GIS Statewide Parcels + AR SOS)",
           "kind": "city",
           "apiCity": "ar",
           "minProperties": 1800000,
@@ -413,6 +415,21 @@
       "healedFeeds": [],
       "rolledOverToCycle": null,
       "reportPath": "docs/benchmarks/2026-11-15-cohort-00-ct-nyc-report.md",
+      "notes": "Automated battery pass"
+    },
+    {
+      "timestamp": "2026-11-18T11:31:13Z",
+      "cycle": 1,
+      "cohortId": "cohort-01-nj-dc",
+      "jurisdictions": [
+        "NJ",
+        "DC"
+      ],
+      "totalChecks": 25,
+      "passedChecks": 25,
+      "healedFeeds": [],
+      "rolledOverToCycle": null,
+      "reportPath": "docs/benchmarks/2026-11-18-cohort-01-nj-dc-report.md",
       "notes": "Automated battery pass"
     }
   ]

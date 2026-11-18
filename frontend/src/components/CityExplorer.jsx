@@ -283,7 +283,7 @@ const CITY_STATE_CODES = {
 const CITY_CONFIG = {
   nyc: {
     name: 'NYC',
-    title: 'NYC Landlord Networks',
+    title: 'NYC Owner Networks',
     subTitle: 'HPD registration data',
     beta: true,
     idLabel: 'BBL',
@@ -346,7 +346,7 @@ const CITY_CONFIG = {
   },
   dc: {
     name: 'D.C.',
-    title: 'D.C. Landlord Networks',
+    title: 'D.C. Owner Networks',
     subTitle: 'CAMA assessment data',
     beta: true,
     idLabel: 'SSL',
@@ -403,7 +403,7 @@ const CITY_CONFIG = {
   },
   baltimore: {
     name: 'Baltimore',
-    title: 'Baltimore Landlord Networks',
+    title: 'Baltimore Owner Networks',
     subTitle: 'City GIS ownership data',
     beta: true,
     idLabel: 'Block-Lot',
@@ -459,7 +459,7 @@ const CITY_CONFIG = {
 
   boston: {
     name: 'Boston',
-    title: 'Boston Landlord Networks',
+    title: 'Boston Owner Networks',
     subTitle: 'Boston assessments, MassGIS coordinates/units & ISD code violations',
     beta: true,
     idLabel: 'Parcel ID',
@@ -521,7 +521,7 @@ const CITY_CONFIG = {
   },
   detroit: {
     name: 'Detroit',
-    title: 'Detroit Landlord Networks',
+    title: 'Detroit Owner Networks',
     subTitle: 'GIS & assessment data',
     beta: true,
     idLabel: 'Parcel ID',
@@ -600,7 +600,7 @@ const CITY_CONFIG = {
   },
   philadelphia: {
     name: 'Philadelphia',
-    title: 'Philadelphia Landlord Networks',
+    title: 'Philadelphia Owner Networks',
     subTitle: 'OPA assessments, L&I rental licenses & violations',
     beta: true,
     idLabel: 'OPA Number',
@@ -619,7 +619,7 @@ const CITY_CONFIG = {
     unitsTooltip: 'Dwelling units reported on active Philadelphia L&I Rental Licenses (93,580 licensed properties; unlicensed owner-occupied OPA parcels omit unit counts)',
     recordLabel: 'parcels',
     boroughLabel: 'Ward',
-    dataSourceDesc: 'Data sourced from Philadelphia Office of Property Assessment (OPA) parcels, L&I active rental licenses, PA Department of State business Governor/Officer filings (xvd7-5r2c), and L&I code violations. Landlord networks are clustered from taxpayer names, PA DOS Governors, guarded off-site mailing addresses, and verified non-agent rental license owner contacts.',
+    dataSourceDesc: 'Data sourced from Philadelphia Office of Property Assessment (OPA) parcels, L&I active rental licenses, PA Department of State business Governor/Officer filings (xvd7-5r2c), and L&I code violations. Owner networks are clustered from taxpayer names, PA DOS Governors, guarded off-site mailing addresses, and verified non-agent rental license owner contacts.',
     coverageNote: 'Philadelphia managing agents flagged on L&I rental licenses and commercial PA registered agents are quarantined so third-party intermediaries never merge unrelated portfolios.',
     quickSearches: ['Eyal Guigui', 'Philly SFR', 'Eyal Greenberg', 'OKH-PH Owner', 'Marine Club'],
     defaultSearchQuery: 'properties',
@@ -657,7 +657,7 @@ const CITY_CONFIG = {
   },
   chicago: {
     name: 'Chicago',
-    title: 'Chicago Landlord Networks',
+    title: 'Chicago Owner Networks',
     subTitle: 'Cook County Assessor parcel & taxpayer data',
     beta: true,
     idLabel: 'PIN',
@@ -713,7 +713,7 @@ const CITY_CONFIG = {
   },
   miami: {
     name: 'Miami',
-    title: 'Miami Landlord Networks',
+    title: 'Miami Owner Networks',
     subTitle: 'Property assessments & Florida SunBiz',
     beta: true,
     idLabel: 'Folio',
@@ -731,7 +731,7 @@ const CITY_CONFIG = {
     recordLabel: 'parcels',
     boroughLabel: 'City',
     dataSourceDesc: 'Data sourced from Miami-Dade County parcel ownership records, bulk Florida Sunbiz corporate officer & LLC manager filings, and Florida DBPR Ch. 509 active apartment licenses.',
-    coverageNote: 'Commercial registered-agent hubs (>=15 entities) and mortgage-escrow servicers are quarantined so multi-LLC landlord networks merge only on genuine officers, managers, DBPR licensees, or private business addresses.',
+    coverageNote: 'Commercial registered-agent hubs (>=15 entities) and mortgage-escrow servicers are quarantined so multi-LLC owner networks merge only on genuine officers, managers, DBPR licensees, or private business addresses.',
     quickSearches: ['Lennar Homes', 'FKH SFR', 'Mark Solls', 'DR Horton', 'Mana'],
     defaultSearchQuery: 'properties',
     evictionNote: 'Court and code-enforcement records appear only where loaded.',
@@ -765,7 +765,7 @@ const CITY_CONFIG = {
   },
   minneapolis: {
     name: 'Minneapolis',
-    title: 'Minneapolis Landlord Networks',
+    title: 'Minneapolis Owner Networks',
     subTitle: 'Active rental license data',
     beta: true,
     idLabel: 'Property ID (PID)',
@@ -889,12 +889,12 @@ const CITY_CONFIG = {
   },
   ma: {
     name: 'Massachusetts',
-    title: 'Massachusetts Landlord Networks',
-    subTitle: '351-town MassGIS parcels, Boston CLT/ISD enrichments & MA corporate filings',
+    title: 'Massachusetts Owner Networks',
+    subTitle: 'All 351 MA cities & towns · MassGIS L3 + 112 live municipal CAMA portals + Boston ISD',
     beta: true,
     idLabel: 'Parcel ID',
     idDesc: 'MassGIS standardized municipal parcel card identifier',
-    agencyLabel: 'MassGIS / ISD',
+    agencyLabel: 'CAMA / MassGIS / ISD',
     hasViolationClasses: false,
     registrationBadge: 'Tax Parcel',
     filingLabel: 'filing',
@@ -906,12 +906,38 @@ const CITY_CONFIG = {
     reliableUnits: false,
     recordLabel: 'parcels',
     boroughLabel: 'Municipality',
-    dataSourceDesc: 'Data sourced from MassGIS Level 3 Property Tax Parcels across all 351 Massachusetts cities and towns, cross-enriched with Boston Assessing Community Land Trust parcels & Boston ISD code violations, OpenCorporates Massachusetts corporate/LLC filings, and NHPD.',
-    coverageNote: 'Covers all 351 Massachusetts municipalities, including Boston ISD code violations and charitable/CLT housing. Private Massachusetts nominee trust schedules of beneficiaries not filed with the Corporations Division remain undisclosed.',
-    quickSearches: ['Pulte Homes', 'Todd Sheldon', 'Oak Realty', 'Old Colony Realty', 'Obsidian ML'],
+    dataSourceDesc: 'Data sourced from MassGIS Level 3 Property Tax Parcels across all 351 Massachusetts cities and towns, actively enriched via 112 live municipal CAMA portals (78 Vision/VGSI, 31 MapGeo, Analyze Boston FY2026 Property Assessments & dual-owner nominee realty trust piercing, Cambridge FY2027 Assessing Open Data, and Ashland ActDataScout), Boston ISD code violations, OpenCorporates MA corporate/LLC filings, and NHPD.',
+    coverageNote: 'Unifies Boston, Brookline, Somerville, Cambridge, Quincy, Worcester, and all 351 Massachusetts municipalities into one cross-town ownership graph, including Boston ISD code violations and Community Land Trusts. Non-Boston private nominee trust beneficiary schedules not filed with the Corporations Division remain undisclosed.',
+    quickSearches: ['Dudley Neighbors', 'Pulte Homes', 'Todd Sheldon', 'Cottage Brook', 'Oak Realty'],
     defaultSearchQuery: 'realty',
     evictionNote: 'Massachusetts Housing Court case records appear only where parcel crosswalks are loaded.',
     officialRecords: [
+      {
+        label: 'Boston Property Assessment Lookup',
+        desc: 'Official City of Boston Assessing parcel record & FY2026 valuation',
+        getUrl: (p) => {
+          const bbl = String(p?.bbl || '');
+          if (!bbl.startsWith('M035-')) return null;
+          const pid = bbl.slice(5).replace(/\D/g, '');
+          return pid
+            ? `https://properties.boston.gov/#/details?parcelId=${encodeURIComponent(pid.padStart(10, '0'))}`
+            : 'https://properties.boston.gov/';
+        },
+        getIframeUrl: null,
+      },
+      {
+        label: 'Boston Tax Parcel Viewer',
+        desc: 'Official City of Boston interactive tax parcel map',
+        getUrl: (p) => {
+          const bbl = String(p?.bbl || '');
+          if (!bbl.startsWith('M035-')) return null;
+          const pid = bbl.slice(5).replace(/\D/g, '');
+          return pid
+            ? `https://taxparcelviewer.boston.gov/?#widget_11=text:${encodeURIComponent(pid.padStart(10, '0'))}`
+            : 'https://taxparcelviewer.boston.gov/';
+        },
+        getIframeUrl: null,
+      },
       {
         label: 'MassGIS Property Tax Parcel Viewer',
         desc: 'Official MassMapper Level 3 assessor parcel map across all 351 towns',
@@ -946,7 +972,7 @@ const CITY_CONFIG = {
   },
   fl: {
     name: 'Florida',
-    title: 'Florida Statewide Landlord Networks',
+    title: 'Florida Statewide Owner Networks',
     subTitle: '67-county FDOR parcels, Sunbiz officers & DBPR Ch. 509 licenses',
     beta: true,
     idLabel: 'Parcel ID',
@@ -1010,7 +1036,7 @@ const CITY_CONFIG = {
   },
   ny: {
     name: 'NY State',
-    title: 'New York State Landlord Networks (Outside NYC)',
+    title: 'New York State Owner Networks (Outside NYC)',
     subTitle: '33 non-NYC NYS GIS counties, NY DOS corps & Buffalo enforcement · Switch to NYC for 5 boroughs',
     beta: true,
     idLabel: 'SWIS-SBL',
@@ -1066,7 +1092,7 @@ const CITY_CONFIG = {
   },
   co: {
     name: 'Colorado',
-    title: 'Colorado Landlord Networks',
+    title: 'Colorado Owner Networks',
     subTitle: 'Statewide public parcels, CO SOS & Denver rental licenses',
     beta: true,
     idLabel: 'Parcel ID',
@@ -1130,7 +1156,7 @@ const CITY_CONFIG = {
   },
   nc: {
     name: 'North Carolina',
-    title: 'North Carolina Landlord Networks',
+    title: 'North Carolina Owner Networks',
     subTitle: 'NC OneMap standardized parcels across all 100 counties',
     beta: true,
     idLabel: 'NC Parcel ID',
@@ -1180,7 +1206,7 @@ const CITY_CONFIG = {
   },
   wi: {
     name: 'Wisconsin',
-    title: 'Wisconsin Landlord Networks',
+    title: 'Wisconsin Owner Networks',
     subTitle: 'SCO/DOA V11 statewide parcels across all 72 counties',
     beta: true,
     idLabel: 'Statewide PIN',
@@ -1230,7 +1256,7 @@ const CITY_CONFIG = {
   },
   vt: {
     name: 'Vermont',
-    title: 'Vermont Landlord Networks',
+    title: 'Vermont Owner Networks',
     subTitle: 'VCGI standardized Grand List parcels across 250+ towns',
     beta: true,
     idLabel: 'SPAN',
@@ -1280,7 +1306,7 @@ const CITY_CONFIG = {
   },
   ar: {
     name: 'Arkansas',
-    title: 'Arkansas Landlord Networks',
+    title: 'Arkansas Owner Networks',
     subTitle: 'Statewide parcels across all 75 counties + OpenCorporates AR',
     beta: true,
     idLabel: 'County Parcel ID',
@@ -1341,7 +1367,7 @@ const CITY_CONFIG = {
   },
   va: {
     name: 'Virginia',
-    title: 'Virginia Landlord Networks',
+    title: 'Virginia Owner Networks',
     subTitle: 'VGIN local-schema parcels + HRGeo + County CAMA + OpenCorporates VA SCC',
     beta: true,
     maintenance: false,
@@ -1716,10 +1742,35 @@ function OfficialRecordPreview({ p, config }) {
 // ---------------------------------------------------------------------------
 // BuildingDrawer
 // ---------------------------------------------------------------------------
+const isPlaceholderSiteAddress = (rawAddr) => {
+  const s = String(rawAddr || '').trim().toUpperCase();
+  if (!s) return true;
+  if (/^(0|UNASSIGNED|UNKNOWN|NO\s+ADDRESS|NONE|N\/?A|VACANT|VACANT\s+LAND|VACANT\s+LOT|UNDETERMINED)$/i.test(s)) {
+    return true;
+  }
+  if (/^0\s+(UNASSIGNED|UNKNOWN|NONE|NO\s+ADDRESS|N\/?A|VACANT)\b/i.test(s)) {
+    return true;
+  }
+  if (/^0\s+[A-Z]/i.test(s)) {
+    return true;
+  }
+  if (/^PARCEL\s+/i.test(s)) {
+    return true;
+  }
+  return false;
+};
+
 const formatPropertyAddress = (p, config) => {
   const raw = (p?.address || '').trim();
-  if (raw) return raw;
-  return p?.bbl ? `Unaddressed (${config?.idLabel || 'ID'} ${p.bbl})` : 'Unaddressed Parcel';
+  const upper = raw.toUpperCase();
+  if (!raw || /^(0|0\s+UNASSIGNED|UNASSIGNED|0\s+UNKNOWN|UNKNOWN|NO\s+ADDRESS|NONE|N\/?A|VACANT)$/i.test(upper)) {
+    return p?.bbl ? `Unaddressed Parcel (${config?.idLabel || 'ID'} ${p.bbl})` : 'Unaddressed Parcel';
+  }
+  if (/^0\s+[A-Z]/i.test(upper)) {
+    const streetOnly = raw.replace(/^0\s+/i, '').trim();
+    return p?.bbl ? `${streetOnly} (Unnumbered · ${p.bbl})` : `${streetOnly} (Unnumbered)`;
+  }
+  return raw;
 };
 
 function BuildingDrawer({ p, networkName, onClose, onSelectParcel, config }) {
@@ -1961,11 +2012,48 @@ function BuildingDrawer({ p, networkName, onClose, onSelectParcel, config }) {
             </div>
           )}
 
+          {p.building_photo_url && (
+            <figure className="overflow-hidden rounded-xl border border-slate-200 bg-slate-100">
+              <img
+                src={p.building_photo_url}
+                alt={`Municipal assessor photograph for ${formatPropertyAddress(p, config)}`}
+                loading="lazy"
+                width="480"
+                height="320"
+                onError={(e) => {
+                  const fig = e.currentTarget.closest('figure');
+                  if (fig) fig.style.display = 'none';
+                }}
+                className="w-full max-h-56 object-cover"
+              />
+              <figcaption className="px-3 py-1.5 text-[10px] font-semibold text-slate-500 bg-slate-50 border-t border-slate-200">
+                Municipal CAMA property photograph
+              </figcaption>
+            </figure>
+          )}
+
           {/* Inline iframe preview */}
           <OfficialRecordPreview p={p} config={config} />
 
           <div className="space-y-2">
             <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Official Records</div>
+            {p.cama_site_link && (
+              <a
+                href={p.cama_site_link}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-3 px-4 py-3 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl transition-colors group"
+              >
+                <Building2 size={15} className="text-emerald-700 shrink-0" aria-hidden="true" />
+                <div className="flex-1">
+                  <div className="text-sm font-bold text-emerald-900">Municipal CAMA Property Record Card</div>
+                  <div className="text-[10px] text-emerald-700">
+                    Direct official municipal assessor parcel card{p.source_fy ? ` (FY${p.source_fy})` : ''}
+                  </div>
+                </div>
+                <ExternalLink size={13} className="text-emerald-500 group-hover:text-emerald-700 shrink-0" aria-hidden="true" />
+              </a>
+            )}
             {p.opencorporates_url && (
               <a
                 href={p.opencorporates_url}
@@ -2653,21 +2741,26 @@ function CitySearchBox({ onSelect, externalQuery, onExternalQueryConsumed, apiBa
   };
 
   return (
-    <div className="relative">
+    <search className="relative">
       <div className={`flex items-center gap-2 bg-white border-2 rounded-2xl px-4 py-3 transition-all shadow-md ${focused ? 'border-violet-400 shadow-violet-100' : 'border-slate-200'}`}>
-        <Search size={18} className={`shrink-0 transition-colors ${focused ? 'text-violet-500' : 'text-slate-400'}`} />
+        <Search size={18} aria-hidden="true" className={`shrink-0 transition-colors ${focused ? 'text-violet-500' : 'text-slate-400'}`} />
         <input
+          type="search"
+          aria-label={`Search property owner, LLC name, or ${config.name} address`}
+          autoCorrect="off"
+          autoCapitalize="none"
+          spellCheck={false}
           value={query}
           onChange={e => { setQuery(e.target.value); search(e.target.value); }}
           onFocus={() => setFocused(true)}
           onBlur={() => setTimeout(() => setFocused(false), 200)}
-          placeholder={`Search landlord, LLC name, or ${config.name} address…`}
+          placeholder={`Search property owner, LLC name, or ${config.name} address…`}
           className="flex-1 bg-transparent outline-none text-slate-900 placeholder-slate-400 font-medium"
         />
-        {loading && <Loader2 size={16} className="animate-spin text-violet-500 shrink-0" />}
+        {loading && <Loader2 size={16} aria-hidden="true" className="animate-spin text-violet-500 shrink-0" />}
         {query && !loading && (
-          <button onClick={() => { setQuery(''); setResults([]); }} className="text-slate-300 hover:text-slate-500">
-            <X size={16} />
+          <button type="button" aria-label="Clear search query" onClick={() => { setQuery(''); setResults([]); }} className="text-slate-300 hover:text-slate-500">
+            <X size={16} aria-hidden="true" />
           </button>
         )}
       </div>
@@ -2702,7 +2795,7 @@ function CitySearchBox({ onSelect, externalQuery, onExternalQueryConsumed, apiBa
                   {r.type?.endsWith('_network') && (
                     <div className="flex gap-2 mt-1">
                       <span className="text-[10px] font-bold text-violet-700 bg-violet-100 px-1.5 py-0.5 rounded-full">
-                        {fmt(r.building_count)} bldgs
+                        {fmt(r.building_count)} {config.recordLabel === 'parcels' ? (Number(r.building_count) === 1 ? 'parcel' : 'parcels') : 'bldgs'}
                       </span>
                       {config.reliableUnits && r.unit_count > 0 && (
                         <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded-full">
@@ -2718,7 +2811,7 @@ function CitySearchBox({ onSelect, externalQuery, onExternalQueryConsumed, apiBa
           </motion.div>
         )}
       </AnimatePresence>
-    </div>
+    </search>
   );
 }
 
@@ -3474,12 +3567,14 @@ function NetworkDetail({ networkKey, onBack, onSearchTrigger, onMapSelected, onO
       return true;
     };
 
-    // Group only when a real street address exists; keep unaddressed parcels separate by parcel ID
+    // Group only when a real street-numbered building address exists; keep unaddressed / 0-unassigned parcels separate by parcel ID
     const groups = {};
     baseList.forEach((p, idx) => {
       const addr = (p.address || '').trim().toUpperCase();
       const borough = (p.borough || '').trim().toUpperCase();
-      const key = addr ? `${addr}|${borough}` : `__UNADDRESSED__:${p.bbl || idx}|${borough}`;
+      const key = (!isPlaceholderSiteAddress(addr))
+        ? `${addr}|${borough}`
+        : `__UNADDRESSED__:${p.bbl || idx}|${borough}`;
       if (!groups[key]) {
         groups[key] = {
           ...p,
@@ -3911,7 +4006,9 @@ function NetworkDetail({ networkKey, onBack, onSearchTrigger, onMapSelected, onO
                 </div>
                 <div className={`grid ${portfolioStatCols} gap-3 mt-3`}>
                   <div className="flex flex-col">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase leading-none mb-1">Buildings</span>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase leading-none mb-1">
+                      {config.recordLabel === 'parcels' ? 'Parcels' : 'Buildings'}
+                    </span>
                     <span className="text-2xl font-black text-slate-800 leading-none">{fmt(data.building_count)}</span>
                   </div>
                   {config.reliableUnits && (
@@ -4477,7 +4574,7 @@ function NetworkDetail({ networkKey, onBack, onSearchTrigger, onMapSelected, onO
                 </table>
                 {displayProps.length === 0 && (
                   <div className="px-4 py-8 text-center text-xs text-slate-400 italic border-t border-slate-100">
-                    No buildings match.
+                    No {config.recordLabel || 'properties'} match.
                   </div>
                 )}
                 {displayProps.length > visibleRows && (
@@ -4877,7 +4974,7 @@ export default function CityExplorer({ city = "nyc", onBack, onMapSelected, onOp
                             </span>
                           )}
                           <span className="text-[10px] font-bold bg-violet-100 text-violet-700 px-2 py-0.5 rounded-full">
-                            {fmt(n.building_count)} bldgs
+                            {fmt(n.building_count)} {config.recordLabel === 'parcels' ? (Number(n.building_count) === 1 ? 'parcel' : 'parcels') : 'bldgs'}
                           </span>
                           {config.reliableUnits && n.unit_count > 0 && (
                             <span className="text-[10px] font-bold bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">

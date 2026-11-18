@@ -659,6 +659,27 @@ def _optimization_rotation_thread():
         opt_schedule.run_pending()
         time.sleep(30)
 
+def run_nightly_ma_cama_update():
+    """Nightly Massachusetts municipal CAMA scraper across Vision/VGSI, MapGeo,
+    Analyze Boston, and Cambridge FY2027 Assessing Open Data portals.
+    Updates `MA_MUNI_<TOWN>` per-town completeness status and rebuilds `ma_networks`
+    when deed/CAMA owner records change."""
+    logger.info("=" * 80)
+    logger.info("Starting Nightly Massachusetts Municipal CAMA Update")
+    logger.info("=" * 80)
+    sweep_stale_locks()
+    try:
+        cmd = [sys.executable, "ma/scrape_ma_cama.py", "--due-nightly", "--max-towns", "12", "--rebuild-networks"]
+        res = run_source_only(cmd, check=False, timeout=NETWORK_REBUILD_TIMEOUT)
+        if getattr(res, "returncode", 1) == 0:
+            logger.info("✓ Nightly Massachusetts municipal CAMA update finished cleanly.")
+        else:
+            logger.warning("⚠ Nightly Massachusetts municipal CAMA update exited with code %s.", getattr(res, "returncode", "unknown"))
+    except Exception as e:
+        logger.error("✘ Nightly Massachusetts municipal CAMA update failed: %s", e)
+    logger.info("=" * 80)
+
+
 def main():
     """Main scheduler loop"""
     logger.info("Vision Data Updater Service Starting")
@@ -674,6 +695,7 @@ def main():
     
     # Schedule heavy jobs on the main loop
     schedule.every().day.at("02:00").do(run_nightly_update)
+    schedule.every().day.at("02:45").do(run_nightly_ma_cama_update)
     schedule.every().day.at("03:30").do(run_nightly_nyc_update)
     schedule.every().day.at("03:45").do(run_nightly_nj_update)
     schedule.every().day.at("04:00").do(run_nightly_other_cities_update)
@@ -686,6 +708,7 @@ def main():
     
     logger.info("Scheduled jobs:")
     logger.info("  - Nightly CT update (Vision/Current Owner): 2:00 AM daily")
+    logger.info("  - Nightly MA municipal CAMA update (Vision/MapGeo/Boston/Cambridge): 2:45 AM daily")
     logger.info("  - Nightly NYC update (HPD + enrichment + networks): 3:30 AM daily")
     logger.info("  - Nightly NJ update (BHI + networks): 3:45 AM daily")
     logger.info("  - Nightly multi-city source-only hook: 4:00 AM daily")

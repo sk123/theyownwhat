@@ -32,7 +32,6 @@ DATASET_KEY_TO_CITY_PREFIX = {
     "NYS": "ny",
     "DC": "dc",
     "BALTIMORE": "baltimore",
-    "BOSTON": "boston",
     "DETROIT": "detroit",
     "PHILADELPHIA": "philadelphia",
     "CHICAGO": "chicago",
@@ -50,7 +49,7 @@ DATASET_KEY_TO_CITY_PREFIX = {
 }
 
 CODE_CASE_DATASET_KEYS = {
-    "CT", "NY", "BOSTON", "DC", "DETROIT", "BALTIMORE", "PHILADELPHIA", "MINNEAPOLIS", "NYS",
+    "CT", "NY", "MA", "DC", "DETROIT", "BALTIMORE", "PHILADELPHIA", "MINNEAPOLIS", "NYS",
 }
 EVICTION_DATASET_KEYS = {
     "CT", "NY", "BALTIMORE", "NYS",

@@ -193,11 +193,20 @@ def ensure_nationwide_parent_tables(conn) -> None:
                 oc_company_number      TEXT,
                 oc_match_tier          SMALLINT,
                 oc_match_confidence    NUMERIC(4,3),
+                cama_site_link         TEXT,
+                building_photo_url     TEXT,
+                cama_last_scraped_at   TIMESTAMPTZ,
+                source_fy              INTEGER,
                 source_system          TEXT,
                 created_at             TIMESTAMP DEFAULT NOW(),
                 updated_at             TIMESTAMP DEFAULT NOW(),
                 PRIMARY KEY (jurisdiction, bbl)
             ) PARTITION BY LIST (jurisdiction);
+
+            ALTER TABLE us_properties ADD COLUMN IF NOT EXISTS cama_site_link TEXT;
+            ALTER TABLE us_properties ADD COLUMN IF NOT EXISTS building_photo_url TEXT;
+            ALTER TABLE us_properties ADD COLUMN IF NOT EXISTS cama_last_scraped_at TIMESTAMPTZ;
+            ALTER TABLE us_properties ADD COLUMN IF NOT EXISTS source_fy INTEGER;
 
             CREATE TABLE IF NOT EXISTS us_networks (
                 jurisdiction       TEXT NOT NULL,

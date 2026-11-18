@@ -205,12 +205,12 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
                                     ? 'Light Maintenance'
                                     : cityStats?.eviction_data_available && !cityStats?.code_data_available
                                     ? 'Eviction Watch'
-                                    : 'Landlord Rap Sheets'}
+                                    : 'Owner Rap Sheets'}
                             </div>
                             <span className="px-2 py-0.5 rounded-md bg-amber-500/20 border border-amber-500/30 text-amber-200 text-[10px] font-black uppercase tracking-widest">Beta</span>
                         </div>
                         <h1 className="text-4xl font-black mb-2 tracking-tight">
-                            {rapSheetsEnabled ? `${selectedCity} Landlord Rap Sheets` : 'Non-Hartford Rap Sheets Paused'}
+                            {rapSheetsEnabled ? `${selectedCity} Owner Rap Sheets` : 'Non-Hartford Rap Sheets Paused'}
                         </h1>
                         {!rapSheetsEnabled && (
                             <p className="text-sm font-medium text-slate-300">
@@ -229,7 +229,7 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
                         <div className="flex items-center gap-2 mb-2 -mt-1">
                             <ShieldAlert size={18} className="text-slate-800" />
                             <h2 className="text-lg font-black text-slate-900 tracking-tight">
-                                {rapSheetsEnabled ? `${selectedCity} Landlord Rap Sheets` : 'Rap Sheets Paused'}
+                                {rapSheetsEnabled ? `${selectedCity} Owner Rap Sheets` : 'Rap Sheets Paused'}
                             </h2>
                             <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-[9px] font-black uppercase">Beta</span>
                         </div>
@@ -301,7 +301,7 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
                             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} aria-hidden="true" />
                             <input
                                 type="search"
-                                aria-label="Filter landlords by name"
+                                aria-label="Filter property owners by name"
                                 placeholder="Filter by name..."
                                 className="w-full pl-10 pr-4 py-2 bg-slate-100 border-transparent focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 rounded-xl text-sm transition-all"
                                 value={filter}

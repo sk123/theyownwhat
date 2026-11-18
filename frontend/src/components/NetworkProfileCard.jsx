@@ -627,7 +627,7 @@ export default function NetworkProfileCard({
                                     city: 'CT'
                                 })}
                                 className="px-2 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-lg text-[10px] font-extrabold uppercase tracking-wider transition-all flex items-center gap-1 shrink-0"
-                                title="Report a data error, wrong landlord grouping, or missing detail"
+                                title="Report a data error, wrong owner grouping, or missing detail"
                             >
                                 <ShieldAlert size={12} className="text-amber-600 shrink-0" />
                                 <span className="hidden sm:inline">Wrong?</span>

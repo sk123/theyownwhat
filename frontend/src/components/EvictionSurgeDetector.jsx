@@ -67,7 +67,7 @@ export default function EvictionSurgeDetector({ items = [], mode = 'landlord', o
                             onClick={() => onModeChange?.('landlord')}
                             className={`px-3 py-1 text-[11px] font-bold rounded-md transition-colors ${mode === 'landlord' ? 'bg-amber-100 text-amber-700' : 'text-slate-600 hover:bg-slate-100'}`}
                         >
-                            Landlord
+                            Property Owner
                         </button>
                         <button
                             type="button"
@@ -91,7 +91,7 @@ export default function EvictionSurgeDetector({ items = [], mode = 'landlord', o
             </div>
             {mode === 'landlord' ? (
                 <div className="mt-3 rounded-xl border border-amber-200 bg-white p-3">
-                    <div className="text-[10px] font-bold text-amber-600 uppercase tracking-widest mb-2">Detected Landlord Surges</div>
+                    <div className="text-[10px] font-bold text-amber-600 uppercase tracking-widest mb-2">Detected Owner Surges</div>
                     {networkLeaders.length > 0 ? (
                         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-2">
                         {networkLeaders.map((item) => (
@@ -107,7 +107,7 @@ export default function EvictionSurgeDetector({ items = [], mode = 'landlord', o
                         ))}
                         </div>
                     ) : (
-                        <div className="text-sm font-semibold text-slate-600">No landlord surges detected with the current threshold.</div>
+                        <div className="text-sm font-semibold text-slate-600">No property owner surges detected with the current threshold.</div>
                     )}
                 </div>
             ) : (

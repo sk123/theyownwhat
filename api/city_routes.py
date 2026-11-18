@@ -1197,7 +1197,6 @@ SIBLING_EXPLORER_PAIRS = {
     "nyc": ("ny", "NY State (Outside NYC)"),
     "ny": ("nyc", "New York City (5 Boroughs)"),
     "boston": ("ma", "Massachusetts Statewide"),
-    "ma": ("boston", "Boston Neighborhood View"),
     "miami": ("fl", "Florida Statewide"),
     "fl": ("miami", "Miami-Dade All-Parcels"),
 }

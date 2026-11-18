@@ -93,7 +93,7 @@ export default function MajorUpgradeButton({
                 <span>Why This Exists</span>
               </div>
               <p className="mt-1.5 text-[11px] text-slate-600 leading-relaxed">
-                Landlords routinely place each building in a separate LLC so properties look unconnected in court or assessor lookups. Links deeds, corporate filings, rental licenses, addresses, code violations, evictions, and subsidies into unified portfolios.
+                Property owners routinely place each building in a separate LLC so properties look unconnected in court or assessor lookups. Links deeds, corporate filings, rental licenses, addresses, code violations, evictions, and subsidies into unified portfolios.
               </p>
             </div>
 
@@ -103,7 +103,7 @@ export default function MajorUpgradeButton({
                 <span>Data Expansion (1 &rarr; {jurisdictionCount})</span>
               </div>
               <p className="mt-1.5 text-[11px] text-slate-600 leading-relaxed">
-                Added statewide VA, FL, MA, NY State (33 counties), NC (100 counties), AR (75 counties), WI (72 counties), CO, VT, and NJ alongside CT, NYC, Chicago, Philadelphia, D.C., Baltimore, Boston, Detroit, Miami-Dade, and Minneapolis—with NHPD subsidies &amp; recent parcel sales.
+                Added statewide VA, FL, MA (all 351 towns incl. Boston), NY State (33 counties), NC (100 counties), AR (75 counties), WI (72 counties), CO, VT, and NJ alongside CT, NYC, Chicago, Philadelphia, D.C., Baltimore, Detroit, Miami-Dade, and Minneapolis—with NHPD subsidies &amp; recent parcel sales.
               </p>
             </div>
 

@@ -105,7 +105,7 @@ const getDashboardMetricKey = (row, index = '') => (
 const metricHint = (metric, selectedCity) => {
     if (metric.key === 'code_violations') return 'Official Hartford code-enforcement records matched to parcels.';
     if (metric.key === 'attorneys') return `Networks with concentrated plaintiff-attorney activity${selectedCity === 'STATEWIDE' ? ' statewide' : ` in ${displayCity(selectedCity)}`}.`;
-    if (metric.key === 'evictions') return 'Court eviction filings linked to matched parcels and landlord identities.';
+    if (metric.key === 'evictions') return 'Court eviction filings linked to matched parcels and owner identities.';
     return 'Cached ownership-network leaderboard from municipal assessment and registration records.';
 };
 

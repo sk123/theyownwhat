@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 
 const DATASET_ORDER = [
-    'CT', 'NYC', 'PHILADELPHIA', 'DC', 'BALTIMORE', 'BOSTON', 'MA',
+    'CT', 'MA', 'NYC', 'PHILADELPHIA', 'DC', 'BALTIMORE',
     'FL', 'MIAMI', 'CHICAGO', 'NYS', 'NJ', 'CO', 'NC', 'VA', 'AR', 'WI', 'VT', 'DETROIT', 'MINNEAPOLIS',
 ];
 
@@ -29,8 +29,7 @@ const DATASET_META = {
     NYS: { label: 'New York State (33 Counties)', short: 'NY State', accent: 'indigo' },
     DC: { label: 'Washington, D.C.', short: 'D.C.', accent: 'cyan' },
     BALTIMORE: { label: 'Baltimore', short: 'Baltimore', accent: 'amber' },
-    BOSTON: { label: 'Boston', short: 'Boston', accent: 'emerald' },
-    MA: { label: 'Massachusetts', short: 'MA', accent: 'emerald' },
+    MA: { label: 'Massachusetts (All 351 Cities & Towns)', short: 'MA', accent: 'emerald' },
     DETROIT: { label: 'Detroit', short: 'Detroit', accent: 'rose' },
     PHILADELPHIA: { label: 'Philadelphia', short: 'Philadelphia', accent: 'violet' },
     CHICAGO: { label: 'Chicago', short: 'Chicago', accent: 'sky' },
@@ -75,12 +74,11 @@ function getDatasetKey(row) {
     const state = String(row?.state || '').toUpperCase();
     const municipality = String(row?.municipality || '').toUpperCase();
     if (state === 'CT' || row?.type === 'state') return 'CT';
+    if (state === 'MA' || row?.type === 'ma_town' || municipality === 'MA' || municipality.includes('MASSACHUSETTS')) return 'MA';
     if (municipality === 'NY' || municipality === 'NYS' || municipality === 'NEW YORK STATE') return 'NYS';
     if (municipality.includes('NYC') || municipality.includes('NEW YORK CITY') || municipality.includes('NEW YORK')) return 'NYC';
     if (municipality === 'DC' || municipality.includes('WASHINGTON')) return 'DC';
     if (municipality.includes('BALTIMORE')) return 'BALTIMORE';
-    if (municipality.includes('BOSTON')) return 'BOSTON';
-    if (municipality === 'MA' || municipality.includes('MASSACHUSETTS')) return 'MA';
     if (municipality.includes('DETROIT')) return 'DETROIT';
     if (municipality.includes('PHILADELPHIA')) return 'PHILADELPHIA';
     if (municipality.includes('CHICAGO')) return 'CHICAGO';
@@ -99,8 +97,8 @@ function getDatasetKey(row) {
 
 function getDisplayName(row) {
     const key = getDatasetKey(row);
-    if (key !== 'CT') return DATASET_META[key]?.label || row.municipality || 'Unknown source';
-    return row.municipality || 'Unknown town';
+    if (key === 'CT' || row?.type === 'ma_town') return row.municipality || 'Unknown town';
+    return DATASET_META[key]?.label || row.municipality || 'Unknown source';
 }
 
 function formatDateTime(dateStr) {
@@ -154,6 +152,8 @@ function getStatusClasses(status) {
     const value = String(status || '').toLowerCase();
     if (value === 'success') return 'bg-emerald-50 text-emerald-700 border-emerald-100';
     if (value === 'running') return 'bg-blue-50 text-blue-700 border-blue-100';
+    if (value === 'cama_queued') return 'bg-sky-50 text-sky-700 border-sky-200';
+    if (value === 'massgis_l3') return 'bg-slate-100 text-slate-700 border-slate-200';
     if (value === 'unavailable') return 'bg-slate-100 text-slate-500 border-slate-200';
     if (value === 'failed' || value === 'failure' || value === 'error') return 'bg-rose-50 text-rose-700 border-rose-100';
     return 'bg-amber-50 text-amber-700 border-amber-100';
@@ -314,16 +314,19 @@ const FreshnessModal = ({ isOpen, onClose }) => {
     }, [allRows]);
 
     const summary = useMemo(() => {
-        const totalProperties = allRows.reduce((sum, row) => sum + Number(row.total_properties || 0), 0);
+        const totalProperties = allRows.reduce(
+            (sum, row) => sum + (row.is_state_overview ? 0 : Number(row.total_properties || 0)),
+            0
+        );
         const cityRows = allRows.filter((row) => row.type === 'city').length;
-        const townRows = allRows.filter((row) => row.datasetKey === 'CT').length;
+        const townRows = allRows.filter((row) => row.datasetKey === 'CT' || row.type === 'ma_town').length;
         const datasetRows = allRows.reduce((sum, row) => sum + (Array.isArray(row.datasets) ? row.datasets.length : 0), 0);
         const attentionRows = allRows.filter((row) => {
             const status = String(row.status || '').toLowerCase();
-            return status && status !== 'success';
+            return status && !['success', 'massgis_l3', 'cama_queued'].includes(status);
         }).length;
         return {
-            sourceRows: allRows.length,
+            sourceRows: allRows.filter((row) => !row.is_state_overview).length,
             totalProperties,
             townRows,
             cityRows,
@@ -381,7 +384,13 @@ const FreshnessModal = ({ isOpen, onClose }) => {
     if (!isOpen) return null;
 
     return (
-        <div className="fixed inset-0 z-[200] overflow-y-auto bg-slate-950/60 px-3 pt-16 pb-3 backdrop-blur-sm md:p-5 flex justify-center items-start md:items-center" onClick={onClose}>
+        <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="freshness-modal-title"
+            className="fixed inset-0 z-[200] overflow-y-auto bg-slate-950/60 px-3 pt-16 pb-3 backdrop-blur-sm md:p-5 flex justify-center items-start md:items-center"
+            onClick={onClose}
+        >
             <div
                 className="flex w-full max-w-7xl flex-col rounded-2xl border border-slate-200 bg-slate-50 shadow-2xl my-auto max-h-[90vh] overflow-hidden"
                 onClick={(event) => event.stopPropagation()}
@@ -391,10 +400,10 @@ const FreshnessModal = ({ isOpen, onClose }) => {
                     <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                         <div className="flex items-start gap-3">
                             <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-slate-900 text-white shadow-sm">
-                                <Database className="h-5 w-5" />
+                                <Database className="h-5 w-5" aria-hidden="true" />
                             </div>
                             <div>
-                                <h2 className="text-2xl font-black tracking-tight text-slate-950">Data Completeness</h2>
+                                <h2 id="freshness-modal-title" className="text-2xl font-black tracking-tight text-slate-950">Data Completeness</h2>
                                 <p className="mt-1 text-sm font-medium text-slate-500">
                                     Source inventory, refresh dates, and field coverage from the live cache.
                                 </p>
@@ -402,18 +411,27 @@ const FreshnessModal = ({ isOpen, onClose }) => {
                         </div>
 
                         <div className="flex items-center gap-2">
-                            <div className="relative w-full sm:w-80">
-                                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                            <search className="relative w-full sm:w-80">
+                                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" aria-hidden="true" />
                                 <input
-                                    type="text"
+                                    type="search"
+                                    aria-label="Search sources, towns, and layers"
                                     placeholder="Search sources, towns, layers..."
+                                    autoCorrect="off"
+                                    autoCapitalize="none"
+                                    spellCheck={false}
                                     value={searchTerm}
                                     onChange={(event) => setSearchTerm(event.target.value)}
                                     className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-9 pr-3 text-sm font-medium text-slate-800 outline-none transition focus:border-blue-300 focus:bg-white focus:ring-4 focus:ring-blue-50"
                                 />
-                            </div>
-                            <button onClick={onClose} className="rounded-xl p-2.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700">
-                                <X className="h-5 w-5" />
+                            </search>
+                            <button
+                                type="button"
+                                onClick={onClose}
+                                aria-label="Close Data Completeness dialog"
+                                className="rounded-xl p-2.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                            >
+                                <X className="h-5 w-5" aria-hidden="true" />
                             </button>
                         </div>
                     </div>
@@ -555,9 +573,15 @@ function SystemFreshnessCard({ label, value }) {
 
 function SourceSection({ group, onSort, getSortIcon }) {
     const { key, rows, meta } = group;
-    const propertyRows = rows.reduce((sum, row) => sum + Number(row.total_properties || 0), 0);
+    const townRows = rows.filter((row) => key === 'CT' || row.type === 'ma_town');
+    const overviewCards = rows.filter((row) => !(key === 'CT' || row.type === 'ma_town'));
+    const propertyRows = (townRows.length ? townRows : overviewCards).reduce(
+        (sum, row) => sum + Number(row.total_properties || 0),
+        0
+    );
     const datasets = rows.reduce((sum, row) => sum + (row.datasets?.length || 0), 0);
     const accentClass = ACCENT_CLASSES[meta.accent] || ACCENT_CLASSES.slate;
+    const hasTownTable = townRows.length > 0;
 
     return (
         <section id={`freshness-section-${key}`} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -567,16 +591,17 @@ function SourceSection({ group, onSort, getSortIcon }) {
                     <div>
                         <h3 className="text-lg font-black text-slate-950">{meta.label}</h3>
                         <p className="text-xs font-bold text-slate-400">
-                            {rows.length.toLocaleString()} source rows · {compactCount(propertyRows)} property rows
-                            {datasets ? ` · ${datasets.toLocaleString()} datasets` : ''}
+                            {hasTownTable ? `${townRows.length.toLocaleString()} municipalities` : `${rows.length.toLocaleString()} source rows`} · {compactCount(propertyRows)} property rows
+                            {datasets ? ` · ${datasets.toLocaleString()} statewide datasets` : ''}
                         </p>
                     </div>
                 </div>
 
                 <div className="flex flex-wrap gap-2">
-                    {SORT_OPTIONS.slice(0, key === 'CT' ? 6 : 4).map((option) => (
+                    {SORT_OPTIONS.slice(0, hasTownTable ? 6 : 4).map((option) => (
                         <button
                             key={option.value}
+                            type="button"
                             onClick={() => onSort(option.value)}
                             className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-black text-slate-500 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
                         >
@@ -587,16 +612,18 @@ function SourceSection({ group, onSort, getSortIcon }) {
                 </div>
             </div>
 
-            {key === 'CT' ? (
-                <div className="divide-y divide-slate-100">
-                    {rows.map((row) => (
-                        <TownCompletenessRow key={`${row.datasetKey}-${row.municipality}`} row={row} />
+            {overviewCards.length > 0 && (
+                <div className={`grid gap-4 p-4 ${overviewCards.length === 1 ? 'grid-cols-1' : 'lg:grid-cols-2'} ${hasTownTable ? 'border-b border-slate-200 bg-slate-50/40' : ''}`}>
+                    {overviewCards.map((row) => (
+                        <CitySourceCard key={`${row.datasetKey}-${row.municipality}`} row={row} />
                     ))}
                 </div>
-            ) : (
-                <div className="grid gap-4 p-4 lg:grid-cols-2">
-                    {rows.map((row) => (
-                        <CitySourceCard key={`${row.datasetKey}-${row.municipality}`} row={row} />
+            )}
+
+            {hasTownTable && (
+                <div className="divide-y divide-slate-100">
+                    {townRows.map((row) => (
+                        <TownCompletenessRow key={`${row.datasetKey}-${row.municipality}`} row={row} />
                     ))}
                 </div>
             )}
@@ -713,8 +740,9 @@ function DatasetStatusCard({ dataset }) {
     const details = dataset.details || {};
 
     const isNhpd = String(dataset.source_name || '').toUpperCase().includes('NHPD') || Boolean(dataset.unique_subsidies || details.unique_nhpd_properties_matched);
+    const isCorpRegistry = String(dataset.source_type || '').toLowerCase() === 'corporate_registry' || String(dataset.source_name || '').toUpperCase().startsWith('OC_');
 
-    const propsCount = dataset.properties_count || details.properties_count || details.properties_loaded || details.deduped_buildings;
+    const propsCount = isCorpRegistry ? null : (dataset.properties_count || details.properties_count || details.properties_loaded || details.deduped_buildings);
     const propsExamined = dataset.properties_examined || details.properties_examined;
     const matchedSubsidies = dataset.matched_properties || details.matched_properties;
     const uniqueNhpd = dataset.unique_subsidies || details.unique_nhpd_properties_matched;
@@ -725,10 +753,11 @@ function DatasetStatusCard({ dataset }) {
     const openViolations = details.open_violations;
     const registrations = details.registrations || details.active_licenses || details.active_registrations;
     const contacts = details.contacts;
-    const networks = details.networks;
+    const networks = details.networks || details.networks_count;
+    const municipalitiesLoaded = details.municipalities_loaded;
     const companiesCount = details.companies_count;
     const officersCount = details.officers_count;
-    const parcelsEnriched = details.parcels_enriched;
+    const parcelsEnriched = details.parcels_enriched || details.oc_matched_parcels;
 
     return (
         <div className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-xs">
@@ -788,6 +817,9 @@ function DatasetStatusCard({ dataset }) {
                 {formatCount(contacts) && (
                     <MetricChip label="Owner Contacts" value={formatCount(contacts)} tone="indigo" />
                 )}
+                {formatCount(municipalitiesLoaded) && (
+                    <MetricChip label="Municipalities" value={formatCount(municipalitiesLoaded)} tone="default" />
+                )}
                 {formatCount(networks) && (
                     <MetricChip label="Networks" value={formatCount(networks)} tone="blue" />
                 )}
@@ -798,7 +830,7 @@ function DatasetStatusCard({ dataset }) {
                     <MetricChip label="Principals / Officers" value={formatCount(officersCount)} tone="emerald" />
                 )}
                 {formatCount(parcelsEnriched) && (
-                    <MetricChip label="Parcels Enriched" value={formatCount(parcelsEnriched)} tone="indigo" />
+                    <MetricChip label="Registry-Matched Parcels" value={formatCount(parcelsEnriched)} tone="indigo" />
                 )}
 
                 {dataset.source_url && (
@@ -863,12 +895,20 @@ function DatasetStatusCard({ dataset }) {
 function StatusBadge({ status }) {
     const value = String(status || 'unknown');
     const normalized = value.toLowerCase();
-    const Icon = normalized === 'success' ? CheckCircle : normalized === 'running' ? RefreshCw : normalized === 'unavailable' ? ShieldAlert : AlertCircle;
+    const Icon =
+        normalized === 'success' ? CheckCircle :
+        normalized === 'running' ? RefreshCw :
+        normalized === 'cama_queued' ? Clock :
+        normalized === 'massgis_l3' ? Database :
+        normalized === 'unavailable' ? ShieldAlert : AlertCircle;
+    const label =
+        normalized === 'cama_queued' ? 'CAMA QUEUED' :
+        normalized === 'massgis_l3' ? 'MASSGIS L3' : value;
 
     return (
         <span className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-black uppercase tracking-[0.12em] ${getStatusClasses(value)}`}>
-            <Icon className={`h-3 w-3 ${normalized === 'running' ? 'animate-spin' : ''}`} />
-            {value}
+            <Icon className={`h-3 w-3 ${normalized === 'running' ? 'animate-spin' : ''}`} aria-hidden="true" />
+            {label}
         </span>
     );
 }

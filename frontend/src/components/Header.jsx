@@ -5,7 +5,6 @@ import MajorUpgradeButton from './MajorUpgradeTooltip';
 const ALL_HEADER_JURISDICTIONS = [
     { key: 'AR', label: 'AR', mobileLabel: 'Arkansas', fullTitle: 'ARKANSAS' },
     { key: 'BALTIMORE', label: 'Balt', mobileLabel: 'Baltimore', fullTitle: 'BALTIMORE' },
-    { key: 'BOSTON', label: 'Boston', mobileLabel: 'Boston', fullTitle: 'BOSTON' },
     { key: 'CHICAGO', label: 'Chicago', mobileLabel: 'Chicago', fullTitle: 'CHICAGO' },
     { key: 'CO', label: 'CO', mobileLabel: 'Colorado', fullTitle: 'COLORADO' },
     { key: 'CT', label: 'CT', mobileLabel: 'CT', fullTitle: 'CONNECTICUT' },
@@ -26,7 +25,7 @@ const ALL_HEADER_JURISDICTIONS = [
 ].sort((a, b) => a.label.localeCompare(b.label, 'en'));
 
 const DEFAULT_LIVE_KEYS = new Set([
-    'AR', 'BALTIMORE', 'BOSTON', 'CHICAGO', 'CO', 'CT', 'DC', 'DETROIT', 'FL', 'MA',
+    'AR', 'BALTIMORE', 'CHICAGO', 'CO', 'CT', 'DC', 'DETROIT', 'FL', 'MA',
     'MIAMI', 'MINNEAPOLIS', 'NC', 'NJ', 'NYS', 'NY', 'PHILADELPHIA', 'VA', 'VT', 'WI',
 ]);
 
@@ -511,13 +510,13 @@ export default function Header({ onHome, onDatasets, onReset, onAbout, onShowUpg
                             <div className="min-w-0">
                                 <h1 className="font-black text-xl md:text-2xl leading-tight text-gray-900 tracking-tight truncate">they own <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-indigo-600">WHAT??</span></h1>
                                  {isDatasetLanding ? (
-                                     <p className="text-[10px] md:text-xs text-gray-500 font-medium tracking-wide truncate">LANDLORD / PROPERTY EXPLORER <span className="text-[9px] text-slate-400 font-semibold">v0.2.0</span></p>
+                                     <p className="text-[10px] md:text-xs text-gray-500 font-medium tracking-wide truncate">PROPERTY OWNER EXPLORER <span className="text-[9px] text-slate-400 font-semibold">v0.2.0</span></p>
                                  ) : activeState === 'CT' ? (
-                                     <p className="text-[10px] md:text-xs text-gray-500 font-medium tracking-wide truncate">CONNECTICUT <span className="hidden sm:inline">LANDLORD / PROPERTY </span>EXPLORER <span className="text-[9px] text-slate-400 font-semibold">v0.2.0</span></p>
+                                     <p className="text-[10px] md:text-xs text-gray-500 font-medium tracking-wide truncate">CONNECTICUT <span className="hidden sm:inline">PROPERTY OWNER </span>EXPLORER <span className="text-[9px] text-slate-400 font-semibold">v0.2.0</span></p>
                                  ) : (
                                      <p className="text-[10px] md:text-xs text-gray-500 font-medium tracking-wide flex items-center gap-1.5 min-w-0">
                                          <span className="truncate">
-                                             {HEADER_STATE_TITLES[activeState] || (activeState === 'CHICAGO' ? 'CHICAGO' : activeState)} <span className="hidden sm:inline">LANDLORD / PROPERTY </span>EXPLORER
+                                             {HEADER_STATE_TITLES[activeState] || (activeState === 'CHICAGO' ? 'CHICAGO' : activeState)} <span className="hidden sm:inline">PROPERTY OWNER </span>EXPLORER
                                          </span>
                                          <span className="text-[8px] font-black bg-violet-100 text-violet-700 px-1 py-0.5 rounded uppercase tracking-wider shrink-0">Beta</span>
                                      </p>

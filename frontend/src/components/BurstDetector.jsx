@@ -9,7 +9,7 @@ import {
 
 const DIMENSIONS = [
     { key: 'city', label: 'City', icon: Building2, color: 'blue', desc: 'Filing bursts by municipality' },
-    { key: 'landlord', label: 'Landlord', icon: Users, color: 'amber', desc: 'Individual landlord filing surges' },
+    { key: 'landlord', label: 'Owner', icon: Users, color: 'amber', desc: 'Individual property owner filing surges' },
     { key: 'network', label: 'Network', icon: Briefcase, color: 'purple', desc: 'Linked ownership network bursts' },
     { key: 'attorney', label: 'Attorney', icon: Scale, color: 'fuchsia', desc: 'Attorney filing pattern spikes' },
 ];

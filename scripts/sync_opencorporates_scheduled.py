@@ -126,6 +126,7 @@ def sync_oc_completeness_status(db_url: str, snapshot_label: Optional[str] = Non
                     "officers_count": o_cnt,
                     "license": "ODbL v1.0 (OpenCorporates)",
                     "url": f"https://opencorporates.com/registers/{jur}",
+                    "source_url": f"https://opencorporates.com/registers/{jur}",
                 }
                 cur.execute(
                     """

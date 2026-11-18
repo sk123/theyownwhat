@@ -28,7 +28,6 @@ const SEARCH_CITIES = [
   { key: 'CHICAGO', prefix: 'chicago', label: 'Chicago' },
   { key: 'DC', prefix: 'dc', label: 'D.C.' },
   { key: 'BALTIMORE', prefix: 'baltimore', label: 'Baltimore' },
-  { key: 'BOSTON', prefix: 'boston', label: 'Boston' },
   { key: 'MA', prefix: 'ma', label: 'Mass.' },
   { key: 'FL', prefix: 'fl', label: 'Florida' },
   { key: 'MIAMI', prefix: 'miami', label: 'Miami-Dade' },
@@ -125,25 +124,6 @@ const DATASETS = [
       cost: 'Baltimore Open Data: $0; corporate registry spine via OpenCorporates (ODbL v1.0). Domestic MD officer charter extracts require an SDAT quote.',
       sourceUrl: 'https://egov.maryland.gov/BusinessExpress/EntitySearch',
       ocRegisterUrl: 'https://opencorporates.com/registers/us_md',
-    },
-  },
-  {
-    key: 'BOSTON',
-    title: 'Boston',
-    shortLabel: 'Boston',
-    region: 'Northeast',
-    description: 'Boston property assessments & sales linked to Massachusetts OpenCorporates officer/LLC manager filings, ISD code cases, and NHPD.',
-    tone: 'emerald',
-    icon: Factory,
-    endpoint: '/api/boston/stats',
-    sources: ['Assessment & sale roll', 'MA Sec. & OpenCorporates', 'ISD building code cases', 'NHPD'],
-    rapSheets: null,
-    networkLimit: {
-      needed: 'Boston ISD rental-registration contact rosters, private realty trust schedules of beneficiaries, and Housing Court eviction crosswalks',
-      gap: 'Boston assessment parcels, ISD code violations, and bulk Massachusetts corporate officer, LLC manager, DBA, and foreign-branch filings are joined. Private Massachusetts nominee trusts and parcel-linked Eastern Housing Court eviction dockets are not in open bulk feeds.',
-      cost: 'Analyze Boston Open Data: $0; corporate registry graph via OpenCorporates (ODbL v1.0).',
-      sourceUrl: 'https://corp.sec.state.ma.us/CorpWeb/CorpSearch/CorpSearch.aspx',
-      ocRegisterUrl: 'https://opencorporates.com/registers/us_ma',
     },
   },
   {
@@ -287,16 +267,16 @@ const DATASETS = [
     title: 'Massachusetts',
     shortLabel: 'MA',
     region: 'Northeast',
-    description: 'MassGIS Level 3 assessor parcels & sales across all 351 Massachusetts towns linked to MA Sec. / OpenCorporates corporate & LLC officer filings and NHPD.',
+    description: 'MassGIS Level 3 assessor parcels & sales across all 351 Massachusetts towns, unified with Boston Assessing nominee-trust piercing, CLT housing, MA OpenCorporates officers, Boston ISD code cases, and NHPD.',
     tone: 'emerald',
     icon: Factory,
     endpoint: '/api/ma/stats',
-    sources: ['MassGIS L3 (351 towns)', 'Parcel sales', 'MA Sec. & OpenCorporates', 'NHPD'],
+    sources: ['MassGIS L3 (351 towns)', 'Boston Assessing & ISD code', 'MA Sec. & OpenCorporates', 'Parcel sales', 'NHPD'],
     rapSheets: null,
     networkLimit: {
-      needed: 'beneficial-ownership schedules behind private Massachusetts nominee trusts and statewide Housing Court parcel crosswalks',
-      gap: 'All 351 Massachusetts municipal tax-assessor parcel rolls (with recorded sale dates & prices) and bulk MA corporate/LLC officer, DBA, and foreign-branch filings are joined. Private realty trust beneficiaries and municipal code feeds outside Boston are not in statewide bulk files.',
-      cost: 'MassGIS Level 3 Property Tax Parcels: $0; corporate registry graph via OpenCorporates (ODbL v1.0).',
+      needed: 'beneficial-ownership schedules behind non-Boston private Massachusetts nominee trusts and statewide Housing Court parcel crosswalks',
+      gap: 'All 351 Massachusetts municipal tax-assessor parcel rolls (with recorded sale dates & prices), Boston Assessing dual-owner nominee trust & CLT enrichments, Boston ISD code violations, and bulk MA corporate/LLC officer, DBA, and foreign-branch filings are joined. Municipal code feeds outside Boston and non-Boston private realty trust beneficiaries are not in statewide bulk files.',
+      cost: 'MassGIS Level 3 & Analyze Boston Open Data: $0; corporate registry graph via OpenCorporates (ODbL v1.0).',
       sourceUrl: 'https://corp.sec.state.ma.us/CorpWeb/CorpSearch/CorpSearch.aspx',
       ocRegisterUrl: 'https://opencorporates.com/registers/us_ma',
       sponsor: false,
@@ -445,14 +425,13 @@ const DATASETS = [
 
 // Default live production datasets verified in DB; expands automatically if snapshot includes additional keys (e.g. AR).
 const DEFAULT_LIVE_DATASET_KEYS = new Set([
-  'CT', 'NY', 'DC', 'BALTIMORE', 'BOSTON', 'DETROIT', 'PHILADELPHIA', 'CHICAGO',
+  'CT', 'NY', 'DC', 'BALTIMORE', 'DETROIT', 'PHILADELPHIA', 'CHICAGO',
   'MIAMI', 'MINNEAPOLIS', 'NJ', 'FL', 'MA', 'NYS', 'CO', 'NC', 'VA', 'AR', 'WI', 'VT',
 ]);
 
 const DATASET_SCOPE_LABELS = {
   AR: '75 counties',
   BALTIMORE: 'City',
-  BOSTON: 'City',
   CHICAGO: 'Cook County',
   CO: 'Statewide',
   CT: '169 towns',
@@ -467,14 +446,15 @@ const DATASET_SCOPE_LABELS = {
   NY: '5 boroughs',
   NYS: '33 counties',
   PHILADELPHIA: 'City',
+  VA: 'Statewide',
   VT: '250+ towns',
   WI: '72 counties',
 };
 
 // Jurisdictions where we hold code-enforcement cases, so "rank by code cases"
 // is a real ordering rather than a column of zeros. CT's code data is Hartford
-// only; the rest come from each city's *_bbl_stats violation totals.
-const CODE_CASE_DATASET_KEYS = new Set(['CT', 'NY', 'BOSTON', 'DC', 'DETROIT', 'BALTIMORE', 'PHILADELPHIA', 'MINNEAPOLIS', 'NYS']);
+// only; MA includes Boston ISD violations; the rest come from *_bbl_stats.
+const CODE_CASE_DATASET_KEYS = new Set(['CT', 'NY', 'MA', 'DC', 'DETROIT', 'BALTIMORE', 'PHILADELPHIA', 'MINNEAPOLIS', 'NYS']);
 
 const hasCodeCaseData = (datasetKey) => CODE_CASE_DATASET_KEYS.has(datasetKey);
 
@@ -1513,12 +1493,12 @@ export default function DatasetLanding({
         {/* 1. CLEAN SEARCH HERO */}
         <div className="mx-auto w-full max-w-3xl text-center">
           <h2 className="text-xl sm:text-2xl font-extrabold tracking-tight text-slate-900">
-            Who really owns rental housing?
+            Who really owns our neighborhoods?
           </h2>
           <p className="mt-1 text-xs sm:text-sm text-slate-600 leading-relaxed">
             Search{' '}
             <strong className="font-semibold text-slate-800 tabular-nums">
-              {liveTotals.properties || '21M'}
+              {liveTotals.properties || '25M'}
             </strong>{' '}
             properties,{' '}
             {liveTotals.businesses && (
@@ -1530,9 +1510,9 @@ export default function DatasetLanding({
               </>
             )}
             <strong className="font-semibold text-slate-800 tabular-nums">
-              {liveTotals.networks || '14M'}
+              {liveTotals.networks || '17M'}
             </strong>{' '}
-            landlord networks across{' '}
+            owner networks across{' '}
             <strong className="font-semibold text-slate-800 tabular-nums">
               {baseDatasets.length}
             </strong>{' '}
@@ -1547,7 +1527,7 @@ export default function DatasetLanding({
               <div className="relative flex-1 flex items-center min-w-0">
                 <Search className="w-4 h-4 text-slate-400 ml-3 shrink-0 pointer-events-none" aria-hidden="true" />
                 <label htmlFor="landing-omni-input" className="sr-only">
-                  Search landlords, LLCs, officers, or street addresses
+                  Search property owners, LLCs, officers, or street addresses
                 </label>
                 <input
                   id="landing-omni-input"
@@ -1558,7 +1538,7 @@ export default function DatasetLanding({
                     setOmniOpen(true);
                   }}
                   onFocus={() => setOmniOpen(true)}
-                  placeholder="Search a landlord, LLC, officer, or street address…"
+                  placeholder="Search a property owner, LLC, officer, or street address…"
                   className="w-full bg-transparent px-2.5 py-1.5 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none"
                 />
                 {omniTerm && (
@@ -1802,7 +1782,7 @@ export default function DatasetLanding({
                 onClick={() => onOpenMonitor('HARTFORD')}
                 className="min-h-[24px] text-slate-600 hover:text-blue-600 hover:underline cursor-pointer"
               >
-                Landlord Rap Sheets
+                Owner Rap Sheets
               </button>
             )}
             <a

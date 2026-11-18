@@ -119,6 +119,9 @@ class ThirdPartyExclusionTests(unittest.TestCase):
             "FFBCCI",
             "CLEARBROOK COMMUNITY CONDO ASSN",
             "WILLIAMSBURG VILLAGE CONDOMINIUM ASSOCIATION",
+            "WINTHROP CENTER RESIDENTIAL CONDOMINIUNM TRUST",
+            "77 SCHOOL STREET CONDOMINIUM TRUST",
+            "PAN AM SOUTHERN LLC",
             "HOME PATH FINANCIAL LP",
         ]
         for name in excluded_names:
@@ -142,7 +145,7 @@ class ThirdPartyExclusionTests(unittest.TestCase):
             "3024 CHURCH AVENUE LLC",
             "1120 COLLEGE AVE HDFC",
             "55 UNIVERSITY PL ASSOCIATES LLC",
-            "77 SCHOOL STREET CONDOMINIUM TRUST",
+            "77 SCHOOL STREET REALTY TRUST",
             "AVE P 380 CT CORPORATION",
             "FKH SFR PROPCO B-HLD LP",
             "IH3 PROPERTY FLORIDA LP",
@@ -389,10 +392,54 @@ class ThirdPartyExclusionTests(unittest.TestCase):
             "RUTGERS BUILDERS T/A RUTGERSVILLAGE",
             "COVENTRY SQ",
             "WOODMERE AT EATONTOWN",
+            "SAME TWO ABOVE",
+            "SEE ATTACHED SCHEDULE",
         ):
             self.assertFalse(looks_like_person_owner(non_person), non_person)
         self.assertTrue(looks_like_person_owner("RAMAN KHOSLA"))
         self.assertTrue(looks_like_person_owner("WILLIAM CHRISTOPHER SMITH"))
+
+    def test_va_unimproved_vacant_parcel_filter_and_ma_cama_registry(self):
+        from ma.ma_municipal_config import MA_MUNICIPAL_DATA_SOURCES, ma_muni_status_key
+        from states.ingest_va_parcels import _clean_va_site_address, _is_unimproved_vacant_va_parcel
+
+        # 1. Caroline County $800 '0 UNASSIGNED' 'Vacant Land' (BLDG_VAL=0) paper lot is excluded
+        self.assertIsNone(_clean_va_site_address("0 UNASSIGNED"))
+        self.assertIsNone(_clean_va_site_address("UNASSIGNED"))
+        self.assertEqual(_clean_va_site_address("4591 FORGE RD"), "4591 FORGE RD")
+
+        self.assertTrue(
+            _is_unimproved_vacant_va_parcel(
+                has_imp_col=True,
+                imp_val=0.0,
+                tot_val=800.0,
+                yr_built=None,
+                units=None,
+                land_use="Vacant Land",
+                use_code="200V",
+                real_site_addr=None,
+            )
+        )
+        # 2. Genuine improved Virginia residential building (BLDG_VAL>0) is preserved
+        self.assertFalse(
+            _is_unimproved_vacant_va_parcel(
+                has_imp_col=True,
+                imp_val=193600.0,
+                tot_val=229400.0,
+                yr_built=1988,
+                units=1,
+                land_use="Single Family",
+                use_code="100",
+                real_site_addr="4591 FORGE RD",
+            )
+        )
+        # 3. MA CAMA config covers Boston, Cambridge, Vision, and MapGeo portals cleanly
+        self.assertGreaterEqual(len(MA_MUNICIPAL_DATA_SOURCES), 110)
+        self.assertEqual(MA_MUNICIPAL_DATA_SOURCES["BOSTON"]["type"], "boston_assessing")
+        self.assertEqual(MA_MUNICIPAL_DATA_SOURCES["CAMBRIDGE"]["type"], "cambridge_socrata")
+        self.assertEqual(MA_MUNICIPAL_DATA_SOURCES["SOMERVILLE"]["type"], "vision_appraisal")
+        self.assertEqual(MA_MUNICIPAL_DATA_SOURCES["NEWTON"]["type"], "mapgeo")
+        self.assertEqual(ma_muni_status_key("Watertown"), "MA_MUNI_WATERTOWN")
 
 
 if __name__ == "__main__":

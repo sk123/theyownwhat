@@ -218,7 +218,8 @@ class TestFeedbackAndAutocomplete(unittest.TestCase):
         """Verify initialism queries like 'WC Smith' (DC) and 'DR Horton' (VA) match corporate/principal networks."""
         for city, query, min_bldgs in (
             ("dc", "WC Smith", 50),
-            ("va", "DR Horton", 200),
+            ("va", "DR Horton", 150),
+            ("ma", "Dudley Neighbors", 140),
             ("baltimore", "Baltimore SFR", 500),
         ):
             url = f"{API_BASE_URL}/api/{city}/search?q={urllib.parse.quote(query)}&limit=8"

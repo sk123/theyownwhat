@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-11-15T03:40:14Z",
+  "updatedAt": "2026-11-18T11:31:13Z",
   "rotation": {
     "currentCycle": 1,
     "cadencePhase": "initialCoverage",
@@ -9,25 +9,25 @@
     "isDue": false,
     "isOverdue": false,
     "daysSinceLastAdvance": 0.0,
-    "lastRunAt": "2026-11-15T03:40:14Z",
-    "lastAdvancedAt": "2026-11-15T03:40:14Z",
-    "nextDueAt": "2026-11-15T21:40:14Z",
-    "nextCohortIndex": 1,
-    "nextCohortId": "cohort-01-nj-dc",
-    "nextCohortLabel": "Mid-Atlantic Stateful & Capital \u2014 New Jersey & Washington, D.C.",
+    "lastRunAt": "2026-11-18T11:31:13Z",
+    "lastAdvancedAt": "2026-11-18T11:31:13Z",
+    "nextDueAt": "2026-11-19T05:31:13Z",
+    "nextCohortIndex": 2,
+    "nextCohortId": "cohort-02-baltimore-boston",
+    "nextCohortLabel": "Northeast & Chesapeake \u2014 Baltimore & Boston",
     "nextJurisdictions": [
+      "BALTIMORE",
+      "BOSTON"
+    ],
+    "completedInCycleCount": 4,
+    "totalJurisdictionsCount": 22,
+    "completedJurisdictionsInCycle": [
+      "CT",
+      "NYC",
       "NJ",
       "DC"
     ],
-    "completedInCycleCount": 2,
-    "totalJurisdictionsCount": 13,
-    "completedJurisdictionsInCycle": [
-      "CT",
-      "NYC"
-    ],
     "remainingJurisdictionsInCycle": [
-      "NJ",
-      "DC",
       "BALTIMORE",
       "BOSTON",
       "DETROIT",
@@ -36,23 +36,32 @@
       "CT_MUNI_COHORT_A",
       "PHILADELPHIA",
       "CHICAGO",
-      "CT_MUNI_COHORT_B"
+      "MA",
+      "CT_MUNI_COHORT_B",
+      "FL",
+      "NYS",
+      "CO",
+      "NC",
+      "WI",
+      "VT",
+      "VA",
+      "AR"
     ],
-    "historyCount": 1
+    "historyCount": 2
   },
   "latestAdvance": {
-    "timestamp": "2026-11-15T03:40:14Z",
+    "timestamp": "2026-11-18T11:31:13Z",
     "cycle": 1,
-    "cohortId": "cohort-00-ct-nyc",
+    "cohortId": "cohort-01-nj-dc",
     "jurisdictions": [
-      "CT",
-      "NYC"
+      "NJ",
+      "DC"
     ],
-    "totalChecks": 28,
-    "passedChecks": 28,
+    "totalChecks": 25,
+    "passedChecks": 25,
     "healedFeeds": [],
     "rolledOverToCycle": null,
-    "reportPath": "docs/benchmarks/2026-11-15-cohort-00-ct-nyc-report.md",
+    "reportPath": "docs/benchmarks/2026-11-18-cohort-01-nj-dc-report.md",
     "notes": "Automated battery pass"
   }
 }

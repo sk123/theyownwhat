@@ -182,6 +182,8 @@ FULL_SITE_ADDR_PRIORITY = [
 HOUSE_NUM_PRIORITY = [
     "HOUSENUM",
     "HOUSE_NUMB",
+    "ADDR_NUM",
+    "MHSE_",
     "ST_NUM",
     "ADDRNBR",
     "ADDRESS_NU",
@@ -196,6 +198,8 @@ STREET_NAME_PRIORITY = [
     "ST_NAME",
     "STREETNAME",
     "STREET_NAM",
+    "FULL_STR",
+    "MSTRT",
     "STREET_ADD",
     "PARCEL_LOCATION_STREET",
     "SITUS_ADDRESS_STREET_NAME",
@@ -206,15 +210,16 @@ STREET_TYPE_PRIORITY = [
     "ST_TYPE",
     "STREETTYPE",
     "STREET_TYP",
+    "MSTTYP",
 ]
 
 SITE_ZIP_PRIORITY = [
     "SITE_ZIP",
     "ZIP_CODE",
     "ZIPCODE",
-    "ZIP",
     "PSTLZIP5",
     "ADDRESSZIP",
+    "MPRZP1",
 ]
 
 MAIL_ADDR1_PRIORITY = [
@@ -225,6 +230,7 @@ MAIL_ADDR1_PRIORITY = [
     "MAIL_ADD1",
     "MAILINGADD",
     "MAIL1",
+    "MADD1",
     "OWNERMAILINGADDR",
     "BILLINGADDR",
     "OWN_ADD",
@@ -235,6 +241,7 @@ MAIL_ADDR1_PRIORITY = [
     "OWNRADR1",
     "OWNER_A",
     "MLADDRESS",
+    "ADDRESS1",
 ]
 
 MAIL_ADDR2_PRIORITY = [
@@ -242,6 +249,7 @@ MAIL_ADDR2_PRIORITY = [
     "MAIL_ADD2",
     "MAILINGA_1",
     "MAIL2",
+    "MADD2",
     "OWN_ADD2",
     "OWNRADR2",
     "OWNERADD_1",
@@ -250,68 +258,138 @@ MAIL_ADDR2_PRIORITY = [
 MAIL_CITY_PRIORITY = [
     "MAILCITY",
     "MAIL_CITY",
+    "MCITY",
     "OWNERCITY",
     "OWNER_CITY",
     "OWN_CITY",
     "BILLINGCITY",
     "MLCITY",
+    "CITY",
 ]
 
 MAIL_STATE_PRIORITY = [
     "MAILSTATE",
     "MAIL_STATE",
+    "MSTATE",
     "OWNERSTATE",
     "OWNER_STAT",
     "OWN_STAT",
     "BILLINGSTATE",
     "MLSTATE",
+    "STATE",
 ]
 
 MAIL_ZIP_PRIORITY = [
     "MAILZIP",
     "MAIL_ZIP",
+    "MZIP5",
     "MAINZIPCOD",
     "OWNERZIP",
     "OWN_ZIP",
     "BILLINGZIP",
     "MLZIP5",
+    "ZIP",
 ]
 
 TOTAL_VAL_PRIORITY = [
     "TOTALASSES",
     "TOTAL_ASSESSMENT",
+    "TOTALASSESSEDVALUE",
+    "TOTAL_ASSESSED_PARCEL_VALUE",
+    "TOTAL_VAL",
     "TOTALVALUE",
+    "TOTALPROPERTYVALUE",
     "NTOTAL_VAL",
     "TOTAL_VALU",
     "TOTALVAL1",
+    "TOTVAL1",
     "TOTVALUE",
+    "TOT_VALUE",
+    "TOT_VAL",
     "YR26_TOTAL",
+    "CURTOT",
+    "CRT_TOTAL",
+    "CRTTOTAL",
+    "CALCTOTVAL",
+    "SUMTOTALVA",
+    "ASSESS_TOTAL",
+    "AS_TOTAL_ASSESS_VAL_1",
+    "CURRENT_TOTAL_VALUE",
+    "MVAL2026",
     "FAIRMARKET",
     "FAIRMARKETVALUE",
     "ASSESSMENT",
+    "TOTAL",
 ]
 
 LAND_VAL_PRIORITY = [
     "LANDVALUE",
     "NLAND_VALU",
     "LAND_VALUE",
+    "LAND_VAL",
     "LANDVAL1",
+    "LANDVAL",
+    "TOTALLANDVALUE",
+    "TOTALLAND",
+    "TOT_LAND_V",
+    "SUMLANDVAL",
+    "TOTAL_ASSESSED_LAND",
+    "ASSESS_LAND",
+    "CURRENT_LAND_VALUE",
+    "MTOTLD",
     "PRVLNDVAL",
     "TOTLLVAL",
-    "LAND_VAL",
     "LNDVALUE",
+    "LVAL2026",
 ]
 
 IMP_VAL_PRIORITY = [
+    "BLDG_VAL",
+    "BLDGVALUE",
     "DWELLINGVA",
+    "DWELLNGVAL",
+    "DWLGVAL1",
     "IMPROVEMEN",
+    "IMPROVEMENTVALUE",
+    "IMPROVEMENTS_VALUE_CURRENT",
+    "IMPROVVALUE",
+    "IMPROVEDVALUE",
     "NBLDG_VALU",
     "BLDG_VALUE",
-    "IMPROVEMENTVALUE",
+    "BLDGVAL",
+    "BLDG_VALUA",
+    "TOTALBLDGVALUE",
+    "TOTALBUILDINGVALUE",
+    "MAINSTRUCTURESVALUE",
+    "CRT_MAIN_STRUCTURES",
+    "CRTMAINSTRUCTURES",
+    "PRC_TTL_APPRAIS_IMPROVEMENTS",
+    "TOTAL_ASSESSED_IMPROVEMENTS",
+    "TOTAL_IMPROVEMENTS_VALUE",
+    "ASSESS_IMPROVEMENTS",
+    "ASSESS_BUILDING",
+    "AS_BLDG_VAL_1",
+    "TOT_IMP_VA",
+    "TOTALIMP",
+    "TOTAL_IMPR",
+    "CURIMP",
+    "CURRIMPROV",
+    "YR26_IMP",
+    "IVAL2026",
+    "MIMPRV",
+    "IMP_VALUE",
+    "IMP_VAL",
+    "IMPVAL",
+    "IMPVALUE",
+    "IMPRV",
+    "IMPROV",
+    "SLH_IMPROV",
+    "SUMIMPROVE",
+    "MPROV__VALUE",
+    "HOME_VALUE",
     "PRVIMPVAL",
     "TOTLIVAL",
-    "BLDG_VAL",
-    "IMPVALUE",
+    "IMP",
 ]
 
 SALE_DATE_PRIORITY = [
@@ -319,6 +397,9 @@ SALE_DATE_PRIORITY = [
     "LASTSALEDA",
     "SALEDATE",
     "SALE_DATE",
+    "LS_DATE2",
+    "LS_DATE",
+    "DTESLD",
     "SALE_DATE_1",
     "SALEDATE1",
     "SALE1D",
@@ -330,6 +411,8 @@ SALE_PRICE_PRIORITY = [
     "LAST_SALE_PRICE",
     "LASTSALEPR",
     "SALEPRICE",
+    "LS_PRICE",
+    "MSELLP",
     "NSALE_PRIC",
     "SALE_PRICE",
     "SALE_PRICE_1",
@@ -344,6 +427,9 @@ YEAR_BUILT_PRIORITY = [
     "YRBUILT",
     "YR_BUILT",
     "RESYRBLT",
+    "MINTYR",
+    "BLDG_YR_BU",
+    "MAINSTRUCTURE1YEARBUILT",
     "EFFYRBUILT",
 ]
 
@@ -356,15 +442,37 @@ UNITS_PRIORITY = [
 ]
 
 LAND_USE_PRIORITY = [
+    "STYLE",
+    "USE_DESCRIPTION",
     "LANDUSE",
     "LANDDESC",
     "PROPERTYDE",
-    "USE_DESCRIPTION",
     "PROP_DESC",
     "PROPDESC",
+    "BLDG_DESCR",
+    "STRUCT_DES",
+    "USE_CODE",
     "LANDDES1",
     "ZONING",
     "ZONEDESC",
+]
+
+USE_CODE_SECONDARY_PRIORITY = [
+    "USE_CODE",
+    "CLASS",
+    "MZONE",
+    "ZONING",
+]
+
+CAMA_CARD_PRIORITY = [
+    "TAX_CARD",
+    "CARD_URL",
+    "PROPCARD",
+]
+
+PHOTO_URL_PRIORITY = [
+    "IMAGE",
+    "PHOTO_URL",
 ]
 
 
@@ -445,6 +553,60 @@ def _clean_sale_date(val: Any) -> Optional[dt.date]:
     if d and 1950 <= d.year <= 2027:
         return d
     return None
+
+
+_PLACEHOLDER_SITE_RE = re.compile(
+    r"^(?:0|0\s+UNASSIGNED|UNASSIGNED|0\s+UNKNOWN|UNKNOWN|NO\s+ADDRESS|NONE|N/?A|VACANT|VACANT\s+LAND|VACANT\s+LOT|UNDETERMINED)$",
+    re.I,
+)
+_EXPLICIT_VACANT_USE_RE = re.compile(
+    r"(?:\bVACANT\b|\bUNIMPROVED\b|\bRAW\s+LAND\b|\bTIMBERLAND\b|\bWOODLAND\b|\bOPEN\s+SPACE\b|"
+    r"\bCOMMON\s+AREA\b|\bRIGHT[\s-]*OF[\s-]*WAY\b|\bMINERAL\s+RIGHTS?\b|\bCEMETERY\b|^200V$|^VAC$)",
+    re.I,
+)
+
+
+def _clean_va_site_address(raw_addr: Optional[str]) -> Optional[str]:
+    s = _clean_str(raw_addr)
+    if not s:
+        return None
+    if _PLACEHOLDER_SITE_RE.match(s):
+        return None
+    if re.match(r"^0(?:\.0)?\s+(?:UNASSIGNED|UNKNOWN|NONE|NO\s+ADDRESS|N/?A|VACANT)\b", s, re.I):
+        return None
+    return s
+
+
+def _is_unimproved_vacant_va_parcel(
+    *,
+    has_imp_col: bool,
+    imp_val: Optional[float],
+    tot_val: Optional[float],
+    yr_built: Optional[int],
+    units: Optional[int],
+    land_use: Optional[str],
+    use_code: Optional[str],
+    real_site_addr: Optional[str],
+) -> bool:
+    """Return True when authoritative locality CAMA fields show a vacant/unimproved non-building lot."""
+    has_structure_meta = bool((yr_built and yr_built > 1600) or (units and units > 0))
+    if has_structure_meta:
+        return False
+
+    # 1. Locality explicitly reports a building/improvement assessment column and certifies $0 improvements
+    if has_imp_col and (imp_val is None or imp_val <= 0):
+        return True
+
+    # 2. Explicit vacant/unimproved land classification in STYLE / LANDUSE / USE_CODE
+    for txt in (land_use, use_code):
+        if txt and _EXPLICIT_VACANT_USE_RE.search(txt.strip()):
+            return True
+
+    # 3. Unaddressed nominal-value ($<=5,000) paper subdivision lots / slivers without structure metadata
+    if not real_site_addr and tot_val is not None and tot_val <= 5000:
+        return True
+
+    return False
 
 
 def _clean_locality_label(raw_loc: str) -> str:
@@ -578,6 +740,9 @@ def fetch_vgin_local_schema_parcels(refresh_gdb: bool = False) -> Tuple[List[Dic
             "yrblt": _pick_col(fields, YEAR_BUILT_PRIORITY),
             "units": _pick_col(fields, UNITS_PRIORITY),
             "luse": _pick_col(fields, LAND_USE_PRIORITY),
+            "ucode": _pick_col(fields, USE_CODE_SECONDARY_PRIORITY),
+            "card_url": _pick_col(fields, CAMA_CARD_PRIORITY),
+            "photo_url": _pick_col(fields, PHOTO_URL_PRIORITY),
             "qpid": qpid_col,
             "loc_name": _pick_col(fields, ["VGIN_LOCALITY_NAME"]),
         }
@@ -639,8 +804,12 @@ def fetch_vgin_local_schema_parcels(refresh_gdb: bool = False) -> Tuple[List[Dic
         a_yb = _col("yrblt")
         a_un = _col("units")
         a_lu = _col("luse")
+        a_uc = _col("ucode")
+        a_card = _col("card_url")
+        a_photo = _col("photo_url")
         a_qp = _col("qpid")
         a_ln = _col("loc_name")
+        has_imp_col = a_iv is not None
 
         for i in range(n_rows):
             owner1 = _clean_str(a_own1[i]) if a_own1 is not None else None
@@ -657,26 +826,50 @@ def fetch_vgin_local_schema_parcels(refresh_gdb: bool = False) -> Tuple[List[Dic
             loc_slug = re.sub(r"[^A-Z0-9]+", "_", locality_up).strip("_")[:24]
             bbl = f"VA-{loc_slug}-{pid}"[:80]
 
-            site_addr = _clean_str(a_sfull[i]) if a_sfull is not None else None
-            if not site_addr or site_addr in ("0", "0 "):
+            real_site = _clean_va_site_address(a_sfull[i]) if a_sfull is not None else None
+            if not real_site:
                 parts = []
                 if a_hnum is not None:
                     hn = _clean_str(a_hnum[i])
                     if hn and hn not in ("0", "0.0"):
                         parts.append(hn.removesuffix(".0"))
                 if a_sname is not None:
-                    sn = _clean_str(a_sname[i])
+                    sn = _clean_va_site_address(a_sname[i])
                     if sn:
                         parts.append(sn)
                 if a_stype is not None:
                     st = _clean_str(a_stype[i])
-                    if st:
+                    if st and parts and not parts[-1].upper().endswith(f" {st.upper()}"):
                         parts.append(st)
                 if parts:
-                    site_addr = " ".join(parts)
+                    real_site = _clean_va_site_address(" ".join(parts))
 
-            if not site_addr:
-                site_addr = f"PARCEL {pid}"
+            imp_val = _clean_money(a_iv[i]) if a_iv is not None else None
+            land_val = _clean_money(a_lv[i]) if a_lv is not None else None
+            tot_val = _clean_money(a_tv[i]) if a_tv is not None else None
+            if tot_val is None and (land_val is not None or imp_val is not None):
+                tot_val = (land_val or 0.0) + (imp_val or 0.0)
+
+            sprice = _clean_money(a_sp[i]) if a_sp is not None else None
+            sdate = _clean_sale_date(a_sd[i]) if a_sd is not None else None
+            yr_built = source_int(a_yb[i]) if a_yb is not None else None
+            units = source_int(a_un[i]) if a_un is not None else None
+            luse = _clean_str(a_lu[i]) if a_lu is not None else None
+            ucode = _clean_str(a_uc[i]) if a_uc is not None else None
+
+            if _is_unimproved_vacant_va_parcel(
+                has_imp_col=has_imp_col,
+                imp_val=imp_val,
+                tot_val=tot_val,
+                yr_built=yr_built,
+                units=units,
+                land_use=luse,
+                use_code=ucode,
+                real_site_addr=real_site,
+            ):
+                continue
+
+            site_addr = real_site or f"PARCEL {pid}"
 
             m_parts = []
             for arr in (a_m1, a_m2, a_mc):
@@ -691,18 +884,6 @@ def fetch_vgin_local_schema_parcels(refresh_gdb: bool = False) -> Tuple[List[Dic
                 m_parts.append(tail)
             mailing_addr = ", ".join(m_parts)
 
-            tot_val = _clean_money(a_tv[i]) if a_tv is not None else None
-            if tot_val is None:
-                lv = _clean_money(a_lv[i]) if a_lv is not None else None
-                iv = _clean_money(a_iv[i]) if a_iv is not None else None
-                if lv is not None or iv is not None:
-                    tot_val = (lv or 0.0) + (iv or 0.0)
-
-            sprice = _clean_money(a_sp[i]) if a_sp is not None else None
-            sdate = _clean_sale_date(a_sd[i]) if a_sd is not None else None
-            yr_built = source_int(a_yb[i]) if a_yb is not None else None
-            units = source_int(a_un[i]) if a_un is not None else None
-            luse = _clean_str(a_lu[i]) if a_lu is not None else None
             szip = _clean_zip5(a_szip[i]) if a_szip is not None else None
             owner2 = _clean_str(a_own2[i]) if a_own2 is not None else None
 
@@ -717,6 +898,7 @@ def fetch_vgin_local_schema_parcels(refresh_gdb: bool = False) -> Tuple[List[Dic
                 mailing_address=mailing_addr,
                 explicit_mail_state=mst,
                 land_use=luse,
+                bld_class=ucode,
                 units=units,
                 year_built=yr_built,
                 assessed_total=tot_val,
@@ -728,6 +910,12 @@ def fetch_vgin_local_schema_parcels(refresh_gdb: bool = False) -> Tuple[List[Dic
                 col_max_len=40,
             )
             if rec is not None:
+                raw_card = _clean_str(a_card[i]) if a_card is not None else None
+                if raw_card and raw_card.lower().startswith("http"):
+                    rec["cama_site_link"] = raw_card.replace("\\", "/")
+                raw_photo = _clean_str(a_photo[i]) if a_photo is not None else None
+                if raw_photo and raw_photo.lower().startswith("http"):
+                    rec["building_photo_url"] = raw_photo.replace("\\", "/")
                 parcels.append(rec)
                 loc_added += 1
 
@@ -766,7 +954,22 @@ def fetch_hrgeo_hampton_roads_parcels(skip_agencies: Set[str]) -> List[Dict[str,
             borough = agency
         if not owner1 or not pid:
             return None
-        site = _clean_str(a.get("PSTLADDRESS")) or f"PARCEL {pid}"
+        real_site = _clean_va_site_address(a.get("PSTLADDRESS"))
+        tot_v = _clean_money(a.get("TOTVALUE"))
+        yr_b = source_int(a.get("RESYRBLT"))
+        zon = _clean_str(a.get("ZONING"))
+        if _is_unimproved_vacant_va_parcel(
+            has_imp_col=False,
+            imp_val=None,
+            tot_val=tot_v,
+            yr_built=yr_b,
+            units=None,
+            land_use=zon,
+            use_code=None,
+            real_site_addr=real_site,
+        ):
+            return None
+        site = real_site or f"PARCEL {pid}"
         szip = _clean_zip5(a.get("PSTLZIP5"))
         mst = _clean_str(a.get("MLSTATE"))
         mzip = _clean_zip5(a.get("MLZIP5"))
@@ -825,7 +1028,25 @@ def fetch_henrico_parcels() -> List[Dict[str, Any]]:
         gpin = _clean_str(a.get("GPIN")) or str(a.get("OBJECTID") or "")
         if not owner1 or not gpin:
             return None
-        site = _clean_str(a.get("FULL_ADDRESS")) or f"PARCEL {gpin}"
+        real_site = _clean_va_site_address(a.get("FULL_ADDRESS"))
+        lv = _clean_money(a.get("LAND_VALUE_CURRENT")) or 0.0
+        iv = _clean_money(a.get("IMPROVEMENTS_VALUE_CURRENT")) or 0.0
+        tot = (lv + iv) if (lv + iv) > 0 else None
+        yr_b = source_int(a.get("YEAR_BUILT"))
+        units_h = source_int(a.get("NUMBER_UNITS_APARTMENT"))
+        luse_h = _clean_str(a.get("USE_DESCRIPTION"))
+        if _is_unimproved_vacant_va_parcel(
+            has_imp_col=True,
+            imp_val=iv,
+            tot_val=tot,
+            yr_built=yr_b,
+            units=units_h,
+            land_use=luse_h,
+            use_code=None,
+            real_site_addr=real_site,
+        ):
+            return None
+        site = real_site or f"PARCEL {gpin}"
         mparts = [
             p for p in (
                 _clean_str(a.get("MAILING_ADDRESS_01")),
@@ -834,9 +1055,6 @@ def fetch_henrico_parcels() -> List[Dict[str, Any]]:
                 _clean_str(a.get("MAILING_ADDRESS_04")),
             ) if p
         ]
-        lv = _clean_money(a.get("LAND_VALUE_CURRENT")) or 0.0
-        iv = _clean_money(a.get("IMPROVEMENTS_VALUE_CURRENT")) or 0.0
-        tot = (lv + iv) if (lv + iv) > 0 else None
         c = feat.get("centroid") or feat.get("geometry") or {}
         lat, lng = _validate_coords("va", source_float(c.get("y")), source_float(c.get("x")))
         return _build_parcel_record(
@@ -891,12 +1109,25 @@ def fetch_prince_william_parcels() -> List[Dict[str, Any]]:
         sparts = [
             p for p in (
                 _clean_str(a.get("StreetNumber")),
-                _clean_str(a.get("StreetName")),
+                _clean_va_site_address(a.get("StreetName")),
                 _clean_str(a.get("StreetType")),
                 _clean_str(a.get("UnitNumber")),
             ) if p and p != "0"
         ]
-        site = " ".join(sparts) if sparts else f"PARCEL {gpin}"
+        real_site = _clean_va_site_address(" ".join(sparts)) if sparts else None
+        pwc_use = _clean_str(a.get("CAMA_USECODE"))
+        if _is_unimproved_vacant_va_parcel(
+            has_imp_col=False,
+            imp_val=None,
+            tot_val=None,
+            yr_built=None,
+            units=None,
+            land_use=pwc_use,
+            use_code=pwc_use,
+            real_site_addr=real_site,
+        ):
+            return None
+        site = real_site or f"PARCEL {gpin}"
         mst = _clean_str(a.get("CAMA_STATE"))
         mzip = _clean_zip5(a.get("CAMA_ZIPCODE"))
         mparts = [
@@ -941,12 +1172,262 @@ def fetch_prince_william_parcels() -> List[Dict[str, Any]]:
     )
 
 
-def ingest_virginia(*, rebuild_only: bool = False, refresh_gdb: bool = False) -> Tuple[int, int]:
+def prune_and_enrich_va_from_local_gdb(conn) -> Dict[str, int]:
+    """Fast in-place surgical pass over `va_properties` using local VGIN LocalSchemas GDB:
+    1. Prunes certified zero-improvement (`BLDG_VAL == 0` / `'Vacant Land'` / `'200V'`) and
+       unaddressed `<= $5,000` nominal vacant paper lots (such as Caroline Pines / Glasgow
+       paper subdivisions) from `va_properties`.
+    2. Upgrades `PARCEL ...` / `'0 UNASSIGNED'` addresses, mailing addresses, assessments,
+       sales, year built, and county `Tax_Card` links from the expanded 81-locality schema map.
+    """
+    local_schemas_gdb, parcel_geom_gdb = _resolve_gdb_paths(refresh=False)
+    layers = pyogrio.list_layers(local_schemas_gdb)
+
+    # Fast 2-second non-geometry QPID -> (PARCELID, LOCALITY) lookup from VA_Parcels
+    qpid_to_pid_loc: Dict[int, Tuple[str, str]] = {}
+    if os.path.exists(parcel_geom_gdb):
+        g_info = pyogrio.read_info(parcel_geom_gdb, layer="VA_Parcels")
+        for offset in range(0, g_info["features"], 400_000):
+            meta_g, _, _, g_fd = raw_read(
+                parcel_geom_gdb,
+                layer="VA_Parcels",
+                skip_features=offset,
+                max_features=400_000,
+                columns=["VGIN_QPID", "LOCALITY", "PARCELID"],
+                read_geometry=False,
+            )
+            gi = {c: idx for idx, c in enumerate(meta_g["fields"])}
+            q_arr = g_fd[gi["VGIN_QPID"]]
+            l_arr = g_fd[gi["LOCALITY"]]
+            p_arr = g_fd[gi["PARCELID"]]
+            valid = ~np.isnan(q_arr)
+            for idx_hit in np.nonzero(valid)[0]:
+                qv = int(q_arr[idx_hit])
+                if qv > 0:
+                    qpid_to_pid_loc[qv] = (str(p_arr[idx_hit] or "").strip(), str(l_arr[idx_hit] or "").strip().upper())
+        print(f"  [VA Prune & Enrich] Loaded {len(qpid_to_pid_loc):,} QPID->PARCELID mappings (no geometry).")
+
+    unimproved_bbls: List[str] = []
+    enrich_updates: List[Tuple] = []
+
+    print(f"▶ [VA Prune & Enrich] Auditing {len(layers)} local VGIN tables against `va_properties`...")
+    for layer_name, _ in layers:
+        if not layer_name.startswith("TBL_"):
+            continue
+        info = pyogrio.read_info(local_schemas_gdb, layer=layer_name)
+        fields = list(info["fields"])
+        if info["features"] <= 0:
+            continue
+        own1_col = _pick_col(fields, OWNER1_PRIORITY)
+        if not own1_col:
+            up = {c.upper(): c for c in fields}
+            if "NAME" in up:
+                own1_col = up["NAME"]
+        if not own1_col:
+            continue
+
+        cmap = {
+            "own1": own1_col,
+            "pid": _pick_col(fields, PARCEL_ID_PRIORITY),
+            "site_full": _pick_col(fields, FULL_SITE_ADDR_PRIORITY),
+            "hnum": _pick_col(fields, HOUSE_NUM_PRIORITY),
+            "sname": _pick_col(fields, STREET_NAME_PRIORITY),
+            "stype": _pick_col(fields, STREET_TYPE_PRIORITY),
+            "maddr1": _pick_col(fields, MAIL_ADDR1_PRIORITY),
+            "maddr2": _pick_col(fields, MAIL_ADDR2_PRIORITY),
+            "mcity": _pick_col(fields, MAIL_CITY_PRIORITY),
+            "mstate": _pick_col(fields, MAIL_STATE_PRIORITY),
+            "mzip": _pick_col(fields, MAIL_ZIP_PRIORITY),
+            "totval": _pick_col(fields, TOTAL_VAL_PRIORITY),
+            "lndval": _pick_col(fields, LAND_VAL_PRIORITY),
+            "impval": _pick_col(fields, IMP_VAL_PRIORITY),
+            "sdate": _pick_col(fields, SALE_DATE_PRIORITY),
+            "sprice": _pick_col(fields, SALE_PRICE_PRIORITY),
+            "yrblt": _pick_col(fields, YEAR_BUILT_PRIORITY),
+            "units": _pick_col(fields, UNITS_PRIORITY),
+            "luse": _pick_col(fields, LAND_USE_PRIORITY),
+            "ucode": _pick_col(fields, USE_CODE_SECONDARY_PRIORITY),
+            "card_url": _pick_col(fields, CAMA_CARD_PRIORITY),
+            "photo_url": _pick_col(fields, PHOTO_URL_PRIORITY),
+            "qpid": _pick_col(fields, ["VGIN_QPID"]),
+            "loc_name": _pick_col(fields, ["VGIN_LOCALITY_NAME"]),
+        }
+        fallback_loc = _clean_locality_label(layer_name)
+        needed_cols = sorted({c for c in cmap.values() if c is not None})
+        meta_t, _, _, fdata = raw_read(
+            local_schemas_gdb, layer=layer_name, columns=needed_cols, read_geometry=False
+        )
+        col_idx = {c: i for i, c in enumerate(meta_t["fields"])}
+        n_rows = len(fdata[0]) if needed_cols else 0
+
+        def _col(key: str):
+            cn = cmap.get(key)
+            return fdata[col_idx[cn]] if cn is not None else None
+
+        a_pid = _col("pid")
+        a_sfull = _col("site_full")
+        a_hnum = _col("hnum")
+        a_sname = _col("sname")
+        a_stype = _col("stype")
+        a_tv = _col("totval")
+        a_lv = _col("lndval")
+        a_iv = _col("impval")
+        a_sd = _col("sdate")
+        a_sp = _col("sprice")
+        a_yb = _col("yrblt")
+        a_un = _col("units")
+        a_lu = _col("luse")
+        a_uc = _col("ucode")
+        a_card = _col("card_url")
+        a_photo = _col("photo_url")
+        a_qp = _col("qpid")
+        a_ln = _col("loc_name")
+        has_imp_col = a_iv is not None
+
+        for i in range(n_rows):
+            qpid_val = _to_qpid(a_qp[i]) if a_qp is not None else None
+            g_pid, g_loc = qpid_to_pid_loc.get(qpid_val, ("", "")) if qpid_val else ("", "")
+            locality = (_clean_str(a_ln[i]) if a_ln is not None else None) or g_loc or fallback_loc
+            locality_up = locality.upper()
+            pid = (_clean_str(a_pid[i]) if a_pid is not None else None) or g_pid or (str(qpid_val) if qpid_val else f"{layer_name}-{i}")
+            loc_slug = re.sub(r"[^A-Z0-9]+", "_", locality_up).strip("_")[:24]
+            bbl = f"VA-{loc_slug}-{pid}"[:80]
+
+            real_site = _clean_va_site_address(a_sfull[i]) if a_sfull is not None else None
+            if not real_site:
+                parts = []
+                if a_hnum is not None:
+                    hn = _clean_str(a_hnum[i])
+                    if hn and hn not in ("0", "0.0"):
+                        parts.append(hn.removesuffix(".0"))
+                if a_sname is not None:
+                    sn = _clean_va_site_address(a_sname[i])
+                    if sn:
+                        parts.append(sn)
+                if a_stype is not None:
+                    st = _clean_str(a_stype[i])
+                    if st and parts and not parts[-1].upper().endswith(f" {st.upper()}"):
+                        parts.append(st)
+                if parts:
+                    real_site = _clean_va_site_address(" ".join(parts))
+
+            imp_val = _clean_money(a_iv[i]) if a_iv is not None else None
+            land_val = _clean_money(a_lv[i]) if a_lv is not None else None
+            tot_val = _clean_money(a_tv[i]) if a_tv is not None else None
+            if tot_val is None and (land_val is not None or imp_val is not None):
+                tot_val = (land_val or 0.0) + (imp_val or 0.0)
+            yr_built = source_int(a_yb[i]) if a_yb is not None else None
+            units = source_int(a_un[i]) if a_un is not None else None
+            luse = _clean_str(a_lu[i]) if a_lu is not None else None
+            ucode = _clean_str(a_uc[i]) if a_uc is not None else None
+
+            if _is_unimproved_vacant_va_parcel(
+                has_imp_col=has_imp_col,
+                imp_val=imp_val,
+                tot_val=tot_val,
+                yr_built=yr_built,
+                units=units,
+                land_use=luse,
+                use_code=ucode,
+                real_site_addr=real_site,
+            ):
+                unimproved_bbls.append(bbl)
+                continue
+
+            sdate = _clean_sale_date(a_sd[i]) if a_sd is not None else None
+            sprice = _clean_money(a_sp[i]) if a_sp is not None else None
+            raw_card = _clean_str(a_card[i]) if a_card is not None else None
+            card_url = raw_card.replace("\\", "/") if (raw_card and raw_card.lower().startswith("http")) else None
+            raw_photo = _clean_str(a_photo[i]) if a_photo is not None else None
+            photo_url = raw_photo.replace("\\", "/") if (raw_photo and raw_photo.lower().startswith("http")) else None
+
+            if real_site or tot_val or yr_built or sdate or card_url or photo_url:
+                enrich_updates.append((
+                    bbl, real_site, luse, ucode, tot_val, sdate, sprice, yr_built, card_url, photo_url
+                ))
+
+    deleted_vgin = 0
+    deleted_sql = 0
+    updated_rows = 0
+    with conn.cursor() as cur:
+        for start in range(0, len(unimproved_bbls), 25000):
+            chunk = unimproved_bbls[start : start + 25000]
+            cur.execute("DELETE FROM va_properties WHERE bbl = ANY(%s)", (chunk,))
+            deleted_vgin += cur.rowcount
+
+        # Also prune explicit vacant / nominal unaddressed paper lots on non-VGIN sources (HRGeo / Henrico / PWC)
+        cur.execute(
+            """
+            DELETE FROM va_properties
+            WHERE COALESCE(year_built, 0) <= 0
+              AND COALESCE(units_res, 0) <= 0
+              AND (
+                  COALESCE(land_use, '') ~* '(\\mVACANT\\M|\\mUNIMPROVED\\M|\\mRAW\\s+LAND\\M|\\mCOMMON\\s+AREA\\M|\\mOPEN\\s+SPACE\\M|\\mRIGHT[\\s-]*OF[\\s-]*WAY\\M|^200V$)'
+                  OR (
+                      (
+                          address IS NULL
+                          OR address ~* '^(0|0\\s+UNASSIGNED|UNASSIGNED|0\\s+UNKNOWN|UNKNOWN|NO\\s+ADDRESS|VACANT|PARCEL\\s+)'
+                      )
+                      AND COALESCE(assessed_total, 0) > 0
+                      AND assessed_total <= 5000
+                  )
+              )
+            """
+        )
+        deleted_sql = cur.rowcount
+
+        # Normalize any remaining '0 UNASSIGNED' / 'UNASSIGNED' / '0' placeholder addresses on improved parcels
+        cur.execute(
+            """
+            UPDATE va_properties
+            SET address = 'PARCEL ' || SPLIT_PART(bbl, '-', 3)
+            WHERE address ~* '^(0|0\\s+UNASSIGNED|UNASSIGNED|0\\s+UNKNOWN|UNKNOWN|NO\\s+ADDRESS)$'
+            """
+        )
+
+        for start in range(0, len(enrich_updates), 5000):
+            batch = enrich_updates[start : start + 5000]
+            execute_values(
+                cur,
+                """
+                UPDATE va_properties AS p
+                SET address = CASE
+                        WHEN v.real_site IS NOT NULL AND (p.address IS NULL OR p.address LIKE 'PARCEL %%' OR p.address ~* '^(0|UNASSIGNED)')
+                        THEN v.real_site ELSE p.address END,
+                    land_use = COALESCE(v.luse, p.land_use),
+                    bld_class = COALESCE(v.ucode, p.bld_class),
+                    assessed_total = COALESCE(p.assessed_total, v.tot_val),
+                    last_sale_date = COALESCE(p.last_sale_date, v.sdate),
+                    last_sale_price = COALESCE(p.last_sale_price, v.sprice),
+                    year_built = COALESCE(p.year_built, v.yr_built),
+                    cama_site_link = COALESCE(v.card_url, p.cama_site_link),
+                    building_photo_url = COALESCE(v.photo_url, p.building_photo_url)
+                FROM (VALUES %s) AS v(
+                    bbl, real_site, luse, ucode, tot_val, sdate, sprice, yr_built, card_url, photo_url
+                )
+                WHERE p.bbl = v.bbl;
+                """,
+                batch,
+                template="(%s, %s, %s, %s, %s::numeric, %s::date, %s::numeric, %s::int, %s, %s)",
+                page_size=2500,
+            )
+            updated_rows += cur.rowcount
+    conn.commit()
+    print(
+        f"  ✓ [VA Prune & Enrich] Pruned {deleted_vgin + deleted_sql:,} unimproved/vacant non-building lots "
+        f"(VGIN={deleted_vgin:,}, SQL={deleted_sql:,}); enriched {updated_rows:,} improved parcels."
+    )
+    return {"deleted": deleted_vgin + deleted_sql, "enriched": updated_rows}
+
+
+def ingest_virginia(*, rebuild_only: bool = False, refresh_gdb: bool = False, prune_and_enrich_local: bool = False) -> Tuple[int, int]:
     t0 = time.time()
     conn = psycopg2.connect(DATABASE_URL)
     try:
         ensure_jurisdiction_partition(conn, "va")
-        if not rebuild_only:
+        if prune_and_enrich_local:
+            prune_and_enrich_va_from_local_gdb(conn)
+        elif not rebuild_only:
             vgin_rows, covered = fetch_vgin_local_schema_parcels(refresh_gdb=refresh_gdb)
             hr_rows = fetch_hrgeo_hampton_roads_parcels(covered)
             hen_rows = fetch_henrico_parcels()
@@ -1033,9 +1514,14 @@ def ingest_virginia(*, rebuild_only: bool = False, refresh_gdb: bool = False) ->
 def main() -> int:
     parser = argparse.ArgumentParser(description="Ingest Virginia (`va`) parcels, OpenCorporates links & networks.")
     parser.add_argument("--rebuild-only", action="store_true", help="Rebuild OC links & networks from existing `va_properties`.")
+    parser.add_argument("--prune-and-enrich-local", action="store_true", help="Prune unimproved/vacant lots & enrich addresses/CAMA cards from local VGIN GDB, then rebuild `va_networks`.")
     parser.add_argument("--refresh-gdb", action="store_true", help="Re-download latest VGIN quarterly File Geodatabases from ArcGIS Online.")
     args = parser.parse_args()
-    ingest_virginia(rebuild_only=args.rebuild_only, refresh_gdb=args.refresh_gdb)
+    ingest_virginia(
+        rebuild_only=args.rebuild_only,
+        refresh_gdb=args.refresh_gdb,
+        prune_and_enrich_local=args.prune_and_enrich_local,
+    )
     return 0
 
 

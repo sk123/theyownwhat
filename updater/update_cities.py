@@ -76,6 +76,13 @@ def run_update(full: bool = True, target_cities: list[str] | None = None) -> int
                             }[city](conn)
                         except Exception as sale_exc:
                             logger.warning("%s GIS recent-sale enrichment skipped/failed: %s", city.upper(), sale_exc)
+                    if city == "boston":
+                        try:
+                            from ma.scrape_ma_cama import scrape_boston_cama
+                            scrape_boston_cama(conn)
+                            logger.info("✓ Synced Boston Assessing & ISD updates into unified MA dataset.")
+                        except Exception as ma_sync_exc:
+                            logger.warning("MA Boston cross-enrichment sync skipped/failed: %s", ma_sync_exc)
                     logger.info("✓ %s sync and network rebuild completed.", city.upper())
                 except Exception as city_exc:
                     logger.error("✘ %s sync failed (continuing to remaining cities): %s", city.upper(), city_exc)

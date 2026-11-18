@@ -187,7 +187,7 @@ export default function AboutModal({ isOpen, onClose, onShowFreshness }) {
                     <div className="p-6 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
                         <div>
                             <h2 className="text-2xl font-black tracking-tight text-gray-900">they own <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-indigo-600">WHAT??</span></h2>
-                            <p className="mt-1 text-sm font-medium text-slate-500">Source-backed property & landlord-network explorer</p>
+                            <p className="mt-1 text-sm font-medium text-slate-500">Source-backed property &amp; owner-network explorer</p>
                         </div>
                         <button
                             onClick={onClose}
@@ -255,7 +255,7 @@ export default function AboutModal({ isOpen, onClose, onShowFreshness }) {
                         <div className="mt-4 rounded-xl border border-amber-100 bg-gradient-to-br from-amber-50/80 to-yellow-50/50 p-4">
                             <h4 className="text-xs font-black uppercase tracking-[0.14em] text-amber-600 mb-2">Network Accuracy</h4>
                             <p className="text-sm leading-relaxed text-slate-700">
-                                Ownership networks are rebuilt nightly using automated graph algorithms that link businesses, principals, properties, and addresses. Small refinements to those backend algorithms can make associations overbroad or underbroad, so network sizes may shift from the last time you used the tool. Fine-tuning is in progress. If you notice a connection that doesn't look right (e.g., unrelated landlords grouped together), please use the feedback button to let us know — it helps improve accuracy for everyone.
+                                Ownership networks are rebuilt nightly using automated graph algorithms that link businesses, principals, properties, and addresses. Small refinements to those backend algorithms can make associations overbroad or underbroad, so network sizes may shift from the last time you used the tool. Fine-tuning is in progress. If you notice a connection that doesn't look right (e.g., unrelated property owners grouped together), please use the feedback button to let us know — it helps improve accuracy for everyone.
                             </p>
                         </div>
                     </div>

@@ -61,6 +61,7 @@ from api.populate_cities import (
     source_text,
 )
 from api.shared_utils import (
+    is_excluded_third_party_entity,
     looks_like_person_owner,
     normalize_mailing_address_coarse,
     strip_benign_care_of_prefix,
@@ -421,6 +422,67 @@ def cross_enrich_boston_and_ma(conn) -> Dict[str, int]:
         )
         summary["boston_coords_units_updated"] = cur.rowcount
 
+        # 1b. `boston_properties` -> shared `M035-*` rows in `ma_properties` (missing units/year_built + untruncated entity names)
+        cur.execute(
+            """
+            UPDATE ma_properties m
+            SET units_res = CASE
+                    WHEN COALESCE(m.units_res, 0) = 0 AND COALESCE(b.units_res, 0) > 0 THEN b.units_res
+                    ELSE m.units_res
+                END,
+                units_total = CASE
+                    WHEN COALESCE(m.units_total, 0) = 0 AND COALESCE(b.units_total, 0) > 0 THEN b.units_total
+                    ELSE m.units_total
+                END,
+                year_built = CASE
+                    WHEN COALESCE(m.year_built, 0) = 0 AND COALESCE(b.year_built, 0) > 0 THEN b.year_built
+                    ELSE m.year_built
+                END
+            FROM boston_properties b
+            WHERE m.bbl = 'M035-' || LPAD(b.bbl, 10, '0')
+              AND (
+                  (COALESCE(m.units_res, 0) = 0 AND COALESCE(b.units_res, 0) > 0)
+                  OR (COALESCE(m.year_built, 0) = 0 AND COALESCE(b.year_built, 0) > 0)
+              )
+            """
+        )
+
+    # 1c. Upgrade 40-char truncated MassGIS owner names when Boston Assessing has the full untruncated entity
+    #     on the same recorded deed (e.g. 'TULCHINSKY FAMILY' -> 'TULCHINSKY FAMILY LIMITED PARTNERSHIP - NO 1')
+    with conn.cursor(cursor_factory=RealDictCursor) as ucur:
+        ucur.execute(
+            """
+            SELECT m.bbl, m.owner_name AS ma_owner, b.owner_name AS bos_owner
+            FROM ma_properties m
+            JOIN boston_properties b ON m.bbl = 'M035-' || LPAD(b.bbl, 10, '0')
+            WHERE m.last_sale_date IS NOT DISTINCT FROM b.last_sale_date
+              AND b.owner_name IS NOT NULL
+              AND LENGTH(TRIM(b.owner_name)) > LENGTH(TRIM(m.owner_name)) + 3
+              AND UPPER(TRIM(b.owner_name)) LIKE UPPER(TRIM(m.owner_name)) || '%'
+            """
+        )
+        untrunc_updates = []
+        for ur in ucur.fetchall():
+            bos_raw = source_text(ur.get("bos_owner"))
+            if not bos_raw or is_public_entity(bos_raw) or is_excluded_third_party_entity(bos_raw):
+                continue
+            untrunc_updates.append((bos_raw, normalize_owner_name(bos_raw), ur["bbl"]))
+    if untrunc_updates:
+        with conn.cursor() as cur:
+            execute_values(
+                cur,
+                """
+                UPDATE ma_properties AS m
+                SET owner_name = v.ow,
+                    owner_name_norm = v.own,
+                    owner_is_truncated = FALSE
+                FROM (VALUES %s) AS v(ow, own, bbl)
+                WHERE m.jurisdiction = 'ma' AND m.bbl = v.bbl
+                """,
+                untrunc_updates,
+                page_size=2000,
+            )
+
     # 2. `boston_properties` -> `ma_properties` (missing private/CLT/nonprofit housing & residential parcels)
     with conn.cursor(cursor_factory=RealDictCursor) as rcur:
         rcur.execute(
@@ -596,10 +658,104 @@ def build_and_save_ma_networks(conn) -> Tuple[int, int]:
         is_public_fn=is_public_entity,
         generic_owner_names=GENERIC_OWNER_NAMES,
     )
+
+    # Dual-source Boston Assessing <-> MassGIS nominee realty trust & alternate-owner cross-town linker:
+    # On ~18K Boston parcels, MassGIS records the human trustee ('CAMMARANO ALBERTO TS') while Boston
+    # Assessing records the nominee realty trust ('LEXINGTON STREET REALTY TRUST') for the exact same deed.
+    # Uniting both identities pierces Boston nominee trusts and connects them to matching trust/trustee
+    # holdings in Brookline, Somerville, Cambridge, Quincy, Revere, and all 351 MA municipalities.
+    boston_alt_by_bbl: Dict[str, Tuple[str, str]] = {}
+    with conn.cursor(cursor_factory=RealDictCursor) as acur:
+        acur.execute("SELECT to_regclass('public.boston_properties') IS NOT NULL AS has_bos")
+        if acur.fetchone()["has_bos"]:
+            acur.execute(
+                """
+                SELECT m.bbl, m.owner_name AS ma_owner, b.owner_name AS bos_owner
+                FROM ma_properties m
+                JOIN boston_properties b ON m.bbl = 'M035-' || LPAD(b.bbl, 10, '0')
+                WHERE m.last_sale_date IS NOT DISTINCT FROM b.last_sale_date
+                  AND b.owner_name IS NOT NULL
+                  AND COALESCE(b.land_use, '') != 'CM'
+                  AND UPPER(TRIM(m.owner_name)) != UPPER(TRIM(b.owner_name))
+                """
+            )
+            for ar in acur.fetchall():
+                bos_raw = source_text(ar.get("bos_owner"))
+                if not bos_raw or is_public_entity(bos_raw) or is_excluded_third_party_entity(bos_raw):
+                    continue
+                bos_norm = normalize_owner_name(bos_raw)
+                ma_norm = normalize_owner_name(ar.get("ma_owner") or "")
+                if bos_norm and len(bos_norm) >= 6 and bos_norm != ma_norm and bos_norm not in GENERIC_OWNER_NAMES:
+                    boston_alt_by_bbl[ar["bbl"]] = (bos_raw, bos_norm)
+
+    bos_trust_merges = 0
+    if boston_alt_by_bbl:
+        bbl_to_r: Dict[str, str] = {}
+        r_to_props: Dict[str, List[dict]] = {}
+        for rb, grp in network_groups.items():
+            ded = {p["bbl"]: p for p in grp if p.get("bbl")}
+            if ded:
+                for b in ded:
+                    bbl_to_r[b] = rb
+                r_to_props[rb] = list(ded.values())
+        par_r = {r: r for r in r_to_props}
+        sz_r = {r: len(ps) for r, ps in r_to_props.items()}
+        pub_r = {
+            r: any(is_public_entity(p.get("owner_name") or "") or is_excluded_third_party_entity(p.get("owner_name") or "") for p in ps)
+            for r, ps in r_to_props.items()
+        }
+
+        def _find_r(x: str) -> str:
+            while par_r[x] != x:
+                par_r[x] = par_r[par_r[x]]
+                x = par_r[x]
+            return x
+
+        by_any_owner_norm: Dict[str, List[str]] = {}
+        for p in properties:
+            b = p.get("bbl")
+            if not b or b not in bbl_to_r:
+                continue
+            onorm = normalize_owner_name(p.get("owner_name") or "")
+            if onorm and len(onorm) >= 6 and onorm not in GENERIC_OWNER_NAMES and not is_public_entity(onorm):
+                by_any_owner_norm.setdefault(onorm, []).append(b)
+            alt = boston_alt_by_bbl.get(b)
+            if alt:
+                by_any_owner_norm.setdefault(alt[1], []).append(b)
+
+        # Only trigger merges on norms touched by at least one Boston dual-owner parcel
+        bos_alt_norms = {alt[1] for alt in boston_alt_by_bbl.values()}
+        for anorm in bos_alt_norms:
+            bbls = by_any_owner_norm.get(anorm) or []
+            if len(bbls) < 2 or len(bbls) > 150:
+                continue
+            roots = list({bbl_to_r[b] for b in bbls if b in bbl_to_r})
+            if len(roots) < 2:
+                continue
+            anchor = _find_r(roots[0])
+            for other in roots[1:]:
+                uo = _find_r(other)
+                if anchor == uo or pub_r.get(anchor) or pub_r.get(uo):
+                    continue
+                if sz_r[anchor] + sz_r[uo] > 250:
+                    continue
+                par_r[uo] = anchor
+                sz_r[anchor] += sz_r[uo]
+                bos_trust_merges += 1
+
+        if bos_trust_merges:
+            merged_ng: Dict[str, List[dict]] = {}
+            for r, ps in r_to_props.items():
+                merged_ng.setdefault(_find_r(r), []).extend(ps)
+            network_groups = merged_ng
+
     del properties
     gc.collect()
-    if oc_merges:
-        print(f"  [MA] Corporate registry & series untangling merged {oc_merges:,} multi-entity links.")
+    if oc_merges or bos_trust_merges:
+        print(
+            f"  [MA] Corporate registry & series untangling merged {oc_merges:,} multi-entity links "
+            f"(+ {bos_trust_merges:,} Boston nominee-trust / cross-town dual-owner links)."
+        )
 
     insert_sql = """
         INSERT INTO ma_networks (
@@ -632,7 +788,13 @@ def build_and_save_ma_networks(conn) -> Tuple[int, int]:
             oc_company_ids = set()
             oc_holding_entities = set()
             oc_raw_hq_addrs = set()
+            bos_alt_names = set()
             for p in group:
+                alt_pair = boston_alt_by_bbl.get(p["bbl"])
+                if alt_pair:
+                    bos_alt_names.add(alt_pair[0])
+                    if looks_like_person_owner(alt_pair[0]):
+                        human_counts[alt_pair[0]] = human_counts.get(alt_pair[0], 0) + 1
                 oj, on = p.get("oc_jurisdiction_code"), p.get("oc_company_number")
                 if oj and on:
                     oc_company_ids.add(f"{oj}/{on}")
@@ -661,7 +823,7 @@ def build_and_save_ma_networks(conn) -> Tuple[int, int]:
                 )
                 else "corp"
             )
-            member_names = sorted({p["owner_name"] for p in group if p.get("owner_name")} | oc_holding_entities)
+            member_names = sorted({p["owner_name"] for p in group if p.get("owner_name")} | oc_holding_entities | bos_alt_names)
             member_addrs = sorted({p["mailing_address"] for p in group if p.get("mailing_address")} | oc_raw_hq_addrs)
             member_addr_norms = sorted({p["mailing_address_norm"] for p in group if p.get("mailing_address_norm")})
             bbl_list = [p["bbl"] for p in group]
@@ -735,8 +897,29 @@ def build_and_save_ma_networks(conn) -> Tuple[int, int]:
                 json.dumps({
                     "properties_count": n_properties,
                     "networks_count": n_networks,
+                    "networks": n_networks,
                     "municipalities_loaded": n_municipalities,
                     "oc_matched_parcels": oc_stats.get("matched", 0),
+                    "source_url": "https://www.mass.gov/info-details/massgis-data-property-tax-parcels",
+                    "message": (
+                        "MassGIS Level 3 Standardized Property Tax Parcels across all 351 Massachusetts cities & towns, "
+                        "actively enriched via 112 live municipal CAMA portals (Vision/VGSI, MapGeo, Analyze Boston FY2026 "
+                        "Assessing & ISD Violations, Cambridge FY2027 Assessing Open Data) and MA OpenCorporates filings."
+                    ),
+                    "sources": [
+                        {
+                            "source": "MassGIS Level 3 Standardized Property Tax Parcels (All 351 Cities & Towns)",
+                            "url": "https://www.mass.gov/info-details/massgis-data-property-tax-parcels",
+                        },
+                        {
+                            "source": "Massachusetts Municipal CAMA Portals (78 Vision/VGSI + 31 MapGeo + Cambridge FY2027 + Ashland)",
+                            "url": "https://www.vgsi.com/massachusetts-online-database/",
+                        },
+                        {
+                            "source": "Analyze Boston FY2026 Property Assessment & Dual-Owner Nominee Realty Trust Cross-Enrichment",
+                            "url": "https://data.boston.gov/dataset/property-assessment",
+                        },
+                    ],
                 }),
             ),
         )

@@ -59,7 +59,6 @@ const DATASET_PATHS = {
   NYS: '/ny',
   DC: '/dc',
   BALTIMORE: '/baltimore',
-  BOSTON: '/boston',
   DETROIT: '/detroit',
   PHILADELPHIA: '/philadelphia',
   CHICAGO: '/chicago',
@@ -67,6 +66,7 @@ const DATASET_PATHS = {
   MINNEAPOLIS: '/minneapolis',
   NJ: '/nj',
   MA: '/ma',
+  BOSTON: '/ma',
   FL: '/fl',
   CO: '/co',
   VT: '/vt',
@@ -75,111 +75,115 @@ const DATASET_PATHS = {
   AR: '/ar',
   VA: '/va',
 };
-const PATH_DATASETS = Object.fromEntries(Object.entries(DATASET_PATHS).map(([state, path]) => [path, state]));
+const PATH_DATASETS = {
+  ...Object.fromEntries(Object.entries(DATASET_PATHS).map(([state, path]) => [path, state])),
+  '/ma': 'MA',
+  '/boston': 'MA',
+};
 
 const SEO_BY_DATASET = {
   LANDING: {
-    title: 'They Own WHAT?? | Landlord & Property Explorer',
-    description: 'Choose a source-backed landlord and property dataset to explore ownership networks, property portfolios, code records, subsidies, and public ownership links.',
+    title: 'They Own WHAT?? | Property Owner & Network Explorer',
+    description: 'Choose a source-backed property ownership dataset to explore owner networks, property portfolios, code records, subsidies, and public corporate links.',
     path: '/',
   },
   CT: {
-    title: 'They Own WHAT?? | Connecticut Landlord & Property Explorer',
-    description: 'Explore Connecticut landlord networks, municipal property records, code records, subsidies, and public ownership links from source-loaded public data.',
+    title: 'They Own WHAT?? | Connecticut Property Owner Explorer',
+    description: 'Explore Connecticut property owner networks, municipal property records, code records, subsidies, and public ownership links from source-loaded public data.',
     path: '/ct',
   },
   NY: {
-    title: 'They Own WHAT?? | NYC Landlord & Property Explorer',
-    description: 'Explore New York City landlord and property records using source-loaded HPD registration, property, housing, and subsidy data.',
+    title: 'They Own WHAT?? | NYC Property Owner Explorer',
+    description: 'Explore New York City property owner and building records using source-loaded HPD registration, PLUTO parcel, housing code, eviction, and subsidy data.',
     path: '/nyc',
   },
   DC: {
-    title: 'They Own WHAT?? | Washington, D.C. Property Explorer',
+    title: 'They Own WHAT?? | Washington, D.C. Property Owner Explorer',
     description: 'Explore Washington, D.C. property assessment records and owner networks from source-loaded public data.',
     path: '/dc',
   },
   BALTIMORE: {
-    title: 'They Own WHAT?? | Baltimore Landlord & Property Explorer',
+    title: 'They Own WHAT?? | Baltimore Property Owner Explorer',
     description: 'Explore Baltimore property ownership records, housing/code layers, and source-backed public property data.',
     path: '/baltimore',
   },
   BOSTON: {
-    title: 'They Own WHAT?? | Boston Landlord & Property Explorer',
-    description: 'Explore Boston property assessment records, ownership networks, and public violation-source enrichment.',
-    path: '/boston',
+    title: 'They Own WHAT?? | Massachusetts (incl. Boston) Property Owner Explorer',
+    description: 'Explore Massachusetts & Boston property assessment records, owner networks, nominee realty trust links, and Boston ISD code violations.',
+    path: '/ma',
   },
   DETROIT: {
-    title: 'They Own WHAT?? | Detroit Landlord & Property Explorer',
+    title: 'They Own WHAT?? | Detroit Property Owner Explorer',
     description: 'Explore Detroit property records, ownership networks, and municipal assessment database.',
     path: '/detroit',
   },
   PHILADELPHIA: {
-    title: 'They Own WHAT?? | Philadelphia Landlord & Property Explorer',
+    title: 'They Own WHAT?? | Philadelphia Property Owner Explorer',
     description: 'Explore Philadelphia OPA assessments, L&I active rental licenses, code violations, PA DOS corporate Governor filings, and NHPD subsidies.',
     path: '/philadelphia',
   },
   CHICAGO: {
-    title: 'They Own WHAT?? | Chicago Landlord & Property Explorer',
+    title: 'They Own WHAT?? | Chicago Property Owner Explorer',
     description: 'Explore Chicago property records, owner networks, and municipal assessment database.',
     path: '/chicago',
   },
   MIAMI: {
-    title: 'They Own WHAT?? | Miami Landlord & Property Explorer',
+    title: 'They Own WHAT?? | Miami-Dade Property Owner Explorer',
     description: 'Explore Miami-Dade property records, Florida Sunbiz corporate officer/manager networks, DBPR apartment licenses, and NHPD subsidies.',
     path: '/miami',
   },
   MINNEAPOLIS: {
-    title: 'They Own WHAT?? | Minneapolis Landlord & Property Explorer',
+    title: 'They Own WHAT?? | Minneapolis Property Owner Explorer',
     description: 'Explore Minneapolis property records, active rental licenses, owner networks, and municipal database.',
     path: '/minneapolis',
   },
   NJ: {
-    title: 'They Own WHAT?? | New Jersey BHI Landlord & Property Explorer',
+    title: 'They Own WHAT?? | New Jersey BHI Property Owner Explorer',
     description: 'Explore New Jersey DCA BHI active-building registration records and conservative owner networks from public source-loaded data.',
     path: '/nj',
   },
   NYS: {
-    title: 'They Own WHAT?? | New York State Landlord & Property Explorer',
+    title: 'They Own WHAT?? | New York State Property Owner Explorer',
     description: 'Explore New York State non-NYC county tax parcels linked to NY DOS corporate filings, Buffalo rental/code/court records, and NHPD subsidies.',
     path: '/ny',
   },
   MA: {
-    title: 'They Own WHAT?? | Massachusetts Statewide Landlord & Property Explorer',
-    description: 'Explore Massachusetts MassGIS Level 3 municipal tax parcels across all 351 cities and towns, landlord networks, and NHPD subsidies.',
+    title: 'They Own WHAT?? | Massachusetts Statewide Property Owner Explorer',
+    description: 'Explore Massachusetts MassGIS Level 3 municipal tax parcels across all 351 cities and towns, unified with Boston Assessing, ISD code cases, owner networks, and NHPD subsidies.',
     path: '/ma',
   },
   FL: {
-    title: 'They Own WHAT?? | Florida Statewide Landlord & Property Explorer',
+    title: 'They Own WHAT?? | Florida Statewide Property Owner Explorer',
     description: 'Explore Florida statewide investor/multifamily property parcels across all 67 counties linked to Sunbiz corporate principals, DBPR apartment licenses, and NHPD.',
     path: '/fl',
   },
   CO: {
-    title: 'They Own WHAT?? | Colorado Statewide Landlord & Property Explorer',
+    title: 'They Own WHAT?? | Colorado Statewide Property Owner Explorer',
     description: 'Explore Colorado public property parcels linked to Colorado Secretary of State filings, Denver active rental licenses, and NHPD subsidies.',
     path: '/co',
   },
   NC: {
-    title: 'They Own WHAT?? | North Carolina Statewide Landlord & Property Explorer',
-    description: 'Explore North Carolina NC OneMap property parcels across all 100 counties, landlord ownership networks, and NHPD subsidies.',
+    title: 'They Own WHAT?? | North Carolina Statewide Property Owner Explorer',
+    description: 'Explore North Carolina NC OneMap property parcels across all 100 counties, property ownership networks, and NHPD subsidies.',
     path: '/nc',
   },
   WI: {
-    title: 'They Own WHAT?? | Wisconsin Statewide Landlord & Property Explorer',
-    description: 'Explore Wisconsin statewide residential and multifamily property parcels, landlord networks, and NHPD subsidies.',
+    title: 'They Own WHAT?? | Wisconsin Statewide Property Owner Explorer',
+    description: 'Explore Wisconsin statewide residential and multifamily property parcels, owner networks, and NHPD subsidies.',
     path: '/wi',
   },
   VT: {
-    title: 'They Own WHAT?? | Vermont Statewide Landlord & Property Explorer',
-    description: 'Explore Vermont VCGI standardized Grand List property parcels, landlord ownership networks, and NHPD subsidies.',
+    title: 'They Own WHAT?? | Vermont Statewide Property Owner Explorer',
+    description: 'Explore Vermont VCGI standardized Grand List property parcels, property ownership networks, and NHPD subsidies.',
     path: '/vt',
   },
   AR: {
-    title: 'They Own WHAT?? | Arkansas Statewide Landlord & Property Explorer',
+    title: 'They Own WHAT?? | Arkansas Statewide Property Owner Explorer',
     description: 'Explore Arkansas GIS Office property parcels across all 75 counties linked to corporate officer filings and NHPD subsidies.',
     path: '/ar',
   },
   VA: {
-    title: 'They Own WHAT?? | Virginia Statewide Landlord & Property Explorer',
+    title: 'They Own WHAT?? | Virginia Statewide Property Owner Explorer',
     description: 'Explore Virginia VGIN & county CAMA property parcels linked to Virginia SCC corporate officer filings, recent sales, and NHPD subsidies.',
     path: '/va',
   },
@@ -197,6 +201,7 @@ function datasetHomeView(state) {
 function getStoredDataset() {
   try {
     const stored = window.localStorage.getItem(DATASET_STORAGE_KEY);
+    if (stored === 'BOSTON') return 'MA';
     return DATASET_PATHS[stored] ? stored : null;
   } catch {
     return null;
@@ -511,7 +516,7 @@ function App() {
         'BALTIMORE': 'BALTIMORE',
         'BALT': 'BALTIMORE',
         'MD': 'BALTIMORE',
-        'BOSTON': 'BOSTON',
+        'BOSTON': 'MA',
         'MA': 'MA',
         'MASSACHUSETTS': 'MA',
         'DETROIT': 'DETROIT',
@@ -1198,7 +1203,7 @@ function App() {
                         className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-200 hover:border-red-300 hover:bg-red-50/40 shadow-2xs text-xs font-extrabold text-slate-700 hover:text-red-600 transition-all whitespace-nowrap cursor-pointer"
                       >
                         <ShieldAlert size={14} className="text-red-500 shrink-0" aria-hidden="true" />
-                        <span>Landlord Rap Sheets</span>
+                        <span>Owner Rap Sheets</span>
                       </button>
                       {evictionToolsEnabled && (
                         <button
@@ -1318,7 +1323,7 @@ function App() {
                     >
                       <div className="flex items-center gap-2 min-w-0">
                         <span className="font-black text-xs md:text-sm text-slate-900 truncate">
-                          {networkData?.networkName || 'Landlord Portfolio'}
+                          {networkData?.networkName || 'Owner Portfolio'}
                         </span>
                         <span className="text-[10px] text-blue-700 bg-blue-50 border border-blue-200 font-extrabold px-2 py-0.5 rounded-full shrink-0">
                           {(filteredProperties || []).length} Properties
@@ -1545,7 +1550,7 @@ function App() {
             >
               <CityExplorer
                 key={`${activeState}-${cityExplorerKey}`}
-                city={activeState === 'NY' ? 'nyc' : activeState === 'NYS' ? 'ny' : activeState.toLowerCase()}
+                city={activeState === 'NY' ? 'nyc' : activeState === 'NYS' ? 'ny' : activeState === 'BOSTON' ? 'ma' : activeState.toLowerCase()}
                 onBack={() => showDatasetPicker()}
                 onMapSelected={setSelectedMapProperties}
                 onOpenSiblingNetwork={(sibJur, sibNetworkKey) => {
