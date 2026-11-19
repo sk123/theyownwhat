@@ -16,6 +16,7 @@ Governing policy (`docs/ASSURANCE_POLICY.md` & `README.md` Source-Only Policy):
 
 from __future__ import annotations
 
+from collections import Counter, deque
 from dataclasses import dataclass
 import datetime as dt
 import re
@@ -1508,8 +1509,16 @@ def cluster_with_oc_and_series(
             if pub_check(raw_nm) or pub_check(norm_nm):
                 is_pub = True
             bk = p.get("_building_key") or p.get("_coarse_mail")
+            if not bk and p.get("mailing_address"):
+                bk = normalize_mailing_address_coarse(strip_benign_care_of_prefix(p.get("mailing_address") or ""))
             if bk:
                 hq_set.add(bk)
+            oj = p.get("oc_jurisdiction_code")
+            on = p.get("oc_company_number")
+            if oj and on and (oj, on) in oc_resolved:
+                for ohq in oc_resolved[(oj, on)].get("hq_addresses") or ():
+                    if ohq:
+                        hq_set.add(ohq)
         comp_pub[r] = is_pub
         comp_hqs[r] = hq_set
         comp_humans[r] = set()
@@ -1867,6 +1876,21 @@ def cluster_with_oc_and_series(
         for b in bbls:
             comp_humans[find_r(bbl_to_root[b])].add(h_key)
 
+    # Precompute each current component root's officer-bearing OC company set BEFORE Step 3 so
+    # BOTH Step 3 (direct principal) and Step 3c (Depth-4 BFS) distinguish a controlling/core
+    # principal of a portfolio from a 1-deal peripheral closing attorney / passive co-investor.
+    comp_oc_entities: Dict[str, Set[Tuple[str, str]]] = {}
+    for ck, hset in entity_humans.items():
+        if not hset:
+            continue
+        for hk in hset:
+            for b_id in (human_entity_bbls.get(hk) or {}).get(ck, ()):
+                if b_id in bbl_to_root:
+                    comp_oc_entities.setdefault(find_r(bbl_to_root[b_id]), set()).add(ck)
+
+    # Collect disambiguated same-person principal subclusters for Step 3 + Step 3c CT Depth-4 BFS
+    disambiguated_principal_subclusters: List[Tuple[str, str, List[Tuple[str, str]], List[str]]] = []
+
     # Now merge entities within each accepted human's disambiguated same-person sub-clusters
     for h_key in accepted_humans:
         ent_bbl_map = human_entity_bbls.get(h_key) or {}
@@ -1954,13 +1978,37 @@ def cluster_with_oc_and_series(
             if matched_idx is not None:
                 sub_bbl_lists[matched_idx].append(b_dir)
 
-        for sub_bbls in sub_bbl_lists:
+        for s_idx, sub_bbls in enumerate(sub_bbl_lists):
+            sub_pid = f"{h_key}#{s_idx}"
+            sub_ents_cur = person_subclusters[s_idx]
+            sub_ents_set = set(sub_ents_cur)
+            disambiguated_principal_subclusters.append((sub_pid, surname, sub_ents_cur, sub_bbls))
             roots = list({find_r(bbl_to_root[b_id]) for b_id in sub_bbls})
             if len(roots) < 2:
                 continue
+            # Sort so largest controlling root anchors first
+            roots.sort(key=lambda r_k: len(comp_oc_entities.get(r_k) or ()), reverse=True)
+            anchor_r = roots[0]
             for other in roots[1:]:
-                if union_r(roots[0], other, require_hq_compat=True):
+                ra_c, rb_c = find_r(anchor_r), find_r(other)
+                if ra_c == rb_c:
+                    continue
+                ents_a = comp_oc_entities.get(ra_c) or set()
+                ents_b = comp_oc_entities.get(rb_c) or set()
+                hqs_a = comp_hqs.get(ra_c) or set()
+                hqs_b = comp_hqs.get(rb_c) or set()
+                # Peripheral signatory / closing-attorney boundary guard:
+                # Never merge two established independent-HQ multi-entity portfolios (>= 4 OC entities
+                # each, zero shared HQs) through a principal who appears on < 30% of BOTH empires!
+                if len(ents_a) >= 4 and len(ents_b) >= 4 and hqs_a and hqs_b and not (hqs_a & hqs_b):
+                    cov_a = len(sub_ents_set & ents_a) / max(len(ents_a), 1)
+                    cov_b = len(sub_ents_set & ents_b) / max(len(ents_b), 1)
+                    if cov_a < 0.30 and cov_b < 0.30:
+                        continue
+                if union_r(ra_c, rb_c, require_hq_compat=True):
                     merges += 1
+                    new_r = find_r(ra_c)
+                    comp_oc_entities[new_r] = ents_a | ents_b
 
     # 3b. CT-Parity Same-Surname Co-Principal Bridges:
     # When >=2 accepted property-owning principals share an uncommon surname (len>=4, <=12 principals
@@ -1994,6 +2042,203 @@ def cluster_with_oc_and_series(
             for other in roots[1:]:
                 if union_r(roots[0], other, require_hq_compat=True):
                     merges += 1
+
+    # 3c. CT-Parity Depth-4 Iterative Bipartite BFS (`MAX_DEPTH = 4`):
+    # Mirrors `api/network_builder.py::discover_networks_depth_limited` over the
+    # `(ComponentRoot <-> DisambiguatedPrincipal <-> Entity <-> Co-Principal <-> ComponentRoot)`
+    # bipartite graph, connecting multi-partner real estate groups & co-principals across up to
+    # 4 hops WITHOUT artificial numeric entity quotas, protected by a zero-quota post-BFS
+    # structural HQ/family dispersion guard so independent landlord empires never snowball.
+    bfs_node_to_int: Dict[Tuple[str, Any], int] = {}
+    bfs_int_to_node: List[Tuple[str, Any]] = []
+    bfs_graph: Dict[int, Set[int]] = {}
+    bfs_seed_ints: Set[int] = set()
+
+    def _bfs_id(node_obj: Tuple[str, Any]) -> int:
+        nid = bfs_node_to_int.get(node_obj)
+        if nid is None:
+            nid = len(bfs_int_to_node)
+            bfs_node_to_int[node_obj] = nid
+            bfs_int_to_node.append(node_obj)
+            bfs_graph[nid] = set()
+        return nid
+
+    # Refresh `comp_oc_entities` keys to current DSU roots before Step 3c Depth-4 BFS
+    refreshed_comp_oc: Dict[str, Set[Tuple[str, str]]] = {}
+    for orig_rk, ent_s in comp_oc_entities.items():
+        refreshed_comp_oc.setdefault(find_r(orig_rk), set()).update(ent_s)
+    comp_oc_entities = refreshed_comp_oc
+
+    comp_principal_ents: Dict[Tuple[str, str], Set[Tuple[str, str]]] = {}
+    for sub_pid, surname, sub_ents, sub_bbls in disambiguated_principal_subclusters:
+        # Compute structural HQ cohesion of this disambiguated principal sub-cluster
+        sub_hq_counts: Counter = Counter()
+        for ck in sub_ents:
+            for chq in entity_hqs.get(ck, ()):
+                sub_hq_counts[chq] += 1
+        total_sub_hq = sum(sub_hq_counts.values())
+        top2_sub_share = (
+            sum(c for _, c in sub_hq_counts.most_common(2)) / total_sub_hq
+            if total_sub_hq
+            else 1.0
+        )
+        is_uncommon = bool(len(surname) >= 4 and surname not in _COMMON_HOMONYM_SURNAMES)
+        # Only traverse through structurally cohesive / non-homonym principals in Depth-4 BFS
+        if not (
+            len(sub_hq_counts) <= 4
+            or top2_sub_share >= 0.40
+            or (is_uncommon and len(sub_hq_counts) <= 12)
+        ):
+            continue
+
+        # Map each component root touched by this principal -> which of `sub_ents` live in that root
+        root_to_matched_ents: Dict[str, Set[Tuple[str, str]]] = {}
+        root_has_direct_parcel: Set[str] = set()
+        sub_ent_bbl_set: Set[str] = set()
+        for ck in sub_ents:
+            for b_id in (human_entity_bbls.get(sub_pid.split("#", 1)[0]) or {}).get(ck, ()):
+                sub_ent_bbl_set.add(b_id)
+                if b_id in bbl_to_root:
+                    root_to_matched_ents.setdefault(find_r(bbl_to_root[b_id]), set()).add(ck)
+        for b_id in sub_bbls:
+            if b_id not in sub_ent_bbl_set and b_id in bbl_to_root:
+                rr = find_r(bbl_to_root[b_id])
+                root_to_matched_ents.setdefault(rr, set())
+                root_has_direct_parcel.add(rr)
+
+        if len(root_to_matched_ents) < 2:
+            continue
+
+        p_nid = _bfs_id(("prin", sub_pid))
+        for rr, matched_ck_set in root_to_matched_ents.items():
+            total_comp_ents = len(comp_oc_entities.get(rr) or ())
+            # Edge-level salience guard: on established multi-entity portfolios (>= 4 OC entities),
+            # only allow a principal to act as a BFS bridge if they are a controlling/core principal
+            # (>= 30% of that portfolio's OC entities) OR share a verified HQ with that portfolio!
+            # Prevents a 1-deal closing attorney / passive co-investor from bridging two empires.
+            if total_comp_ents >= 4 and rr not in root_has_direct_parcel:
+                salience = len(matched_ck_set) / max(total_comp_ents, 1)
+                if salience < 0.30:
+                    continue
+            comp_principal_ents[(rr, sub_pid)] = matched_ck_set
+            r_nid = _bfs_id(("comp", rr))
+            bfs_graph[r_nid].add(p_nid)
+            bfs_graph[p_nid].add(r_nid)
+            bfs_seed_ints.add(r_nid)
+
+    if bfs_seed_ints:
+        BFS_MAX_DEPTH = 4
+        bfs_node_owner: Dict[int, int] = {}
+        bfs_comp_par: Dict[int, int] = {}
+
+        def _bfs_find(x: int) -> int:
+            while bfs_comp_par[x] != x:
+                bfs_comp_par[x] = bfs_comp_par[bfs_comp_par[x]]
+                x = bfs_comp_par[x]
+            return x
+
+        def _bfs_union(a: int, b: int) -> None:
+            ra_b, rb_b = _bfs_find(a), _bfs_find(b)
+            if ra_b != rb_b:
+                bfs_comp_par[ra_b] = rb_b
+
+        for s_idx, seed_nid in enumerate(sorted(bfs_seed_ints)):
+            bfs_comp_par[s_idx] = s_idx
+            if seed_nid in bfs_node_owner:
+                continue
+            bfs_node_owner[seed_nid] = s_idx
+            q = deque([(seed_nid, 0)])
+            while q:
+                curr_n, depth = q.popleft()
+                if depth >= BFS_MAX_DEPTH:
+                    continue
+                for nb in bfs_graph.get(curr_n, ()):
+                    if nb not in bfs_node_owner:
+                        bfs_node_owner[nb] = s_idx
+                        q.append((nb, depth + 1))
+                    else:
+                        other_idx = bfs_node_owner[nb]
+                        if _bfs_find(s_idx) != _bfs_find(other_idx):
+                            _bfs_union(s_idx, other_idx)
+
+        # Group `comp` roots by BFS super-component
+        bfs_groups: Dict[int, List[str]] = {}
+        for nid, owner_idx in bfs_node_owner.items():
+            kind, val = bfs_int_to_node[nid]
+            if kind == "comp":
+                bfs_groups.setdefault(_bfs_find(owner_idx), []).append(val)
+
+        # Precompute O(1) current-root -> original-roots index once so the post-BFS dispersion guard
+        # never rescans the entire 2M-entry `root_to_props` dictionary per super-component!
+        curr_to_orig_roots: Dict[str, List[str]] = {}
+        for orig_r in root_to_props:
+            curr_to_orig_roots.setdefault(find_r(orig_r), []).append(orig_r)
+
+        # Apply zero-quota structural HQ & owner-family dispersion guard on each BFS super-component
+        for group_roots in bfs_groups.values():
+            uniq_roots = list({find_r(rr) for rr in group_roots})
+            if len(uniq_roots) < 2:
+                continue
+            # Count exact buildings & mailing HQs in O(component_size)
+            if len(uniq_roots) >= 3:
+                total_bldgs = 0
+                hq_c_exact: Counter = Counter()
+                fam_c_exact: Counter = Counter()
+                for cur_r in uniq_roots:
+                    for orig_r in curr_to_orig_roots.get(cur_r, ()):
+                        p_list = root_to_props.get(orig_r) or ()
+                        total_bldgs += len(p_list)
+                        for pp in p_list:
+                            ma = pp.get("mailing_address") or ""
+                            if ma:
+                                mc = normalize_mailing_address_coarse(strip_benign_care_of_prefix(ma))
+                                if mc:
+                                    hq_c_exact[mc] += 1
+                            fk = extract_owner_family_key(pp.get("owner_name") or pp.get("owner_name_norm") or "")
+                            if fk:
+                                fam_c_exact[fk] += 1
+                if total_bldgs >= 80 and len(hq_c_exact) >= 35:
+                    t_hq = max(sum(hq_c_exact.values()), 1)
+                    t_fam = max(sum(fam_c_exact.values()), 1)
+                    top3_hq = sum(c for _, c in hq_c_exact.most_common(3)) / t_hq
+                    top3_fam = sum(c for _, c in fam_c_exact.most_common(3)) / t_fam
+                    if top3_hq < 0.25 and top3_fam < 0.25:
+                        # Reject dispersed multi-operator snowball; keep tight Step 3 merges intact!
+                        continue
+
+            # Commit verified CT-parity Depth-4 BFS edges with independent-HQ empire boundary guard:
+            # Never fuse two independent large established-HQ portfolios (>= 4 OC entities each)
+            # that share ZERO HQs unless they share a controlling principal covering >= 50% of the
+            # smaller portfolio's OC entities!
+            anchor_r = max(uniq_roots, key=lambda r_k: len(comp_oc_entities.get(r_k) or ()))
+            for other_r in uniq_roots:
+                if other_r == anchor_r:
+                    continue
+                ra_cur, rb_cur = find_r(anchor_r), find_r(other_r)
+                if ra_cur == rb_cur:
+                    continue
+                ents_a = comp_oc_entities.get(ra_cur) or set()
+                ents_b = comp_oc_entities.get(rb_cur) or set()
+                hqs_a = comp_hqs.get(ra_cur) or set()
+                hqs_b = comp_hqs.get(rb_cur) or set()
+                if len(ents_a) >= 4 and len(ents_b) >= 4 and hqs_a and hqs_b and not (hqs_a & hqs_b):
+                    # Require shared direct controlling human covering >= 50% of the smaller empire
+                    shared_h = (comp_humans.get(ra_cur) or set()) & (comp_humans.get(rb_cur) or set())
+                    if not shared_h:
+                        continue
+                    smaller_ents = ents_a if len(ents_a) <= len(ents_b) else ents_b
+                    best_cov = 0.0
+                    for hk_s in shared_h:
+                        hk_ents = set((human_entity_bbls.get(hk_s) or {}).keys())
+                        cov = len(hk_ents & smaller_ents) / max(len(smaller_ents), 1)
+                        if cov > best_cov:
+                            best_cov = cov
+                    if best_cov < 0.50:
+                        continue
+                if union_r(ra_cur, rb_cur, require_hq_compat=False):
+                    merges += 1
+                    new_r = find_r(ra_cur)
+                    comp_oc_entities[new_r] = (comp_oc_entities.get(ra_cur) or set()) | (comp_oc_entities.get(rb_cur) or set())
 
     # 4. Corroborated corporate series & container-suffix siblings
     for bucket_key, bbls in by_series_spv.items():

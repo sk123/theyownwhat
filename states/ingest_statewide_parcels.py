@@ -1386,13 +1386,15 @@ def enrich_ny_buffalo_enforcement_and_registry(conn) -> Dict[str, int]:
 # PARTITIONED PERSISTENCE & NETWORK CLUSTERING
 # ==============================================================================
 
-def build_and_save_state_networks(conn, jur: str, state_code: str, source_tag: str) -> Tuple[int, int]:
-    oc_stats = link_jurisdiction_parcels_to_oc(conn, jur, state_code, col_max_len=40)
-    if oc_stats["evaluated"]:
-        print(
-            f"  [{jur.upper()}] Corporate registry linker evaluated {oc_stats['evaluated']:,} business parcels "
-            f"-> {oc_stats['matched']:,} matched (T1={oc_stats['tier1']:,}, T2={oc_stats['tier2']:,}, T3={oc_stats['tier3']:,})."
-        )
+def build_and_save_state_networks(conn, jur: str, state_code: str, source_tag: str, *, skip_oc_relink: bool = False) -> Tuple[int, int]:
+    oc_stats = {"evaluated": 0, "matched": 0, "tier1": 0, "tier2": 0, "tier3": 0, "tier4": 0, "quarantined": 0}
+    if not skip_oc_relink:
+        oc_stats = link_jurisdiction_parcels_to_oc(conn, jur, state_code, col_max_len=40)
+        if oc_stats["evaluated"]:
+            print(
+                f"  [{jur.upper()}] Corporate registry linker evaluated {oc_stats['evaluated']:,} business parcels "
+                f"-> {oc_stats['matched']:,} matched (T1={oc_stats['tier1']:,}, T2={oc_stats['tier2']:,}, T3={oc_stats['tier3']:,})."
+            )
 
     registrar_substrings = load_registrar_address_substrings(conn)
     properties: List[Dict[str, Any]] = []

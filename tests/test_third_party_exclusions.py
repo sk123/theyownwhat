@@ -757,6 +757,58 @@ class ThirdPartyExclusionTests(unittest.TestCase):
         self.assertEqual(len(ca_merged), 1)
         self.assertEqual(len(next(iter(ca_merged.values()))), 12)
 
+    def test_depth4_bfs_salience_blocks_peripheral_attorney_bridge_between_independent_empires(self):
+        from api.oc_linker import cluster_with_oc_and_series
+
+        # Empire A (Hamilton Co, 5 LLCs at 39 Brighton Ave, Jameson Brown) + 1 affiliate LLC at old addr
+        # Empire B (First Realty, 5 LLCs at 151 Tremont St, William Kargman)
+        # Peripheral closing attorney 'SALLY E MICHAEL' appears on 1 LLC of Empire A and 1 LLC of Empire B.
+        # Depth-4 BFS MUST merge Jameson Brown's affiliate into Empire A while keeping Empire A & B SEPARATE!
+        props = [
+            {"bbl": f"a-{i}", "owner_name": f"BRIGHTON {i} LLC", "borough": "BOSTON",
+             "mailing_address": "39 BRIGHTON AVE, ALLSTON, MA 02134",
+             "oc_jurisdiction_code": "us_ma", "oc_company_number": f"MA_A{i}"}
+            for i in range(5)
+        ] + [
+            {"bbl": "a-aff", "owner_name": "HARBOR ANNEX LLC", "borough": "CAMBRIDGE",
+             "mailing_address": "88 HARBOR RD, CAMBRIDGE, MA 02138",
+             "oc_jurisdiction_code": "us_ma", "oc_company_number": "MA_AAFF"},
+        ] + [
+            {"bbl": f"b-{i}", "owner_name": f"TREMONT {i} LLC", "borough": "BOSTON",
+             "mailing_address": "151 TREMONT ST, BOSTON, MA 02111",
+             "oc_jurisdiction_code": "us_ma", "oc_company_number": f"MA_B{i}"}
+            for i in range(5)
+        ]
+        init_groups = {
+            "root_A": props[:5],
+            "root_AFF": [props[5]],
+            "root_B": props[6:],
+        }
+        oc_res = {}
+        for i in range(5):
+            humans = ["JAMESON BROWN", "RONALD BROWN"] + (["SALLY E MICHAEL"] if i == 0 else [])
+            oc_res[("us_ma", f"MA_A{i}")] = {
+                "humans": humans, "holding_entities": [], "reached_companies": [f"us_ma/MA_A{i}"],
+                "hq_addresses": ["39 BRIGHTON AVENUE ALLSTON MA"], "raw_hq_addresses": [],
+            }
+        oc_res[("us_ma", "MA_AAFF")] = {
+            "humans": ["JAMESON BROWN"], "holding_entities": [], "reached_companies": ["us_ma/MA_AAFF"],
+            "hq_addresses": ["88 HARBOR ROAD CAMBRIDGE MA"], "raw_hq_addresses": [],
+        }
+        for i in range(5):
+            humans = ["WILLIAM KARGMAN", "ROBERT KARGMAN"] + (["SALLY E MICHAEL"] if i == 0 else [])
+            oc_res[("us_ma", f"MA_B{i}")] = {
+                "humans": humans, "holding_entities": [], "reached_companies": [f"us_ma/MA_B{i}"],
+                "hq_addresses": ["151 TREMONT STREET BOSTON MA"], "raw_hq_addresses": [],
+            }
+        merged, _ = cluster_with_oc_and_series(props, init_groups, oc_res)
+        clusters = [frozenset(p["bbl"] for p in grp) for grp in merged.values()]
+        expected_a = frozenset([f"a-{i}" for i in range(5)] + ["a-aff"])
+        expected_b = frozenset([f"b-{i}" for i in range(5)])
+        self.assertIn(expected_a, clusters)
+        self.assertIn(expected_b, clusters)
+        self.assertEqual(len(clusters), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

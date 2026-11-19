@@ -4,7 +4,7 @@ import re
 import time
 import psycopg2
 from psycopg2.extras import RealDictCursor, execute_values
-from collections import deque, defaultdict
+from collections import Counter, deque, defaultdict
 import logging
 import sys
 
@@ -42,8 +42,11 @@ logger = logging.getLogger(__name__)
 # --- Configuration ---
 DATABASE_URL = os.environ.get("DATABASE_URL")
 MAX_DEPTH = 4 # Standard depth for network discovery
-PUBLIC_EMAIL_MAX_BUSINESSES = int(os.environ.get("PUBLIC_EMAIL_MAX_BUSINESSES", "25"))
-CUSTOM_EMAIL_DOMAIN_MAX_BUSINESSES = int(os.environ.get("CUSTOM_EMAIL_DOMAIN_MAX_BUSINESSES", "75"))
+EMAIL_HUB_MIN_BUSINESSES = int(os.environ.get("EMAIL_HUB_MIN_BUSINESSES", "10"))
+EMAIL_HUB_MIN_DISPERSED_HQS = int(os.environ.get("EMAIL_HUB_MIN_DISPERSED_HQS", "6"))
+EMAIL_HUB_TOP2_HQ_MAX_SHARE = float(os.environ.get("EMAIL_HUB_TOP2_HQ_MAX_SHARE", "0.35"))
+EMAIL_HUB_MIN_DISPERSED_SURNAMES = int(os.environ.get("EMAIL_HUB_MIN_DISPERSED_SURNAMES", "8"))
+EMAIL_HUB_TOP2_SURNAME_MAX_SHARE = float(os.environ.get("EMAIL_HUB_TOP2_SURNAME_MAX_SHARE", "0.30"))
 AMBIGUOUS_PRINCIPAL_MIN_BUSINESSES = int(os.environ.get("AMBIGUOUS_PRINCIPAL_MIN_BUSINESSES", "12"))
 AMBIGUOUS_PRINCIPAL_MAX_OWNING_BUSINESSES = int(os.environ.get("AMBIGUOUS_PRINCIPAL_MAX_OWNING_BUSINESSES", "3"))
 AMBIGUOUS_PRINCIPAL_MIN_EMAIL_DOMAINS = int(os.environ.get("AMBIGUOUS_PRINCIPAL_MIN_EMAIL_DOMAINS", "5"))
@@ -612,6 +615,7 @@ def build_graph(conn, skip_emails=False):
 
         count = 0
         property_active_principal_ids = set()
+        biz_to_surnames = defaultdict(set)
         with conn.cursor(name="network_pbl_links", cursor_factory=RealDictCursor) as link_cur:
             link_cur.itersize = 50000
             link_cur.execute("""
@@ -660,6 +664,10 @@ def build_graph(conn, skip_emails=False):
 
                 graph[u].add(v)
                 graph[v].add(u)
+                rep_norm = normalize_person_name(row['p_rep_name'] or row['p_name'] or "")
+                rep_toks = rep_norm.split()
+                if rep_toks:
+                    biz_to_surnames[bid].add(rep_toks[-1])
                 try:
                     pid_int = int(pid)
                     property_active_principal_ids.add(pid_int)
@@ -1008,10 +1016,16 @@ def build_graph(conn, skip_emails=False):
         # (Removed: Loaded from DB)
 
         email_map = defaultdict(list)
-        email_key_types = {}
+        email_biz_hqs = defaultdict(Counter)
         with conn.cursor(name="network_email_businesses", cursor_factory=RealDictCursor) as email_cur:
             email_cur.itersize = 50000
-            email_cur.execute("SELECT id, name, business_email_address FROM businesses WHERE business_email_address IS NOT NULL")
+            email_cur.execute("""
+                SELECT id, name, business_email_address,
+                       mail_address, mail_city, mail_state, mail_zip,
+                       business_address, business_city, business_state, business_zip
+                FROM businesses
+                WHERE business_email_address IS NOT NULL
+            """)
             for row in email_cur:
                 # --- FILTER: Must be an owning business ---
                 if row['id'] not in owning_business_ids:
@@ -1028,32 +1042,51 @@ def build_graph(conn, skip_emails=False):
                 key = get_email_match_key(row['business_email_address'], email_rules)
                 if key:
                     email_map[key].append(row['id']) # Store string ID directly
-                    try:
-                        _, domain = row['business_email_address'].lower().strip().split('@', 1)
-                    except ValueError:
-                        domain = ""
-                    email_key_types[key] = "public_email" if email_rules.get(domain) == "public" else "custom_domain"
+                    m_addr = compose_address(row.get('mail_address'), row.get('mail_city'), row.get('mail_state'), row.get('mail_zip'))
+                    b_addr = compose_address(row.get('business_address'), row.get('business_city'), row.get('business_state'), row.get('business_zip'))
+                    hq_norm = first_normalized_mailing_address(m_addr, b_addr, coarse=True)
+                    if hq_norm and not is_ignored_shared_address(hq_norm):
+                        email_biz_hqs[key][hq_norm] += 1
 
         skipped_email_keys = 0
         for key, biz_ids in email_map.items():
             if len(biz_ids) > 1:
-                key_type = email_key_types.get(key, "custom_domain")
-                max_group_size = PUBLIC_EMAIL_MAX_BUSINESSES if key_type == "public_email" else CUSTOM_EMAIL_DOMAIN_MAX_BUSINESSES
-                if len(biz_ids) > max_group_size:
-                    skipped_email_keys += 1
-                    logger.info(
-                        "    Skipping high-frequency email key %s (%s businesses, cap %s)",
-                        key,
-                        len(biz_ids),
-                        max_group_size,
-                    )
-                    continue
-                # Convert all to ints first
+                # Quota-free structural cohesion test (replaces arbitrary 25/75 business caps):
+                # A large landlord can legitimately share one email/domain across 100+ LLCs
+                # when they share cohesive HQ addresses or principal surnames. Only skip an
+                # email/domain when >= 10 businesses have BOTH dispersed HQs AND dispersed
+                # unrelated principal surnames (indicating an unlisted attorney/CPA/agent).
+                if len(biz_ids) >= EMAIL_HUB_MIN_BUSINESSES:
+                    hq_counts = email_biz_hqs.get(key) or Counter()
+                    total_hqs = sum(hq_counts.values())
+                    top2_hq_share = (sum(c for _, c in hq_counts.most_common(2)) / total_hqs) if total_hqs else 1.0
+                    surnames = Counter(s for b in biz_ids for s in biz_to_surnames.get(b, ()))
+                    total_sur = sum(surnames.values())
+                    top2_sur_share = (sum(c for _, c in surnames.most_common(2)) / total_sur) if total_sur else 1.0
+                    if (
+                        len(hq_counts) >= EMAIL_HUB_MIN_DISPERSED_HQS
+                        and top2_hq_share < EMAIL_HUB_TOP2_HQ_MAX_SHARE
+                        and len(surnames) >= EMAIL_HUB_MIN_DISPERSED_SURNAMES
+                        and top2_sur_share < EMAIL_HUB_TOP2_SURNAME_MAX_SHARE
+                    ):
+                        skipped_email_keys += 1
+                        logger.info(
+                            "    Skipping dispersed intermediary email key %s (%s businesses, %s HQs top2=%.0f%%, %s surnames top2=%.0f%%)",
+                            key,
+                            len(biz_ids),
+                            len(hq_counts),
+                            top2_hq_share * 100.0,
+                            len(surnames),
+                            top2_sur_share * 100.0,
+                        )
+                        continue
+                # Star-connect through hub business (O(N) edges instead of O(N^2) clique!)
                 int_ids = [get_id(('business', bid)) for bid in biz_ids]
-                for i in range(len(int_ids)):
-                    for j in range(i+1, len(int_ids)):
-                        u, v = int_ids[i], int_ids[j]
-                        graph[u].add(v); graph[v].add(u)
+                hub_u = int_ids[0]
+                for v in int_ids[1:]:
+                    if hub_u != v:
+                        graph[hub_u].add(v)
+                        graph[v].add(hub_u)
         if skipped_email_keys:
             logger.info("  - Skipped %s high-frequency email key(s) as likely service/agent bridges.", skipped_email_keys)
 

@@ -61,6 +61,7 @@ def main() -> int:
     parser.add_argument("--states", nargs="*", default=DEFAULT_STATES)
     parser.add_argument("--cities", nargs="*", default=DEFAULT_CITIES)
     parser.add_argument("--skip-ra-refresh", action="store_true")
+    parser.add_argument("--skip-oc-relink", action="store_true", help="Reuse existing oc_company_number matches on {jur}_properties for 10x faster re-clustering.")
     args = parser.parse_args()
 
     dsn = _db_url()
@@ -79,10 +80,10 @@ def main() -> int:
         conn = psycopg2.connect(dsn)
         try:
             if st_l == "ma":
-                p_cnt, n_cnt = build_and_save_ma_networks(conn)
+                p_cnt, n_cnt = build_and_save_ma_networks(conn, skip_oc_relink=args.skip_oc_relink)
             else:
                 st_code, src_tag = STATE_SOURCE_TAGS[st_l]
-                p_cnt, n_cnt = build_and_save_state_networks(conn, st_l, st_code, src_tag)
+                p_cnt, n_cnt = build_and_save_state_networks(conn, st_l, st_code, src_tag, skip_oc_relink=args.skip_oc_relink)
             print(
                 f"[HARDEN] ✓ [{st_l.upper()}] {p_cnt:,} parcels -> {n_cnt:,} clean networks ({time.time() - t0:.1f}s)",
                 flush=True,

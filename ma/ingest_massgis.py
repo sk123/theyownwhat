@@ -607,13 +607,15 @@ def cross_enrich_boston_and_ma(conn) -> Dict[str, int]:
     return summary
 
 
-def build_and_save_ma_networks(conn) -> Tuple[int, int]:
+def build_and_save_ma_networks(conn, *, skip_oc_relink: bool = False) -> Tuple[int, int]:
     """Run OpenCorporates 5-tier deterministic linking (if OC data loaded) and guarded
     Union-Find + corporate-principal network clustering over `ma_properties`."""
-    cross_enrich_boston_and_ma(conn)
-    oc_stats = link_jurisdiction_parcels_to_oc(conn, "ma", "MA", col_max_len=40)
-    if oc_stats["evaluated"]:
-        print(f"  OpenCorporates linker evaluated {oc_stats['evaluated']:,} MA business parcels -> {oc_stats['matched']:,} matched.")
+    oc_stats = {"evaluated": 0, "matched": 0, "tier1": 0, "tier2": 0, "tier3": 0, "tier4": 0, "quarantined": 0}
+    if not skip_oc_relink:
+        cross_enrich_boston_and_ma(conn)
+        oc_stats = link_jurisdiction_parcels_to_oc(conn, "ma", "MA", col_max_len=40)
+        if oc_stats["evaluated"]:
+            print(f"  OpenCorporates linker evaluated {oc_stats['evaluated']:,} MA business parcels -> {oc_stats['matched']:,} matched.")
 
     registrar_substrings = load_registrar_address_substrings(conn)
     properties: List[Dict[str, Any]] = []
