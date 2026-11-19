@@ -677,14 +677,17 @@ def _detect_falsely_blacklisted_cohesive_hqs(conn, jur: str) -> List[Dict[str, A
         if "mailing_address" not in p_cols:
             return []
 
-        # Sample top shared mailing addresses in J that have >= 5 parcels
+        # Sample top shared mailing addresses in J that have >= 5 parcels (with matched OC company numbers)
+        oc_col_expr = "ARRAY_AGG(DISTINCT oc_company_number) FILTER (WHERE oc_company_number IS NOT NULL AND oc_company_number != '')" if "oc_company_number" in p_cols else "ARRAY[]::text[]"
+        oc_sel_col = ", oc_company_number" if "oc_company_number" in p_cols else ""
         cur.execute(
             f"""
             SELECT mailing_address, COUNT(*)::int AS p_cnt,
                    COUNT(DISTINCT owner_name)::int AS distinct_owners,
-                   ARRAY_AGG(DISTINCT owner_name) FILTER (WHERE owner_name IS NOT NULL) AS sample_owners
+                   ARRAY_AGG(DISTINCT owner_name) FILTER (WHERE owner_name IS NOT NULL) AS sample_owners,
+                   {oc_col_expr} AS sample_oc_nums
             FROM (
-                SELECT mailing_address, owner_name
+                SELECT mailing_address, owner_name{oc_sel_col}
                 FROM {props_tbl}
                 WHERE mailing_address IS NOT NULL AND mailing_address != ''
                   AND owner_name IS NOT NULL AND owner_name != ''
@@ -697,7 +700,7 @@ def _detect_falsely_blacklisted_cohesive_hqs(conn, jur: str) -> List[Dict[str, A
             """
         )
         coarse_to_stats: Dict[str, Dict[str, Any]] = {}
-        for raw_addr, p_cnt, d_own, s_owners in cur.fetchall():
+        for raw_addr, p_cnt, d_own, s_owners, s_oc_nums in cur.fetchall():
             if is_excluded_third_party_address(raw_addr):
                 continue
             coarse = normalize_mailing_address_coarse(raw_addr)
@@ -705,16 +708,18 @@ def _detect_falsely_blacklisted_cohesive_hqs(conn, jur: str) -> List[Dict[str, A
                 continue
             st = coarse_to_stats.setdefault(
                 coarse,
-                {"parcels": 0, "owners": set(), "raw_sample": raw_addr},
+                {"parcels": 0, "owners": set(), "oc_nums": set(), "raw_sample": raw_addr},
             )
             st["parcels"] += int(p_cnt or 0)
             for o in (s_owners or [])[:40]:
                 st["owners"].add(str(o))
+            for n in (s_oc_nums or [])[:60]:
+                st["oc_nums"].add(str(n))
 
         if not coarse_to_stats:
             return []
 
-        # Intersect with oc_registered_agent_addresses
+        # Intersect with oc_registered_agent_addresses (evaluate top 30 highest-impact hits via indexed `oc_officers` PK lookup)
         cur.execute(
             """
             SELECT address_coarse, distinct_company_count, source
@@ -723,59 +728,74 @@ def _detect_falsely_blacklisted_cohesive_hqs(conn, jur: str) -> List[Dict[str, A
             """,
             (list(coarse_to_stats.keys()),),
         )
-        ra_hits = cur.fetchall()
+        ra_hits = [
+            r for r in cur.fetchall()
+            if r and r[0] and not is_excluded_third_party_address(r[0])
+        ]
+        ra_hits.sort(key=lambda r: -coarse_to_stats[r[0]]["parcels"])
+        ra_hits = ra_hits[:30]
         if not ra_hits:
             return []
 
-        for addr_coarse, oc_co_cnt, ra_src in ra_hits:
-            # Never rescue known hard-coded commercial RAs / law hubs
-            if is_excluded_third_party_address(addr_coarse):
-                continue
-            stats = coarse_to_stats[addr_coarse]
-            # Check officer cohesion in oc_companies + oc_officers for this exact address
+        # Zero full-table scans on `oc_companies`: join matched parcel `oc_company_number`s directly
+        # against `idx_oc_officers_company (jurisdiction_code, company_number)` in milliseconds!
+        pair_addrs: List[str] = []
+        pair_nums: List[str] = []
+        for addr_coarse, _, _ in ra_hits:
+            for cnum in list(coarse_to_stats[addr_coarse]["oc_nums"])[:80]:
+                pair_addrs.append(addr_coarse)
+                pair_nums.append(cnum)
+
+        oc_stats_by_addr: Dict[str, Tuple[int, int, str, int]] = {}
+        if pair_addrs:
             cur.execute(
                 """
-                WITH cos AS (
-                    SELECT jurisdiction_code, company_number
-                    FROM oc_companies
-                    WHERE jurisdiction_code = %s
-                      AND (
-                          agent_address_coarse = %s
-                          OR registered_address_coarse = %s
-                          OR mailing_address_coarse = %s
-                      )
-                    LIMIT 120
+                WITH pairs AS (
+                    SELECT DISTINCT addr_coarse, company_number
+                    FROM unnest(%s::text[], %s::text[]) AS p(addr_coarse, company_number)
                 ),
                 offs AS (
-                    SELECT c.company_number, o.name_norm
-                    FROM cos c
+                    SELECT p.addr_coarse, p.company_number, o.name_norm
+                    FROM pairs p
                     JOIN oc_officers o
-                      ON o.jurisdiction_code = c.jurisdiction_code
-                     AND o.company_number = c.company_number
+                      ON o.jurisdiction_code = %s AND o.company_number = p.company_number
                     WHERE COALESCE(o.is_current, TRUE) = TRUE
                       AND o.role_class IN ('beneficial_principal', 'corporate_parent')
                       AND o.name_norm IS NOT NULL AND o.name_norm != ''
+                ),
+                co_counts AS (
+                    SELECT addr_coarse, COUNT(DISTINCT company_number)::int AS co_cnt
+                    FROM pairs GROUP BY addr_coarse
+                ),
+                off_totals AS (
+                    SELECT addr_coarse, COUNT(DISTINCT company_number)::int AS cos_with_off
+                    FROM offs GROUP BY addr_coarse
+                ),
+                off_ranked AS (
+                    SELECT addr_coarse, name_norm, COUNT(DISTINCT company_number)::int AS off_cos,
+                           ROW_NUMBER() OVER (PARTITION BY addr_coarse ORDER BY COUNT(DISTINCT company_number) DESC) AS rn
+                    FROM offs GROUP BY addr_coarse, name_norm
                 )
-                SELECT
-                    (SELECT COUNT(DISTINCT company_number) FROM cos)::int AS co_cnt,
-                    (SELECT COUNT(DISTINCT company_number) FROM offs)::int AS cos_with_off,
-                    (SELECT name_norm FROM offs GROUP BY name_norm ORDER BY COUNT(DISTINCT company_number) DESC LIMIT 1) AS top_off,
-                    (SELECT COUNT(DISTINCT company_number) FROM offs WHERE name_norm = (
-                        SELECT name_norm FROM offs GROUP BY name_norm ORDER BY COUNT(DISTINCT company_number) DESC LIMIT 1
-                    ))::int AS top_off_cos
+                SELECT cc.addr_coarse, cc.co_cnt,
+                       COALESCE(ot.cos_with_off, 0) AS cos_with_off,
+                       COALESCE(orank.name_norm, '') AS top_off,
+                       COALESCE(orank.off_cos, 0) AS top_off_cos
+                FROM co_counts cc
+                LEFT JOIN off_totals ot ON ot.addr_coarse = cc.addr_coarse
+                LEFT JOIN off_ranked orank ON orank.addr_coarse = cc.addr_coarse AND orank.rn = 1
                 """,
-                (oc_jur, addr_coarse, addr_coarse, addr_coarse),
+                (pair_addrs, pair_nums, oc_jur),
             )
-            row = cur.fetchone()
-            if not row:
-                continue
-            co_cnt, cos_with_off, top_off, top_off_cos = row
-            co_cnt = int(co_cnt or 0)
-            cos_with_off = int(cos_with_off or 0)
-            top_off_cos = int(top_off_cos or 0)
+            oc_stats_by_addr = {
+                r[0]: (int(r[1] or 0), int(r[2] or 0), str(r[3] or ""), int(r[4] or 0))
+                for r in cur.fetchall()
+            }
+
+        for addr_coarse, oc_co_cnt, ra_src in ra_hits:
+            stats = coarse_to_stats[addr_coarse]
+            co_cnt, cos_with_off, top_off, top_off_cos = oc_stats_by_addr.get(addr_coarse, (0, 0, "", 0))
             off_share = (top_off_cos / cos_with_off) if cos_with_off >= 3 else 0.0
 
-            # Also check parcel owner-family cohesion
             fams = Counter(
                 extract_owner_family_key(o) or normalize_owner_name(o)
                 for o in stats["owners"]
@@ -784,11 +804,11 @@ def _detect_falsely_blacklisted_cohesive_hqs(conn, jur: str) -> List[Dict[str, A
             fam_share = top_fam_cnt / max(len(stats["owners"]), 1)
 
             # High-confidence cohesive landlord HQ:
-            # Either >= 55% of local OC companies at this address share one beneficial principal
-            # (with >= 5 companies), OR >= 65% of parcel owners share one corporate family stem
-            # AND OC company count is modest (<= 400, not a CT Corp skyscraper).
-            if (cos_with_off >= 5 and off_share >= 0.55) or (
-                len(stats["owners"]) >= 4 and fam_share >= 0.65 and int(oc_co_cnt or 0) <= 400 and (cos_with_off < 5 or off_share >= 0.40)
+            # Require >= 0.75 officer concentration on large multi-tenant buildings (> 50 OC cos)
+            # to avoid unblocking shared commercial office towers; >= 0.55 on smaller buildings.
+            min_off_share = 0.75 if int(oc_co_cnt or 0) > 50 else 0.55
+            if (cos_with_off >= 5 and off_share >= min_off_share) or (
+                len(stats["owners"]) >= 4 and fam_share >= 0.65 and int(oc_co_cnt or 0) <= 250 and (cos_with_off < 5 or off_share >= 0.45)
             ):
                 candidates.append(
                     {
@@ -900,11 +920,14 @@ def _detect_missed_oc_business_abbrevs(conn, jur: str) -> List[Dict[str, Any]]:
             GROUP BY owner_name
             HAVING COUNT(*) >= 3
             ORDER BY COUNT(*) DESC
-            LIMIT 250
+            LIMIT 80
             """
         )
         rows = cur.fetchall()
+        t_budget = time.time() + 15.0
         for raw_owner, sample_mail, p_cnt in rows:
+            if time.time() > t_budget:
+                break
             if not looks_like_business_name(raw_owner) or is_excluded_third_party_entity(raw_owner):
                 continue
             norm = normalize_business_name(raw_owner)
@@ -920,13 +943,15 @@ def _detect_missed_oc_business_abbrevs(conn, jur: str) -> List[Dict[str, Any]]:
             if not zip5 or len(toks[0]) < 4 or not toks[0].isalpha():
                 continue
 
-            # Query in-state active OC companies sharing the exact first distinctive token + ZIP
+            # Indexed btree range scan (`name_norm >= prefix AND name_norm < prefix_hi`)
+            p_lo = toks[0] + " "
+            p_hi = toks[0] + "!"
             cur.execute(
                 """
                 SELECT name_norm, company_number, registered_address_coarse, mailing_address_coarse
                 FROM oc_companies
                 WHERE jurisdiction_code = %s
-                  AND name_norm LIKE %s
+                  AND name_norm >= %s AND name_norm < %s
                   AND COALESCE(is_active, TRUE) = TRUE
                   AND (
                       COALESCE(registered_address_raw, '') LIKE %s
@@ -934,7 +959,7 @@ def _detect_missed_oc_business_abbrevs(conn, jur: str) -> List[Dict[str, Any]]:
                   )
                 LIMIT 15
                 """,
-                (oc_jur, toks[0] + " %", f"%{zip5}%", f"%{zip5}%"),
+                (oc_jur, p_lo, p_hi, f"%{zip5}%", f"%{zip5}%"),
             )
             for oc_norm, oc_num, reg_c, mail_c in cur.fetchall():
                 oc_toks = str(oc_norm or "").split()
@@ -1595,11 +1620,16 @@ def run_gemini_advisory_review(
 # ---------------------------------------------------------------------------
 
 def _collect_auto_fix_rules(jur: str, findings: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Convert verified deterministic findings into concrete `network_linking_rules` specs."""
+    """Convert verified deterministic findings into concrete `network_linking_rules` specs.
+    Includes conflict-resolution guard so an address flagged as both cohesive_hq and new_hub
+    never oscillates between unblock/block."""
     specs: List[Dict[str, Any]] = []
+    cohesive_addrs = {hq["address_coarse"] for hq in (findings.get("cohesive_hqs") or []) if hq.get("address_coarse")}
+    hub_addrs = {hub["address_coarse"] for hub in (findings.get("new_hubs") or []) if hub.get("address_coarse")}
+    conflicting_addrs = cohesive_addrs & hub_addrs
 
     for hq in findings.get("cohesive_hqs") or []:
-        if hq.get("auto_fixable"):
+        if hq.get("auto_fixable") and hq["address_coarse"] not in conflicting_addrs:
             specs.append(
                 {
                     "rule_type": "ra_allowlist",
@@ -1675,7 +1705,7 @@ def _collect_auto_fix_rules(jur: str, findings: Dict[str, Any]) -> List[Dict[str
             )
 
     for hub in findings.get("new_hubs") or []:
-        if hub.get("auto_fixable"):
+        if hub.get("auto_fixable") and hub["address_coarse"] not in conflicting_addrs:
             specs.append(
                 {
                     "rule_type": "third_party_hub_block",

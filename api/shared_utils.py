@@ -52,6 +52,7 @@ _BIZ_ABBREV_MAP = {
     'PROPS': 'PROPERTIES',
     'PROPERTY': 'PROPERTIES',
     'SVCS': 'SERVICES',
+    'SRVCS': 'SERVICES',
     'DEVL': 'DEVELOPMENT',
     'DEV': 'DEVELOPMENT',
     'SYS': 'SYSTEM',
@@ -687,8 +688,8 @@ def normalize_mailing_address(address: str) -> str:
     if norm in ADDRESS_PLACEHOLDER_VALUES:
         return ""
 
-    # Check for empty numeric placeholders like "0" or "000"
-    if re.match(r'^0+$', norm):
+    # Check for empty numeric placeholders like "0" or "000", or synthetic "0000 UNDELIVERABLE" mailings
+    if re.match(r'^0+(?:\s|$)', norm) or "UNDELIVERABLE" in norm or re.search(r'\b99999\b', norm):
         return ""
 
     # Minimum content: must contain at least one letter and be > 4 chars.
