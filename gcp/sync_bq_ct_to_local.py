@@ -141,6 +141,17 @@ def collect_local_seed_cnums(conn, oc_jur: str) -> List[str]:
             if not cur.fetchone()[0]:
                 continue
             cur.execute(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'public' AND table_name = %s AND column_name = 'oc_company_number'
+                )
+                """,
+                (tbl,),
+            )
+            if not cur.fetchone()[0]:
+                continue
+            cur.execute(
                 f"""
                 SELECT DISTINCT oc_company_number
                 FROM {tbl}
