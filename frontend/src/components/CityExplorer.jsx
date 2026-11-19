@@ -3282,6 +3282,54 @@ const ROLE_LABELS = {
   AGENT:               { l: 'Managing Agent',   cls: 'bg-amber-100 text-amber-700' },
 };
 
+const PERSON_SUFFIXES_SET = new Set(['JR', 'SR', 'II', 'III', 'IV', 'V', 'MD', 'ESQ', 'PHD', 'CPA', 'TR', 'TRS', 'TRST', 'TRUSTEE', 'TRUSTEES', 'ETAL']);
+
+function parsePersonNameParts(raw = '') {
+  let cleaned = String(raw || '').trim().replace(/\s+/g, ' ');
+  if (!cleaned || cleaned.length < 3 || /[+&/]/.test(cleaned) || isEntity(cleaned)) return null;
+  cleaned = cleaned.replace(/^(?:TRUSTEE|TRST|TRS|TR)\s+/i, '').trim();
+  let disp = cleaned;
+  if (disp.includes(',') && disp.split(',').length === 2) {
+    const [last, first] = disp.split(',').map(p => p.trim());
+    if (first && last && !/\b(JR|SR|II|III|IV|V|ESQ|TR|TRS)\b/i.test(first)) {
+      disp = `${first} ${last}`;
+    }
+  }
+  let toks = (disp.toUpperCase().match(/[A-Z]+/g) || []).filter(t => !PERSON_SUFFIXES_SET.has(t));
+  if (toks.length < 2 || toks.length > 4) return null;
+  if (toks.length >= 3 && toks[toks.length - 1] === toks[toks.length - 2]) {
+    toks = toks.slice(0, -1);
+  }
+  const a = toks[0];
+  const b = toks[toks.length - 1];
+  const pairKey = a < b ? `${a}|${b}` : `${b}|${a}`;
+  const middle = toks.length > 2 ? toks.slice(1, -1).join(' ') : '';
+  return { pairKey, middle, display: disp };
+}
+
+function middlesCompatible(m1 = '', m2 = '') {
+  if (!m1 || !m2) return true;
+  const t1 = m1.split(' ')[0];
+  const t2 = m2.split(' ')[0];
+  if (t1 === t2) return true;
+  return (t1.length === 1 && t2.startsWith(t1)) || (t2.length === 1 && t1.startsWith(t2));
+}
+
+function middleSpecificity(mid = '') {
+  if (!mid) return 0;
+  return mid.split(' ')[0].length > 1 ? 2 : 1;
+}
+
+function pickBetterPersonDisplay(cur, cand, curMid, candMid) {
+  const cs = middleSpecificity(curMid);
+  const ns = middleSpecificity(candMid);
+  if (ns !== cs) return ns > cs ? cand : cur;
+  const cc = !cur.includes(',') && !cur.includes('  ');
+  const nc = !cand.includes(',') && !cand.includes('  ');
+  if (nc !== cc) return nc ? cand : cur;
+  return cand.length > cur.length ? cand : cur;
+}
+
 function computePeopleEntitiesModel(contacts = [], memberNames = [], connectionSignals = null) {
   const sigs = connectionSignals || {};
   const ocMatched = sigs.oc_matched_companies || [];
@@ -3289,25 +3337,6 @@ function computePeopleEntitiesModel(contacts = [], memberNames = [], connectionS
   const sigHumans = (sigs.source_human_names || []).filter(n => n && !isJunk(n) && isLikelyPerson(n));
 
   const cleanContacts = [...contacts.filter(c => !isJunk(c.full_name || c.corporation || ''))];
-  const existingUpper = new Set(cleanContacts.map(c => (c.full_name || c.corporation || '').toUpperCase().trim()));
-  if (hasOcFilings) {
-    const memberCorpNames = (memberNames || []).filter(n => n && !isJunk(n) && !isLikelyPerson(n)).slice(0, 6);
-    sigHumans.forEach(hName => {
-      const hu = hName.toUpperCase().trim();
-      if (!existingUpper.has(hu)) {
-        existingUpper.add(hu);
-        cleanContacts.push({
-          contact_type: 'CORPORATE_PRINCIPAL',
-          full_name: hName,
-          corporations: memberCorpNames,
-          corporation: memberCorpNames[0] || null,
-          registration_ids: [],
-          bbls: [],
-        });
-      }
-    });
-  }
-  const contactNames  = new Set(cleanContacts.map(c => (c.full_name || c.corporation || '').toUpperCase().trim()));
 
   const PERSON_TYPES  = new Set(['HEADOFFICER', 'INDIVIDUALOWNER', 'JOINTOWNER', 'CORPORATE_PRINCIPAL']);
   const ENTITY_TYPES  = new Set(['CORPORATEOWNER']);
@@ -3325,29 +3354,127 @@ function computePeopleEntitiesModel(contacts = [], memberNames = [], connectionS
     return isEntity(c.full_name || '') || isEntity(c.corporation || '');
   });
 
-  const peopleMap = new Map();
-  personContacts.forEach(c => {
-    const key = c.full_name || c.corporation || '';
-    if (!key) return;
-    if (!peopleMap.has(key)) peopleMap.set(key, c);
-    else {
-      const existing = peopleMap.get(key);
-      const merged = [...new Set([...(existing.corporations||[]), ...(c.corporations||[])])];
-      const registrationIds = [...new Set([...(existing.registration_ids || []), ...(c.registration_ids || [])])];
-      const bbls = [...new Set([...(existing.bbls || []), ...(c.bbls || [])])];
-      peopleMap.set(key, {
-        ...existing,
-        corporations: merged,
-        registration_ids: registrationIds,
-        bbls,
-        building_count: bbls.length || existing.building_count || c.building_count,
+  // Append any source_human_names from corporate filings that are not already represented
+  // (never fabricate synthetic corporation counts for unmatched signal-only names).
+  const rawPeopleQueue = [...personContacts];
+  if (hasOcFilings) {
+    sigHumans.forEach(hName => {
+      rawPeopleQueue.push({
+        contact_type: 'CORPORATE_PRINCIPAL',
+        full_name: hName,
+        corporations: [],
+        corporation: null,
+        registration_ids: [],
+        bbls: [],
+        _fromSignalOnly: true,
       });
+    });
+  }
+
+  // Specificity-first middle-compatible clustering so "DON R HANKEY", "DON HANKEY",
+  // "DON R. HANKEY", and "DON ROBERT HANKEY" collapse cleanly into one canonical person,
+  // while "JOHN A SMITH" and "JOHN B SMITH" stay distinct.
+  const parsedQueue = rawPeopleQueue.map((c, idx) => {
+    const rawNm = c.full_name || c.corporation || '';
+    const parsed = parsePersonNameParts(rawNm);
+    return { c, idx, rawNm, parsed };
+  }).filter(x => x.rawNm);
+
+  parsedQueue.sort((a, b) => {
+    const sa = a.parsed ? middleSpecificity(a.parsed.middle) : -1;
+    const sb = b.parsed ? middleSpecificity(b.parsed.middle) : -1;
+    if (sb !== sa) return sb - sa;
+    const fa = a.c._fromSignalOnly ? 1 : 0;
+    const fb = b.c._fromSignalOnly ? 1 : 0;
+    if (fa !== fb) return fa - fb;
+    return a.idx - b.idx;
+  });
+
+  const clustersByPair = new Map();
+  const unparsedMap = new Map();
+  const allClusters = [];
+
+  parsedQueue.forEach(({ c, idx, rawNm, parsed }) => {
+    if (!parsed) {
+      const uk = rawNm.toUpperCase().trim();
+      if (!unparsedMap.has(uk)) {
+        const cl = { firstIdx: idx, contact: { ...c }, middles: new Set(), bestMid: '' };
+        unparsedMap.set(uk, cl);
+        allClusters.push(cl);
+      } else {
+        const ex = unparsedMap.get(uk).contact;
+        const mergedCorps = [...new Set([...(ex.corporations || []), ...(c.corporations || [])])];
+        const mergedRegs = [...new Set([...(ex.registration_ids || []), ...(c.registration_ids || [])])];
+        const mergedBbls = [...new Set([...(ex.bbls || []), ...(c.bbls || [])])];
+        unparsedMap.get(uk).contact = {
+          ...ex,
+          corporations: mergedCorps,
+          registration_ids: mergedRegs,
+          bbls: mergedBbls,
+          building_count: Math.max(mergedBbls.length, ex.building_count || 0, c.building_count || 0),
+        };
+      }
+      return;
+    }
+
+    const list = clustersByPair.get(parsed.pairKey) || [];
+    const compatible = list.filter(cl => [...cl.middles].every(em => middlesCompatible(parsed.middle, em)));
+    let target = null;
+    if (compatible.length === 1) {
+      target = compatible[0];
+    } else if (compatible.length > 1 && parsed.middle) {
+      const exact = compatible.filter(cl => cl.middles.has(parsed.middle));
+      if (exact.length === 1) target = exact[0];
+    }
+
+    if (!target) {
+      const cl = {
+        pairKey: parsed.pairKey,
+        middles: parsed.middle ? new Set([parsed.middle]) : new Set(),
+        bestMid: parsed.middle,
+        firstIdx: idx,
+        contact: { ...c, full_name: parsed.display },
+      };
+      list.push(cl);
+      clustersByPair.set(parsed.pairKey, list);
+      allClusters.push(cl);
+    } else {
+      if (parsed.middle) target.middles.add(parsed.middle);
+      const ex = target.contact;
+      const preferIncomingBase = ex._fromSignalOnly && !c._fromSignalOnly;
+      const base = preferIncomingBase ? { ...c } : { ...ex };
+      const betterName = pickBetterPersonDisplay(ex.full_name || '', parsed.display, target.bestMid, parsed.middle);
+      if (betterName === parsed.display && middleSpecificity(parsed.middle) >= middleSpecificity(target.bestMid)) {
+        target.bestMid = parsed.middle;
+      }
+      const mergedCorps = [...new Set([...(ex.corporations || []), ...(c.corporations || [])])];
+      const mergedRegs = [...new Set([...(ex.registration_ids || []), ...(c.registration_ids || [])])];
+      const mergedBbls = [...new Set([...(ex.bbls || []), ...(c.bbls || [])])];
+      target.firstIdx = Math.min(target.firstIdx, idx);
+      target.contact = {
+        ...base,
+        full_name: betterName,
+        corporations: mergedCorps,
+        corporation: mergedCorps[0] || base.corporation || null,
+        registration_ids: mergedRegs,
+        bbls: mergedBbls,
+        building_count: Math.max(mergedBbls.length, ex.building_count || 0, c.building_count || 0),
+        address: base.address || ex.address || c.address || null,
+        _fromSignalOnly: Boolean(ex._fromSignalOnly && c._fromSignalOnly),
+      };
     }
   });
-  const groupedPeople = [...peopleMap.values()];
+
+  allClusters.sort((a, b) => a.firstIdx - b.firstIdx);
+  const groupedPeople = allClusters.map(cl => cl.contact);
+
+  const contactNames = new Set([
+    ...groupedPeople.map(c => (c.full_name || c.corporation || '').toUpperCase().trim()),
+    ...entityContacts.map(c => (c.corporation || c.full_name || '').toUpperCase().trim()),
+  ]);
 
   const corpToOfficers = new Map();
-  personContacts.forEach(c => {
+  groupedPeople.forEach(c => {
     (c.corporations || []).forEach(corp => {
       if (!corp || isJunk(corp)) return;
       if (!corpToOfficers.has(corp)) corpToOfficers.set(corp, new Set());
@@ -3361,7 +3488,7 @@ function computePeopleEntitiesModel(contacts = [], memberNames = [], connectionS
     if (!key) return;
     if (!entityMap.has(key)) entityMap.set(key, { contact: c, addr: c.address });
   });
-  personContacts.forEach(c => {
+  groupedPeople.forEach(c => {
     (c.corporations || []).filter(x => !isJunk(x)).forEach(corp => {
       if (!entityMap.has(corp)) entityMap.set(corp, { contact: { ...c, corporation: corp, full_name: null }, addr: c.address });
     });
@@ -3386,8 +3513,15 @@ function computePeopleEntitiesModel(contacts = [], memberNames = [], connectionS
     count: (c.corporations||[]).filter(corp => entityMap.has(corp)).length,
   })).filter(x => x.count >= 2).sort((a, b) => b.count - a.count).slice(0, 4);
 
+  const groupedPersonPairs = new Set(groupedPeople.map(c => parsePersonNameParts(c.full_name || '')?.pairKey).filter(Boolean));
   const nameOnlyAliases = (memberNames || [])
-    .filter(n => n && !isJunk(n) && !contactNames.has(n.toUpperCase().trim()))
+    .filter(n => {
+      if (!n || isJunk(n)) return false;
+      if (contactNames.has(n.toUpperCase().trim())) return false;
+      const p = parsePersonNameParts(n);
+      if (p && groupedPersonPairs.has(p.pairKey)) return false;
+      return true;
+    })
     .map(n => ({ _type: 'name', name: n }));
   const nameOnlyPeople   = nameOnlyAliases.filter(e => isLikelyPerson(e.name));
   const nameOnlyEntities = nameOnlyAliases.filter(e => !isLikelyPerson(e.name));
@@ -3457,7 +3591,7 @@ function PeopleEntitiesSection({ contacts = [], memberNames = [], connectionSign
               {personEntityCount.map(({ name, contact, count }) => (
                 <button key={name} onClick={() => onContact(contact)}
                   className="w-full flex items-center justify-between text-left hover:bg-amber-100 rounded-lg px-1.5 py-1 transition-colors group">
-                  <span className="text-[11px] font-semibold text-slate-800">{name}</span>
+                  <span className="text-[11px] font-semibold text-slate-800">{formatDisplayName(name)}</span>
                   <span className="text-[9px] font-bold text-amber-600 shrink-0 ml-2">
                     {count} {count === 1 ? 'entity' : 'entities'}
                   </span>

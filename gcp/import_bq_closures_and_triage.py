@@ -101,6 +101,19 @@ def ensure_bq_derived_tables(conn) -> None:
     conn.commit()
 
 
+import re
+
+_COMMERCIAL_RA_NAME_RE = re.compile(
+    r"\b(?:CORPORATION\s+SERVICE|CT\s+CORPORATION|C\.?\s*T\.?\s*CORP|CSC|"
+    r"REGISTERED\s+AGENT|LEGALZOOM|COGENCY|INCORP\s+SERVICES|PARACORP|"
+    r"NORTHWEST\s+REGISTERED|CAPITOL\s+SERVICES|NATIONAL\s+REGISTERED|"
+    r"UNITED\s+STATES\s+CORP|CORPORATE\s+CREATIONS|RESIDENT\s+AGENTS|"
+    r"AGENT\s+SERVICE|BUSINESS\s+FILINGS|ZENBUSINESS|INCFILE|LAW\s+OFFICES?|"
+    r"ATTORNEYS?\s+AT\s+LAW)\b",
+    re.IGNORECASE,
+)
+
+
 def import_national_ra_hubs(conn, gz_path: str) -> int:
     if not os.path.exists(gz_path):
         return 0
@@ -113,6 +126,12 @@ def import_national_ra_hubs(conn, gz_path: str) -> int:
                 continue
             cnt = int(float(r.get("distinct_company_count") or 0))
             names = [n.strip() for n in (r.get("sample_agent_names") or "").split("|") if n.strip()][:10]
+            # Never blacklist a self-agent corporate HQ (e.g. a single landlord acting as
+            # statutory agent for their own 30 LLCs at their own office!). Require either a
+            # commercial RA/law-firm name, >= 5 distinct unrelated agent names, or >= 150 cos.
+            has_comm_ra = any(_COMMERCIAL_RA_NAME_RE.search(nm) for nm in names)
+            if not (has_comm_ra or len(names) >= 5 or cnt >= 150):
+                continue
             prev = rows_by_coarse.get(coarse)
             if prev is None or cnt > prev[2]:
                 rows_by_coarse[coarse] = (coarse, raw_sample[:240], cnt, names, "bigquery_61jur_agent_closure")

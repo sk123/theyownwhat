@@ -21,6 +21,8 @@ import requests
 
 import api.db as db_module
 from api.network_profile import (
+    dedupe_human_name_list,
+    dedupe_network_contacts,
     derive_network_business_profile,
     fetch_batch_network_oc_profiles,
 )
@@ -355,14 +357,18 @@ def _parse_jsonish(value, fallback=None):
 
 def _network_identity(display_name, member_names, connection_signals=None):
     signals = _parse_jsonish(connection_signals, {})
-    source_human_names = [
-        name for name in (signals.get("source_human_names") or []) if name
-    ]
+    source_human_names = dedupe_human_name_list(
+        [name for name in (signals.get("source_human_names") or []) if name],
+        max_names=25,
+    )
     if not source_human_names:
-        source_human_names = sorted({
-            name for name in (member_names or [])
-            if looks_like_person_owner(name)
-        })
+        source_human_names = dedupe_human_name_list(
+            sorted({
+                name for name in (member_names or [])
+                if looks_like_person_owner(name)
+            }),
+            max_names=25,
+        )
     primary_human_name = signals.get("primary_human_name")
     if not primary_human_name and looks_like_person_owner(display_name):
         primary_human_name = display_name
@@ -1793,31 +1799,18 @@ def city_network_detail(city: str, network_key: str):
             "oc_matched_companies": oc_all_cids,
             "oc_company_links": oc_links,
         }
-        existing_contact_keys = {
-            (
-                (fc.get("contact_type") or "").upper(),
-                (fc.get("full_name") or fc.get("corporation") or "").strip().upper(),
-            )
-            for fc in formatted_contacts
+        formatted_contacts.extend(oc_contacts)
+
+    # Deduplicate human principals across punctuation, case, LAST/FIRST inversions, and
+    # compatible middle initials/names (e.g. DON R HANKEY + DON R. HANKEY + DON ROBERT HANKEY
+    # + DON HANKEY -> 1 canonical principal with unioned entities), while keeping incompatible
+    # middle initials (e.g. JOHN A SMITH vs JOHN B SMITH) strictly separate.
+    formatted_contacts = dedupe_network_contacts(formatted_contacts)
+    if conn_signals.get("source_human_names"):
+        conn_signals = {
+            **conn_signals,
+            "source_human_names": dedupe_human_name_list(conn_signals.get("source_human_names") or [], max_names=25),
         }
-        existing_person_names = {
-            (fc.get("full_name") or "").strip().upper()
-            for fc in formatted_contacts
-            if fc.get("full_name")
-        }
-        for occ in oc_contacts:
-            nm_upper = (occ.get("full_name") or occ.get("corporation") or "").strip().upper()
-            if not nm_upper:
-                continue
-            ctype_upper = (occ.get("contact_type") or "").upper()
-            if ctype_upper == "CORPORATE_PRINCIPAL" and nm_upper in existing_person_names:
-                continue
-            if (ctype_upper, nm_upper) in existing_contact_keys:
-                continue
-            existing_contact_keys.add((ctype_upper, nm_upper))
-            if occ.get("full_name"):
-                existing_person_names.add(nm_upper)
-            formatted_contacts.append(occ)
 
     sibling_portfolios = _find_sibling_portfolios(
         c,
@@ -2255,9 +2248,28 @@ def _fetch_oc_enrichment_for_cids(
     # Fetch beneficial principals & corporate parents across all linked OC companies
     oc_contacts: list[dict] = []
     if all_cids:
+        j_all = [cid.split("/", 1)[0] for cid in all_cids]
+        n_all = [cid.split("/", 1)[1] for cid in all_cids]
+        ct_pl_rows = []
         try:
-            j_all = [cid.split("/", 1)[0] for cid in all_cids]
-            n_all = [cid.split("/", 1)[1] for cid in all_cids]
+            ct_pl_rows = _query(
+                """
+                SELECT pl.jurisdiction_code, pl.company_number,
+                       pl.canonical_principal_id, pl.canonical_name,
+                       pl.position, pl.statewide_company_count, pl.name_variants
+                FROM UNNEST(%s::text[], %s::text[]) AS k(j, n)
+                JOIN oc_ct_principal_links pl
+                  ON pl.jurisdiction_code = k.j AND pl.company_number = k.n
+                LIMIT 250
+                """,
+                (j_all, n_all),
+            )
+        except Exception:
+            ct_pl_rows = []
+
+        ct_covered_cids = {f"{r['jurisdiction_code']}/{r['company_number']}" for r in ct_pl_rows}
+
+        try:
             off_rows = _query(
                 """
                 SELECT o.jurisdiction_code, o.company_number, o.name, o.name_norm,
@@ -2274,6 +2286,44 @@ def _fetch_oc_enrichment_for_cids(
             off_rows = []
 
         grouped_off: dict[tuple[str, str], dict] = {}
+        # 1. Populate BigQuery CT-deduplicated canonical human principals first
+        for pr in ct_pl_rows:
+            cname = (pr.get("canonical_name") or "").strip()
+            pid = (pr.get("canonical_principal_id") or "").strip()
+            if not cname or not pid or is_excluded_third_party_entity(cname):
+                continue
+            cid = f"{pr['jurisdiction_code']}/{pr['company_number']}"
+            comp_row = comp_by_cid.get(cid) or {}
+            comp_name = comp_row.get("name") or cid
+            entry = grouped_off.setdefault(
+                ("CORPORATE_PRINCIPAL", f"CTPID:{pid}"),
+                {
+                    "contact_type": "CORPORATE_PRINCIPAL",
+                    "full_name": cname,
+                    "corporation_self": None,
+                    "corporations": set(),
+                    "bbls": set(),
+                    "registration_ids": set(),
+                    "address": None,
+                    "positions": [],
+                    "statewide_company_count": int(pr.get("statewide_company_count") or 0) or None,
+                    "name_variants": list(pr.get("name_variants") or []),
+                },
+            )
+            entry["corporations"].add(comp_name)
+            entry["registration_ids"].add(f"OC:{cid}")
+            entry["bbls"].update(bbl_map.get(cid, set()))
+            for pos_p in str(pr.get("position") or "").split(","):
+                pos_c = pos_p.strip()
+                if pos_c and pos_c not in entry["positions"]:
+                    entry["positions"].append(pos_c)
+            if not entry["address"]:
+                for hq_cand in (comp_row.get("mailing_address_raw"), comp_row.get("registered_address_raw")):
+                    if hq_cand and hq_cand != comp_row.get("agent_address_raw") and not is_excluded_third_party_address(hq_cand):
+                        entry["address"] = hq_cand
+                        break
+
+        # 2. Populate corporate parents + fallback human principals for non-CT-synced companies
         for o in off_rows:
             raw_nm = (o.get("name") or "").strip()
             if not raw_nm or is_excluded_third_party_entity(raw_nm):
@@ -2282,6 +2332,8 @@ def _fetch_oc_enrichment_for_cids(
             comp_row = comp_by_cid.get(cid) or {}
             comp_name = comp_row.get("name") or cid
             is_corp = bool(o.get("is_corporate_officer")) or o.get("role_class") == "corporate_parent" or not looks_like_person_owner(raw_nm)
+            if not is_corp and cid in ct_covered_cids:
+                continue
             ctype = "CORPORATEOWNER" if is_corp else "CORPORATE_PRINCIPAL"
             norm_key = (o.get("name_norm") or raw_nm.upper()).strip()
             entry = grouped_off.setdefault(
@@ -2295,6 +2347,8 @@ def _fetch_oc_enrichment_for_cids(
                     "registration_ids": set(),
                     "address": None,
                     "positions": [],
+                    "statewide_company_count": None,
+                    "name_variants": [],
                 },
             )
             entry["corporations"].add(comp_name)
@@ -2317,7 +2371,7 @@ def _fetch_oc_enrichment_for_cids(
             if ent["corporation_self"] and ent["corporation_self"] not in corps_sorted:
                 corps_sorted.insert(0, ent["corporation_self"])
             bbls_sorted = sorted(ent["bbls"])
-            oc_contacts.append({
+            contact_obj = {
                 "contact_type": ent["contact_type"],
                 "corporations": corps_sorted,
                 "corporation": ent["corporation_self"] or (corps_sorted[0] if corps_sorted else None),
@@ -2333,9 +2387,14 @@ def _fetch_oc_enrichment_for_cids(
                 "zip": None,
                 "position": ", ".join(ent["positions"][:3]) if ent["positions"] else None,
                 "source": "OpenCorporates",
-            })
+            }
+            if ent.get("statewide_company_count"):
+                contact_obj["statewide_company_count"] = ent["statewide_company_count"]
+            if len(ent.get("name_variants") or []) > 1:
+                contact_obj["name_variants"] = ent["name_variants"]
+            oc_contacts.append(contact_obj)
 
-    return oc_links, oc_contacts, all_cids
+    return oc_links, dedupe_network_contacts(oc_contacts), all_cids
 
 
 # ---------------------------------------------------------------------------

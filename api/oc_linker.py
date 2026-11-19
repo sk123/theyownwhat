@@ -702,9 +702,13 @@ def refresh_empirical_registered_agent_addresses(
             (min_distinct_companies,),
         )
 
-        # Step 2: Insert deterministic commercial RA & multi-charter foreign-branch hubs immediately
-        # (never flag self-registered landlord/corporate HQs like 1 Washington Mall, 60 Leo Birmingham Pkwy,
-        # or 269 Mill Rd simply because property LLCs list site addresses in `registered_address_coarse`).
+        # Step 2: Insert deterministic commercial RA hubs immediately ONLY when commercial
+        # RA/law filings represent a real share of the address (`>= 25%` of `total_cos` or
+        # `>= 50` commercial RA filings). Multi-tenant towers where one small law office on
+        # another floor has 5–20 filings alongside a dominant 200-LLC landlord HQ (e.g.
+        # 1 Washington Mall Boston, 1100 New Jersey Ave SE DC, 4751 Wilshire Blvd LA, or
+        # CT corporate towers) are routed to Step 3's officer-dispersion check so a landlord
+        # acting as self-agent at its own HQ is NEVER falsely blacklisted.
         cur.execute(
             """
             INSERT INTO oc_registered_agent_addresses (
@@ -720,14 +724,11 @@ def refresh_empirical_registered_agent_addresses(
                 sample_raw_address,
                 total_cos,
                 NULL::text[],
-                CASE
-                    WHEN known_ra_agent_cos >= 5 THEN 'empirical_oc_agent_hub'
-                    ELSE 'empirical_oc_shared_office_hub'
-                END,
+                'empirical_oc_agent_hub',
                 NOW()
             FROM _ra_cand_stats
-            WHERE known_ra_agent_cos >= 5
-               OR (foreign_home_jurs >= 5 AND total_cos >= 15)
+            WHERE (known_ra_agent_cos >= 5 AND known_ra_agent_cos >= 0.25 * GREATEST(total_cos, 1))
+               OR known_ra_agent_cos >= 50
             ON CONFLICT (address_coarse) DO UPDATE SET
                 sample_raw_address = EXCLUDED.sample_raw_address,
                 distinct_company_count = EXCLUDED.distinct_company_count,
@@ -737,9 +738,11 @@ def refresh_empirical_registered_agent_addresses(
         )
         upserted = cur.rowcount
 
-        # Step 3: For remaining external-agent candidates (`external_agent_clients >= 10`) OR large shared
-        # offices (`total_cos >= 35`), sample up to 80 companies per address and check officer dispersion
-        # via `idx_oc_officers_company`. Flag ONLY when officers are genuinely dispersed (`top_officer_share < 0.25`).
+        # Step 3: For remaining external-agent candidates (`external_agent_clients >= 10`),
+        # minority-RA / multi-charter towers (`known_ra_agent_cos >= 5` or `foreign_home_jurs >= 5`),
+        # OR large shared offices (`total_cos >= 35`), sample up to 80 companies per address and
+        # check officer dispersion via `idx_oc_officers_company`. Flag ONLY when officers are
+        # genuinely dispersed (`top_officer_share < 0.25`), preserving single-operator & self-agent HQs!
         cur.execute(
             """
             CREATE TEMP TABLE _ra_need_off ON COMMIT DROP AS
@@ -748,11 +751,13 @@ def refresh_empirical_registered_agent_addresses(
             FROM _ra_cand_stats
             WHERE (
                   total_cos >= 35
+                  OR known_ra_agent_cos >= 5
+                  OR (foreign_home_jurs >= 5 AND total_cos >= 15)
                   OR (external_agent_clients >= 10 AND external_agent_clients >= 0.40 * GREATEST(agent_cos, 1))
               )
               AND NOT (
-                  known_ra_agent_cos >= 5
-                  OR (foreign_home_jurs >= 5 AND total_cos >= 15)
+                  (known_ra_agent_cos >= 5 AND known_ra_agent_cos >= 0.25 * GREATEST(total_cos, 1))
+                  OR known_ra_agent_cos >= 50
               );
             CREATE UNIQUE INDEX ON _ra_need_off (addr_coarse);
             """
@@ -762,6 +767,7 @@ def refresh_empirical_registered_agent_addresses(
         if need_off_cnt:
             cur.execute(
                 """
+                CREATE TEMP TABLE _ra_off_disp ON COMMIT DROP AS
                 WITH sampled_cos AS (
                     SELECT addr_coarse, jurisdiction_code, company_number
                     FROM (
@@ -809,6 +815,10 @@ def refresh_empirical_registered_agent_addresses(
                     ) s
                     GROUP BY addr_coarse
                 )
+                SELECT t.addr_coarse, t.cos_with_off, to2.top_off_cos
+                FROM totals t
+                JOIN top_off to2 ON to2.addr_coarse = t.addr_coarse;
+
                 INSERT INTO oc_registered_agent_addresses (
                     address_coarse,
                     sample_raw_address,
@@ -825,10 +835,9 @@ def refresh_empirical_registered_agent_addresses(
                     CASE WHEN n.is_ext_agent THEN 'empirical_oc_agent_hub' ELSE 'empirical_oc_shared_office_hub' END,
                     NOW()
                 FROM _ra_need_off n
-                JOIN totals t ON t.addr_coarse = n.addr_coarse
-                JOIN top_off to2 ON to2.addr_coarse = n.addr_coarse
-                WHERE t.cos_with_off >= 10
-                  AND (to2.top_off_cos::float / t.cos_with_off) < 0.25
+                JOIN _ra_off_disp d ON d.addr_coarse = n.addr_coarse
+                WHERE d.cos_with_off >= 10
+                  AND (d.top_off_cos::float / d.cos_with_off) < 0.25
                 ON CONFLICT (address_coarse) DO UPDATE SET
                     sample_raw_address = EXCLUDED.sample_raw_address,
                     distinct_company_count = EXCLUDED.distinct_company_count,
@@ -837,6 +846,22 @@ def refresh_empirical_registered_agent_addresses(
                 """
             )
             upserted += cur.rowcount
+
+            # Un-blacklist self-agent / dominant-operator HQs that were previously inserted
+            # by raw agent-count imports (`bigquery_61jur_agent_closure`, `empirical_oc_agent_stream`)
+            # when officer verification proves a single operator controls >= 25% of entities there.
+            cur.execute(
+                """
+                DELETE FROM oc_registered_agent_addresses
+                WHERE address_coarse IN (
+                    SELECT addr_coarse
+                    FROM _ra_off_disp
+                    WHERE cos_with_off >= 5
+                      AND (top_off_cos::float / cos_with_off) >= 0.25
+                )
+                  AND source IN ('bigquery_61jur_agent_closure', 'empirical_oc_agent_stream');
+                """
+            )
             allowlist = sorted(get_learned_ra_allowlist())
             if allowlist:
                 cur.execute(
@@ -864,6 +889,19 @@ _EXCLUDED_OC_COMPANY_TYPE_RE = re.compile(
     r"\b(?:RELIGIOUS|CHURCH\s+CORP|SAVINGS\s+BANK|BANK\s+STOCK|BANK\s+NON[- ]STOCK|^BANK$|"
     r"BANK\s*-\s*(?:DOMESTIC|FOREIGN)|CREDIT\s+UNION|INSURANCE\s+(?:COMPANY|STOCK|NON[- ]STOCK)|"
     r"^INSURANCE$|MUNICIPAL\s*-\s*(?:DOMESTIC|FOREIGN)|ELECTRIC\s+MEMBERSHIP\s+COOP|^SCHOOL$)\b",
+    re.IGNORECASE,
+)
+# Third-party IRC § 1031 exchange accommodators, EB-5 regional/lending centers, escrow/title
+# intermediaries, and statutory trusts that hold temporary/administrative roles across
+# hundreds of unrelated real-estate owners.
+_INTERMEDIARY_EXCHANGE_LENDER_RE = re.compile(
+    r"\b(?:1031|EXCHANGE|EXCHANGES|SAFE\s+HARBOR|ACCOMMODATOR|ASSET\s+PRESERVATION|"
+    r"STEWART\s+HOLDINGS|IPX1031|LENDING\s+CENTER|REGIONAL\s+CENTER|ESCROW|"
+    r"TITLE\s+(?:CO|COMPANY|INSURANCE|AGENCY|HOLDINGS)|TITLES\s+INC|STATUTORY\s+TRUST|"
+    r"FOUNDATION\s+FOR\s+AFFORDABLE|RV\s+REGISTRATION|ACTION\s+SERVICES\s+LLC|"
+    r"FILING\s+SERVICES|LAW\s+OFFICES?|PLLC|LLP|CPA|CPAS|ACCOUNTING|ACCOUNTANTS|"
+    r"TAX\s+(?:INC|LLC|SERVICES|GROUP|PREP|NERD|ADVISOR|PARTNERS)|LNR\s+PARTNERS|SPECIAL\s+SERVIC|"
+    r"AGENCY\s+AGENTS|FORVIS\s+MAZARS)\b|\b(?:P\.?C\.?|P\.?A\.?)\s*$",
     re.IGNORECASE,
 )
 _STREET_OR_POBOX_START_RE = re.compile(r"^(?:\d+\s+[A-Z0-9]|PO BOX \d+\b)")
@@ -898,6 +936,7 @@ def resolve_oc_company_principals(
     all_nonprofit_keys: Set[Tuple[str, str]] = set()
     parent_edges: Dict[Tuple[str, str], Set[Tuple[str, str]]] = {}
     direct_humans: Dict[Tuple[str, str], Set[str]] = {}
+    direct_ct_pids: Dict[Tuple[str, str], Dict[str, str]] = {}
     direct_hq_addrs: Dict[Tuple[str, str], Set[str]] = {}
     direct_raw_hq_addrs: Dict[Tuple[str, str], Set[str]] = {}
     entity_labels: Dict[Tuple[str, str], str] = {}
@@ -929,6 +968,10 @@ def resolve_oc_company_principals(
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute("SELECT to_regclass('public.oc_cross_state_pierced_branches') IS NOT NULL AS has_cspb")
         has_cspb = bool(cur.fetchone()["has_cspb"])
+        cur.execute("SELECT to_regclass('public.oc_ct_principal_links') IS NOT NULL AS has_ct_pl")
+        has_ct_pl = bool(cur.fetchone()["has_ct_pl"])
+        cur.execute("SELECT to_regclass('public.oc_ct_company_edges') IS NOT NULL AS has_ct_edges")
+        has_ct_edges = bool(cur.fetchone()["has_ct_edges"])
         for _hop in range(max_hops):
             batch = [k for k in frontier if k not in visited]
             if not batch:
@@ -964,8 +1007,9 @@ def resolve_oc_company_principals(
                     ctype = (row.get("company_type") or "").strip()
                     if cname:
                         entity_labels[key] = cname
-                    if (cname and is_excluded_third_party_entity(cname)) or (
-                        ctype and _EXCLUDED_OC_COMPANY_TYPE_RE.search(ctype)
+                    if (
+                        (cname and (is_excluded_third_party_entity(cname) or _INTERMEDIARY_EXCHANGE_LENDER_RE.search(cname)))
+                        or (ctype and _EXCLUDED_OC_COMPANY_TYPE_RE.search(ctype))
                     ):
                         excluded_company_keys.add(key)
                         continue
@@ -1134,6 +1178,83 @@ def resolve_oc_company_principals(
                                 if hkey in visited and hkey not in excluded_company_keys:
                                     direct_humans.setdefault(hkey, set()).add(p_clean)
                                     touched_human_keys.add(hkey)
+
+                # 3c. BigQuery CT-Treatment deduplicated canonical principals (`oc_ct_principal_links`)
+                # Replaces raw un-deduplicated officer name variants (e.g. DON R HANKEY + DON R. HANKEY
+                # + DON RUFUS HANKEY + DON HANKEY) with one statewide-deduplicated canonical principal
+                # and carries empirical homonym-guarded IDs (`PHQ:...@hq`) straight into clustering.
+                if has_ct_pl:
+                    cur.execute(
+                        """
+                        SELECT pl.jurisdiction_code, pl.company_number,
+                               pl.canonical_principal_id, pl.canonical_name,
+                               pl.is_homonymous_guarded, pl.statewide_company_count
+                        FROM unnest(%s::text[], %s::text[]) AS k(j, n)
+                        JOIN oc_ct_principal_links pl
+                          ON pl.jurisdiction_code = k.j AND pl.company_number = k.n
+                        """,
+                        (c_jurs, c_nums),
+                    )
+                    ct_pl_by_co: Dict[Tuple[str, str], List[dict]] = {}
+                    for row in cur.fetchall():
+                        ck = (row["jurisdiction_code"], row["company_number"])
+                        if ck in excluded_company_keys:
+                            continue
+                        ct_pl_by_co.setdefault(ck, []).append(row)
+                    for ck, prows in ct_pl_by_co.items():
+                        clean_names: Set[str] = set()
+                        pid_map: Dict[str, str] = {}
+                        for pr in prows:
+                            cname = (pr.get("canonical_name") or "").strip()
+                            pid = (pr.get("canonical_principal_id") or "").strip()
+                            sw_cnt = int(pr.get("statewide_company_count") or 1)
+                            if not cname or not pid or counsel_re.search(cname) or is_excluded_third_party_entity(cname):
+                                continue
+                            # Skip serial intermediary super-hubs (> 120 statewide cos) from bridging
+                            if sw_cnt > 120:
+                                continue
+                            clean_names.add(cname)
+                            pid_map[cname] = pid
+                        if clean_names:
+                            direct_humans[ck] = clean_names
+                            if pid_map:
+                                direct_ct_pids[ck] = pid_map
+                            touched_human_keys.add(ck)
+
+                # 3d. Direct 1-hop verified `corporate_parent` bridges from BigQuery CT-Treatment
+                # (strictly excluding 1031-exchange accommodators, EB-5 lenders, escrow/title, & >120 hubs)
+                if has_ct_edges and _hop == 0:
+                    cur.execute(
+                        """
+                        SELECT e.jurisdiction_code, e.src_company_number, e.dst_company_number, e.bridge_key
+                        FROM unnest(%s::text[], %s::text[]) AS k(j, n)
+                        JOIN oc_ct_company_edges e
+                          ON e.jurisdiction_code = k.j
+                         AND (e.src_company_number = k.n OR e.dst_company_number = k.n)
+                        WHERE e.edge_type = 'corporate_parent'
+                        """,
+                        (c_jurs, c_nums),
+                    )
+                    cp_by_bridge: Dict[str, List[Tuple[Tuple[str, str], Tuple[str, str]]]] = {}
+                    for row in cur.fetchall():
+                        bk = (row.get("bridge_key") or "").strip()
+                        if not bk or is_excluded_third_party_entity(bk) or _INTERMEDIARY_EXCHANGE_LENDER_RE.search(bk):
+                            continue
+                        sk = (row["jurisdiction_code"], row["src_company_number"])
+                        dk = (row["jurisdiction_code"], row["dst_company_number"])
+                        cp_by_bridge.setdefault(bk, []).append((sk, dk))
+                    for bk, pairs in cp_by_bridge.items():
+                        if len(pairs) > 120:
+                            continue
+                        for sk, dk in pairs:
+                            if sk in excluded_company_keys or dk in excluded_company_keys:
+                                continue
+                            if sk in visited:
+                                parent_edges.setdefault(sk, set()).add(dk)
+                                next_frontier.add(dk)
+                            if dk in visited:
+                                parent_edges.setdefault(dk, set()).add(sk)
+                                next_frontier.add(sk)
 
                 # Enforce board-governance caps AFTER both `oc_officers` and `oc_cross_state_pierced_branches`
                 # so large corporate boards (>12 officers) and volunteer nonprofit boards (>2 officers) never
@@ -1376,6 +1497,7 @@ def resolve_oc_company_principals(
         if seed in excluded_company_keys:
             resolved[seed] = {
                 "humans": [],
+                "ct_principal_ids": {},
                 "holding_entities": [],
                 "reached_companies": [],
                 "hq_addresses": [],
@@ -1385,6 +1507,7 @@ def resolve_oc_company_principals(
         seen_nodes: Set[Tuple[str, str]] = {seed}
         stack = [seed]
         humans: Set[str] = set()
+        ct_pids: Dict[str, str] = {}
         holdings: Set[str] = set()
         hq_addrs: Set[str] = set()
         raw_hq_addrs: Set[str] = set()
@@ -1393,10 +1516,16 @@ def resolve_oc_company_principals(
             if curr in excluded_company_keys:
                 continue
             humans.update(direct_humans.get(curr, ()))
+            ct_pids.update(direct_ct_pids.get(curr, {}))
             hq_addrs.update(direct_hq_addrs.get(curr, ()))
             raw_hq_addrs.update(direct_raw_hq_addrs.get(curr, ()))
             for parent_node in parent_edges.get(curr, ()):
                 if parent_node in seen_nodes or parent_node in excluded_company_keys:
+                    continue
+                # Never bridge a for-profit LP and a 501(c)(3) nonprofit Managing General Partner /
+                # LIHTC welfare-exemption co-GP in either direction (e.g. Housing Corp. of America,
+                # Riverside Charitable Corp., LA Housing Partnership, Abbey Road / Penny Lane).
+                if (parent_node in all_nonprofit_keys) != (seed in all_nonprofit_keys):
                     continue
                 seen_nodes.add(parent_node)
                 if parent_node in entity_labels:
@@ -1404,8 +1533,10 @@ def resolve_oc_company_principals(
                 stack.append(parent_node)
         if len(humans) > MAX_CUMULATIVE_ROLLUP_OFFICERS:
             humans = set()
+            ct_pids = {}
         resolved[seed] = {
             "humans": sorted(humans),
+            "ct_principal_ids": ct_pids,
             "holding_entities": sorted(holdings),
             "reached_companies": sorted(f"{j}/{n}" for j, n in seen_nodes if (j, n) not in excluded_company_keys),
             "hq_addresses": sorted(hq_addrs),
@@ -1734,11 +1865,18 @@ def cluster_with_oc_and_series(
                 by_oc_node.setdefault(f"{oj}/{on}", []).append(b)
 
             if info:
+                ct_pids_map = info.get("ct_principal_ids") or {}
                 ent_hkeys: List[str] = []
                 for h_name in info.get("humans", ()):
                     if not looks_like_person_owner(h_name):
                         continue
-                    h_key, _ = _resolve_human_key(h_name)
+                    ct_pid = ct_pids_map.get(h_name)
+                    if ct_pid and (":PHQ:" in ct_pid or ":PCO:" in ct_pid):
+                        # Empirically homonymous common name (e.g. DAVID KIM / JOHN SMITH):
+                        # keep strictly partitioned by BigQuery's statewide HQ/company ID!
+                        h_key = f"CTPID:{ct_pid}"
+                    else:
+                        h_key, _ = _resolve_human_key(h_name)
                     if h_key and h_key not in generic_set and not pub_check(h_key):
                         ent_hkeys.append(h_key)
 

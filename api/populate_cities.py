@@ -356,7 +356,11 @@ def is_public_or_generic_address(address_norm: str, registrar_substrings: tuple 
     if not address_norm and not raw_address:
         return True
     n = normalize_link_address(address_norm or raw_address)
-    if not n:
+    if not n or len(n) < 6 or n in US_STATE_CODES:
+        return True
+    # Every linkable street address or PO Box must contain both a digit and a letter
+    # (blocks bare state codes 'CA'/'VA', street-less stubs 'MAIN'/'A A', and bare numbers '0'/'3').
+    if not re.search(r"\d", n) or not re.search(r"[A-Z]", n):
         return True
     if any(k in n for k in PUBLIC_ADDRESS_KEYWORDS):
         return True

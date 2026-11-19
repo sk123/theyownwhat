@@ -393,6 +393,298 @@ def extract_care_of_orgs(addresses: Iterable[str]) -> Counter:
     return counts
 
 
+_PERSON_SUFFIXES = frozenset({
+    "JR", "SR", "II", "III", "IV", "V", "MD", "ESQ", "PHD", "CPA",
+    "TR", "TRS", "TRST", "TRUSTEE", "TRUSTEES", "ETAL",
+})
+
+
+def parse_human_name_parts(raw_name: Optional[str]) -> Optional[Tuple[Tuple[str, str], str, str]]:
+    """Parse a clean human name into `(sorted_first_last_pair, middle_norm, clean_display)`.
+
+    Returns `None` for blank, corporate, or non-person strings. Handles `LAST, FIRST M.`
+    inversions, duplicated full names (`David Veneziano David Veneziano`), leading
+    `TRUSTEE` prefixes, and duplicated trailing surnames.
+    """
+    if not raw_name:
+        return None
+    cleaned = " ".join(str(raw_name).strip().split())
+    if not cleaned or len(cleaned) < 3 or "+" in cleaned or "&" in cleaned or "/" in cleaned:
+        return None
+    if is_excluded_third_party_entity(cleaned):
+        return None
+    if _OPERATING_KEYWORDS_RE.search(cleaned) or re.search(
+        r"\b(LLC|INC|CORP|LP|GP|HOLDINGS|HOLDIMGS|SFR|TRUST)\b", cleaned, re.IGNORECASE
+    ):
+        return None
+    # Strip leading TRUSTEE / TR prefixes and collapse duplicated full names
+    cleaned = re.sub(r"^(?:TRUSTEE|TRST|TRS|TR)\s+", "", cleaned, flags=re.IGNORECASE).strip()
+    cleaned = re.sub(r"^([A-Za-z][A-Za-z .'-]{3,}?)\s+\1$", r"\1", cleaned, flags=re.IGNORECASE).strip()
+    disp = cleaned
+    if "," in disp and len(disp.split(",")) == 2:
+        last, first = [p.strip() for p in disp.split(",", 1)]
+        if first and last and not re.search(r"\b(JR|SR|II|III|IV|V|ESQ|TR|TRS)\b", first, re.IGNORECASE):
+            disp = f"{first} {last}"
+    toks = [t for t in re.findall(r"[A-Z]+", disp.upper()) if t not in _PERSON_SUFFIXES]
+    if len(toks) < 2 or len(toks) > 4:
+        return None
+    # Collapse duplicated trailing surname like "ALEXANDRA SAMIA SOLIA SOLIA"
+    if len(toks) >= 3 and toks[-1] == toks[-2]:
+        disp = re.sub(rf"\s+{re.escape(toks[-1])}\s*$", "", disp, flags=re.IGNORECASE).strip()
+        toks = toks[:-1]
+    pair = (min(toks[0], toks[-1]), max(toks[0], toks[-1]))
+    middle = " ".join(toks[1:-1]) if len(toks) > 2 else ""
+    return pair, middle, disp
+
+
+def _middles_compatible(m1: str, m2: str) -> bool:
+    """True when two normalized middle-name strings can represent the same human.
+
+    - Blank matches anything (`DON HANKEY` <-> `DON R HANKEY` / `DON ROBERT HANKEY`).
+    - Exact match (`R` == `R`, `ROBERT` == `ROBERT`).
+    - Single-letter initial matches full name with same prefix (`R` <-> `ROBERT`).
+    - Distinct initials (`A` vs `B`) or distinct full names (`ANDREW` vs `ARTHUR`) stay separate.
+    """
+    if not m1 or not m2:
+        return True
+    t1 = m1.split()[0]
+    t2 = m2.split()[0]
+    if t1 == t2:
+        return True
+    if (len(t1) == 1 and t2.startswith(t1)) or (len(t2) == 1 and t1.startswith(t2)):
+        return True
+    return False
+
+
+def _middle_specificity(mid: str) -> int:
+    if not mid:
+        return 0
+    first_tok = mid.split()[0]
+    return 2 if len(first_tok) > 1 else 1
+
+
+def _pick_better_person_display(current: str, candidate: str, cur_mid: str, cand_mid: str) -> str:
+    """Pick the cleanest, most informative verbatim filing name among merged variants."""
+    cur_spec = _middle_specificity(cur_mid)
+    cand_spec = _middle_specificity(cand_mid)
+    if cand_spec != cur_spec:
+        return candidate if cand_spec > cur_spec else current
+    cur_clean = "," not in current and "  " not in current
+    cand_clean = "," not in candidate and "  " not in candidate
+    if cand_clean != cur_clean:
+        return candidate if cand_clean else current
+    # Prefer proper mixed case over all-lowercase or all-uppercase when otherwise tied
+    cur_mixed = current != current.upper() and current != current.lower()
+    cand_mixed = candidate != candidate.upper() and candidate != candidate.lower()
+    if cand_mixed != cur_mixed:
+        return candidate if cand_mixed else current
+    return candidate if len(candidate) > len(current) else current
+
+
+def _cluster_person_items(
+    items: Sequence[Tuple[Tuple[str, str], str, str, Any]],
+) -> List[Dict[str, Any]]:
+    """Cluster parsed person tuples `(pair, middle, disp, payload)` using specificity-first
+    middle-name compatibility so:
+      - `DON HANKEY`, `DON R HANKEY`, `DON R. HANKEY`, `DON ROBERT HANKEY` -> 1 cluster
+      - `JOHN A. SMITH` & `JOHN B. SMITH` -> 2 distinct clusters
+      - `JOHN SMITH` does not falsely bridge `JOHN A. SMITH` and `JOHN B. SMITH`.
+    """
+    # Preserve original first-seen order via index while clustering most-specific first
+    indexed = list(enumerate(items))
+    ordered = sorted(indexed, key=lambda x: (-_middle_specificity(x[1][1]), x[0]))
+
+    clusters_by_pair: Dict[Tuple[str, str], List[Dict[str, Any]]] = defaultdict(list)
+    all_clusters: List[Dict[str, Any]] = []
+
+    for orig_idx, (pair, mid, disp, payload) in ordered:
+        existing_list = clusters_by_pair[pair]
+        compatible = [
+            cl for cl in existing_list
+            if all(_middles_compatible(mid, em) for em in cl["middles"])
+        ]
+        target: Optional[Dict[str, Any]] = None
+        if len(compatible) == 1:
+            target = compatible[0]
+        elif len(compatible) > 1:
+            # Exact middle match breaks ties; otherwise do NOT bridge incompatible clusters
+            exact = [cl for cl in compatible if mid and mid in cl["middles"]]
+            if len(exact) == 1:
+                target = exact[0]
+
+        if target is None:
+            cl = {
+                "pair": pair,
+                "middles": {mid} if mid else set(),
+                "best_mid": mid,
+                "display": disp,
+                "first_idx": orig_idx,
+                "items": [(orig_idx, mid, disp, payload)],
+            }
+            existing_list.append(cl)
+            all_clusters.append(cl)
+        else:
+            if mid:
+                target["middles"].add(mid)
+            better_disp = _pick_better_person_display(target["display"], disp, target["best_mid"], mid)
+            if better_disp == disp and _middle_specificity(mid) >= _middle_specificity(target["best_mid"]):
+                target["best_mid"] = mid
+            target["display"] = better_disp
+            target["first_idx"] = min(target["first_idx"], orig_idx)
+            target["items"].append((orig_idx, mid, disp, payload))
+
+    all_clusters.sort(key=lambda cl: cl["first_idx"])
+    return all_clusters
+
+
+def dedupe_human_name_list(names: Sequence[str], max_names: Optional[int] = None) -> List[str]:
+    """Deduplicate a sequence of raw human principal names across punctuation,
+    case, `LAST, FIRST` inversions, and compatible middle initials/names."""
+    parsed: List[Tuple[Tuple[str, str], str, str, str]] = []
+    passthrough: List[Tuple[int, str]] = []
+    seen_pass: set[str] = set()
+    for idx, raw in enumerate(names or ()):
+        if not raw:
+            continue
+        p = parse_human_name_parts(raw)
+        if p is not None:
+            parsed.append((p[0], p[1], p[2], str(raw).strip()))
+        else:
+            s = " ".join(str(raw).strip().split())
+            if s and s.upper() not in seen_pass:
+                seen_pass.add(s.upper())
+                passthrough.append((idx, s))
+
+    clusters = _cluster_person_items(parsed)
+    out = [cl["display"] for cl in clusters]
+    for _idx, s in passthrough:
+        if s.upper() not in {x.upper() for x in out}:
+            out.append(s)
+    return out[:max_names] if max_names is not None else out
+
+
+_CONTACT_TYPE_PRIORITY = {
+    "HEADOFFICER": 0,
+    "INDIVIDUALOWNER": 1,
+    "JOINTOWNER": 2,
+    "CORPORATE_PRINCIPAL": 3,
+    "AGENT": 4,
+    "CORPORATEOWNER": 5,
+}
+_PERSON_CONTACT_TYPES = frozenset({"HEADOFFICER", "INDIVIDUALOWNER", "JOINTOWNER", "CORPORATE_PRINCIPAL"})
+
+
+def dedupe_network_contacts(contacts: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Deduplicate network-level contact records so filing-name variants of the same
+    human principal (e.g. `DON R HANKEY`, `DON R. HANKEY`, `DON HANKEY`, `DON ROBERT HANKEY`)
+    collapse into one canonical record with unioned corporations, BBLs, registration IDs,
+    and roles while preserving distinct people (`JOHN A. SMITH` vs `JOHN B. SMITH`).
+    """
+    if not contacts:
+        return []
+
+    person_items: List[Tuple[Tuple[str, str], str, str, Dict[str, Any]]] = []
+    corp_by_key: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    corp_order: List[Tuple[str, str]] = []
+    other_items: List[Dict[str, Any]] = []
+
+    for c in contacts:
+        ctype = (c.get("contact_type") or "").upper()
+        raw_person = (c.get("full_name") or "").strip()
+        is_person = bool(raw_person) and (
+            ctype in _PERSON_CONTACT_TYPES or (ctype != "CORPORATEOWNER" and looks_like_person_owner(raw_person))
+        )
+        if is_person:
+            parsed = parse_human_name_parts(raw_person)
+            if parsed is not None:
+                person_items.append((parsed[0], parsed[1], parsed[2], c))
+                continue
+        # Corporate or unparsed contact
+        corp_nm = (c.get("corporation") or raw_person or "").strip()
+        if not corp_nm:
+            other_items.append(c)
+            continue
+        ckey = (ctype, _canonical_org_key(corp_nm) or corp_nm.upper())
+        if ckey not in corp_by_key:
+            corp_by_key[ckey] = dict(c)
+            corp_order.append(ckey)
+        else:
+            ex = corp_by_key[ckey]
+            ex["corporations"] = sorted(set(ex.get("corporations") or []) | set(c.get("corporations") or []))
+            ex["registration_ids"] = sorted(set(ex.get("registration_ids") or []) | set(c.get("registration_ids") or []))
+            ex["bbls"] = sorted(set(ex.get("bbls") or []) | set(c.get("bbls") or []))
+            ex["building_count"] = max(len(ex["bbls"]), int(ex.get("building_count") or 0), int(c.get("building_count") or 0))
+            if not ex.get("address") and c.get("address"):
+                ex["address"] = c["address"]
+
+    merged_people: List[Dict[str, Any]] = []
+    for cl in _cluster_person_items(person_items):
+        recs = [it[3] for it in cl["items"]]
+        # Pick primary base record by highest role priority, then most corporations/BBLs
+        recs_sorted = sorted(
+            recs,
+            key=lambda r: (
+                _CONTACT_TYPE_PRIORITY.get((r.get("contact_type") or "").upper(), 9),
+                -len(r.get("corporations") or ()),
+                -int(r.get("building_count") or 0),
+            ),
+        )
+        base = dict(recs_sorted[0])
+        corps_set = set()
+        reg_set = set()
+        bbl_set = set()
+        positions: List[str] = []
+        raw_variants: List[str] = []
+        seen_var_upper: set[str] = set()
+        max_bldg_count = 0
+
+        for r in recs_sorted:
+            for cp in r.get("corporations") or ():
+                if cp:
+                    corps_set.add(cp)
+            if r.get("corporation"):
+                corps_set.add(r["corporation"])
+            for rid in r.get("registration_ids") or ():
+                if rid:
+                    reg_set.add(rid)
+            for bbl in r.get("bbls") or ():
+                if bbl:
+                    bbl_set.add(bbl)
+            max_bldg_count = max(max_bldg_count, int(r.get("building_count") or 0))
+            for pos_part in str(r.get("position") or "").split(","):
+                p_clean = pos_part.strip()
+                if p_clean and p_clean not in positions:
+                    positions.append(p_clean)
+            if not base.get("address") and r.get("address"):
+                base["address"] = r["address"]
+            if not base.get("city") and r.get("city"):
+                base["city"] = r["city"]
+            if not base.get("state") and r.get("state"):
+                base["state"] = r["state"]
+            if not base.get("zip") and r.get("zip"):
+                base["zip"] = r["zip"]
+            rv = (r.get("full_name") or "").strip()
+            if rv and rv.upper() not in seen_var_upper:
+                seen_var_upper.add(rv.upper())
+                raw_variants.append(rv)
+
+        corps_sorted = sorted(corps_set)
+        bbls_sorted = sorted(bbl_set)
+        base["full_name"] = cl["display"]
+        base["corporations"] = corps_sorted
+        base["corporation"] = corps_sorted[0] if corps_sorted else base.get("corporation")
+        base["registration_ids"] = sorted(reg_set)
+        base["bbls"] = bbls_sorted
+        base["building_count"] = max(len(bbls_sorted), max_bldg_count)
+        if positions:
+            base["position"] = ", ".join(positions[:3])
+        if len(raw_variants) > 1:
+            base["name_variants"] = raw_variants
+        merged_people.append(base)
+
+    return merged_people + [corp_by_key[k] for k in corp_order] + other_items
+
+
 def _dedupe_human_officers(
     primary_human_name: Optional[str],
     source_human_names: Sequence[str],
@@ -401,86 +693,46 @@ def _dedupe_human_officers(
     max_officers: int = 4,
 ) -> Tuple[List[str], int]:
     """
-    Deduplicate human officer variants (e.g. 'LEONARD J SAMIA' / 'SAMIA, LEONARD J.')
-    and rank the most representative people across the entire network (by entity frequency,
-    managing/operating-company officer roles, and operator-surname corroboration).
+    Deduplicate human officer variants (e.g. 'LEONARD J SAMIA' / 'SAMIA, LEONARD J.' /
+    'DON R. HANKEY' / 'DON ROBERT HANKEY') while keeping incompatible middle initials
+    separate, and rank the most representative people across the network.
     """
-    by_canon: Dict[str, str] = {}
-    order: List[str] = []
-    suffixes = {"JR", "SR", "II", "III", "IV", "MD", "ESQ", "TR", "TRS", "TRST", "TRUSTEE"}
-
-    def _canon_for(raw_name: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
-        if not raw_name:
-            return None, None
-        cleaned = " ".join(str(raw_name).strip().split())
-        if not cleaned or len(cleaned) < 3 or "+" in cleaned or "&" in cleaned or "/" in cleaned:
-            return None, None
-        if is_excluded_third_party_entity(cleaned):
-            return None, None
-        if _OPERATING_KEYWORDS_RE.search(cleaned) or re.search(r"\b(LLC|INC|CORP|LP|GP|HOLDINGS|HOLDIMGS|SFR|TRUST)\b", cleaned, re.IGNORECASE):
-            return None, None
-        # Strip leading TRUSTEE / TR prefixes and collapse duplicated full names ("David Veneziano David Veneziano")
-        cleaned = re.sub(r"^(?:TRUSTEE|TRST|TRS|TR)\s+", "", cleaned, flags=re.IGNORECASE).strip()
-        cleaned = re.sub(r"^([A-Za-z][A-Za-z .'-]{3,}?)\s+\1$", r"\1", cleaned, flags=re.IGNORECASE).strip()
-        disp = cleaned
-        if "," in disp and len(disp.split(",")) == 2:
-            last, first = [p.strip() for p in disp.split(",", 1)]
-            if first and last and not re.search(r"\b(JR|SR|II|III|IV|ESQ|TR|TRS)\b", first, re.IGNORECASE):
-                disp = f"{first} {last}"
-        toks = [t for t in re.findall(r"[A-Z]+", disp.upper()) if t not in suffixes]
-        if len(toks) < 2 or len(toks) > 4:
-            return None, None
-        # Collapse duplicated trailing surname like "ALEXANDRA SAMIA SOLIA SOLIA"
-        if len(toks) >= 3 and toks[-1] == toks[-2]:
-            disp = re.sub(rf"\s+{re.escape(toks[-1])}\s*$", "", disp, flags=re.IGNORECASE).strip()
-            toks = toks[:-1]
-        # Collapse reversed LAST FIRST duplicates (e.g. "WILDER BENJAMIN" == "BENJAMIN J WILDER")
-        pair = sorted((toks[0], toks[-1]))
-        return f"{pair[0]}|{pair[1]}", disp
-
-    def _add(raw_name: Optional[str]) -> None:
-        canon, disp = _canon_for(raw_name)
-        if not canon or not disp:
-            return
-        if canon not in by_canon:
-            by_canon[canon] = disp
-            order.append(canon)
-        else:
-            existing = by_canon[canon]
-            if len(disp) > len(existing) and "," not in disp and "  " not in disp:
-                by_canon[canon] = disp
-
+    raw_candidates: List[Tuple[str, Optional[float], bool]] = []
     if primary_human_name:
-        _add(primary_human_name)
+        raw_candidates.append((primary_human_name, None, True))
     for nm in source_human_names or ():
-        _add(nm)
-    for raw_nm in (officer_scores or {}).keys():
-        _add(raw_nm)
+        if nm:
+            raw_candidates.append((nm, None, False))
+    for raw_nm, val in (officer_scores or {}).items():
+        if raw_nm:
+            raw_candidates.append((raw_nm, float(val or 0.0), False))
 
-    if not order:
+    parsed_items: List[Tuple[Tuple[str, str], str, str, Tuple[Optional[float], bool]]] = []
+    for raw_nm, score_val, is_primary in raw_candidates:
+        p = parse_human_name_parts(raw_nm)
+        if p is not None:
+            parsed_items.append((p[0], p[1], p[2], (score_val, is_primary)))
+
+    clusters = _cluster_person_items(parsed_items)
+    if not clusters:
         return [], 0
 
-    canon_scores: Dict[str, float] = defaultdict(float)
-    for raw_nm, val in (officer_scores or {}).items():
-        canon, _ = _canon_for(raw_nm)
-        if canon:
-            canon_scores[canon] += float(val or 0.0)
-
     pref_set = {t.upper() for t in preferred_tokens if len(t) >= 4}
-    primary_canon, _ = _canon_for(primary_human_name) if primary_human_name else (None, None)
 
-    def _rank_key(canon_key: str) -> Tuple[float, int]:
-        score = canon_scores.get(canon_key, 0.0)
-        surname = canon_key.split("|")[-1]
-        if pref_set and any(_token_matches_stem(pt, surname) for pt in pref_set):
+    def _rank_key(cl: Dict[str, Any]) -> Tuple[float, int]:
+        score = sum((it[3][0] or 0.0) for it in cl["items"])
+        is_prim = any(it[3][1] for it in cl["items"])
+        pair = cl["pair"]
+        if pref_set and any(
+            _token_matches_stem(pt, tok) for pt in pref_set for tok in pair
+        ):
             score += 12.0
-        # Slight tie-breaker for existing primary_human_name when scores are equal or absent
-        if primary_canon and canon_key == primary_canon:
+        if is_prim:
             score += 1.5
-        return (-score, order.index(canon_key))
+        return (-score, cl["first_idx"])
 
-    ranked_canons = sorted(order, key=_rank_key)
-    return [by_canon[c] for c in ranked_canons[:max_officers]], len(order)
+    ranked = sorted(clusters, key=_rank_key)
+    return [cl["display"] for cl in ranked[:max_officers]], len(clusters)
 
 
 def _pick_sample_entities(

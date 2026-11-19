@@ -676,10 +676,10 @@ def crunch_california() -> None:
         own = re.sub(r"\s*/C$", "", s_txt(b.get("business_name"))).strip()
         if not an or not own:
             continue
-        mail = ", ".join(p for p in (
-            s_txt(b.get("mailing_address")), s_txt(b.get("mailing_city")),
-            "CA", clean_zip(b.get("mailing_zip_code")),
-        ) if p)
+        m_st = s_txt(b.get("mailing_address"))
+        m_ct = s_txt(b.get("mailing_city"))
+        m_zp = clean_zip(b.get("mailing_zip_code"))
+        mail = ", ".join(p for p in (m_st, m_ct, "CA" if (m_st or m_ct) else "", m_zp) if p)
         la_owner_by_addr[(an, z5)] = (own, mail)
         la_owner_by_addr.setdefault((an, ""), (own, mail))
     log(f"  [CA] Indexed {len(sf_owner_by_addr):,} SF business locations & {len(la_owner_by_addr):,} LA real-estate/lessor businesses.")

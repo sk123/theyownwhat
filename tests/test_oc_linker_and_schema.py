@@ -437,6 +437,84 @@ class TestAssessorPlaceholderAndInstitutionalHygiene(unittest.TestCase):
         ):
             self.assertFalse(is_public_entity(real_landlord), real_landlord)
 
+        from api.populate_cities import is_public_or_generic_address
+        for junk_addr in ("CA", "VA", "MAIN", "A A", "0", "3", "#"):
+            self.assertTrue(is_public_or_generic_address(junk_addr), junk_addr)
+        self.assertFalse(is_public_or_generic_address("4751 WILSHIRE BLVD STE 110 LOS ANGELES CA 90010"))
+
+    def test_bq_ct_intermediary_exchange_lender_guard_and_homonym_pid_isolation(self):
+        from api.oc_linker import _INTERMEDIARY_EXCHANGE_LENDER_RE, cluster_with_oc_and_series
+
+        for intermed in (
+            "API STEWART HOLDINGS LLC",
+            "NATIONAL SAFE HARBOR EXCHANGES INC",
+            "AMERICAN LENDING CENTER LLC",
+            "FOUNDATION FOR AFFORDABLE HOUSING V INC",
+            "FIRST AMERICAN EXCHANGE COMPANY LLC",
+        ):
+            self.assertTrue(_INTERMEDIARY_EXCHANGE_LENDER_RE.search(intermed), intermed)
+
+        for real_op in (
+            "HANKEY FINANCE COMPANY, INC.",
+            "GLEIBERMAN INVESTMENTS INC",
+            "WINNCOMPANIES",
+            "THE HAMILTON COMPANY, INC.",
+        ):
+            self.assertFalse(_INTERMEDIARY_EXCHANGE_LENDER_RE.search(real_op), real_op)
+
+        # Two empirically homonymous DAVID KIMs with distinct BigQuery PHQ IDs must NEVER merge,
+        # while two DON ROBERT HANKEY entities with the same statewide-unambiguous ID DO merge.
+        props = [
+            {"bbl": "B1", "owner_name": "ALPHA KIM LLC", "owner_name_norm": "ALPHA KIM LLC", "oc_jurisdiction_code": "us_ca", "oc_company_number": "C1"},
+            {"bbl": "B2", "owner_name": "BETA KIM LLC", "owner_name_norm": "BETA KIM LLC", "oc_jurisdiction_code": "us_ca", "oc_company_number": "C2"},
+            {"bbl": "B3", "owner_name": "SMHC 23 LLC", "owner_name_norm": "SMHC 23 LLC", "oc_jurisdiction_code": "us_ca", "oc_company_number": "C3"},
+            {"bbl": "B4", "owner_name": "SEPULVEDA TOWER LLC", "owner_name_norm": "SEPULVEDA TOWER LLC", "oc_jurisdiction_code": "us_ca", "oc_company_number": "C4"},
+        ]
+        groups = {p["bbl"]: [p] for p in props}
+        oc_resolved = {
+            ("us_ca", "C1"): {
+                "humans": ["DAVID KIM"],
+                "ct_principal_ids": {"DAVID KIM": "us_ca:PHQ:DAVID|KIM:_@2000 WINSTON|92806"},
+                "holding_entities": [],
+                "reached_companies": ["us_ca/C1"],
+                "hq_addresses": ["2000 WINSTON ROAD ANAHEIM CA"],
+                "raw_hq_addresses": ["2000 WINSTON RD, ANAHEIM, CA 92806"],
+            },
+            ("us_ca", "C2"): {
+                "humans": ["DAVID KIM"],
+                "ct_principal_ids": {"DAVID KIM": "us_ca:PHQ:DAVID|KIM:_@7959 ALABAMA|91304"},
+                "holding_entities": [],
+                "reached_companies": ["us_ca/C2"],
+                "hq_addresses": ["7959 ALABAMA AVENUE CANOGA PARK CA"],
+                "raw_hq_addresses": ["7959 ALABAMA AVE, CANOGA PARK, CA 91304"],
+            },
+            ("us_ca", "C3"): {
+                "humans": ["DON ROBERT HANKEY"],
+                "ct_principal_ids": {"DON ROBERT HANKEY": "us_ca:P:DON|HANKEY:R"},
+                "holding_entities": [],
+                "reached_companies": ["us_ca/C3"],
+                "hq_addresses": [],
+                "raw_hq_addresses": [],
+            },
+            ("us_ca", "C4"): {
+                "humans": ["DON ROBERT HANKEY"],
+                "ct_principal_ids": {"DON ROBERT HANKEY": "us_ca:P:DON|HANKEY:R"},
+                "holding_entities": [],
+                "reached_companies": ["us_ca/C4"],
+                "hq_addresses": [],
+                "raw_hq_addresses": [],
+            },
+        }
+        clustered, merges = cluster_with_oc_and_series(props, groups, oc_resolved)
+        # B3 & B4 merged (Don Hankey); B1 & B2 stayed strictly separated (distinct David Kims)
+        self.assertEqual(len(clustered), 3)
+        self.assertEqual(merges, 1)
+        by_bbl_group = {p["bbl"]: len(grp) for grp in clustered.values() for p in grp}
+        self.assertEqual(by_bbl_group["B1"], 1)
+        self.assertEqual(by_bbl_group["B2"], 1)
+        self.assertEqual(by_bbl_group["B3"], 2)
+        self.assertEqual(by_bbl_group["B4"], 2)
+
 
 if __name__ == "__main__":
     unittest.main()

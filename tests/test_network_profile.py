@@ -7,6 +7,8 @@ import unittest
 
 from api.network_profile import (
     clean_display_hq,
+    dedupe_human_name_list,
+    dedupe_network_contacts,
     derive_network_business_profile,
     extract_care_of_orgs,
     hq_street_zip_key,
@@ -334,6 +336,81 @@ class TestNetworkProfile(unittest.TestCase):
         ok, payload, err = verify_review_token(qs["token"][0], expected_item_key="label-candidate:101")
         self.assertTrue(ok, err)
         self.assertEqual(payload["r"], "salmun@storrsmagic.org")
+
+    def test_principal_dedupe_collapses_ca_hankey_variants_but_separates_incompatible_middles(self):
+        deduped_names = dedupe_human_name_list([
+            "DON R HANKEY",
+            "DON HANKEY",
+            "DON R. HANKEY",
+            "DON ROBERT HANKEY",
+            "Don R. Hankey",
+            "eugene leydiker",
+        ])
+        self.assertEqual(len(deduped_names), 2)
+        self.assertEqual(deduped_names[0].upper(), "DON ROBERT HANKEY")
+        self.assertEqual(deduped_names[1].lower(), "eugene leydiker")
+
+        contacts = [
+            {
+                "contact_type": "CORPORATE_PRINCIPAL",
+                "full_name": "DON R. HANKEY",
+                "corporations": ["KNIGHT MPIC VENTURES II, LLC", "MARINA BUSINESS CENTER, LLC"],
+                "bbls": ["CA-LA-1", "CA-LA-2"],
+                "registration_ids": ["OC:us_ca/1"],
+                "building_count": 2,
+            },
+            {
+                "contact_type": "CORPORATE_PRINCIPAL",
+                "full_name": "DON ROBERT HANKEY",
+                "corporations": ["CIRCA 1200 LLC", "MARINA BUSINESS CENTER, LLC"],
+                "bbls": ["CA-LA-2", "CA-LA-3"],
+                "registration_ids": ["OC:us_ca/2"],
+                "building_count": 2,
+            },
+            {
+                "contact_type": "CORPORATE_PRINCIPAL",
+                "full_name": "DON HANKEY",
+                "corporations": ["HANKEY FINANCE COMPANY, INC."],
+                "bbls": ["CA-LA-4"],
+                "registration_ids": ["OC:us_ca/3"],
+                "building_count": 1,
+            },
+            {
+                "contact_type": "CORPORATE_PRINCIPAL",
+                "full_name": "JOHN A. SMITH",
+                "corporations": ["ALPHA LLC"],
+                "bbls": ["CA-LA-10"],
+                "registration_ids": ["OC:us_ca/10"],
+                "building_count": 1,
+            },
+            {
+                "contact_type": "CORPORATE_PRINCIPAL",
+                "full_name": "JOHN B. SMITH",
+                "corporations": ["BETA LLC"],
+                "bbls": ["CA-LA-11"],
+                "registration_ids": ["OC:us_ca/11"],
+                "building_count": 1,
+            },
+            {
+                "contact_type": "CORPORATE_PRINCIPAL",
+                "full_name": "JOHN SMITH",
+                "corporations": ["GAMMA LLC"],
+                "bbls": ["CA-LA-12"],
+                "registration_ids": ["OC:us_ca/12"],
+                "building_count": 1,
+            },
+        ]
+        merged = dedupe_network_contacts(contacts)
+        hankeys = [c for c in merged if "HANKEY" in (c.get("full_name") or "").upper()]
+        self.assertEqual(len(hankeys), 1)
+        self.assertEqual(hankeys[0]["full_name"].upper(), "DON ROBERT HANKEY")
+        self.assertEqual(len(hankeys[0]["corporations"]), 4)
+        self.assertEqual(hankeys[0]["building_count"], 4)
+        self.assertEqual(len(hankeys[0]["name_variants"]), 3)
+
+        # Incompatible middle initials must NEVER collapse together even when plain "JOHN SMITH" is present
+        smiths = [c for c in merged if "SMITH" in (c.get("full_name") or "").upper()]
+        self.assertEqual(len(smiths), 3)
 
 
 if __name__ == "__main__":
