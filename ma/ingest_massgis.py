@@ -1026,6 +1026,11 @@ def main() -> None:
             full_statewide=args.full,
             rebuild_only=args.rebuild_only,
         )
+        try:
+            from updater.post_rebuild_label_audit import audit_jurisdiction_labels
+            audit_jurisdiction_labels(conn, "ma", limit=120, with_web_audit=False)
+        except Exception as aud_exc:
+            print(f"⚠ Representative label audit skipped for MA: {aud_exc}")
         print(
             f"✓ Massachusetts (`ma`) complete in {time.time() - t0:.1f}s: "
             f"{props_cnt:,} parcels -> {nets_cnt:,} private landlord networks."

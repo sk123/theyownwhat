@@ -1,21 +1,14 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { 
-  ArrowRight, 
-  Building2, 
-  ChevronDown, 
-  CircleAlert, 
-  Clock, 
-  ExternalLink, 
-  Factory, 
-  Home, 
-  Landmark, 
-  Layers, 
-  MapPinned, 
-  Search, 
-  ShieldAlert,
+import {
+  ArrowRight,
   Briefcase,
+  Building2,
+  ExternalLink,
+  Layers,
+  MapPinned,
+  Search,
   User,
-  X
+  X,
 } from 'lucide-react';
 import { formatDisplayName } from '../utils/formatName';
 import AlgorithmicEstimateBanner from './AlgorithmicEstimateBanner';
@@ -45,476 +38,36 @@ const SEARCH_CITIES = [
 ];
 
 const QUICK_OMNI_EXAMPLES = [
+  { label: 'WinnCompanies', scope: 'MA', tag: 'MA' },
   { label: 'Gurevitch', scope: 'CT', tag: 'CT' },
   { label: 'Chestnut Holdings', scope: 'NY', tag: 'NY' },
-  { label: 'WC Smith', scope: 'DC', tag: 'D.C.' },
   { label: 'Progress Residential', scope: 'FL', tag: 'FL' },
 ];
 
 const DATASETS = [
-  {
-    key: 'CT',
-    title: 'Connecticut',
-    shortLabel: 'CT',
-    region: 'Northeast',
-    description: 'All 169 municipal parcel rolls linked to CT SOTS principals, multi-hop corporate/foreign-branch filings, judicial evictions, and NHPD.',
-    tone: 'blue',
-    icon: MapPinned,
-    endpoint: '/api/dashboard/summary?city=STATEWIDE',
-    sources: ['CT SOTS principals', 'OpenCorporates branches', '169-town CAMA/GIS', 'CT Judicial evictions', 'Hartford code', 'NHPD'],
-    rapSheets: { type: 'evictions_and_code', label: 'Hartford Rap Sheets' },
-    networkLimit: {
-      needed: 'municipal code-enforcement feeds outside Hartford and passive beneficial-owner filings behind private trusts',
-      gap: 'All 169 town assessment rolls, CT SOTS business/principal filings, cross-state OpenCorporates parent/branch links, and statewide Judicial eviction dockets are loaded. Code-enforcement records currently cover Hartford, and passive beneficiaries behind unrecorded trusts are not in public filings.',
-      cost: 'CT Geodata, CT SOTS Open Data, and CT Judicial records: $0; corporate registry graph via OpenCorporates (ODbL v1.0).',
-      sourceUrl: 'https://data.ct.gov/Business/Connecticut-Business-Registry-Business-Master/n7gp-d28j/about_data',
-      ocRegisterUrl: 'https://opencorporates.com/registers/us_ct',
-    },
-  },
-  {
-    key: 'NY',
-    title: 'New York',
-    shortLabel: 'NY',
-    region: 'Northeast',
-    description: 'Unified 62-county New York explorer: fuses all 5 NYC Boroughs (PLUTO, HPD registrations/contacts/Class-C violations & Marshal evictions) with NYS ORPTS county tax parcels, Buffalo & Syracuse rental/code feeds, NY DOS/OpenCorporates officers, and NHPD.',
-    tone: 'indigo',
-    icon: Building2,
-    endpoint: '/api/ny/stats',
-    sources: ['NYC PLUTO & HPD (5 boroughs)', 'NYS ORPTS & SDG ImageMate', 'Buffalo & Syracuse code/rentals', 'DOI/Marshal evictions', 'NY DOS & OpenCorporates', 'NHPD'],
-    rapSheets: { type: 'hpd_violations', label: 'NY HPD & Code Rap Sheets' },
-    networkLimit: {
-      needed: 'county assessment rolls for NY counties that opt out of NYS GIS redistribution and undisclosed passive NY LLC member rosters',
-      gap: 'Unifies all 5 NYC boroughs (HPD registrations/contacts, Class C violations & Marshal evictions) with 33 NYS GIS counties plus Buffalo & Syracuse rental/code registries and NY DOS / OpenCorporates filings. 24 non-NYC counties opt out of NYS ITS bulk GIS redistribution and are queued on SDG ImageMate / RPTL § 1590 county rolls.',
-      cost: 'NYC Open Data, NYS GIS, NY DOS, Buffalo & Syracuse Open Data: $0; corporate registry graph via OpenCorporates (ODbL v1.0).',
-      sourceUrl: 'https://data.gis.ny.gov/datasets/sharegisny::nys-tax-parcels-public/about',
-      ocRegisterUrl: 'https://opencorporates.com/registers/us_ny',
-    },
-  },
-  {
-    key: 'DC',
-    title: 'Washington, D.C.',
-    shortLabel: 'D.C.',
-    region: 'Mid-Atlantic',
-    description: 'District CAMA parcels linked to DLCP rental housing licenses, D.C. OpenCorporates beneficial-owner & officer filings, DOB code cases, and NHPD.',
-    tone: 'cyan',
-    icon: Landmark,
-    endpoint: '/api/dc/stats',
-    sources: ['CAMA assessment roll', 'DLCP rental licenses', 'DC OpenCorporates officers', 'DOB code cases', 'NHPD'],
-    rapSheets: null,
-    networkLimit: {
-      needed: 'D.C. Superior Court Landlord & Tenant Branch eviction docket feeds and beneficial owners behind unrecorded private trusts',
-      gap: 'District CAMA assessments, DLCP Basic Business Rental Housing Licenses, and bulk D.C. corporate officer & beneficial-owner filings (including cross-state foreign branches) are joined. Parcel-linked Superior Court eviction dockets are not published as an open bulk feed.',
-      cost: 'DC GIS CAMA and DLCP Rental Licenses: $0; corporate registry graph via OpenCorporates (ODbL v1.0).',
-      sourceUrl: 'https://corponline.dlcp.dc.gov/',
-      ocRegisterUrl: 'https://opencorporates.com/registers/us_dc',
-    },
-  },
-  {
-    key: 'BALTIMORE',
-    title: 'Baltimore',
-    shortLabel: 'Baltimore',
-    region: 'Mid-Atlantic',
-    description: 'Baltimore GIS parcels linked to DHCD rental licenses, MD & cross-state OpenCorporates corporate/HQ filings, code, evictions, and NHPD.',
-    tone: 'amber',
-    icon: Home,
-    endpoint: '/api/baltimore/stats',
-    sources: ['City GIS & sales', 'DHCD rental licenses', 'MD & OpenCorporates graph', 'Code & vacants', 'Evictions', 'NHPD'],
-    rapSheets: null,
-    networkLimit: {
-      needed: 'domestic Maryland SDAT LLC member/officer Charter & Annual Report extracts',
-      gap: 'Baltimore RealProperty parcels, DHCD rental licenses, Maryland entity registrations, and 61-jurisdiction foreign-branch parent links are joined. However, Maryland SDAT public bulk files list resident agents rather than domestic LLC human members unless disclosed via out-of-state parent filings.',
-      cost: 'Baltimore Open Data: $0; corporate registry spine via OpenCorporates (ODbL v1.0). Domestic MD officer charter extracts require an SDAT quote.',
-      sourceUrl: 'https://egov.maryland.gov/BusinessExpress/EntitySearch',
-      ocRegisterUrl: 'https://opencorporates.com/registers/us_md',
-    },
-  },
-  {
-    key: 'DETROIT',
-    title: 'Detroit',
-    shortLabel: 'Detroit',
-    region: 'Midwest',
-    description: 'Detroit parcel assessments & sales linked to BSEED rental registrations, MI OpenCorporates officer & foreign-branch filings, blight tickets, and NHPD.',
-    tone: 'rose',
-    icon: Building2,
-    endpoint: '/api/detroit/stats',
-    sources: ['City parcels & sales', 'BSEED rentals', 'MI LARA & OpenCorporates', 'Blight tickets', 'NHPD'],
-    rapSheets: null,
-    networkLimit: {
-      needed: 'member disclosures for manager-silent Michigan LLCs and 36th District Court landlord-tenant eviction feeds',
-      gap: 'Detroit assessment parcels, BSEED rental registrations, DAH blight tickets, and bulk Michigan LARA corporate officer & cross-state foreign-branch filings are joined. Domestic Michigan LLCs that list only a registered agent on annual statements still omit passive members.',
-      cost: 'Detroit Open Data: $0; corporate registry graph via OpenCorporates (ODbL v1.0).',
-      sourceUrl: 'https://mibusinessregistry.lara.state.mi.us/',
-      ocRegisterUrl: 'https://opencorporates.com/registers/us_mi',
-    },
-  },
-  {
-    key: 'PHILADELPHIA',
-    title: 'Philadelphia',
-    shortLabel: 'Philly',
-    region: 'Mid-Atlantic',
-    description: 'Philadelphia OPA assessments & sales, L&I active rental licenses, PA DOS & OpenCorporates Governor/Officer filings, L&I code cases, and NHPD.',
-    tone: 'violet',
-    icon: Landmark,
-    endpoint: '/api/philadelphia/stats',
-    sources: ['OPA parcels & sales', 'L&I rental licenses', 'PA DOS & OpenCorporates officers', 'L&I code violations', 'NHPD'],
-    rapSheets: null,
-    networkLimit: {
-      needed: 'beneficial-owner disclosures beyond public PA DOS Governor/Officer rosters and parcel-linked Municipal Court eviction filings',
-      gap: 'OPA assessments, L&I active rental licenses, L&I code violations, and bulk PA corporate Governor/Officer & cross-state foreign-branch filings are joined. Passive LLC members not listed as Governors and parcel-level Municipal Court eviction dockets are not publicly bulk-released.',
-      cost: 'OPA, L&I, and PA DOS Open Data (xvd7-5r2c): $0; corporate registry graph via OpenCorporates (ODbL v1.0).',
-      sourceUrl: 'https://data.pa.gov/d/xvd7-5r2c',
-      ocRegisterUrl: 'https://opencorporates.com/registers/us_pa',
-      sponsor: false,
-    },
-  },
-  {
-    key: 'IL',
-    title: 'Illinois',
-    shortLabel: 'IL',
-    region: 'Midwest',
-    description: 'Unified Illinois explorer: Chicago & all 130+ Cook County suburbs (1.67M improved PINs + CCAO characteristics), DuPage County GIS, Chicago DOB building violations, IL SOS / OpenCorporates officers, and NHPD.',
-    tone: 'blue',
-    icon: Building2,
-    endpoint: '/api/il/stats',
-    sources: ['Cook County (Chicago + 130 suburbs)', 'DuPage County GIS', 'Chicago DOB violations', 'IL SOS & OpenCorporates', 'NHPD'],
-    rapSheets: null,
-    networkLimit: {
-      needed: 'downstate county Devnet/Beacon CAMA rolls, confidential Illinois land trust beneficiaries (765 ILCS 405), and Circuit Court eviction dockets',
-      gap: 'Unifies City of Chicago and suburban Cook County (1.67M improved PINs with mortgage-servicer swap & CCAO building characteristics), DuPage County GIS (310K improved PINs), Chicago Dept. of Buildings violations, and bulk IL corporate/LLC officer & foreign-branch filings. Downstate counties have no state GIS parcel layer and are queued on Devnet wEdge / Beacon CAMA portals.',
-      cost: 'Cook County, DuPage County, and City of Chicago Open Data: $0; corporate registry graph via OpenCorporates (ODbL v1.0).',
-      sourceUrl: 'https://apps.ilsos.gov/businessentitysearch/',
-      ocRegisterUrl: 'https://opencorporates.com/registers/us_il',
-    },
-  },
-  {
-    key: 'CA',
-    title: 'California',
-    shortLabel: 'CA',
-    region: 'West',
-    description: 'California improved property rolls (LA County & San Francisco) joined with SF & LA registered real-estate lessor businesses, LAHD/SF eviction notices, LADBS/DBI code cases, NHPD, and 31.96M CA SOS LLC member/officer records.',
-    tone: 'amber',
-    icon: Building2,
-    endpoint: '/api/ca/stats',
-    sources: ['LA & SF improved rolls', 'SF & LA lessor business tax', 'CA SOS (31.96M LLC/corp officers)', 'LAHD & SF evictions', 'LADBS & SF DBI code', 'NHPD'],
-    rapSheets: null,
-    networkLimit: {
-      needed: 'County Assessor CPRA Secured Assessment Roll files (Rev. & Tax. Code § 408.3) where CA Gov. Code § 7928.205 redacts online GIS owner names',
-      gap: 'Under CA Gov. Code § 7928.205 (AB 1785), California county assessors omit deed owner names from unrestricted online GIS downloads. Track A links improved LA County & San Francisco parcels with SF (g8m3-pdis) & LA (6rrh-rzua) registered lessor businesses, eviction/code feeds, NHPD, and 31.96M CA Form LLC-12 officer/member records, while explicitly badging § 7928.205 redacted parcels until County Assessor CPRA Secured Rolls are loaded.',
-      cost: 'SF, LA City, and LA County Open Data: $0; County Assessor CPRA Secured Rolls cost statutory duplication fees ($20+ per county); corporate graph via OpenCorporates (ODbL v1.0).',
-      sourceUrl: 'https://bizfileonline.sos.ca.gov/search/business',
-      ocRegisterUrl: 'https://opencorporates.com/registers/us_ca',
-    },
-  },
-  {
-    key: 'MN',
-    title: 'Minnesota',
-    shortLabel: 'MN',
-    region: 'Midwest',
-    description: 'Unified Minnesota explorer: Hennepin & Ramsey County (Minneapolis-St. Paul Metro) improved CAMA parcels fused with Minneapolis active rental licenses, Regulatory Services code cases, MN SOS / OpenCorporates officers, and NHPD.',
-    tone: 'violet',
-    icon: Landmark,
-    endpoint: '/api/mn/stats',
-    sources: ['Hennepin & Ramsey CAMA', 'Minneapolis rental licenses', 'MN SOS & OpenCorporates', 'Code cases', 'NHPD'],
-    rapSheets: null,
-    networkLimit: {
-      needed: 'Greater Minnesota outstate county CAMA rolls and District Court eviction dockets',
-      gap: 'Unifies Hennepin County (414K improved parcels) and Ramsey County / St. Paul (158K improved parcels) with Minneapolis active rental licenses, owner contacts, code cases, and bulk Minnesota corporate/LLC officer & foreign-branch filings.',
-      cost: 'Hennepin County, Ramsey County, and Minneapolis Open Data: $0; corporate registry graph via OpenCorporates (ODbL v1.0).',
-      sourceUrl: 'https://mblsportal.sos.mn.gov/Business/Search',
-      ocRegisterUrl: 'https://opencorporates.com/registers/us_mn',
-    },
-  },
-  {
-    key: 'NJ',
-    title: 'New Jersey',
-    shortLabel: 'NJ',
-    region: 'Northeast',
-    description: 'New Jersey DCA BHI multi-family registrations linked to NJ & 61-jurisdiction OpenCorporates corporate/foreign-branch parents and NHPD.',
-    tone: 'cyan',
-    icon: MapPinned,
-    endpoint: '/api/nj/stats',
-    sources: ['DCA BHI registrations', 'NJ & OpenCorporates graph', 'Registered owners & agents', 'NHPD'],
-    rapSheets: null,
-    networkLimit: {
-      needed: 'domestic NJ DOR annual-report officer/member disclosures, unredacted MOD-IV municipal parcel owner rolls, and Landlord-Tenant eviction dockets',
-      gap: 'NJ DCA BHI building registrations, NJ entity records, and cross-state foreign-branch parent links are joined. However, NJ DOR bulk corporate files omit domestic LLC human officer rosters, and parcel owner names remain redacted under Daniel\'s Law in statewide NJGIN GIS.',
-      cost: 'NJ DCA BHI OPRA: $0; corporate registry spine via OpenCorporates (ODbL v1.0). NJ DOR officer reports cost $0.0185+/record.',
-      sourceUrl: 'https://www.njportal.com/DOR/BusinessNameSearch/Search/BusinessName',
-      ocRegisterUrl: 'https://opencorporates.com/registers/us_nj',
-    },
-  },
-  {
-    key: 'FL',
-    title: 'Florida',
-    shortLabel: 'FL',
-    region: 'South',
-    description: 'Unified 67-county Florida explorer: fuses FDOR statewide parcels with Miami-Dade Property Appraiser & Hillsborough HCPA CAMA, Sunbiz/OpenCorporates officers, DBPR Ch. 509 apartment licenses, Miami-Dade/Orlando/Gainesville code enforcement, and NHPD.',
-    tone: 'emerald',
-    icon: MapPinned,
-    endpoint: '/api/fl/stats',
-    sources: ['67-county FDOR + Miami-Dade & HCPA CAMA', 'FL Sunbiz & OpenCorporates', 'DBPR Ch. 509 licenses', 'Miami-Dade/Orlando/Gainesville code', 'NHPD'],
-    rapSheets: null,
-    networkLimit: {
-      needed: 'beneficial-ownership disclosures behind anonymous Delaware/Wyoming parent shells and county clerk eviction dockets',
-      gap: 'Unifies all 67 Florida counties (fusing Miami-Dade Property Appraiser untruncated owners & Hillsborough HCPA CAMA with FDOR statewide parcels), bulk FL Sunbiz & OpenCorporates officer/LLC manager/foreign-branch filings, DBPR Ch. 509 apartment licenses, and Miami-Dade RER / Orlando / Gainesville code cases.',
-      cost: 'FDOR/FloridaGIO, Miami-Dade PA, HCPA, Sunbiz, and DBPR extracts: $0; cross-state corporate graph via OpenCorporates (ODbL v1.0).',
-      sourceUrl: 'https://dos.fl.gov/sunbiz/other-services/data-downloads/',
-      ocRegisterUrl: 'https://opencorporates.com/registers/us_fl',
-      sponsor: false,
-    },
-  },
-  {
-    key: 'MA',
-    title: 'Massachusetts',
-    shortLabel: 'MA',
-    region: 'Northeast',
-    description: 'MassGIS Level 3 assessor parcels & sales across all 351 Massachusetts towns, unified with Boston Assessing nominee-trust piercing, CLT housing, MA OpenCorporates officers, Boston ISD code cases, and NHPD.',
-    tone: 'emerald',
-    icon: Factory,
-    endpoint: '/api/ma/stats',
-    sources: ['MassGIS L3 (351 towns)', '112 town CAMA scrapers', 'Boston Assessing & ISD code', 'MA Sec. & OpenCorporates', 'NHPD'],
-    rapSheets: null,
-    networkLimit: {
-      needed: 'beneficial-ownership schedules behind non-Boston private Massachusetts nominee trusts and statewide Housing Court parcel crosswalks',
-      gap: 'All 351 Massachusetts municipal tax-assessor parcel rolls (with recorded sale dates & prices), 112 live municipal CAMA portals, Boston Assessing dual-owner nominee trust & CLT enrichments, Boston ISD code violations, and bulk MA corporate/LLC officer, DBA, and foreign-branch filings are joined.',
-      cost: 'MassGIS Level 3 & Analyze Boston Open Data: $0; corporate registry graph via OpenCorporates (ODbL v1.0).',
-      sourceUrl: 'https://corp.sec.state.ma.us/CorpWeb/CorpSearch/CorpSearch.aspx',
-      ocRegisterUrl: 'https://opencorporates.com/registers/us_ma',
-      sponsor: false,
-    },
-  },
-  {
-    key: 'OH',
-    title: 'Ohio',
-    shortLabel: 'OH',
-    region: 'Midwest',
-    description: 'Ohio County Auditor improved CAMA parcels (Cuyahoga / Greater Cleveland) with transfer dates & prices linked to OH SOS / OpenCorporates officer & foreign-branch filings and NHPD.',
-    tone: 'rose',
-    icon: Building2,
-    endpoint: '/api/oh/stats',
-    sources: ['Cuyahoga Auditor CAMA', 'Transfer dates & prices', 'OH SOS & OpenCorporates', 'NHPD'],
-    rapSheets: null,
-    networkLimit: {
-      needed: 'remaining 87 Ohio County Auditor CAMA rolls, domestic OH LLC member disclosures, and Municipal Court eviction dockets',
-      gap: 'Cuyahoga County (Greater Cleveland) Fiscal Officer improved CAMA parcels and bulk Ohio corporate/LLC & cross-state foreign-branch filings are joined. Additional Ohio county auditors are queued per-county.',
-      cost: 'Cuyahoga County Open Data: $0; corporate registry graph via OpenCorporates (ODbL v1.0).',
-      sourceUrl: 'https://businesssearch.ohiosos.gov/',
-      ocRegisterUrl: 'https://opencorporates.com/registers/us_oh',
-    },
-  },
-  {
-    key: 'MT',
-    title: 'Montana',
-    shortLabel: 'MT',
-    region: 'West',
-    description: 'Montana MSDI / DOR ORION Cadastral improved property parcels across all 56 counties linked to MT SOS / OpenCorporates officer & foreign-branch filings and NHPD.',
-    tone: 'cyan',
-    icon: MapPinned,
-    endpoint: '/api/mt/stats',
-    sources: ['MT Cadastral (56 counties)', 'DOR ORION building values', 'MT SOS & OpenCorporates', 'NHPD'],
-    rapSheets: null,
-    networkLimit: {
-      needed: 'non-disclosure state sale prices (Montana is a statutory non-disclosure sale-price state) and municipal code/eviction feeds',
-      gap: 'All 56 Montana counties (MSDI / DOR ORION Cadastral improved parcels with Care-Of taxpayer & mailing addresses) and bulk Montana corporate/LLC officer & foreign-branch filings are joined.',
-      cost: 'Montana State Library MSDI Cadastral: $0; corporate registry graph via OpenCorporates (ODbL v1.0).',
-      sourceUrl: 'https://biz.sosmt.gov/search/business',
-      ocRegisterUrl: 'https://opencorporates.com/registers/us_mt',
-    },
-  },
-  {
-    key: 'CO',
-    title: 'Colorado',
-    shortLabel: 'CO',
-    region: 'West',
-    description: 'Colorado statewide public parcels & sales linked to CO SOS entities, True Names, cross-state foreign branches, Denver rental licenses, and NHPD.',
-    tone: 'amber',
-    icon: Landmark,
-    endpoint: '/api/co/stats',
-    sources: ['CO Public Parcels & sales', 'CO SOS & True Names', 'OpenCorporates branches', 'Denver rental licenses', 'NHPD'],
-    rapSheets: null,
-    networkLimit: {
-      needed: 'periodic-report member disclosures for domestic CO LLCs without True Name filings and municipal code/eviction feeds',
-      gap: 'Colorado Statewide Public Parcels (with sale dates & prices), CO SOS entities & True Name statements, cross-state foreign-branch parent links, and Denver active residential rental licenses are joined. CO SOS bulk files do not list multi-member domestic LLC rosters unless a True Name is filed.',
-      cost: 'Colorado GeoData Public Parcels, CO SOS Open Data, and Denver Open Data: $0; corporate registry graph via OpenCorporates (ODbL v1.0).',
-      sourceUrl: 'https://data.colorado.gov/Business/Business-Entities-in-Colorado/4ykn-tg5h',
-      ocRegisterUrl: 'https://opencorporates.com/registers/us_co',
-      sponsor: false,
-    },
-  },
-  {
-    key: 'NC',
-    title: 'North Carolina',
-    shortLabel: 'NC',
-    region: 'South',
-    description: 'NC OneMap standardized parcels & sale dates across all 100 counties linked to NC SOS / OpenCorporates officer & foreign-branch filings and NHPD.',
-    tone: 'cyan',
-    icon: Home,
-    endpoint: '/api/nc/stats',
-    sources: ['NC OneMap (100 counties)', 'Parcel sale dates', 'NC SOS & OpenCorporates', 'NHPD'],
-    rapSheets: null,
-    networkLimit: {
-      needed: 'county summary-ejectment eviction dockets and municipal code-enforcement feeds',
-      gap: 'All 100 North Carolina counties (NC OneMap standardized parcels with recorded sale dates) and bulk NC corporate/LLC officer, non-registered HQ, and foreign-branch filings are joined. County summary-ejectment court records and passive LLC members omitted from annual reports are not in bulk feeds.',
-      cost: 'NC OneMap Standardized Parcels: $0; corporate registry graph via OpenCorporates (ODbL v1.0).',
-      sourceUrl: 'https://www.sosnc.gov/online_services/search/by_title/_Business_Registration',
-      ocRegisterUrl: 'https://opencorporates.com/registers/us_nc',
-      sponsor: false,
-    },
-  },
-  {
-    key: 'VA',
-    title: 'Virginia',
-    shortLabel: 'VA',
-    region: 'South',
-    maintenance: false,
-    description: 'Virginia VGIN local-schema parcels, Hampton Roads HRGeo, and county CAMA rolls linked to VA SCC corporate/officer & foreign-branch filings and NHPD.',
-    tone: 'indigo',
-    icon: Landmark,
-    endpoint: '/api/va/stats',
-    sources: ['VGIN Local Schemas', 'HRGeo & County CAMA', 'Parcel sales', 'VA SCC & OpenCorporates', 'NHPD'],
-    rapSheets: null,
-    networkLimit: {
-      needed: 'bulk owner rolls for Northern Virginia privacy-redacted localities (Fairfax, Arlington, Loudoun) and General District Court unlawful-detainer dockets',
-      gap: 'Combines VGIN 2026 Q3 Local Schema Tables, Hampton Roads Regional GIS (Virginia Beach, Norfolk, Suffolk), Henrico CAMA, and Prince William CAMA with VA SCC corporate/officer & cross-state foreign-branch filings across ~88 Virginia counties and cities. Several NoVA localities (including Fairfax, Arlington, and Loudoun) redact deed owner names from bulk public GIS downloads.',
-      cost: 'VGIN, HRGeo, and VA County Open Data: $0; corporate registry graph via OpenCorporates (ODbL v1.0).',
-      sourceUrl: 'https://cis.scc.virginia.gov/',
-      ocRegisterUrl: 'https://opencorporates.com/registers/us_va',
-      sponsor: false,
-    },
-  },
-  {
-    key: 'AR',
-    title: 'Arkansas',
-    shortLabel: 'AR',
-    region: 'South',
-    description: 'Arkansas GIS Office standardized parcels across all 75 counties linked to AR SOS / OpenCorporates officer & foreign-branch filings and NHPD.',
-    tone: 'amber',
-    icon: MapPinned,
-    endpoint: '/api/ar/stats',
-    sources: ['AR GIS (75 counties)', 'AR SOS & OpenCorporates', 'Foreign-branch links', 'NHPD'],
-    rapSheets: null,
-    networkLimit: {
-      needed: 'standardized off-site tax mailing addresses across rural counties, county deed sale dates, and Circuit/District Court eviction feeds',
-      gap: 'Arkansas GIS Office statewide parcels across all 75 counties and bulk AR corporate/LLC officer & cross-state foreign-branch filings are joined. Several county rolls omit off-site tax mailing addresses or parcel sale dates in the statewide GIS layer.',
-      cost: 'Arkansas GIS Office Statewide Parcels: $0; corporate registry graph via OpenCorporates (ODbL v1.0).',
-      sourceUrl: 'https://www.sos.arkansas.gov/corps/search_all.php',
-      ocRegisterUrl: 'https://opencorporates.com/registers/us_ar',
-      sponsor: false,
-    },
-  },
-  {
-    key: 'WI',
-    title: 'Wisconsin',
-    shortLabel: 'WI',
-    region: 'Midwest',
-    description: 'Wisconsin V11 residential & multifamily parcels across all 72 counties linked to WI DFI & OpenCorporates foreign-branch entities and NHPD.',
-    tone: 'rose',
-    icon: Building2,
-    endpoint: '/api/wi/stats',
-    sources: ['WI V11 Parcels (72 counties)', 'WI DFI & OpenCorporates', 'Owner & mailing networks', 'NHPD'],
-    rapSheets: null,
-    networkLimit: {
-      needed: 'domestic Wisconsin DFI LLC member/manager periodic filings, City of Milwaukee MPROP owner tables, and CCAP eviction dockets',
-      gap: 'Wisconsin SCO/DOA V11 statewide parcels (72 counties), WI entity registrations, and 61-jurisdiction foreign-branch parent links are joined. WI DFI public bulk data records registered agents rather than domestic LLC member rosters, and City of Milwaukee redacts owner names in the statewide roll.',
-      cost: 'Wisconsin Statewide Parcel Map Initiative (V11): $0; corporate registry spine via OpenCorporates (ODbL v1.0).',
-      sourceUrl: 'https://apps.dfi.wi.gov/apps/corpsearch/search.aspx',
-      ocRegisterUrl: 'https://opencorporates.com/registers/us_wi',
-    },
-  },
-  {
-    key: 'VT',
-    title: 'Vermont',
-    shortLabel: 'VT',
-    region: 'Northeast',
-    description: 'Vermont VCGI standardized Grand List parcels across 250+ towns linked to VT SOS / OpenCorporates member & manager filings and NHPD.',
-    tone: 'violet',
-    icon: MapPinned,
-    endpoint: '/api/vt/stats',
-    sources: ['VCGI Grand List parcels', 'VT SOS & OpenCorporates', 'Foreign-branch links', 'NHPD'],
-    rapSheets: null,
-    networkLimit: {
-      needed: 'municipal rental-registry/code-enforcement feeds across Vermont towns and Civil Division eviction dockets',
-      gap: 'Vermont VCGI Standardized Parcels & Grand List tax rolls are joined with bulk VT corporate officer, LLC member/manager, DBA, and foreign-branch filings. Unrecorded family trusts and municipal code feeds outside Burlington are not in statewide bulk files.',
-      cost: 'VT Center for Geographic Information (VCGI) Grand List Parcels: $0; corporate registry graph via OpenCorporates (ODbL v1.0).',
-      sourceUrl: 'https://bizfilings.vermont.gov/online/BusinessInquire/',
-      ocRegisterUrl: 'https://opencorporates.com/registers/us_vt',
-      sponsor: false,
-    },
-  },
+  { key: 'AR', title: 'Arkansas', scope: 'Statewide' },
+  { key: 'BALTIMORE', title: 'Baltimore', scope: 'City' },
+  { key: 'CA', title: 'California', scope: 'LA & SF' },
+  { key: 'CO', title: 'Colorado', scope: 'Statewide' },
+  { key: 'CT', title: 'Connecticut', scope: 'Statewide' },
+  { key: 'DETROIT', title: 'Detroit', scope: 'City' },
+  { key: 'FL', title: 'Florida', scope: 'Statewide' },
+  { key: 'IL', title: 'Illinois', scope: 'Chicagoland' },
+  { key: 'MA', title: 'Massachusetts', scope: 'Statewide' },
+  { key: 'MN', title: 'Minnesota', scope: 'Twin Cities' },
+  { key: 'MT', title: 'Montana', scope: 'Statewide' },
+  { key: 'NJ', title: 'New Jersey', scope: 'Multi-family' },
+  { key: 'NY', title: 'New York', scope: 'NYC & State' },
+  { key: 'NC', title: 'North Carolina', scope: 'Statewide' },
+  { key: 'OH', title: 'Ohio', scope: 'Cuyahoga' },
+  { key: 'PHILADELPHIA', title: 'Philadelphia', scope: 'City' },
+  { key: 'VT', title: 'Vermont', scope: 'Statewide' },
+  { key: 'VA', title: 'Virginia', scope: 'Statewide' },
+  { key: 'DC', title: 'Washington, D.C.', scope: 'District' },
+  { key: 'WI', title: 'Wisconsin', scope: 'Statewide' },
 ];
 
-// Default live production datasets verified in DB; expands automatically if snapshot includes additional keys (e.g. AR).
-const DEFAULT_LIVE_DATASET_KEYS = new Set([
-  'CT', 'NY', 'CA', 'FL', 'IL', 'MA', 'NJ', 'PHILADELPHIA', 'DC', 'BALTIMORE',
-  'MN', 'OH', 'CO', 'NC', 'VA', 'AR', 'WI', 'MT', 'VT', 'DETROIT',
-]);
-
-const DATASET_SCOPE_LABELS = {
-  AR: '75 counties',
-  BALTIMORE: 'City',
-  CHICAGO: 'Cook County',
-  CO: 'Statewide',
-  CT: '169 towns',
-  DC: 'District',
-  DETROIT: 'City',
-  FL: '67 counties',
-  MA: '351 towns',
-  MIAMI: 'County',
-  MINNEAPOLIS: 'Rental roll',
-  NC: '100 counties',
-  NJ: 'Multi-family',
-  NY: '5 boroughs',
-  NYS: '33 counties',
-  PHILADELPHIA: 'City',
-  VA: 'Statewide',
-  VT: '250+ towns',
-  WI: '72 counties',
-};
-
-// Jurisdictions where we hold code-enforcement cases, so "rank by code cases"
-// is a real ordering rather than a column of zeros. CT's code data is Hartford
-// only; MA includes Boston ISD violations; the rest come from *_bbl_stats.
-const CODE_CASE_DATASET_KEYS = new Set(['CT', 'NY', 'MA', 'DC', 'DETROIT', 'BALTIMORE', 'PHILADELPHIA', 'MINNEAPOLIS', 'NYS']);
-
-const hasCodeCaseData = (datasetKey) => CODE_CASE_DATASET_KEYS.has(datasetKey);
-
-const RANK_MODES = [
-  {
-    value: 'properties',
-    label: 'Portfolio',
-    hint: 'Ranked by total properties/buildings owned',
-    activeText: 'text-blue-700',
-  },
-  {
-    value: 'evictions',
-    label: 'Evictions',
-    hint: 'Ranked by court eviction filings',
-    activeText: 'text-rose-700',
-  },
-  {
-    value: 'code',
-    label: 'Code',
-    hint: 'Ranked by code-enforcement cases where available',
-    activeText: 'text-amber-700',
-  },
-];
-
-// Code-case count for a network row, whichever jurisdiction shape it arrived in.
-const codeCaseCount = (net) => {
-  if (!net) return 0;
-  const candidates = [
-    net.violation_count,        // CT /api/monitor
-    net.total_violations,       // city networks endpoint
-    net.open_violations,
-  ];
-  for (const value of candidates) {
-    const n = Number(value);
-    if (Number.isFinite(n) && n > 0) return n;
-  }
-  return 0;
-};
-
-const RELIABLE_UNIT_DATASET_KEYS = new Set(['CT', 'NY', 'BALTIMORE', 'PHILADELPHIA', 'MIAMI', 'MINNEAPOLIS', 'NJ', 'FL']);
+const DEFAULT_LIVE_DATASET_KEYS = new Set(DATASETS.map((d) => d.key));
 
 function compactCount(value) {
   const n = Number(value);
@@ -524,480 +77,11 @@ function compactCount(value) {
   return n.toLocaleString();
 }
 
-function formatDate(value) {
-  if (!value) return null;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value).slice(0, 10);
-  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-}
-
-function metricsFor(dataset, stats) {
-  if (!stats) return [];
-  if (dataset.key === 'CT') {
-    return [
-      ['Properties', compactCount(stats.property_count)],
-      ['Businesses', compactCount(stats.business_count)],
-      ['Networks', compactCount(stats.network_count)],
-      ['Units', compactCount(stats.unit_count)],
-      ['Code records', compactCount(stats.code_record_count)],
-    ].filter(([, value]) => value);
-  }
-  const props = compactCount(stats.pluto_lots);
-  const bldgs = compactCount(stats.buildings);
-  const biz = compactCount(stats.businesses);
-  if (dataset.key === 'NY') {
-    return [
-      ['Properties', props],
-      ['Businesses', biz],
-      ['Networks', compactCount(stats.networks)],
-      ['Open HPD', compactCount(stats.code_data?.open_violations)],
-      ['Open Class C', compactCount(stats.code_data?.open_violations_c)],
-    ].filter(([, value]) => value);
-  }
-  const unitMetricLabel = dataset.key === 'PHILADELPHIA' || dataset.key === 'MINNEAPOLIS'
-    ? 'Licensed units'
-    : (dataset.key === 'NJ' ? 'Registered units' : 'Units');
-  const fourthMetric = RELIABLE_UNIT_DATASET_KEYS.has(dataset.key) && compactCount(stats.units)
-    ? [[unitMetricLabel, compactCount(stats.units)]]
-    : (bldgs && bldgs !== props ? [['Buildings', bldgs]] : []);
-  return [
-    ['Properties', props],
-    ['Businesses', biz],
-    ['Networks', compactCount(stats.networks)],
-    ...fourthMetric,
-  ].filter(([, value]) => value);
-}
-
-function networkBusinessCount(net) {
-  if (!net) return 0;
-  for (const field of ['business_count', 'network_business_count', 'linked_business_count']) {
-    const n = Number(net[field]);
-    if (Number.isFinite(n) && n > 0) return n;
-  }
-  return 0;
-}
-
-function formatNetworkMetrics(datasetKey, net, ctMode = 'evictions') {
-  if (!net) return '';
-
-  if (ctMode === 'code' && codeCaseCount(net) > 0) {
-    const cases = compactCount(codeCaseCount(net));
-    const scale = compactCount(
-      datasetKey === 'CT' ? (net.property_count || net.value) : net.building_count
-    );
-    const evicts = compactCount(net.eviction_count || net.evictions_total);
-    return [
-      cases ? `${cases} code cases` : null,
-      scale ? `${scale} ${datasetKey === 'CT' ? 'props' : 'bldgs'}` : null,
-      evicts ? `${evicts} evictions` : null,
-    ].filter(Boolean).join(' • ');
-  }
-
-  if (datasetKey === 'CT') {
-    if (ctMode === 'properties') {
-      const props = compactCount(net.property_count || net.value);
-      const units = compactCount(net.unit_count);
-      const assessed = net.total_assessed_value ? `$${compactCount(net.total_assessed_value)}` : null;
-      return [
-        props ? `${props} props` : null,
-        units ? `${units} units` : null,
-        assessed ? `${assessed} val` : null,
-      ].filter(Boolean).join(' • ');
-    }
-    const props = compactCount(net.property_count);
-    const evicts = compactCount(net.eviction_count);
-    const viols = compactCount(net.violation_count);
-    return [
-      props ? `${props} props` : null,
-      evicts ? `${evicts} evictions` : null,
-      viols ? `${viols} code cases` : null,
-    ].filter(Boolean).join(' • ');
-  }
-
-  const bldgs = compactCount(net.building_count);
-  const units = compactCount(net.unit_count);
-  const openC = compactCount(net.open_violations_c);
-  const openViols = compactCount(net.open_violations || net.total_violations);
-  const evicts = compactCount(net.evictions_total);
-
-  if (datasetKey === 'NY') {
-    return [
-      bldgs ? `${bldgs} bldgs` : null,
-      units ? `${units} units` : null,
-      openC ? `${openC} Class C` : (openViols ? `${openViols} HPD records` : null),
-      evicts ? `${evicts} evictions` : null,
-    ].filter(Boolean).join(' • ');
-  }
-
-  return [
-    bldgs ? `${bldgs} bldgs` : null,
-    units ? `${units} units` : null,
-    openViols ? `${openViols} violations` : null,
-    evicts ? `${evicts} evictions` : null,
-  ].filter(Boolean).join(' • ');
-}
-
-function updatedText(dataset, stats, statsStatus = 'loading') {
-  if (!stats) {
-    return statsStatus === 'error' ? 'Public source records ready' : 'Loading source status';
-  }
-  const rawDate = stats.last_updated || stats.external_last_updated || stats.code_data?.last_success_at;
-  const formattedDate = formatDate(rawDate);
-
-  if (dataset.key === 'CT') {
-    return formattedDate ? `Refreshed ${formattedDate}` : 'Auto-synced daily';
-  }
-  if (dataset.key === 'NY') {
-    const codeData = stats.code_data || {};
-    const refreshStatus = codeData.refresh_status;
-    if (refreshStatus && refreshStatus !== 'success') {
-      const attempted = formatDate(codeData.last_refreshed_at);
-      return attempted ? `HPD refresh ${refreshStatus} ${attempted}` : `HPD refresh ${refreshStatus}`;
-    }
-    const hpdDate = formatDate(codeData.last_success_at || codeData.last_refreshed_at || stats.last_updated);
-    if (hpdDate) return `Refreshed ${hpdDate}`;
-  }
-  if (formattedDate) {
-    return `Refreshed ${formattedDate}`;
-  }
-  return 'Public records loaded';
-}
-
-function ProminentSnapshotStage({
-  dataset,
-  stats,
-  statsStatus,
-  topNetworks,
-  rankMode,
-  onRankModeChange,
-  showingCodeRank,
-  codeSettled,
+export default function DatasetLanding({
   onSelect,
   onOpenMonitor,
-  onOpenCityResult,
   onOpenEntity,
-}) {
-  if (!dataset) return null;
-
-  const fullMetrics = metricsFor(dataset, stats);
-  const isCt = dataset.key === 'CT';
-  const scopeLabel = DATASET_SCOPE_LABELS[dataset.key] || dataset.region;
-  const isLoadingStats = !stats && statsStatus === 'loading';
-
-  const handleOpenNetwork = (net) => {
-    const name = net.entity_name || net.primary_entity_name || net.label || net.display_name || 'Network';
-    const netId = net.network_id || net.id || net.entity_id;
-    const cityNetKey = net.network_key;
-    if (!isCt && cityNetKey && onOpenCityResult) {
-      onOpenCityResult(dataset.key, { networkKey: String(cityNetKey) });
-    } else if (onOpenEntity && netId) {
-      onOpenEntity(String(netId), 'network', name, dataset.key);
-    } else {
-      onSelect(dataset.key);
-    }
-  };
-
-  return (
-    <article className="flex-1 min-w-0 rounded-2xl border border-slate-200/90 bg-white shadow-sm overflow-hidden flex flex-col">
-      {/* Prominent Snapshot Header */}
-      <div className="bg-gradient-to-r from-slate-900 via-slate-900 to-blue-950 px-4 sm:px-5 py-4 sm:py-5 text-white">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <h3 className="text-2xl sm:text-3xl font-black tracking-tight text-white">
-                {dataset.title}
-              </h3>
-              <span className="rounded-md bg-white/15 px-2 py-0.5 text-xs font-semibold text-blue-100">
-                {scopeLabel}
-              </span>
-              <span className="text-xs text-slate-300 inline-flex items-center gap-1">
-                <Clock className="h-3 w-3 text-blue-300 shrink-0" aria-hidden="true" />
-                <span>{updatedText(dataset, stats, statsStatus)}</span>
-              </span>
-            </div>
-            <p className="mt-2 text-xs sm:text-sm text-slate-200/90 leading-relaxed max-w-3xl">
-              {dataset.description}
-            </p>
-          </div>
-
-          {dataset.maintenance ? (
-            <span className="min-h-[38px] inline-flex items-center gap-1.5 rounded-xl border border-amber-300/60 bg-amber-400/20 px-3.5 py-2 text-xs sm:text-sm font-extrabold text-amber-200 shrink-0">
-              <Clock className="h-3.5 w-3.5 text-amber-300" aria-hidden="true" />
-              <span>Maintenance &middot; Back Soon</span>
-            </span>
-          ) : (
-            dataset.rapSheets && onOpenMonitor && (
-              <button
-                type="button"
-                onClick={() => onOpenMonitor(dataset.key)}
-                className="hidden sm:inline-flex min-h-[38px] items-center gap-1.5 rounded-xl border border-white/20 bg-white/10 hover:bg-white/20 px-3.5 py-2 text-xs font-bold text-rose-200 hover:text-white transition-colors cursor-pointer shrink-0"
-              >
-                <ShieldAlert className="h-3.5 w-3.5 text-rose-300" aria-hidden="true" />
-                <span>Rap Sheets</span>
-              </button>
-            )
-          )}
-        </div>
-
-        {!dataset.maintenance && (
-          <div className="mt-3.5 flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
-            <button
-              type="button"
-              onClick={() => onSelect(dataset.key)}
-              className="w-full sm:w-auto min-h-[48px] inline-flex items-center justify-between sm:justify-center gap-3 rounded-xl bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-400 hover:to-indigo-400 text-white px-6 py-3 text-base font-black tracking-tight shadow-lg shadow-blue-950/50 ring-1 ring-white/30 transition-all cursor-pointer active:scale-[0.99]"
-            >
-              <span>Explore {dataset.title}</span>
-              <ArrowRight className="h-5 w-5 shrink-0" aria-hidden="true" />
-            </button>
-            {dataset.rapSheets && onOpenMonitor && (
-              <button
-                type="button"
-                onClick={() => onOpenMonitor(dataset.key)}
-                className="sm:hidden min-h-[40px] inline-flex items-center justify-center gap-1.5 rounded-xl border border-white/20 bg-white/10 hover:bg-white/20 px-4 py-2 text-xs font-bold text-rose-200 hover:text-white transition-colors cursor-pointer"
-              >
-                <ShieldAlert className="h-3.5 w-3.5 text-rose-300" aria-hidden="true" />
-                <span>View {dataset.shortLabel} Rap Sheets</span>
-              </button>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Snapshot Body */}
-      <div className="p-4 sm:p-5 flex-1 flex flex-col justify-between gap-4">
-        {dataset.maintenance ? (
-          <div className="my-auto rounded-2xl border border-amber-200 bg-amber-50/80 p-6 text-center">
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-300 bg-white px-3 py-1 text-[11px] font-extrabold uppercase tracking-wider text-amber-800 shadow-2xs">
-              <Clock className="h-3.5 w-3.5 text-amber-600" aria-hidden="true" />
-              <span>Under Maintenance &middot; Back Soon</span>
-            </span>
-            <h4 className="mt-3 text-base sm:text-lg font-black text-slate-900">
-              {dataset.title} Explorer Is Temporarily in Maintenance — Back Soon
-            </h4>
-            <p className="mt-1.5 mx-auto max-w-lg text-xs sm:text-sm text-slate-600 leading-relaxed">
-              {dataset.maintenanceNote || `${dataset.title} ownership networks are currently refreshing and will be back online shortly.`}
-            </p>
-          </div>
-        ) : (
-        <>
-        {/* 1. Prominent KPI Strip */}
-        <div className={`grid grid-cols-2 ${fullMetrics.slice(0, 5).length >= 5 ? 'sm:grid-cols-5' : 'sm:grid-cols-4'} gap-2.5`}>
-          {isLoadingStats ? (
-            [0, 1, 2, 3].map((idx) => (
-              <div key={idx} className="rounded-xl border border-slate-100 bg-slate-50/80 px-3.5 py-2.5">
-                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Loading</div>
-                <div className="mt-1 flex items-center">
-                  <progress aria-label="Loading metric" className="loading-spinner loading-spinner--xs" />
-                </div>
-              </div>
-            ))
-          ) : (
-            fullMetrics.slice(0, 5).map(([label, value]) => {
-              const codeMetric = dataset.key === 'NY' && (label.includes('HPD') || label.includes('Class C'));
-              const bizMetric = label === 'Businesses';
-              return (
-                <div
-                  key={`stage-${dataset.key}-${label}`}
-                  className={`rounded-xl border px-3 py-2.5 ${
-                    codeMetric
-                      ? 'border-rose-200 bg-rose-50/50'
-                      : bizMetric
-                        ? 'border-indigo-200/90 bg-indigo-50/45'
-                        : 'border-slate-200/80 bg-slate-50/70'
-                  }`}
-                >
-                  <div
-                    className={`text-[10px] font-bold uppercase tracking-wider truncate ${
-                      codeMetric ? 'text-rose-600' : bizMetric ? 'text-indigo-700' : 'text-slate-500'
-                    }`}
-                  >
-                    {label}
-                  </div>
-                  <div
-                    className={`mt-0.5 text-xl sm:text-2xl font-black tabular-nums tracking-tight ${
-                      codeMetric ? 'text-rose-700' : bizMetric ? 'text-indigo-950' : 'text-slate-900'
-                    }`}
-                  >
-                    {value}
-                  </div>
-                </div>
-              );
-            })
-          )}
-        </div>
-
-        {/* 2. Prominent Interactive Top 3 Landlord Networks Leaderboard */}
-        <div>
-          <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-            <div className="flex items-baseline gap-2">
-              <h4 className="text-xs font-extrabold uppercase tracking-wider text-slate-700">
-                Top Ownership Networks
-              </h4>
-              <span className="text-xs text-slate-400">
-                {showingCodeRank
-                  ? 'ranked by code cases'
-                  : rankMode === 'code' && !hasCodeCaseData(dataset.key)
-                    ? 'code feed unavailable — showing portfolio rank'
-                    : rankMode === 'code' && !codeSettled
-                      ? 'loading code cases…'
-                      : rankMode === 'evictions'
-                        ? 'ranked by court eviction filings'
-                        : 'ranked by portfolio size'}
-              </span>
-            </div>
-
-            <div className="inline-flex items-center rounded-lg border border-slate-200 bg-slate-100/80 p-0.5 text-xs">
-              {RANK_MODES.map((mode) => (
-                <button
-                  key={mode.value}
-                  type="button"
-                  onClick={() => onRankModeChange(mode.value)}
-                  title={mode.hint}
-                  className={`min-h-[26px] rounded-md px-2.5 py-0.5 font-bold transition-all cursor-pointer ${
-                    rankMode === mode.value
-                      ? `bg-white shadow-2xs ${mode.activeText}`
-                      : 'text-slate-500 hover:text-slate-800'
-                  }`}
-                >
-                  {mode.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {topNetworks.length > 0 ? (
-            <div className="grid grid-cols-1 gap-1.5">
-              {topNetworks.slice(0, 3).map((net, idx) => {
-                const name = net.entity_name || net.primary_entity_name || net.label || net.display_name || 'Network';
-                const metricsSummary = formatNetworkMetrics(dataset.key, net, rankMode);
-                const bizCount = networkBusinessCount(net);
-                return (
-                  <button
-                    key={`${dataset.key}-${name}-${idx}`}
-                    type="button"
-                    onClick={() => handleOpenNetwork(net)}
-                    className="w-full text-left flex items-center justify-between gap-3 rounded-xl border border-slate-200/80 bg-slate-50/50 hover:bg-blue-50/60 hover:border-blue-300 px-3.5 py-2.5 transition-all cursor-pointer group/net"
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-slate-200/80 group-hover/net:bg-blue-600 group-hover/net:text-white text-xs font-black text-slate-700 transition-colors">
-                        {idx + 1}
-                      </span>
-                      <div className="min-w-0">
-                        <div className="text-sm font-bold text-slate-900 group-hover/net:text-blue-700 truncate">
-                          {formatDisplayName(name)}
-                        </div>
-                        {net.sublabel && (
-                          <div className="text-[11px] text-slate-400 truncate">{net.sublabel}</div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2 shrink-0">
-                      {bizCount > 0 && (
-                        <span className="rounded-md border border-indigo-200/80 bg-indigo-50/80 px-2 py-0.5 text-[11px] font-bold text-indigo-700 tabular-nums">
-                          {compactCount(bizCount)} {bizCount === 1 ? 'business' : 'businesses'}
-                        </span>
-                      )}
-                      {metricsSummary && (
-                        <span className="hidden sm:inline text-xs font-semibold text-slate-600 tabular-nums">
-                          {metricsSummary}
-                        </span>
-                      )}
-                      <ArrowRight className="h-4 w-4 text-slate-300 group-hover/net:text-blue-600 transition-transform group-hover/net:translate-x-0.5" aria-hidden="true" />
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          ) : (
-            <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-4 text-xs text-slate-400 flex items-center gap-2">
-              <progress aria-label="Loading top networks" className="loading-spinner loading-spinner--xs" />
-              <span>Loading top ownership networks&hellip;</span>
-            </div>
-          )}
-
-          <button
-            type="button"
-            onClick={() => onSelect(dataset.key)}
-            className="mt-2.5 w-full min-h-[42px] inline-flex items-center justify-center gap-2 rounded-xl border border-blue-200 bg-blue-50/80 hover:bg-blue-600 hover:border-blue-600 text-blue-700 hover:text-white px-4 py-2 text-xs sm:text-sm font-extrabold transition-all cursor-pointer"
-          >
-            <span>Open Full {dataset.title} Explorer</span>
-            <ArrowRight className="h-4 w-4 shrink-0" aria-hidden="true" />
-          </button>
-        </div>
-        </>
-        )}
-
-        {/* 3. Compact Provenance & Collapsible Source Limits */}
-        <div className="pt-3 border-t border-slate-100 flex flex-col gap-2">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="text-[11px] font-semibold text-slate-400 mr-0.5">Sources:</span>
-            {dataset.sources.map((source) => (
-              <span
-                key={source}
-                className="rounded-md border border-slate-200/80 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-600"
-              >
-                {source}
-              </span>
-            ))}
-          </div>
-
-          {dataset.networkLimit && (
-            <details className="group/lim rounded-xl border border-slate-200/70 bg-slate-50/60 px-3 py-1.5 text-xs text-slate-600">
-              <summary className="cursor-pointer font-semibold text-slate-600 hover:text-slate-900 flex items-center justify-between list-none">
-                <span className="inline-flex items-center gap-1.5">
-                  <CircleAlert className="h-3.5 w-3.5 text-amber-500 shrink-0" aria-hidden="true" />
-                  <span>Data gaps &amp; source limits</span>
-                </span>
-                <ChevronDown className="h-3.5 w-3.5 text-slate-400 transition-transform group-open/lim:rotate-180" aria-hidden="true" />
-              </summary>
-              <div className="mt-2 space-y-1 leading-relaxed text-xs text-slate-600">
-                <p>{dataset.networkLimit.gap}</p>
-                <p>
-                  <span className="font-semibold text-slate-700">Remaining gap: </span>
-                  {dataset.networkLimit.needed}.
-                </p>
-                <p>
-                  <span className="font-semibold text-slate-700">Cost: </span>
-                  {dataset.networkLimit.cost}{' '}
-                  {dataset.networkLimit.sourceUrl && (
-                    <a
-                      href={dataset.networkLimit.sourceUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-0.5 font-semibold text-blue-600 hover:underline"
-                    >
-                      Source <ExternalLink className="h-3 w-3" aria-hidden="true" />
-                    </a>
-                  )}
-                  {dataset.networkLimit.ocRegisterUrl && (
-                    <>
-                      {' · '}
-                      <a
-                        href={dataset.networkLimit.ocRegisterUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-0.5 font-semibold text-blue-600 hover:underline"
-                      >
-                        OpenCorporates <ExternalLink className="h-3 w-3" aria-hidden="true" />
-                      </a>
-                    </>
-                  )}
-                </p>
-              </div>
-            </details>
-          )}
-        </div>
-      </div>
-    </article>
-  );
-}
-
-export default function DatasetLanding({ 
-  onSelect, 
-  onOpenMonitor, 
-  onOpenEntity, 
-  onSearch, 
+  onSearch,
   onSelectCtItem,
   onOpenCityResult,
   onShowFreshness,
@@ -1005,39 +89,16 @@ export default function DatasetLanding({
   lastDataset,
 }) {
   const [liveKeySet, setLiveKeySet] = useState(DEFAULT_LIVE_DATASET_KEYS);
-  const [selectedSnapshotKey, setSelectedSnapshotKey] = useState(() =>
-    lastDataset && DEFAULT_LIVE_DATASET_KEYS.has(lastDataset) ? lastDataset : 'CT'
-  );
-  const [statsByDataset, setStatsByDataset] = useState({});
-  const [statsStatusByDataset, setStatsStatusByDataset] = useState({});
-  const [topNetworksByDataset, setTopNetworksByDataset] = useState({});
-  const [ctPropertyNetworks, setCtPropertyNetworks] = useState([]);
-  const [codeNetworksByDataset, setCodeNetworksByDataset] = useState({});
-  const [codeLoadedByDataset, setCodeLoadedByDataset] = useState({});
-  const [rankMode, setRankMode] = useState('properties');
+  const [overallTotals, setOverallTotals] = useState({ properties: null, businesses: null });
 
-  // Cross-jurisdiction omnibar state
+  // Path 1: Cross-jurisdiction search state
   const [omniTerm, setOmniTerm] = useState('');
   const [omniScope, setOmniScope] = useState('ALL');
   const [omniResults, setOmniResults] = useState([]);
   const [omniLoading, setOmniLoading] = useState(false);
   const [omniOpen, setOmniOpen] = useState(false);
   const omniRef = useRef(null);
-  const snapshotStageRef = useRef(null);
-
-  const scrollToSnapshotStage = () => {
-    window.requestAnimationFrame(() => {
-      snapshotStageRef.current?.scrollIntoView({
-        behavior: 'smooth',
-        block: 'start',
-      });
-    });
-  };
-
-  const handleSelectSnapshotJurisdiction = (key) => {
-    setSelectedSnapshotKey(key);
-    scrollToSnapshotStage();
-  };
+  const omniInputRef = useRef(null);
 
   const baseDatasets = useMemo(() => {
     return DATASETS
@@ -1045,45 +106,68 @@ export default function DatasetLanding({
       .sort((a, b) => a.title.localeCompare(b.title, 'en'));
   }, [liveKeySet]);
 
-  // Aggregate live loaded totals across active datasets (strictly from loaded source responses)
-  const liveTotals = useMemo(() => {
-    let totalProperties = 0;
-    let totalBusinesses = 0;
-    let totalNetworks = 0;
+  const lastDatasetObj = useMemo(() => {
+    if (!lastDataset) return null;
+    return baseDatasets.find((ds) => ds.key === lastDataset) || null;
+  }, [baseDatasets, lastDataset]);
 
-    baseDatasets.forEach((ds) => {
-      const st = statsByDataset[ds.key];
-      if (!st) return;
-      if (ds.key === 'CT') {
-        totalProperties += Number(st.property_count || 0);
-        totalBusinesses += Number(st.business_count || 0);
-        totalNetworks += Number(st.network_count || 0);
-      } else {
-        totalProperties += Number(st.pluto_lots || st.buildings || 0);
-        totalBusinesses += Number(st.businesses || 0);
-        totalNetworks += Number(st.networks || 0);
-      }
-    });
+  // Lightweight overall totals & active jurisdiction list from daily cached snapshot
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch('/api/landing/snapshot', { signal: controller.signal })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((snap) => {
+        if (!snap || controller.signal.aborted) return;
+        const snapStats = snap.stats_by_dataset || {};
+        const snapKeys = Object.keys(snapStats);
+        if (snapKeys.length > 0) {
+          const resolved = new Set(snapKeys);
+          setLiveKeySet(resolved);
+          if (onLiveKeysChange) onLiveKeysChange(resolved);
+        }
 
-    return {
-      properties: totalProperties > 0 ? compactCount(totalProperties) : null,
-      businesses: totalBusinesses > 0 ? compactCount(totalBusinesses) : null,
-      networks: totalNetworks > 0 ? compactCount(totalNetworks) : null,
-    };
-  }, [baseDatasets, statsByDataset]);
+        let totalProperties = 0;
+        let totalBusinesses = 0;
+        Object.entries(snapStats).forEach(([key, st]) => {
+          if (!st) return;
+          if (key === 'CT') {
+            totalProperties += Number(st.property_count || 0);
+            totalBusinesses += Number(st.business_count || 0);
+          } else {
+            totalProperties += Number(st.pluto_lots || st.buildings || 0);
+            totalBusinesses += Number(st.businesses || 0);
+          }
+        });
 
-  // Close omnibar dropdown on outside click
+        setOverallTotals({
+          properties: totalProperties > 0 ? compactCount(totalProperties) : null,
+          businesses: totalBusinesses > 0 ? compactCount(totalBusinesses) : null,
+        });
+      })
+      .catch(() => {});
+
+    return () => controller.abort();
+  }, [onLiveKeysChange]);
+
+  // Close search dropdown on outside click or Escape
   useEffect(() => {
     const onMouseDown = (event) => {
       if (omniRef.current && !omniRef.current.contains(event.target)) {
         setOmniOpen(false);
       }
     };
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') setOmniOpen(false);
+    };
     document.addEventListener('mousedown', onMouseDown);
-    return () => document.removeEventListener('mousedown', onMouseDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onMouseDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
   }, []);
 
-  // Debounced multi-jurisdiction search across CT + active city explorer datasets
+  // Debounced multi-jurisdiction search across CT + active city/state explorers
   useEffect(() => {
     const q = omniTerm.trim();
     if (q.length < 2) {
@@ -1141,29 +225,40 @@ export default function DatasetLanding({
               .then((rows) =>
                 (Array.isArray(rows) ? rows : []).map((row) => {
                   const isNetwork = row.type?.endsWith('_network') || Boolean(row.network_key && !row.bbl);
-                  const display = (isNetwork && row.primary_human_name)
-                    ? row.primary_human_name
+                  const repPerson = row.representative_human_name || row.primary_human_name;
+                  const display = isNetwork
+                    ? (row.operator_name || repPerson || row.display_name || row.label || 'Match')
                     : (row.display_name || row.label || row.address || row.owner_name || 'Match');
-                  const bldgBits = [];
-                  if (isNetwork && row.primary_human_name && row.display_name && row.display_name !== row.primary_human_name) {
-                    bldgBits.push(formatDisplayName(row.display_name));
+                  const bits = [];
+                  if (isNetwork && row.operator_name && repPerson && repPerson.toUpperCase() !== row.operator_name.toUpperCase()) {
+                    bits.push(formatDisplayName(repPerson));
                   }
-                  if (row.building_count) bldgBits.push(`${Number(row.building_count).toLocaleString()} bldgs`);
-                  if (row.unit_count) bldgBits.push(`${Number(row.unit_count).toLocaleString()} units`);
-                  if (row.sublabel) bldgBits.push(row.sublabel);
+                  if (row.primary_hq_address) {
+                    bits.push(formatDisplayName(row.primary_hq_address));
+                  } else if (row.sublabel) {
+                    bits.push(row.sublabel);
+                  }
+                  if (row.building_count) {
+                    bits.push(`${Number(row.building_count).toLocaleString()} properties`);
+                  }
                   return {
                     sourceKind: 'city',
                     datasetKey: cityMeta.key,
                     jurisdictionLabel: cityMeta.label,
                     label: display,
                     typeLabel: isNetwork ? 'Ownership Network' : 'Property / Owner',
-                    context: bldgBits.join(' · ') || row.match_context || '',
+                    context: bits.join(' · ') || row.match_context || '',
                     networkKey: row.network_key || null,
                     bbl: row.bbl || null,
                     raw: row,
                     isNetwork,
                     buildingCount: Number(row.building_count || 0),
-                    exactBoost: String(display).toUpperCase().startsWith(qUpper) || String(row.display_name || '').toUpperCase().startsWith(qUpper) ? 0 : 1,
+                    exactBoost:
+                      String(display).toUpperCase().startsWith(qUpper) ||
+                      String(row.operator_name || '').toUpperCase().startsWith(qUpper) ||
+                      String(row.display_name || '').toUpperCase().startsWith(qUpper)
+                        ? 0
+                        : 1,
                   };
                 })
               )
@@ -1175,22 +270,19 @@ export default function DatasetLanding({
         if (signal.aborted) return;
         const merged = settled
           .flat()
-          .sort((a, b) => (
-            a.exactBoost - b.exactBoost
-            || Number(Boolean(b.isNetwork)) - Number(Boolean(a.isNetwork))
-            || (b.buildingCount || 0) - (a.buildingCount || 0)
-            || a.label.localeCompare(b.label)
-          ))
+          .sort(
+            (a, b) =>
+              a.exactBoost - b.exactBoost ||
+              Number(Boolean(b.isNetwork)) - Number(Boolean(a.isNetwork)) ||
+              (b.buildingCount || 0) - (a.buildingCount || 0) ||
+              a.label.localeCompare(b.label)
+          )
           .slice(0, 14);
         setOmniResults(merged);
       } catch (err) {
-        if (err?.name !== 'AbortError') {
-          setOmniResults([]);
-        }
+        if (err?.name !== 'AbortError') setOmniResults([]);
       } finally {
-        if (!signal.aborted) {
-          setOmniLoading(false);
-        }
+        if (!signal.aborted) setOmniLoading(false);
       }
     }, 220);
 
@@ -1234,7 +326,10 @@ export default function DatasetLanding({
   const handleOmniSubmit = (e) => {
     e.preventDefault();
     const q = omniTerm.trim();
-    if (q.length < 2) return;
+    if (q.length < 2) {
+      omniInputRef.current?.focus();
+      return;
+    }
     if (omniResults.length > 0) {
       handleOmniSelect(omniResults[0]);
       return;
@@ -1254,520 +349,319 @@ export default function DatasetLanding({
     }
   };
 
-  // Fast daily-cached snapshot fetch (single ~50KB payload for all datasets & rank modes),
-  // with individual per-dataset fallback only after snapshot settles.
-  const [snapshotTopByMode, setSnapshotTopByMode] = useState(null);
-  const [snapshotSettled, setSnapshotSettled] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    const controllers = [];
-    const retryTimers = [];
-
-    const fetchDatasetStatsFallback = (dataset, attempt = 0) => {
-      const controller = new AbortController();
-      controllers.push(controller);
-      const timeoutId = setTimeout(() => controller.abort(), 15000);
-
-      fetch(dataset.endpoint, { signal: controller.signal })
-        .then((res) => {
-          clearTimeout(timeoutId);
-          return res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`));
-        })
-        .then((data) => {
-          if (cancelled) return;
-          if (data) {
-            setStatsByDataset((prev) => ({ ...prev, [dataset.key]: data }));
-            setStatsStatusByDataset((prev) => ({ ...prev, [dataset.key]: 'ready' }));
-          } else {
-            setStatsStatusByDataset((prev) => ({ ...prev, [dataset.key]: 'error' }));
-          }
-        })
-        .catch(() => {
-          clearTimeout(timeoutId);
-          if (cancelled) return;
-          if (attempt < 1) {
-            const retryId = setTimeout(() => {
-              if (!cancelled) fetchDatasetStatsFallback(dataset, attempt + 1);
-            }, 2500);
-            retryTimers.push(retryId);
-            return;
-          }
-          setStatsStatusByDataset((prev) => ({ ...prev, [dataset.key]: 'error' }));
-        });
-    };
-
-    const snapController = new AbortController();
-    controllers.push(snapController);
-
-    fetch('/api/landing/snapshot', { signal: snapController.signal })
-      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
-      .then((snap) => {
-        if (cancelled || !snap) return;
-        const snapStats = snap.stats_by_dataset || {};
-        const snapTop = snap.top_networks || {};
-        const snapKeys = Object.keys(snapStats);
-
-        let resolvedKeys = DEFAULT_LIVE_DATASET_KEYS;
-        if (snapKeys.length > 0) {
-          resolvedKeys = new Set(snapKeys);
-          setLiveKeySet(resolvedKeys);
-          if (onLiveKeysChange) {
-            onLiveKeysChange(resolvedKeys);
-          }
-        }
-
-        setStatsByDataset((prev) => ({ ...prev, ...snapStats }));
-        const nextStatuses = {};
-        const missing = [];
-        DATASETS.filter((ds) => resolvedKeys.has(ds.key)).forEach((ds) => {
-          if (snapStats[ds.key]) {
-            nextStatuses[ds.key] = 'ready';
-          } else {
-            nextStatuses[ds.key] = 'loading';
-            missing.push(ds);
-          }
-        });
-        setStatsStatusByDataset((prev) => ({ ...prev, ...nextStatuses }));
-
-        if (snapTop.properties || snapTop.evictions || snapTop.code) {
-          setSnapshotTopByMode(snapTop);
-          if (snapTop.properties) {
-            setTopNetworksByDataset((prev) => ({ ...prev, ...snapTop.properties }));
-          }
-          if (snapTop.properties?.CT) {
-            setCtPropertyNetworks(snapTop.properties.CT);
-          }
-          if (snapTop.code) {
-            setCodeNetworksByDataset((prev) => ({ ...prev, ...snapTop.code }));
-            const settledMap = {};
-            Object.keys(snapTop.code).forEach((k) => {
-              settledMap[k] = true;
-            });
-            setCodeLoadedByDataset((prev) => ({ ...prev, ...settledMap }));
-          }
-        }
-
-        setSnapshotSettled(true);
-        missing.forEach((ds) => fetchDatasetStatsFallback(ds, 0));
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setSnapshotSettled(true);
-        DATASETS.filter((ds) => DEFAULT_LIVE_DATASET_KEYS.has(ds.key)).forEach((dataset) => {
-          setStatsStatusByDataset((prev) => (prev[dataset.key] === 'ready' ? prev : { ...prev, [dataset.key]: 'loading' }));
-          fetchDatasetStatsFallback(dataset, 0);
-        });
-      });
-
-    return () => {
-      cancelled = true;
-      controllers.forEach((c) => c.abort());
-      retryTimers.forEach((t) => clearTimeout(t));
-    };
-  }, [onLiveKeysChange]);
-
-  // Populate topNetworksByDataset instantly from the daily snapshot when available,
-  // fetching individually only after snapshot settles and only for missing keys.
-  useEffect(() => {
-    let cancelled = false;
-
-    const snapBucket =
-      rankMode === 'evictions'
-        ? snapshotTopByMode?.evictions
-        : rankMode === 'code'
-          ? snapshotTopByMode?.code
-          : snapshotTopByMode?.properties;
-
-    if (snapBucket && rankMode !== 'code') {
-      setTopNetworksByDataset((prev) => ({ ...prev, ...snapBucket }));
-    }
-
-    if (!snapshotSettled) {
-      return undefined;
-    }
-
-    baseDatasets.forEach((dataset) => {
-      if (rankMode === 'properties' && snapshotTopByMode?.properties?.[dataset.key]) return;
-      if (rankMode === 'evictions' && snapshotTopByMode?.evictions?.[dataset.key]) return;
-      if (rankMode === 'code' && snapshotTopByMode?.code && dataset.key in snapshotTopByMode.code) return;
-      if (rankMode === 'code' && !hasCodeCaseData(dataset.key) && snapshotTopByMode?.properties?.[dataset.key]) return;
-
-      const apiPrefix = dataset.key === 'NY' ? 'nyc' : dataset.key === 'NYS' ? 'ny' : dataset.key.toLowerCase();
-      const isCtDataset = dataset.key === 'CT';
-
-      const fetchPortfolioRanking = () => {
-        if (!isCtDataset) {
-          fetch(`/api/${apiPrefix}/networks?limit=3`)
-            .then((res) => (res.ok ? res.json() : []))
-            .then((data) => {
-              if (!cancelled && Array.isArray(data)) {
-                setTopNetworksByDataset((prev) => ({ ...prev, [dataset.key]: data.slice(0, 3) }));
-              }
-            })
-            .catch(() => {});
-          return;
-        }
-        fetch('/api/insights')
-          .then((res) => (res.ok ? res.json() : {}))
-          .then((data) => {
-            if (cancelled || !data) return;
-            const statewideList = data['Statewide'] || data['STATEWIDE'] || [];
-            if (Array.isArray(statewideList) && statewideList.length > 0) {
-              const sortedByProps = [...statewideList]
-                .sort((a, b) => (b.property_count || b.value || 0) - (a.property_count || a.value || 0))
-                .slice(0, 3);
-              setCtPropertyNetworks(sortedByProps);
-            }
-          })
-          .catch(() => {});
-      };
-
-      if (rankMode === 'code') {
-        if (!hasCodeCaseData(dataset.key)) {
-          fetchPortfolioRanking();
-          return;
-        }
-        const codeUrl = isCtDataset
-          ? '/api/monitor?city=STATEWIDE&sort_by=violations'
-          : `/api/${apiPrefix}/networks?limit=3&sort_by=code_cases`;
-
-        fetch(codeUrl)
-          .then((res) => (res.ok ? res.json() : []))
-          .then((data) => {
-            if (cancelled) return;
-            const list = Array.isArray(data) ? data : [];
-            const ranked = [...list]
-              .sort((a, b) => codeCaseCount(b) - codeCaseCount(a))
-              .filter((net) => codeCaseCount(net) > 0)
-              .slice(0, 3);
-            setCodeNetworksByDataset((prev) => ({ ...prev, [dataset.key]: ranked }));
-            setCodeLoadedByDataset((prev) => ({ ...prev, [dataset.key]: true }));
-          })
-          .catch(() => {
-            if (!cancelled) {
-              setCodeLoadedByDataset((prev) => ({ ...prev, [dataset.key]: true }));
-            }
-          });
-        return;
-      }
-
-      if (rankMode === 'evictions') {
-        const evictionUrl = isCtDataset
-          ? '/api/monitor?city=STATEWIDE&sort_by=evictions'
-          : `/api/${apiPrefix}/networks?limit=3&sort_by=evictions`;
-
-        fetch(evictionUrl)
-          .then((res) => (res.ok ? res.json() : []))
-          .then((data) => {
-            if (!cancelled && Array.isArray(data)) {
-              setTopNetworksByDataset((prev) => ({ ...prev, [dataset.key]: data.slice(0, 3) }));
-            }
-          })
-          .catch(() => {});
-        return;
-      }
-
-      fetchPortfolioRanking();
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [baseDatasets, rankMode, snapshotTopByMode, snapshotSettled]);
-
-  const activeSnapshotDataset = useMemo(() => {
-    return baseDatasets.find((ds) => ds.key === selectedSnapshotKey) || baseDatasets[0] || null;
-  }, [baseDatasets, selectedSnapshotKey]);
-
-  const activeStats = activeSnapshotDataset ? statsByDataset[activeSnapshotDataset.key] : null;
-  const activeStatsStatus = activeSnapshotDataset
-    ? statsStatusByDataset[activeSnapshotDataset.key] || (activeStats ? 'ready' : 'loading')
-    : 'loading';
-
-  const activeCodeRanked = activeSnapshotDataset ? codeNetworksByDataset[activeSnapshotDataset.key] || [] : [];
-  const activeCodeSettled = activeSnapshotDataset ? Boolean(codeLoadedByDataset[activeSnapshotDataset.key]) : false;
-  const activeShowingCodeRank =
-    Boolean(activeSnapshotDataset) &&
-    rankMode === 'code' &&
-    hasCodeCaseData(activeSnapshotDataset.key) &&
-    activeCodeRanked.length > 0;
-
-  let activeTopNetworks = [];
-  if (activeSnapshotDataset) {
-    if (activeShowingCodeRank) {
-      activeTopNetworks = activeCodeRanked;
-    } else if (activeSnapshotDataset.key === 'CT') {
-      activeTopNetworks =
-        rankMode === 'properties' && ctPropertyNetworks.length > 0
-          ? ctPropertyNetworks
-          : topNetworksByDataset['CT'] || [];
-    } else {
-      activeTopNetworks = topNetworksByDataset[activeSnapshotDataset.key] || [];
-    }
-  }
-
   return (
     <div className="landing-viewport-shell w-full bg-slate-50/80 text-slate-900">
-      <div className="mx-auto w-full max-w-5xl xl:max-w-[1140px] px-4 sm:px-6 pt-4 sm:pt-5 pb-20 md:pb-4 flex flex-col gap-4">
-        {/* 1. CLEAN SEARCH HERO */}
-        <div className="mx-auto w-full max-w-3xl text-center">
-          <h2 className="text-xl sm:text-2xl font-extrabold tracking-tight text-slate-900">
+      <div className="mx-auto w-full max-w-5xl xl:max-w-[1140px] px-4 sm:px-6 pt-5 sm:pt-7 pb-24 md:pb-8 flex flex-col gap-5">
+        {/* Clean Header with Optional Understated Overall Totals */}
+        <header className="mx-auto w-full max-w-3xl text-center">
+          <h2 className="text-2xl sm:text-3xl font-black tracking-tight text-slate-900 [text-wrap:balance]">
             Who really owns our neighborhoods?
           </h2>
-          <p className="mt-1 text-xs sm:text-sm text-slate-600 leading-relaxed">
-            Search{' '}
-            <strong className="font-semibold text-slate-800 tabular-nums">
-              {liveTotals.properties || '25M'}
-            </strong>{' '}
-            properties,{' '}
-            {liveTotals.businesses && (
+          <p className="mt-2 text-sm text-slate-600 leading-relaxed">
+            Explore public property records and corporate ownership networks
+            {overallTotals.properties ? (
               <>
-                <strong className="font-semibold text-indigo-700 tabular-nums">
-                  {liveTotals.businesses}
+                {' '}covering{' '}
+                <strong className="font-semibold text-slate-800 tabular-nums">
+                  {overallTotals.properties}
                 </strong>{' '}
-                businesses &amp; shell LLCs, and{' '}
+                parcels
+                {overallTotals.businesses ? (
+                  <>
+                    {' '}and{' '}
+                    <strong className="font-semibold text-slate-800 tabular-nums">
+                      {overallTotals.businesses}
+                    </strong>{' '}
+                    businesses
+                  </>
+                ) : null}{' '}
+                across{' '}
+                <strong className="font-semibold text-slate-800 tabular-nums">
+                  {baseDatasets.length}
+                </strong>{' '}
+                U.S. jurisdictions.
               </>
+            ) : (
+              <> across {baseDatasets.length} U.S. jurisdictions.</>
             )}
-            <strong className="font-semibold text-slate-800 tabular-nums">
-              {liveTotals.networks || '17M'}
-            </strong>{' '}
-            owner networks across{' '}
-            <strong className="font-semibold text-slate-800 tabular-nums">
-              {baseDatasets.length}
-            </strong>{' '}
-            public-record jurisdictions.
           </p>
+        </header>
 
-          <search ref={omniRef} className="mt-3 text-left relative z-30">
-            <form
-              onSubmit={handleOmniSubmit}
-              className="flex flex-col sm:flex-row items-stretch rounded-xl border border-slate-300 bg-white p-1 shadow-xs focus-within:border-blue-500 focus-within:ring-4 focus-within:ring-blue-500/10 transition-all"
-            >
-              <div className="relative flex-1 flex items-center min-w-0">
-                <Search className="w-4 h-4 text-slate-400 ml-3 shrink-0 pointer-events-none" aria-hidden="true" />
-                <label htmlFor="landing-omni-input" className="sr-only">
-                  Search property owners, LLCs, officers, or street addresses
-                </label>
-                <input
-                  id="landing-omni-input"
-                  type="search"
-                  value={omniTerm}
-                  onChange={(e) => {
-                    setOmniTerm(e.target.value);
-                    setOmniOpen(true);
-                  }}
-                  onFocus={() => setOmniOpen(true)}
-                  placeholder="Search a property owner, LLC, officer, or street address…"
-                  className="w-full bg-transparent px-2.5 py-1.5 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none"
-                />
-                {omniTerm && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setOmniTerm('');
-                      setOmniResults([]);
-                      setOmniOpen(false);
-                    }}
-                    aria-label="Clear search query"
-                    className="p-1 min-h-[24px] min-w-[24px] text-slate-400 hover:text-slate-600 rounded-md mr-1"
-                  >
-                    <X className="w-3.5 h-3.5" aria-hidden="true" />
-                  </button>
-                )}
-              </div>
+        {/* Algorithmic Estimate Disclosure */}
+        <AlgorithmicEstimateBanner />
 
-              <div className="flex items-center gap-1.5 border-t sm:border-t-0 sm:border-l border-slate-200 pt-1 sm:pt-0 sm:pl-1.5">
-                <label htmlFor="omni-scope-select" className="sr-only">
-                  Jurisdiction scope
-                </label>
-                <select
-                  id="omni-scope-select"
-                  value={omniScope}
-                  onChange={(e) => {
-                    setOmniScope(e.target.value);
-                    setOmniOpen(true);
-                  }}
-                  className="min-h-[34px] rounded-lg bg-slate-50 hover:bg-slate-100/80 border border-slate-200/80 px-2.5 py-1.5 text-xs font-semibold text-slate-700 focus:outline-none focus:border-blue-500 cursor-pointer flex-1 sm:flex-initial"
+        {/* TWO CRYSTAL-CLEAR ENTRY PATHS */}
+        <div className="relative grid grid-cols-1 lg:grid-cols-2 gap-5 items-stretch">
+          {/* PATH 1: SEARCH */}
+          <article className="rounded-2xl border-2 border-blue-200/90 bg-white p-5 sm:p-6 shadow-sm flex flex-col justify-between gap-4">
+            <div className="flex flex-col gap-4">
+              <header>
+                <div className="inline-flex items-center gap-2 rounded-full bg-blue-50 border border-blue-200/80 px-3 py-1 text-[11px] font-black uppercase tracking-wider text-blue-700">
+                  <Search className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>Path 1 &middot; Search</span>
+                </div>
+                <h3 className="mt-3 text-lg sm:text-xl font-black tracking-tight text-slate-900">
+                  Search an address, landlord, or LLC
+                </h3>
+                <p className="mt-1 text-xs sm:text-sm text-slate-600 leading-relaxed">
+                  Type a street address, management company, officer name, or shell LLC to jump directly to matching records.
+                </p>
+              </header>
+
+              <search ref={omniRef} className="relative z-30">
+                <form
+                  onSubmit={handleOmniSubmit}
+                  aria-labelledby="path-search-label"
+                  className="flex flex-col gap-3"
                 >
-                  <option value="ALL">All {baseDatasets.length} Jurisdictions</option>
-                  {baseDatasets.map((ds) => (
-                    <option key={ds.key} value={ds.key}>
-                      {ds.title}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="submit"
-                  className="min-h-[34px] rounded-lg bg-blue-600 hover:bg-blue-700 text-white px-4 py-1.5 text-xs font-bold transition-colors shrink-0 cursor-pointer"
-                >
-                  Search
-                </button>
-              </div>
-            </form>
-
-            {/* Omnibar Results Dropdown */}
-            {omniOpen && omniTerm.trim().length >= 2 && (
-              <div className="absolute left-0 right-0 top-full mt-1.5 rounded-xl border border-slate-200 bg-white shadow-xl overflow-hidden max-h-[340px] overflow-y-auto z-40">
-                {omniLoading && omniResults.length === 0 ? (
-                  <div className="p-5 text-center text-xs font-medium text-slate-500 flex items-center justify-center gap-2">
-                    <progress aria-label="Searching public records" className="loading-spinner" />
-                    <span>Searching loaded public records&hellip;</span>
-                  </div>
-                ) : omniResults.length > 0 ? (
-                  <div className="divide-y divide-slate-100">
-                    {omniResults.map((item, idx) => {
-                      const IconComp =
-                        item.typeLabel === 'Business'
-                          ? Briefcase
-                          : item.typeLabel.includes('Principal') || item.typeLabel.includes('Owner')
-                            ? User
-                            : item.typeLabel === 'Address'
-                              ? MapPinned
-                              : Layers;
-                      return (
+                  <div className="flex flex-col gap-1.5">
+                    <label
+                      id="path-search-label"
+                      htmlFor="landing-omni-input"
+                      className="text-xs font-bold text-slate-700"
+                    >
+                      Address, business, or person name
+                    </label>
+                    <div className="relative flex items-center rounded-xl border border-slate-300 bg-white shadow-2xs focus-within:border-blue-600 focus-within:ring-4 focus-within:ring-blue-500/15 transition-all">
+                      <Search
+                        className="w-4 h-4 text-slate-400 ml-3.5 shrink-0 pointer-events-none"
+                        aria-hidden="true"
+                      />
+                      <input
+                        ref={omniInputRef}
+                        id="landing-omni-input"
+                        name="q"
+                        type="search"
+                        autoCorrect="off"
+                        autoCapitalize="none"
+                        spellCheck={false}
+                        enterKeyHint="search"
+                        value={omniTerm}
+                        onChange={(e) => {
+                          setOmniTerm(e.target.value);
+                          setOmniOpen(true);
+                        }}
+                        onFocus={() => setOmniOpen(true)}
+                        placeholder="e.g., WinnCompanies, 123 Main St, or an LLC…"
+                        className="w-full min-h-[48px] bg-transparent px-3 py-2.5 text-[max(1rem,1em)] sm:text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none"
+                      />
+                      {omniTerm && (
                         <button
-                          key={`${item.datasetKey}-${item.label}-${idx}`}
                           type="button"
-                          onClick={() => handleOmniSelect(item)}
-                          className="w-full text-left px-4 py-2.5 hover:bg-slate-50 flex items-center gap-3 transition-colors group"
+                          onClick={() => {
+                            setOmniTerm('');
+                            setOmniResults([]);
+                            setOmniOpen(false);
+                            omniInputRef.current?.focus();
+                          }}
+                          aria-label="Clear search query"
+                          className="p-2 min-h-[36px] min-w-[36px] inline-flex items-center justify-center text-slate-400 hover:text-slate-700 rounded-lg mr-1 cursor-pointer"
                         >
-                          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-600 group-hover:bg-blue-50 group-hover:text-blue-600 transition-colors">
-                            <IconComp className="w-3.5 h-3.5" aria-hidden="true" />
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2">
-                              <span className="font-semibold text-xs sm:text-sm text-slate-900 truncate group-hover:text-blue-700">
-                                {formatDisplayName(item.label)}
-                              </span>
-                              <span className="shrink-0 rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">
-                                {item.jurisdictionLabel}
-                              </span>
-                            </div>
-                            <div className="text-[11px] text-slate-500 truncate">
-                              <span>{item.typeLabel}</span>
-                              {item.context ? ` · ${item.context}` : ''}
-                            </div>
-                          </div>
-                          <ArrowRight className="w-3.5 h-3.5 text-slate-300 group-hover:text-blue-600 shrink-0" aria-hidden="true" />
+                          <X className="w-4 h-4" aria-hidden="true" />
                         </button>
-                      );
-                    })}
+                      )}
+                    </div>
                   </div>
-                ) : (
-                  <div className="p-5 text-center text-xs text-slate-500">
-                    <p className="font-semibold text-slate-700">
-                      No matches found for &ldquo;{omniTerm.trim()}&rdquo;
-                    </p>
-                    <p className="mt-1 text-slate-400">
-                      Check spelling, try a surname or street name without unit numbers, or choose a jurisdiction below.
-                    </p>
+
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-end gap-2.5">
+                    <div className="flex-1 flex flex-col gap-1.5 min-w-0">
+                      <label htmlFor="omni-scope-select" className="text-xs font-bold text-slate-700">
+                        Where to search
+                      </label>
+                      <select
+                        id="omni-scope-select"
+                        name="scope"
+                        value={omniScope}
+                        onChange={(e) => {
+                          setOmniScope(e.target.value);
+                          if (omniTerm.trim().length >= 2) setOmniOpen(true);
+                        }}
+                        className="w-full min-h-[48px] rounded-xl bg-slate-50 hover:bg-slate-100/80 border border-slate-300 px-3 py-2.5 text-[max(1rem,1em)] sm:text-sm font-semibold text-slate-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 cursor-pointer"
+                      >
+                        <option value="ALL">All {baseDatasets.length} Jurisdictions</option>
+                        {baseDatasets.map((ds) => (
+                          <option key={ds.key} value={ds.key}>
+                            {ds.title}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <button
+                      type="submit"
+                      className="min-h-[48px] inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 text-sm font-extrabold shadow-sm transition-colors shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
+                    >
+                      <span>Search records</span>
+                      <ArrowRight className="w-4 h-4" aria-hidden="true" />
+                    </button>
+                  </div>
+                </form>
+
+                {/* Live Search Results Dropdown */}
+                {omniOpen && omniTerm.trim().length >= 2 && (
+                  <div
+                    role="region"
+                    aria-label="Search suggestions"
+                    className="absolute left-0 right-0 top-full mt-2 rounded-xl border border-slate-200 bg-white shadow-xl overflow-hidden max-h-[360px] overflow-y-auto z-40"
+                  >
+                    {omniLoading && omniResults.length === 0 ? (
+                      <div className="p-5 text-center text-xs font-medium text-slate-500 flex items-center justify-center gap-2">
+                        <progress aria-label="Searching public records" className="loading-spinner" />
+                        <span>Searching loaded public records&hellip;</span>
+                      </div>
+                    ) : omniResults.length > 0 ? (
+                      <div className="divide-y divide-slate-100">
+                        {omniResults.map((item, idx) => {
+                          const IconComp =
+                            item.typeLabel === 'Business'
+                              ? Briefcase
+                              : item.typeLabel.includes('Principal') || item.typeLabel.includes('Owner')
+                                ? User
+                                : item.typeLabel === 'Address'
+                                  ? MapPinned
+                                  : Layers;
+                          return (
+                            <button
+                              key={`${item.datasetKey}-${item.label}-${idx}`}
+                              type="button"
+                              onClick={() => handleOmniSelect(item)}
+                              className="w-full text-left px-4 py-3 hover:bg-blue-50/70 flex items-center gap-3 transition-colors group cursor-pointer"
+                            >
+                              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-600 group-hover:bg-blue-100 group-hover:text-blue-700 transition-colors">
+                                <IconComp className="w-4 h-4" aria-hidden="true" />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-bold text-sm text-slate-900 truncate group-hover:text-blue-700">
+                                    {formatDisplayName(item.label)}
+                                  </span>
+                                  <span className="shrink-0 rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-bold text-slate-600">
+                                    {item.jurisdictionLabel}
+                                  </span>
+                                </div>
+                                <div className="text-xs text-slate-500 truncate">
+                                  <span>{item.typeLabel}</span>
+                                  {item.context ? ` · ${item.context}` : ''}
+                                </div>
+                              </div>
+                              <ArrowRight
+                                className="w-4 h-4 text-slate-300 group-hover:text-blue-600 shrink-0"
+                                aria-hidden="true"
+                              />
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div role="status" className="p-5 text-center text-xs text-slate-500">
+                        <p className="font-semibold text-slate-700">
+                          No matches found for &ldquo;{omniTerm.trim()}&rdquo;
+                        </p>
+                        <p className="mt-1 text-slate-400">
+                          Try an operator name, surname, or street name without unit numbers, or pick a place in Path 2.
+                        </p>
+                      </div>
+                    )}
                   </div>
                 )}
-              </div>
-            )}
-          </search>
+              </search>
+            </div>
 
-          {/* Quiet Sample Queries */}
-          <div className="mt-2 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-xs text-slate-500">
-            <span className="text-slate-400">Examples:</span>
-            {QUICK_OMNI_EXAMPLES.map((ex, idx) => (
-              <React.Fragment key={`${ex.scope}-${ex.label}`}>
-                {idx > 0 && <span className="text-slate-300" aria-hidden="true">&middot;</span>}
+            {/* Quiet Sample Queries */}
+            <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center gap-1.5 text-xs">
+              <span className="font-semibold text-slate-400 mr-1">Try:</span>
+              {QUICK_OMNI_EXAMPLES.map((ex) => (
                 <button
+                  key={`${ex.scope}-${ex.label}`}
                   type="button"
                   onClick={() => {
                     setOmniScope(ex.scope);
                     setOmniTerm(ex.label);
                     setOmniOpen(true);
+                    omniInputRef.current?.focus();
                   }}
-                  className="min-h-[24px] text-slate-600 hover:text-blue-600 hover:underline transition-colors cursor-pointer"
+                  className="min-h-[30px] rounded-lg border border-slate-200 bg-slate-50 hover:border-blue-300 hover:bg-blue-50 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:text-blue-700 transition-colors cursor-pointer"
                 >
-                  {ex.label} <span className="text-slate-400">({ex.tag})</span>
+                  {ex.label} <span className="text-slate-400 font-normal">({ex.tag})</span>
                 </button>
-              </React.Fragment>
-            ))}
+              ))}
+            </div>
+          </article>
+
+          {/* Subtle Centered "OR" Divider Badge on Desktop */}
+          <div
+            aria-hidden="true"
+            className="hidden lg:flex items-center justify-center pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-10 h-9 w-9 rounded-full border border-slate-200 bg-slate-50 text-[11px] font-black uppercase tracking-wider text-slate-400 shadow-xs"
+          >
+            or
           </div>
-        </div>
 
-        {/* Algorithmic estimate disclosure across all jurisdictions */}
-        <AlgorithmicEstimateBanner className="mb-3" />
+          {/* PATH 2: SELECT A JURISDICTION & EXPLORE NETWORKS */}
+          <article className="rounded-2xl border-2 border-indigo-200/90 bg-white p-5 sm:p-6 shadow-sm flex flex-col justify-between gap-4">
+            <div className="flex flex-col gap-4">
+              <header className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <div className="inline-flex items-center gap-2 rounded-full bg-indigo-50 border border-indigo-200/80 px-3 py-1 text-[11px] font-black uppercase tracking-wider text-indigo-700">
+                    <Building2 className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>Path 2 &middot; Select a Network</span>
+                  </div>
+                  <h3 className="mt-3 text-lg sm:text-xl font-black tracking-tight text-slate-900">
+                    Pick a place to browse ownership networks
+                  </h3>
+                  <p className="mt-1 text-xs sm:text-sm text-slate-600 leading-relaxed">
+                    Jump straight into any jurisdiction&rsquo;s directory of notable ownership networks, operating companies, and portfolios.
+                  </p>
+                </div>
+              </header>
 
-        {/* 2. PROMINENT JURISDICTION SNAPSHOT SHOWCASE (ZERO-CLUTTER SWITCHER + PROMINENT STAGE) */}
-        <div className="flex flex-col lg:flex-row items-stretch gap-3.5">
-          {/* Minimalist Alphabetical Jurisdiction Switcher */}
-          <div className="lg:w-[328px] shrink-0 rounded-2xl border border-slate-200/90 bg-white p-3.5 shadow-xs flex flex-col justify-between">
-            <fieldset className="border-0 p-0 m-0 min-w-0">
-              <legend className="text-[11px] font-bold uppercase tracking-wider text-slate-400 px-1 mb-2">
-                Select Snapshot ({baseDatasets.length})
-              </legend>
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-2 gap-1">
-                {baseDatasets.map((ds) => {
-                  const isChecked = activeSnapshotDataset?.key === ds.key;
-                  return (
-                    <label
-                      key={ds.key}
-                      onClick={(e) => {
-                        if (e.target.tagName === 'INPUT') return;
-                        if (isChecked) {
-                          const stageRect = snapshotStageRef.current?.getBoundingClientRect();
-                          const isStageOffscreen = stageRect && stageRect.top > window.innerHeight * 0.55;
-                          if (isStageOffscreen) {
-                            scrollToSnapshotStage();
-                          } else if (!ds.maintenance && e.detail > 0) {
-                            onSelect(ds.key);
-                          }
-                        }
-                      }}
-                      onDoubleClick={() => { if (!ds.maintenance) onSelect(ds.key); }}
-                      className="jdx-choice-pill text-xs font-semibold min-w-0"
+              <ul
+                role="list"
+                aria-label="Available jurisdictions to browse ownership networks"
+                className="grid grid-cols-2 sm:grid-cols-2 gap-2"
+              >
+                {baseDatasets.map((ds) => (
+                  <li key={ds.key} className="min-w-0">
+                    <button
+                      type="button"
+                      onClick={() => onSelect(ds.key)}
+                      className="w-full min-h-[44px] flex items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50/60 hover:bg-indigo-50/70 hover:border-indigo-400 px-3 py-2 text-left transition-all cursor-pointer group focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
                     >
-                      <input
-                        type="radio"
-                        name="snapshot-jurisdiction"
-                        value={ds.key}
-                        checked={isChecked}
-                        onChange={() => handleSelectSnapshotJurisdiction(ds.key)}
-                        className="sr-only-radio"
-                      />
-                      <span className="truncate">{ds.title}</span>
-                      {ds.maintenance && (
-                        <span className="ml-auto shrink-0 rounded bg-amber-100 px-1 py-0.2 text-[9px] font-extrabold uppercase tracking-wide text-amber-800">
-                          Soon
+                      <span className="min-w-0">
+                        <span className="block text-sm font-bold text-slate-900 group-hover:text-indigo-800 truncate">
+                          {ds.title}
                         </span>
-                      )}
-                    </label>
-                  );
-                })}
+                        <span className="block text-[10.5px] font-medium text-slate-400 group-hover:text-indigo-600/80 truncate">
+                          {ds.scope}
+                        </span>
+                      </span>
+                      <ArrowRight
+                        className="w-4 h-4 shrink-0 text-slate-300 group-hover:text-indigo-600 group-hover:translate-x-0.5 transition-all"
+                        aria-hidden="true"
+                      />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            {lastDatasetObj && (
+              <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2 text-xs">
+                <span className="text-slate-500">Continue where you left off:</span>
+                <button
+                  type="button"
+                  onClick={() => onSelect(lastDatasetObj.key)}
+                  className="min-h-[32px] inline-flex items-center gap-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-3 py-1 font-bold text-indigo-700 transition-colors cursor-pointer"
+                >
+                  <span>Open {lastDatasetObj.title} networks</span>
+                  <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
+                </button>
               </div>
-            </fieldset>
-
-            <p className="mt-2.5 pt-2 border-t border-slate-100 px-1 text-[11px] text-slate-400 leading-snug">
-              Click any place to jump to its live snapshot, or click again to launch its explorer.
-            </p>
-          </div>
-
-          {/* Prominent Live Snapshot Stage */}
-          <div ref={snapshotStageRef} className="flex-1 min-w-0 flex flex-col scroll-mt-3">
-            <ProminentSnapshotStage
-              dataset={activeSnapshotDataset}
-              stats={activeStats}
-              statsStatus={activeStatsStatus}
-              topNetworks={activeTopNetworks}
-              rankMode={rankMode}
-              onRankModeChange={setRankMode}
-              showingCodeRank={activeShowingCodeRank}
-              codeSettled={activeCodeSettled}
-              onSelect={onSelect}
-              onOpenMonitor={onOpenMonitor}
-              onOpenCityResult={onOpenCityResult}
-              onOpenEntity={onOpenEntity}
-            />
-          </div>
+            )}
+          </article>
         </div>
 
-        {/* 3. QUIET SINGLE-LINE PROVENANCE & TRANSPARENCY FOOTER */}
-        <footer className="pt-2 border-t border-slate-200/70 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+        {/* Quiet Single-Line Provenance & Transparency Footer */}
+        <footer className="pt-3 border-t border-slate-200/70 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
           <p className="min-w-0">
             100% public assessment, corporate (
             <a

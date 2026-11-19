@@ -20,6 +20,10 @@ from psycopg2.extras import RealDictCursor
 import requests
 
 import api.db as db_module
+from api.network_profile import (
+    derive_network_business_profile,
+    fetch_batch_network_oc_profiles,
+)
 from api.shared_utils import (
     THIRD_PARTY_ENTITY_REGEX_BODY,
     THIRD_PARTY_INSTITUTIONAL_SQL_PATTERN,
@@ -197,6 +201,7 @@ def _institutional_filter(include_institutional: bool, column: str = "display_na
     )
 
 _PROP_COLUMNS_CACHE: dict[str, tuple[float, set[str]]] = {}
+_NET_COLUMNS_CACHE: dict[str, tuple[float, set[str]]] = {}
 
 
 def _get_property_columns(city: str) -> set[str]:
@@ -215,6 +220,103 @@ def _get_property_columns(city: str) -> set[str]:
     cols = {r["column_name"] for r in rows}
     _PROP_COLUMNS_CACHE[city] = (now, cols)
     return cols
+
+
+def _get_network_columns(city: str) -> set[str]:
+    now = time.time()
+    cached = _NET_COLUMNS_CACHE.get(city)
+    if cached and now - cached[0] < 120:
+        return cached[1]
+    rows = _query(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = %s
+        """,
+        (f"{city}_networks",),
+    )
+    cols = {r["column_name"] for r in rows}
+    _NET_COLUMNS_CACHE[city] = (now, cols)
+    return cols
+
+
+def _load_cached_representative_profiles(city: str, network_keys: list[str]) -> dict[str, dict]:
+    if not network_keys:
+        return {}
+    try:
+        rows = _query(
+            """
+            SELECT
+                network_key,
+                operator_name,
+                operator_source,
+                operator_basis,
+                operating_entities,
+                primary_hq_address,
+                hq_entity_count,
+                business_count,
+                representative_human_name,
+                key_officers,
+                officer_count,
+                sample_entities,
+                external_source_url,
+                external_source_label
+            FROM network_representative_profiles
+            WHERE jurisdiction = %s
+              AND network_key = ANY(%s)
+            """,
+            (city, list(dict.fromkeys(network_keys))),
+        )
+        out: dict[str, dict] = {}
+        for r in rows:
+            out[r["network_key"]] = {
+                "operator_name": r.get("operator_name"),
+                "operator_source": r.get("operator_source"),
+                "operator_basis": r.get("operator_basis"),
+                "operating_entities": _parse_jsonish(r.get("operating_entities"), []),
+                "primary_hq_address": r.get("primary_hq_address"),
+                "hq_entity_count": r.get("hq_entity_count"),
+                "business_count": r.get("business_count"),
+                "representative_human_name": r.get("representative_human_name"),
+                "key_officers": _parse_jsonish(r.get("key_officers"), []),
+                "officer_count": int(r.get("officer_count") or 0),
+                "sample_entities": _parse_jsonish(r.get("sample_entities"), []),
+                "external_source_url": r.get("external_source_url"),
+                "external_source_label": r.get("external_source_label"),
+            }
+        return out
+    except Exception:
+        return {}
+
+
+def _resolve_network_business_profiles(city: str, rows: list[dict], compute_missing: bool = True) -> dict[str, dict]:
+    """Return cached representative business profiles, computing deterministic profiles live for any uncached rows."""
+    if not rows:
+        return {}
+    keys = [r["network_key"] for r in rows if r.get("network_key")]
+    profiles = _load_cached_representative_profiles(city, keys)
+    if not compute_missing:
+        return profiles
+
+    missing_rows = []
+    for r in rows:
+        nk = r.get("network_key")
+        if nk and nk not in profiles:
+            sigs = _parse_jsonish(r.get("connection_signals"), {})
+            missing_rows.append({**r, "connection_signals": sigs})
+
+    if missing_rows:
+        oc_enr = fetch_batch_network_oc_profiles(_query, city, missing_rows)
+        for r in missing_rows:
+            nk = r["network_key"]
+            profiles[nk] = derive_network_business_profile(
+                r.get("display_name"),
+                r.get("member_names") or [],
+                r.get("member_addresses") or [],
+                r.get("connection_signals") or {},
+                oc_enr.get(nk),
+            )
+    return profiles
 
 
 def _latest_registration_join(city: str, property_alias: str = "p", alias: str = "r") -> str:
@@ -745,14 +847,21 @@ def city_search(
 
     results = []
 
-    def append_network_result(row, match_context=None):
+    def append_network_result(row, match_context=None, cached_prof=None):
         matched_member_names = [name for name in (row.get("matched_member_names") or []) if name]
         identity = _network_identity(
             row.get("display_name"), row.get("member_names"), row.get("connection_signals")
         )
+        prof = cached_prof or {}
+        op_name = prof.get("operator_name")
+        rep_human = prof.get("representative_human_name") or identity.get("primary_human_name")
         context = match_context
         if not context:
-            if identity.get("primary_human_name") and _py_matches_all(identity["primary_human_name"]):
+            if op_name and _py_matches_all(op_name):
+                context = f"Matched operator: {op_name}"
+            elif rep_human and _py_matches_all(rep_human):
+                context = f"Matched principal: {rep_human}"
+            elif identity.get("primary_human_name") and _py_matches_all(identity["primary_human_name"]):
                 context = f"Matched principal: {identity['primary_human_name']}"
             elif matched_member_names:
                 context = "Matched network member: " + ", ".join(matched_member_names[:3])
@@ -762,19 +871,54 @@ def city_search(
             "network_key":   row["network_key"],
             "display_name":  row["display_name"],
             "building_count": int(row["building_count"] or 0),
+            "business_count": prof.get("business_count"),
             "unit_count":    int(row["unit_count"] or 0) if c in RELIABLE_UNIT_CITIES else None,
             "borough_summary": row["borough_summary"],
             "match_context": context,
             "matched_member_names": matched_member_names,
             **identity,
-            "label":         identity["primary_human_name"] or row["display_name"],
+            "operator_name": op_name,
+            "operator_basis": prof.get("operator_basis"),
+            "primary_hq_address": prof.get("primary_hq_address"),
+            "representative_human_name": rep_human,
+            "label":         op_name or rep_human or row["display_name"],
             "sublabel":      _borough_summary_text(row["borough_summary"]),
         })
+
+    # 0. Fast representative-operator / representative-principal match (pre-audited top portfolios)
+    direct_net_rows = []
+    seen_network_keys: set[str] = set()
+    try:
+        where_rep_op, rep_op_params = _build_where(
+            "CONCAT_WS(' ', COALESCE(rp.operator_name, ''), COALESCE(rp.representative_human_name, ''), COALESCE(rp.operating_entities::text, ''))"
+        )
+        rep_net_rows = _query(f"""
+            SELECT
+                n.network_key,
+                n.display_name,
+                n.building_count,
+                n.unit_count,
+                n.borough_summary,
+                n.member_names,
+                n.connection_signals
+            FROM network_representative_profiles rp
+            JOIN {c}_networks n ON n.network_key = rp.network_key
+            WHERE rp.jurisdiction = %s
+              AND ({where_rep_op})
+            ORDER BY n.building_count DESC NULLS LAST, n.display_name
+            LIMIT %s
+        """, [c] + rep_op_params + [min(limit, 8)])
+        for rr in rep_net_rows:
+            if rr["network_key"] not in seen_network_keys:
+                seen_network_keys.add(rr["network_key"])
+                direct_net_rows.append(rr)
+    except Exception:
+        pass
 
     # 1. Direct network name or primary OpenCorporates/registration principal matches.
     # Split `display_name` from `primary_human_name` so `*_networks_display_trgm_idx` is always used.
     where_disp, disp_params = _build_where("display_name")
-    direct_net_rows = _query(f"""
+    disp_rows = _query(f"""
         SELECT
             network_key,
             display_name,
@@ -788,8 +932,11 @@ def city_search(
         ORDER BY building_count DESC NULLS LAST, display_name
         LIMIT %s
     """, disp_params + [limit])
+    for dr in disp_rows:
+        if dr["network_key"] not in seen_network_keys:
+            seen_network_keys.add(dr["network_key"])
+            direct_net_rows.append(dr)
 
-    seen_network_keys = {r["network_key"] for r in direct_net_rows}
     if len(direct_net_rows) < limit:
         where_human, human_params = _build_where("COALESCE(connection_signals::jsonb->>'primary_human_name', '')")
         rem_direct = limit - len(direct_net_rows)
@@ -835,16 +982,9 @@ def city_search(
                     seen_network_keys.add(hr["network_key"])
                     direct_net_rows.append(hr)
 
-    direct_net_rows.sort(key=lambda r: (-(int(r.get("building_count") or 0)), r.get("display_name") or ""))
-    seen_network_keys = set()
-    for r in direct_net_rows[:limit]:
-        seen_network_keys.add(r["network_key"])
-        ctx = "Matched network name" if _py_matches_all(r.get("display_name") or "") else None
-        append_network_result(r, ctx)
-
-    # 2. Multi-entity network member / corporate officer matches (up to 8 slots before
-    # single-parcel property rows so prominent shell-LLC portfolios like WC Smith surface first).
-    member_net_cap = min(max(0, 8 - len(results)), limit - len(results))
+    # 2. Multi-entity network member / corporate officer matches (always check major multi-entity
+    # portfolios so searching "Winn" or "Hamilton" surfaces the 908-parcel portfolio before 1-parcel matches).
+    member_net_cap = min(5, limit)
     if member_net_cap > 0:
         where_hidden_exists, hidden_params = _build_where("n")
         where_member_like, member_params = _build_where("member_name")
@@ -903,8 +1043,32 @@ def city_search(
         """, member_params + [list(seen_network_keys)] + hidden_params + hidden_params + [member_net_cap])
 
         for r in hidden_net_rows:
-            seen_network_keys.add(r["network_key"])
-            append_network_result(r)
+            if r["network_key"] not in seen_network_keys:
+                seen_network_keys.add(r["network_key"])
+                direct_net_rows.append(r)
+
+    cached_search_profiles = _load_cached_representative_profiles(
+        c, [r["network_key"] for r in direct_net_rows]
+    )
+    direct_net_rows.sort(
+        key=lambda r: (
+            0 if (
+                (cached_search_profiles.get(r["network_key"]) or {}).get("operator_name")
+                and _py_matches_all((cached_search_profiles.get(r["network_key"]) or {}).get("operator_name") or "")
+            ) else (1 if _py_matches_all(r.get("display_name") or "") and not r.get("matched_member_names") else 2),
+            -(int(r.get("building_count") or 0)),
+            r.get("display_name") or "",
+        )
+    )
+    top_search_nets = direct_net_rows[: min(limit, 8)]
+    for r in top_search_nets:
+        prof = cached_search_profiles.get(r["network_key"])
+        ctx = None
+        if prof and prof.get("operator_name") and _py_matches_all(prof["operator_name"]):
+            ctx = f"Matched operator: {prof['operator_name']}"
+        elif _py_matches_all(r.get("display_name") or "") and not r.get("matched_member_names"):
+            ctx = "Matched network name"
+        append_network_result(r, ctx, cached_prof=prof)
 
     # 3. Property address/municipality/owner matches for remaining slots.
     remaining = limit - len(results)
@@ -1050,7 +1214,7 @@ def city_top_networks(
         "evictions_total": "evictions_total",
     }
     sort_col = sort_columns.get(sort_by, "building_count")
-    net_cache_key = f"city_top_nets:v1:{c}:{sort_col}:{limit}:{min_buildings}:{int(bool(include_institutional))}"
+    net_cache_key = f"city_top_nets:v2:{c}:{sort_col}:{limit}:{min_buildings}:{int(bool(include_institutional))}"
     now = time.time()
     if limit <= 25 and not force_refresh:
         if net_cache_key in _networks_cache and net_cache_key in _networks_ts and now - _networks_ts[net_cache_key] < L1_MEM_TTL:
@@ -1078,6 +1242,10 @@ def city_top_networks(
     )
     institutional_sql, institutional_params = _institutional_filter(include_institutional, institutional_text)
 
+    net_cols = _get_network_columns(c)
+    oc_ids_expr = "n.oc_company_ids" if "oc_company_ids" in net_cols else "NULL::text[] AS oc_company_ids"
+    member_addrs_expr = "n.member_addresses" if "member_addresses" in net_cols else "ARRAY[]::text[] AS member_addresses"
+
     candidate_limit = min(max(limit + 200, limit * 4), 1000)
     if sort_col in ("building_count", "unit_count", "display_name"):
         rows = _query(f"""
@@ -1089,6 +1257,8 @@ def city_top_networks(
                     n.unit_count,
                     n.borough_summary,
                     n.member_names,
+                    {member_addrs_expr},
+                    {oc_ids_expr},
                     n.connection_signals,
                     n.bbl_list
                 FROM {c}_networks n
@@ -1104,6 +1274,8 @@ def city_top_networks(
                     n.unit_count,
                     n.borough_summary,
                     n.member_names,
+                    n.member_addresses,
+                    n.oc_company_ids,
                     n.connection_signals,
                     COALESCE(stats.open_violations, 0) AS open_violations,
                     COALESCE(stats.open_violations_c, 0) AS open_violations_c,
@@ -1161,6 +1333,8 @@ def city_top_networks(
                     n.unit_count,
                     n.borough_summary,
                     n.member_names,
+                    {member_addrs_expr},
+                    {oc_ids_expr},
                     n.connection_signals,
                     nh.open_violations,
                     nh.open_violations_c,
@@ -1179,24 +1353,31 @@ def city_top_networks(
             LIMIT %s
         """, [min_buildings, candidate_limit] + institutional_params + [limit])
 
+    profiles_by_key = _resolve_network_business_profiles(c, rows, compute_missing=True)
+
     results = []
     for row in rows:
         identity = _network_identity(
             row.get("display_name"), row.get("member_names"), row.get("connection_signals")
         )
+        prof = profiles_by_key.get(row["network_key"]) or {}
         member_names = row.get("member_names") or []
-        biz_count = sum(
-            1 for name in member_names
-            if name and not looks_like_person_owner(name)
-        )
-        if biz_count == 0 and row.get("display_name") and not looks_like_person_owner(row["display_name"]):
-            biz_count = 1
+        biz_count = prof.get("business_count")
+        if biz_count is None:
+            biz_count = sum(
+                1 for name in member_names
+                if name and not looks_like_person_owner(name)
+            )
+            if biz_count == 0 and row.get("display_name") and not looks_like_person_owner(row["display_name"]):
+                biz_count = 1
+        rep_human = prof.get("representative_human_name") or identity["primary_human_name"]
+        op_name = prof.get("operator_name")
         results.append({
             "type": f"{c}_network",
             "network_key": row["network_key"],
             "display_name": row["display_name"],
             "building_count": int(row["building_count"] or 0),
-            "business_count": biz_count,
+            "business_count": int(biz_count or 0),
             "unit_count": int(row["unit_count"] or 0) if c in RELIABLE_UNIT_CITIES else None,
             "open_violations": _safe_int(row.get("open_violations")),
             "open_violations_c": _safe_int(row.get("open_violations_c")),
@@ -1205,7 +1386,19 @@ def city_top_networks(
             "borough_summary": row["borough_summary"],
             "connection_signals": _parse_jsonish(row.get("connection_signals"), {}),
             **identity,
-            "label": identity["primary_human_name"] or row["display_name"],
+            "operator_name": op_name,
+            "operator_source": prof.get("operator_source"),
+            "operator_basis": prof.get("operator_basis"),
+            "operating_entities": prof.get("operating_entities") or [],
+            "primary_hq_address": prof.get("primary_hq_address"),
+            "hq_entity_count": prof.get("hq_entity_count"),
+            "representative_human_name": rep_human,
+            "key_officers": prof.get("key_officers") or [],
+            "officer_count": int(prof.get("officer_count") or 0),
+            "sample_entities": prof.get("sample_entities") or [],
+            "external_source_url": prof.get("external_source_url"),
+            "external_source_label": prof.get("external_source_label"),
+            "label": op_name or rep_human or row["display_name"],
             "sublabel": _borough_summary_text(row["borough_summary"]),
         })
     if limit <= 25:
@@ -1342,10 +1535,13 @@ def _find_sibling_portfolios(
 @router.get("/network/{network_key}")
 def city_network_detail(city: str, network_key: str):
     c = _validate_city(city)
+    net_cols = _get_network_columns(c)
+    oc_ids_expr = "oc_company_ids" if "oc_company_ids" in net_cols else "NULL::text[] AS oc_company_ids"
     nets = _query(f"""
         SELECT
             network_key, anchor_type, display_name,
             member_names, member_addresses,
+            {oc_ids_expr},
             registration_ids, bbl_list,
             building_count, unit_count, borough_summary,
             connection_signals,
@@ -1533,6 +1729,10 @@ def city_network_detail(city: str, network_key: str):
         except Exception:
             conn_signals = {}
     identity = _network_identity(net["display_name"], net["member_names"], conn_signals)
+    detail_profiles = _resolve_network_business_profiles(
+        c, [{**net, "connection_signals": conn_signals}], compute_missing=True
+    )
+    prof = detail_profiles.get(net["network_key"]) or {}
 
     formatted_props = [_format_property(p, city=c) for p in properties]
 
@@ -1639,6 +1839,19 @@ def city_network_detail(city: str, network_key: str):
         "connection_signals": conn_signals,
         "sibling_portfolios": sibling_portfolios,
         **identity,
+        "operator_name": prof.get("operator_name"),
+        "operator_source": prof.get("operator_source"),
+        "operator_basis": prof.get("operator_basis"),
+        "operating_entities": prof.get("operating_entities") or [],
+        "primary_hq_address": prof.get("primary_hq_address"),
+        "hq_entity_count": prof.get("hq_entity_count"),
+        "business_count": prof.get("business_count"),
+        "representative_human_name": prof.get("representative_human_name") or identity.get("primary_human_name"),
+        "key_officers": prof.get("key_officers") or [],
+        "officer_count": int(prof.get("officer_count") or 0),
+        "sample_entities": prof.get("sample_entities") or [],
+        "external_source_url": prof.get("external_source_url"),
+        "external_source_label": prof.get("external_source_label"),
         "updated_at":     str(net["updated_at"]) if net["updated_at"] else None,
         "portfolio_stats": {
             "enrichment_available": has_enrichment,

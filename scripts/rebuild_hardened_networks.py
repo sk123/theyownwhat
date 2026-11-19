@@ -88,6 +88,11 @@ def main() -> int:
                 f"[HARDEN] ✓ [{st_l.upper()}] {p_cnt:,} parcels -> {n_cnt:,} clean networks ({time.time() - t0:.1f}s)",
                 flush=True,
             )
+            try:
+                from updater.post_rebuild_label_audit import audit_jurisdiction_labels
+                audit_jurisdiction_labels(conn, st_l, limit=120, with_web_audit=False)
+            except Exception as aud_exc:
+                print(f"[HARDEN] ⚠ [{st_l.upper()}] representative label audit skipped: {aud_exc}", flush=True)
         finally:
             conn.close()
         gc.collect()
@@ -99,6 +104,11 @@ def main() -> int:
         try:
             rebuild_city_networks_from_db(conn, c_l)
             print(f"[HARDEN] ✓ [{c_l.upper()}] city networks rebuilt ({time.time() - t0:.1f}s)", flush=True)
+            try:
+                from updater.post_rebuild_label_audit import audit_jurisdiction_labels
+                audit_jurisdiction_labels(conn, c_l, limit=120, with_web_audit=False)
+            except Exception as aud_exc:
+                print(f"[HARDEN] ⚠ [{c_l.upper()}] representative label audit skipped: {aud_exc}", flush=True)
         finally:
             conn.close()
         gc.collect()

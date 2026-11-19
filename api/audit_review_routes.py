@@ -322,6 +322,146 @@ def _persist_db_decision_best_effort(
         logger.debug("Optional audit_review_decisions DB log skipped: %s", exc)
 
 
+def _fetch_label_candidate_context(item_key: str) -> Optional[Dict[str, Any]]:
+    """Load live external-source label candidate details from PostgreSQL when `item_key` starts with `label-candidate:`."""
+    clean = str(item_key or "").strip()
+    if not clean.startswith("label-candidate:"):
+        return None
+    suffix = clean.split(":", 1)[1].strip()
+    db_url = os.environ.get("DATABASE_URL")
+    if not db_url:
+        return None
+    try:
+        import psycopg2
+        from psycopg2.extras import RealDictCursor
+        from updater.post_rebuild_label_audit import ensure_representative_profile_tables, fetch_pending_candidates
+
+        conn = psycopg2.connect(db_url, connect_timeout=4)
+        try:
+            ensure_representative_profile_tables(conn)
+            if suffix == "approve-all":
+                pending = fetch_pending_candidates(conn, limit=50)
+                return {
+                    "mode": "approve-all",
+                    "count": len(pending),
+                    "candidates": pending,
+                }
+            cid = int(suffix)
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT c.*, rp.primary_hq_address AS current_hq_address,
+                           rp.representative_human_name AS current_representative_person
+                    FROM network_label_audit_candidates c
+                    LEFT JOIN network_representative_profiles rp
+                      ON rp.jurisdiction = c.jurisdiction AND rp.network_key = c.network_key
+                    WHERE c.id = %s
+                    """,
+                    (cid,),
+                )
+                row = cur.fetchone()
+                return {"mode": "single", "candidate": dict(row)} if row else None
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.debug("Label candidate context load skipped for %s: %s", item_key, exc)
+        return None
+
+
+def _execute_label_candidate_decision(
+    *,
+    decision: str,
+    item_key: str,
+    undo_descriptor: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Apply `approve`, `reject`, or `undo` for `label-candidate:<id>` or `label-candidate:approve-all`
+    directly against PostgreSQL `network_label_audit_candidates` and `network_representative_profiles`.
+    """
+    clean = str(item_key or "").strip()
+    if not clean.startswith("label-candidate:") and not (
+        isinstance(undo_descriptor, dict) and undo_descriptor.get("type") == "label_candidates"
+    ):
+        return None
+
+    db_url = os.environ.get("DATABASE_URL")
+    if not db_url:
+        raise HTTPException(status_code=503, detail="DATABASE_URL is not configured for label candidate approval.")
+
+    import psycopg2
+    from updater.post_rebuild_label_audit import (
+        approve_candidate,
+        ensure_representative_profile_tables,
+        fetch_pending_candidates,
+        reject_candidate,
+        revert_candidate,
+    )
+
+    clean_dec = str(decision or "").strip().lower()
+    conn = psycopg2.connect(db_url, connect_timeout=5)
+    try:
+        ensure_representative_profile_tables(conn)
+        if clean_dec == "undo":
+            desc = undo_descriptor or {}
+            items = desc.get("items") or []
+            reverted = 0
+            for item in items:
+                cid = int(item["id"])
+                revert_candidate(conn, cid, prior_profile=item.get("prior_profile"))
+                reverted += 1
+            return {
+                "summary": f"Reverted {reverted} representative network label decision(s) back to pending review.",
+                "undoDescriptor": None,
+            }
+
+        suffix = clean.split(":", 1)[1].strip()
+        if clean_dec == "approve":
+            if suffix == "approve-all":
+                pending = fetch_pending_candidates(conn, limit=100)
+                undo_items = []
+                for p in pending:
+                    res = approve_candidate(conn, int(p["id"]))
+                    undo_items.append({"id": int(p["id"]), "prior_profile": res.get("prior_profile")})
+                return {
+                    "summary": (
+                        f"Approved and published {len(undo_items)} verified external-source network label(s) to live cards."
+                        if undo_items
+                        else "No pending external-source label candidates remained to approve."
+                    ),
+                    "undoDescriptor": {"type": "label_candidates", "items": undo_items} if undo_items else None,
+                }
+            cid = int(suffix)
+            res = approve_candidate(conn, cid)
+            return {
+                "summary": (
+                    f'Approved and published "{res.get("suggested_operator_name")}" '
+                    f'for {str(res.get("jurisdiction") or "").upper()} (cache invalidated — live immediately).'
+                ),
+                "undoDescriptor": {
+                    "type": "label_candidates",
+                    "items": [{"id": cid, "prior_profile": res.get("prior_profile")}],
+                },
+            }
+
+        if clean_dec == "reject":
+            if suffix == "approve-all":
+                raise HTTPException(status_code=400, detail="Decline candidates individually rather than via approve-all.")
+            cid = int(suffix)
+            res = reject_candidate(conn, cid)
+            return {
+                "summary": (
+                    f'Declined "{res.get("suggested_operator_name")}" for '
+                    f'{str(res.get("jurisdiction") or "").upper()} — keeping the deterministic registry label.'
+                ),
+                "undoDescriptor": {"type": "label_candidates", "items": [{"id": cid, "prior_profile": None}]},
+            }
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    finally:
+        conn.close()
+    return None
+
+
 def record_review_decision(
     *,
     decision: str,
@@ -734,8 +874,49 @@ def render_quick_decision_page(
     reject_checked = "checked" if initial_decision == "reject" else ""
     reject_hidden = "" if initial_decision == "reject" else "hidden"
 
+    label_ctx = _fetch_label_candidate_context(item_key)
     details_html = ""
-    if why_text or details_list:
+    if label_ctx and label_ctx.get("mode") == "single":
+        cand = label_ctx["candidate"]
+        jur_up = str(cand.get("jurisdiction") or "").upper()
+        if not resolved_jur:
+            resolved_jur = jur_up
+        if not title:
+            resolved_title = (
+                f"[{jur_up}] {cand.get('current_operator_name') or cand.get('current_display_name')} "
+                f"→ {cand.get('suggested_operator_name')}"
+            )
+        urls = cand.get("evidence_urls") if isinstance(cand.get("evidence_urls"), list) else []
+        snips = cand.get("evidence_snippets") if isinstance(cand.get("evidence_snippets"), list) else []
+        url_lis = "".join(
+            f'<li><a href="{html.escape(str(u))}" target="_blank" rel="noopener noreferrer" style="color:#60a5fa;word-break:break-all;">{html.escape(str(u))}</a></li>'
+            for u in urls[:6]
+        )
+        snip_lis = "".join(f'<li>&ldquo;{html.escape(str(s))}&rdquo;</li>' for s in snips[:4])
+        details_html = f"""
+        <section class="context-card" aria-label="Representative label candidate details">
+          <p style="margin:0 0 0.4rem;"><strong>Current card label:</strong> {html.escape(str(cand.get('current_operator_name') or cand.get('current_display_name') or '—'))}</p>
+          <p style="margin:0 0 0.4rem;"><strong>Proposed verified label:</strong> <span style="color:#34d399;font-weight:800;">{html.escape(str(cand.get('suggested_operator_name') or '—'))}</span></p>
+          {f'<p style="margin:0 0 0.4rem;"><strong>Proposed representative person:</strong> {html.escape(str(cand.get("suggested_representative_person")))}</p>' if cand.get("suggested_representative_person") else ''}
+          {f'<p style="margin:0 0 0.4rem;"><strong>Proposed HQ:</strong> {html.escape(str(cand.get("suggested_hq_address")))}</p>' if cand.get("suggested_hq_address") else ''}
+          {f'<p style="margin:0.5rem 0;"><strong>Evidence rationale:</strong> {html.escape(str(cand.get("rationale")))}</p>' if cand.get("rationale") else ''}
+          {f'<p style="margin:0.5rem 0 0.25rem;"><strong>Verified Public Sources:</strong></p><ul style="margin:0 0 0.5rem;padding-left:1.2rem;">{url_lis}</ul>' if url_lis else ''}
+          {f'<p style="margin:0.5rem 0 0.25rem;"><strong>Quoted Evidence:</strong></p><ul style="margin:0;padding-left:1.2rem;">{snip_lis}</ul>' if snip_lis else ''}
+          <p style="margin:0.5rem 0 0;font-size:0.82rem;color:var(--muted);">Current status: <strong>{html.escape(str(cand.get('status') or 'pending_review'))}</strong></p>
+        </section>"""
+    elif label_ctx and label_ctx.get("mode") == "approve-all":
+        cand_lis = "".join(
+            f"<li><strong>[{html.escape(str(c.get('jurisdiction') or '').upper())}]</strong> "
+            f"{html.escape(str(c.get('current_operator_name') or c.get('current_display_name') or ''))} "
+            f"&rarr; <strong>{html.escape(str(c.get('suggested_operator_name') or ''))}</strong></li>"
+            for c in (label_ctx.get("candidates") or [])[:25]
+        )
+        details_html = f"""
+        <section class="context-card" aria-label="Pending representative label candidates">
+          <p style="margin:0 0 0.5rem;">Confirming will publish <strong>{int(label_ctx.get('count') or 0)}</strong> pending cited representative label(s) directly to live cards:</p>
+          <ul style="margin:0;padding-left:1.2rem;">{cand_lis or '<li>No pending candidates remain.</li>'}</ul>
+        </section>"""
+    elif why_text or details_list:
         bullets = "".join(f"<li>{html.escape(str(d))}</li>" for d in details_list[:10])
         details_html = f"""
         <section class="context-card" aria-label="Review context">
@@ -1018,17 +1199,39 @@ async def act_on_review_decision(request: Request) -> Response:
             return _with_security_headers(JSONResponse(status_code=403, content={"ok": False, "detail": err}))
         return _with_security_headers(HTMLResponse(status_code=403, content=f"<h1>403 Forbidden</h1><p>{html.escape(err)}</p>"))
 
-    result = record_review_decision(
+    label_result = _execute_label_candidate_decision(
         decision=decision,
         item_key=item_key,
-        title=title,
-        domain=domain,
-        jurisdiction=jurisdiction,
-        preset_reasons=preset_reasons,
-        explanation=explanation,
-        reviewer=reviewer,
         undo_descriptor=undo_descriptor,
     )
+    if label_result is not None:
+        _persist_db_decision_best_effort(
+            item_key=item_key or "label-candidate",
+            decision=decision,
+            domain=domain or "Representative Label Audit",
+            jurisdiction=jurisdiction,
+            title=title or item_key,
+            note=explanation.strip() or label_result.get("summary") or "",
+            reviewer=reviewer,
+        )
+        result = {
+            "ok": True,
+            "decision": decision,
+            "summary": label_result["summary"],
+            "undoDescriptor": label_result.get("undoDescriptor"),
+        }
+    else:
+        result = record_review_decision(
+            decision=decision,
+            item_key=item_key,
+            title=title,
+            domain=domain,
+            jurisdiction=jurisdiction,
+            preset_reasons=preset_reasons,
+            explanation=explanation,
+            reviewer=reviewer,
+            undo_descriptor=undo_descriptor,
+        )
 
     if wants_json:
         return _with_security_headers(JSONResponse(status_code=200, content=result))
@@ -1053,9 +1256,46 @@ def get_review_queue(request: Request, token: str = "") -> Response:
         return _with_security_headers(JSONResponse(status_code=403, content={"ok": False, "detail": err}))
 
     state = load_review_state()
+    pending_label_ctx = _fetch_label_candidate_context("label-candidate:approve-all")
+    pending_labels = (pending_label_ctx or {}).get("candidates") or []
     accept = (request.headers.get("accept") or "").lower()
     if "text/html" not in accept:
-        return _with_security_headers(JSONResponse(status_code=200, content={"ok": True, **state}))
+        return _with_security_headers(
+            JSONResponse(status_code=200, content={"ok": True, **state, "pendingLabelCandidates": pending_labels})
+        )
+
+    pending_label_items = []
+    for c in pending_labels[:30]:
+        jur_up = str(c.get("jurisdiction") or "").upper()
+        cur_nm = str(c.get("current_operator_name") or c.get("current_display_name") or "")
+        sug_nm = str(c.get("suggested_operator_name") or "")
+        cid = c["id"]
+        cand_key = f"label-candidate:{cid}"
+        cand_title = f"[{jur_up}] {sug_nm}"
+        app_href = build_quick_decision_url(
+            "",
+            decision="approve",
+            item_key=cand_key,
+            title=cand_title,
+            domain="Representative Label Audit",
+            jurisdiction=jur_up,
+        )
+        dec_href = build_quick_decision_url(
+            "",
+            decision="reject",
+            item_key=cand_key,
+            title=cand_title,
+            domain="Representative Label Audit",
+            jurisdiction=jur_up,
+        )
+        pending_label_items.append(
+            f"<li><strong>[{html.escape(jur_up)}]</strong> {html.escape(cur_nm)} "
+            f"&rarr; <strong>{html.escape(sug_nm)}</strong> "
+            f"(<a style='color:#34d399;font-weight:700;' href='{html.escape(app_href)}'>Approve</a>"
+            f" &middot; "
+            f"<a style='color:#f87171;font-weight:700;' href='{html.escape(dec_href)}'>Decline</a>)</li>"
+        )
+    pending_label_rows = "".join(pending_label_items) or "<li>No pending external-source network label candidates.</li>"
 
     open_rows = "".join(
         f"<li><strong>[{html.escape(str(i.get('id')))}]</strong> {html.escape(str(i.get('domain') or ''))}: "
@@ -1076,8 +1316,10 @@ def get_review_queue(request: Request, token: str = "") -> Response:
 <body style="font-family:system-ui,sans-serif;background:#0f172a;color:#f8fafc;padding:1.5rem;line-height:1.5;">
 <main style="max-width:760px;margin:0 auto;background:#1e293b;border:1px solid #334155;border-radius:16px;padding:1.5rem;">
 <p style="font-size:0.78rem;text-transform:uppercase;letter-spacing:0.06em;color:#94a3b8;margin:0;">They Own WHAT?? &middot; Maintainer Assurance</p>
-<h1 style="margin:0.35rem 0 1rem;font-size:1.35rem;">Weekly Gemini Audit &amp; Fix Queue</h1>
-<h2 style="font-size:1.05rem;">Open Fix Requests (<code>docs/review-fix-queue.json</code>)</h2>
+<h1 style="margin:0.35rem 0 1rem;font-size:1.35rem;">Audit Review, Label Approvals &amp; Fix Queue</h1>
+<h2 style="font-size:1.05rem;">Pending Representative Network Labels (<code>network_label_audit_candidates</code>)</h2>
+<ul>{pending_label_rows}</ul>
+<h2 style="font-size:1.05rem;margin-top:1.25rem;">Open Fix Requests (<code>docs/review-fix-queue.json</code>)</h2>
 <ul>{open_rows}</ul>
 <h2 style="font-size:1.05rem;margin-top:1.25rem;">Recorded Sign-Offs (<code>docs/weekly-review-decisions.json</code>)</h2>
 <ul>{dec_rows}</ul>

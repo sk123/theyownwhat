@@ -3139,30 +3139,54 @@ function CitySearchBox({ onSelect, externalQuery, onExternalQueryConsumed, apiBa
             exit={{ opacity: 0, y: -4 }}
             className="absolute top-full left-0 right-0 mt-2 bg-white border border-slate-200 rounded-2xl shadow-2xl z-50 overflow-hidden max-h-96 overflow-y-auto"
           >
-            {results.map((r, i) => (
+            {results.map((r, i) => {
+              const isNet = Boolean(r.type?.endsWith('_network'));
+              const primaryTitle = isNet
+                ? formatDisplayName(r.operator_name || r.representative_human_name || r.label)
+                : r.label;
+              const secondaryBits = [];
+              if (isNet) {
+                const repPerson = r.representative_human_name || r.primary_human_name;
+                if (repPerson && r.operator_name && repPerson.toUpperCase() !== r.operator_name.toUpperCase()) {
+                  secondaryBits.push(formatDisplayName(repPerson));
+                }
+                if (r.primary_hq_address) {
+                  secondaryBits.push(formatDisplayName(r.primary_hq_address));
+                }
+              }
+              return (
               <button
                 key={i}
+                type="button"
                 onMouseDown={() => { onSelect(r); setQuery(''); setResults([]); }}
                 className="w-full text-left px-4 py-3 hover:bg-violet-50 transition-colors border-b border-slate-100 last:border-0 flex items-start gap-3"
               >
-                <div className={`p-1.5 rounded-lg mt-0.5 shrink-0 ${r.type?.endsWith('_network') ? 'bg-violet-100' : 'bg-blue-100'}`}>
-                  {r.type?.endsWith('_network')
-                    ? <Users size={13} className="text-violet-600" />
-                    : <Building2 size={13} className="text-blue-600" />}
+                <div className={`p-1.5 rounded-lg mt-0.5 shrink-0 ${isNet ? 'bg-violet-100' : 'bg-blue-100'}`}>
+                  {isNet
+                    ? <Users size={13} aria-hidden="true" className="text-violet-600" />
+                    : <Building2 size={13} aria-hidden="true" className="text-blue-600" />}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <div className="font-semibold text-slate-800 text-sm truncate">{r.label}</div>
+                  <div className="font-semibold text-slate-800 text-sm truncate">{primaryTitle}</div>
+                  {secondaryBits.length > 0 && (
+                    <div className="text-[11px] text-slate-600 truncate">{secondaryBits.join(' · ')}</div>
+                  )}
                   <div className="text-[11px] text-slate-500 truncate">{r.sublabel}</div>
                   {r.match_context && (
                     <div className="mt-1 text-[10px] font-bold text-violet-700 bg-violet-50 border border-violet-100 rounded-md px-1.5 py-0.5 inline-block max-w-full truncate">
                       {r.match_context}
                     </div>
                   )}
-                  {r.type?.endsWith('_network') && (
-                    <div className="flex gap-2 mt-1">
+                  {isNet && (
+                    <div className="flex flex-wrap gap-2 mt-1">
                       <span className="text-[10px] font-bold text-violet-700 bg-violet-100 px-1.5 py-0.5 rounded-full">
                         {fmt(r.building_count)} {config.recordLabel === 'parcels' ? (Number(r.building_count) === 1 ? 'parcel' : 'parcels') : 'bldgs'}
                       </span>
+                      {Number(r.business_count) > 1 && (
+                        <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded-full">
+                          {fmt(r.business_count)} entities
+                        </span>
+                      )}
                       {config.reliableUnits && r.unit_count > 0 && (
                         <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded-full">
                           {fmt(r.unit_count)} units
@@ -3171,9 +3195,10 @@ function CitySearchBox({ onSelect, externalQuery, onExternalQueryConsumed, apiBa
                     </div>
                   )}
                 </div>
-                <ChevronRight size={14} className="text-slate-300 shrink-0 mt-1" />
+                <ChevronRight size={14} aria-hidden="true" className="text-slate-300 shrink-0 mt-1" />
               </button>
-            ))}
+              );
+            })}
           </motion.div>
         )}
       </AnimatePresence>
@@ -4225,7 +4250,7 @@ function NetworkDetail({ networkKey, onBack, onSearchTrigger, onMapSelected, onO
       <NetworkTransactionsDialog
         isOpen={showTxModal}
         onClose={() => setShowTxModal(false)}
-        managerName={data.primary_human_name || data.display_name}
+        managerName={data.operator_name || data.representative_human_name || data.primary_human_name || data.display_name}
         transactions={allTxns}
         totalRecorded={txTotalRecorded}
         onSelectProperty={handleSelectTransactionParcel}
@@ -4248,15 +4273,74 @@ function NetworkDetail({ networkKey, onBack, onSearchTrigger, onMapSelected, onO
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
               <h2 className="text-base md:text-lg font-black text-slate-900 tracking-tight break-words [text-wrap:balance]">
-                {formatDisplayName(data.primary_human_name || data.display_name)}
+                {formatDisplayName(data.operator_name || data.representative_human_name || data.primary_human_name || data.display_name)}
               </h2>
-              <span className={`shrink-0 text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${data.primary_human_name ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-800'}`}>
-                {data.primary_human_name ? 'Source-listed person' : 'Principal unresolved'}
+              <span className={`shrink-0 text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${
+                data.operator_source === 'verified_external_source'
+                  ? 'bg-emerald-100 text-emerald-800'
+                  : data.operator_name
+                    ? 'bg-indigo-100 text-indigo-800'
+                    : data.primary_human_name
+                      ? 'bg-blue-100 text-blue-700'
+                      : 'bg-amber-100 text-amber-800'
+              }`}>
+                {data.operator_source === 'verified_external_source'
+                  ? 'Verified public source'
+                  : data.operator_name
+                    ? 'Source-backed operator'
+                    : data.primary_human_name
+                      ? 'Source-listed person'
+                      : 'Principal unresolved'}
               </span>
+              {Number(data.business_count) > 1 && (
+                <span className="shrink-0 text-[9px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 tabular-nums">
+                  {fmt(data.business_count)} linked entities
+                </span>
+              )}
             </div>
-            {data.registered_entity_name && (
-              <div className="text-[10px] font-semibold text-slate-400 break-words mt-0.5">
-                Connected ownership record: {formatDisplayName(data.registered_entity_name)}
+            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-600">
+              {(data.key_officers?.length > 0 || data.primary_human_name) && (
+                <span className="inline-flex items-center gap-1 min-w-0">
+                  <Users size={12} aria-hidden="true" className="text-slate-400 shrink-0" />
+                  <span className="truncate">
+                    {(data.key_officers?.length > 0 ? data.key_officers.slice(0, 3) : [data.primary_human_name])
+                      .map((nm) => formatDisplayName(nm))
+                      .join(' · ')}
+                    {Number(data.officer_count) > 3 ? ` (+${fmt(Number(data.officer_count) - 3)} more)` : ''}
+                  </span>
+                </span>
+              )}
+              {data.primary_hq_address && (
+                <span className="inline-flex items-center gap-1 min-w-0">
+                  <MapPin size={12} aria-hidden="true" className="text-slate-400 shrink-0" />
+                  <span className="truncate">{formatDisplayName(data.primary_hq_address)}</span>
+                </span>
+              )}
+            </div>
+            {(data.operator_basis || data.registered_entity_name || (data.operating_entities?.length > 0)) && (
+              <div className="text-[10.5px] font-medium text-slate-500 break-words mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                {data.operator_basis && <span>{data.operator_basis}</span>}
+                {data.external_source_url && (
+                  <a
+                    href={data.external_source_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-0.5 font-bold text-blue-600 hover:underline"
+                  >
+                    <span>{data.external_source_label || 'Public source'}</span>
+                    <ExternalLink size={10} aria-hidden="true" />
+                  </a>
+                )}
+                {data.operating_entities?.length > 0 && (
+                  <span className="text-slate-400">
+                    Affiliates: {data.operating_entities.slice(0, 2).map((e) => formatDisplayName(e)).join(', ')}
+                  </span>
+                )}
+                {data.registered_entity_name && (!data.operator_name || data.registered_entity_name.toUpperCase() !== data.operator_name.toUpperCase()) && (
+                  <span className="text-slate-400">
+                    Deed anchor: {formatDisplayName(data.registered_entity_name)}
+                  </span>
+                )}
               </div>
             )}
             {onOpenSiblingNetwork && Array.isArray(data.sibling_portfolios) && data.sibling_portfolios.length > 0 && (
@@ -5345,53 +5429,266 @@ export default function CityExplorer({ city = "nyc", onBack, onMapSelected, onOp
 
               {/* Notable portfolios */}
               {!loadingTop && topNetworks.length > 0 && (
-                <div>
-                  <div className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-3">
-                    {cityKey === 'nyc' ? 'NYC HPD Code Watchlist' : 'Notable Portfolios'}
+                <section aria-labelledby="notable-portfolios-heading">
+                  <div className="flex flex-wrap items-baseline justify-between gap-2 mb-3">
+                    <h2 id="notable-portfolios-heading" className="text-xs font-bold text-slate-500 uppercase tracking-wide">
+                      {cityKey === 'nyc' ? 'NYC HPD Code Watchlist' : 'Notable Ownership Networks'}
+                    </h2>
+                    <span className="text-[11px] text-slate-400">
+                      Labels &amp; business details derived from public corporate and property filings
+                    </span>
                   </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {topNetworks.map(n => (
-                      <button
-                        key={n.network_key}
-                        onClick={() => setSelectedNetwork(n.network_key)}
-                        className="text-left bg-white border border-slate-200 hover:border-violet-300 hover:shadow-md rounded-2xl p-4 transition-all group"
-                      >
-                        <div className="font-bold text-slate-800 text-sm mb-1 group-hover:text-violet-700 transition-colors truncate">
-                          {formatDisplayName(n.primary_human_name || n.display_name)}
-                        </div>
-                        <div className={`inline-flex mb-1 text-[9px] font-black uppercase px-1.5 py-0.5 rounded-md ${n.primary_human_name ? 'bg-blue-50 text-blue-700' : 'bg-amber-50 text-amber-800'}`}>
-                          {n.primary_human_name ? 'Source-listed person' : 'Principal unresolved'}
-                        </div>
-                        {n.registered_entity_name && (
-                          <div className="text-[10px] text-slate-500 mb-1 truncate" title={n.registered_entity_name}>
-                            Entity network: {formatDisplayName(n.registered_entity_name)}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {topNetworks.map((n, cardIdx) => {
+                      const headline = formatDisplayName(
+                        n.operator_name || n.representative_human_name || n.primary_human_name || n.display_name
+                      );
+                      const hasOperator = Boolean(n.operator_name);
+                      const officers = (
+                        Array.isArray(n.key_officers) && n.key_officers.length > 0
+                          ? n.key_officers
+                          : (n.representative_human_name || n.primary_human_name ? [n.representative_human_name || n.primary_human_name] : [])
+                      ).filter(Boolean);
+                      const officerHeadlineSame = !hasOperator && officers.length > 0;
+                      const displayedOfficers = officerHeadlineSame ? officers.slice(1, 4) : officers.slice(0, 3);
+                      const totalOfficers = Math.max(Number(n.officer_count || 0), officers.length);
+                      const extraOfficers = Math.max(
+                        0,
+                        totalOfficers - (officerHeadlineSame ? displayedOfficers.length + 1 : displayedOfficers.length)
+                      );
+
+                      const affiliatedList = [];
+                      const seenAff = new Set([headline.toUpperCase()]);
+                      const pushAff = (raw) => {
+                        if (!raw) return;
+                        const fmtName = formatDisplayName(raw);
+                        const k = fmtName.toUpperCase();
+                        if (seenAff.has(k) || affiliatedList.length >= 3) return;
+                        seenAff.add(k);
+                        affiliatedList.push(fmtName);
+                      };
+                      (n.operating_entities || []).forEach(pushAff);
+                      (n.sample_entities || []).forEach(pushAff);
+                      if (affiliatedList.length === 0 && n.registered_entity_name) {
+                        pushAff(n.registered_entity_name);
+                      } else if (affiliatedList.length === 0 && n.display_name) {
+                        pushAff(n.display_name);
+                      }
+                      const extraEntities = Math.max(
+                        0,
+                        Number(n.business_count || 0) - affiliatedList.length - (hasOperator ? 1 : 0)
+                      );
+
+                      const badgeTone =
+                        n.operator_source === 'verified_external_source'
+                          ? 'bg-emerald-50 text-emerald-800 border-emerald-200/80'
+                          : hasOperator
+                            ? 'bg-indigo-50 text-indigo-700 border-indigo-200/70'
+                            : (n.representative_human_name || n.primary_human_name)
+                              ? 'bg-blue-50 text-blue-700 border-blue-200/70'
+                              : 'bg-amber-50 text-amber-800 border-amber-200/70';
+
+                      const badgeLabel =
+                        n.operator_source === 'verified_external_source'
+                          ? 'Verified operator'
+                          : hasOperator
+                            ? 'Operating entity'
+                            : (n.representative_human_name || n.primary_human_name)
+                              ? 'Source-listed person'
+                              : 'Principal unresolved';
+
+                      const recordNoun = config.recordLabel === 'parcels' ? 'Parcels' : 'Buildings';
+                      const kpiTiles = [
+                        { label: recordNoun, value: fmt(n.building_count), tone: 'default' },
+                        ...(config.reliableUnits && Number(n.unit_count) > 0
+                          ? [{ label: 'Units', value: fmt(n.unit_count), tone: 'emerald' }]
+                          : []),
+                        ...(Number(n.business_count) > 0
+                          ? [{ label: 'Entities', value: fmt(n.business_count), tone: 'default' }]
+                          : []),
+                        ...(totalOfficers > 0
+                          ? [{ label: 'Officers', value: fmt(totalOfficers), tone: 'default' }]
+                          : []),
+                        ...(Number(n.open_violations) > 0
+                          ? [{
+                              label: config.hasViolationClasses && Number(n.open_violations_c) > 0 ? 'Open Code (C)' : 'Open Code',
+                              value: config.hasViolationClasses && Number(n.open_violations_c) > 0
+                                ? `${fmt(n.open_violations)} (${fmt(n.open_violations_c)})`
+                                : fmt(n.open_violations),
+                              tone: 'danger',
+                            }]
+                          : []),
+                        ...(Number(n.evictions_total) > 0
+                          ? [{ label: 'Evictions', value: fmt(n.evictions_total), tone: 'danger' }]
+                          : []),
+                      ].slice(0, 6);
+
+                      const kpiGridCols =
+                        kpiTiles.length >= 3 ? 'grid-cols-2 sm:grid-cols-3' : 'grid-cols-2';
+
+                      return (
+                        <article
+                          key={n.network_key}
+                          className="relative flex flex-col justify-between gap-3 bg-white border border-slate-200/90 hover:border-blue-400 hover:shadow-md has-[button.card-primary-btn:focus-visible]:outline-2 has-[button.card-primary-btn:focus-visible]:outline-offset-2 has-[button.card-primary-btn:focus-visible]:outline-blue-600 rounded-2xl p-4 sm:p-5 transition-all group"
+                        >
+                          {/* Top Header: Rank + Provenance + Title + HQ */}
+                          <header className="min-w-0">
+                            <div className="flex items-center justify-between gap-2 mb-2">
+                              <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+                                <span className="inline-flex items-center rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-black text-slate-500 tabular-nums">
+                                  #{cardIdx + 1}
+                                </span>
+                                <span className={`inline-flex items-center text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-md border ${badgeTone}`}>
+                                  {badgeLabel}
+                                </span>
+                              </div>
+                              <span className="shrink-0 inline-flex items-center gap-1 rounded-lg border border-blue-200/80 bg-blue-50/70 px-2.5 py-1 text-[11px] font-black text-blue-700 tabular-nums">
+                                <Building2 size={12} aria-hidden="true" className="text-blue-500" />
+                                <span>{fmt(n.building_count)}</span>
+                              </span>
+                            </div>
+
+                            <h3 className="min-w-0 text-base sm:text-[17px] font-black text-slate-900 leading-snug tracking-tight group-hover:text-blue-700 transition-colors">
+                              <button
+                                type="button"
+                                onClick={() => setSelectedNetwork(n.network_key)}
+                                className="card-primary-btn text-left w-full focus-visible:outline-none after:content-[''] after:absolute after:inset-0 cursor-pointer"
+                              >
+                                <span className="line-clamp-2 break-words">{headline}</span>
+                              </button>
+                            </h3>
+
+                            {n.primary_hq_address && (
+                              <div className="mt-1.5 flex items-start gap-1.5 text-[11.5px] text-slate-600 min-w-0">
+                                <MapPin size={13} aria-hidden="true" className="shrink-0 mt-0.5 text-slate-400" />
+                                <span className="truncate" title={n.primary_hq_address}>
+                                  {formatDisplayName(n.primary_hq_address)}
+                                </span>
+                              </div>
+                            )}
+
+                            {(n.operator_basis || n.external_source_url) && (
+                              <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10.5px] text-slate-400">
+                                {n.operator_basis && <span className="truncate">{n.operator_basis}</span>}
+                                {n.external_source_url && (
+                                  <a
+                                    href={n.external_source_url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="relative z-[1] inline-flex items-center gap-0.5 font-semibold text-blue-600 hover:underline shrink-0"
+                                  >
+                                    <span>{n.external_source_label || 'Source'}</span>
+                                    <ExternalLink size={10} aria-hidden="true" />
+                                  </a>
+                                )}
+                              </div>
+                            )}
+                          </header>
+
+                          {/* CT-Style KPI Mini-Tiles */}
+                          <div className={`grid ${kpiGridCols} gap-2`}>
+                            {kpiTiles.map((tile) => (
+                              <div
+                                key={tile.label}
+                                className={`rounded-xl border px-3 py-2 ${
+                                  tile.tone === 'danger'
+                                    ? 'border-rose-200/80 bg-rose-50/50'
+                                    : tile.tone === 'emerald'
+                                      ? 'border-emerald-200/80 bg-emerald-50/40'
+                                      : 'border-slate-200/80 bg-slate-50/70'
+                                }`}
+                              >
+                                <div className="text-[9.5px] font-bold uppercase tracking-wider text-slate-400 truncate">
+                                  {tile.label}
+                                </div>
+                                <div
+                                  className={`mt-0.5 text-sm sm:text-base font-black tabular-nums leading-tight truncate ${
+                                    tile.tone === 'danger'
+                                      ? 'text-rose-700'
+                                      : tile.tone === 'emerald'
+                                        ? 'text-emerald-800'
+                                        : 'text-slate-900'
+                                  }`}
+                                >
+                                  {tile.value}
+                                </div>
+                              </div>
+                            ))}
                           </div>
-                        )}
-                        <div className="flex gap-2 flex-wrap">
-                          {n.open_violations > 0 && (
-                            <span className="text-[10px] font-black bg-red-100 text-red-700 px-2 py-0.5 rounded-full">
-                              {fmt(n.open_violations)} {config.openRecordChipLabel || 'open code records'}
-                            </span>
+
+                          {/* CT-Style Wrap-Friendly Pill Chips for Key Principals & Linked Entities */}
+                          {(displayedOfficers.length > 0 || affiliatedList.length > 0) && (
+                            <div className="space-y-2.5 pt-2 border-t border-slate-100">
+                              {displayedOfficers.length > 0 && (
+                                <div>
+                                  <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">
+                                    <Users size={11} aria-hidden="true" />
+                                    <span>Key Principals</span>
+                                  </div>
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {displayedOfficers.map((nm) => (
+                                      <span
+                                        key={nm}
+                                        className="inline-flex items-center rounded-lg border border-violet-200/80 bg-violet-50/80 px-2 py-0.5 text-[11px] font-semibold text-violet-800 max-w-full truncate"
+                                      >
+                                        {formatDisplayName(nm)}
+                                      </span>
+                                    ))}
+                                    {extraOfficers > 0 && (
+                                      <span className="inline-flex items-center rounded-lg border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10.5px] font-semibold text-slate-500 tabular-nums">
+                                        +{fmt(extraOfficers)} more
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              )}
+
+                              {affiliatedList.length > 0 && (
+                                <div>
+                                  <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">
+                                    <Building2 size={11} aria-hidden="true" />
+                                    <span>Linked Entities</span>
+                                  </div>
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {affiliatedList.map((ent) => (
+                                      <span
+                                        key={ent}
+                                        className="inline-flex items-center rounded-lg border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-700 max-w-[230px] truncate"
+                                        title={ent}
+                                      >
+                                        {ent}
+                                      </span>
+                                    ))}
+                                    {extraEntities > 0 && (
+                                      <span className="inline-flex items-center rounded-lg border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10.5px] font-semibold text-slate-500 tabular-nums">
+                                        +{fmt(extraEntities)} more
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
                           )}
-                          {config.hasViolationClasses && n.open_violations_c > 0 && (
-                            <span className="text-[10px] font-black bg-rose-100 text-rose-700 px-2 py-0.5 rounded-full">
-                              {fmt(n.open_violations_c)} Class C
+
+                          {/* Clean Footer Bar */}
+                          <footer className="pt-2.5 border-t border-slate-100 flex items-center justify-between gap-2">
+                            <span className="text-[10.5px] font-semibold text-slate-400 truncate min-w-0">
+                              {n.sublabel || config.name}
                             </span>
-                          )}
-                          <span className="text-[10px] font-bold bg-violet-100 text-violet-700 px-2 py-0.5 rounded-full">
-                            {fmt(n.building_count)} {config.recordLabel === 'parcels' ? (Number(n.building_count) === 1 ? 'parcel' : 'parcels') : 'bldgs'}
-                          </span>
-                          {config.reliableUnits && n.unit_count > 0 && (
-                            <span className="text-[10px] font-bold bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">
-                              {fmt(n.unit_count)} units
+                            <span className="shrink-0 inline-flex items-center gap-1 text-[10.5px] font-extrabold uppercase tracking-wider text-slate-500 group-hover:text-blue-700 transition-colors">
+                              <span>Open Network</span>
+                              <ChevronRight
+                                size={14}
+                                aria-hidden="true"
+                                className="group-hover:translate-x-0.5 transition-transform"
+                              />
                             </span>
-                          )}
-                        </div>
-                        <div className="text-[10px] text-slate-400 mt-1 truncate">{n.sublabel}</div>
-                      </button>
-                    ))}
+                          </footer>
+                        </article>
+                      );
+                    })}
                   </div>
-                </div>
+                </section>
               )}
             </motion.div>
           )}

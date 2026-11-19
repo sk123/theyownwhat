@@ -1870,6 +1870,11 @@ def ingest_state(conn, jur: str, *, rebuild_only: bool = False) -> Tuple[int, in
         enrich_ny_buffalo_enforcement_and_registry(conn)
 
     p_cnt, n_cnt = build_and_save_state_networks(conn, jur, state_code, source_tag)
+    try:
+        from updater.post_rebuild_label_audit import audit_jurisdiction_labels
+        audit_jurisdiction_labels(conn, jur, limit=120, with_web_audit=False)
+    except Exception as aud_exc:
+        print(f"⚠ [{jur.upper()}] representative label audit skipped: {aud_exc}")
     print(f"✓ [{jur.upper()}] Complete in {time.time() - t0:.1f}s: {p_cnt:,} parcels -> {n_cnt:,} landlord networks.")
     return p_cnt, n_cnt
 

@@ -69,6 +69,32 @@ dialog::backdrop {
   overscroll-behavior: contain;
 }
 
+/* Native <details> progressive-enhancement slide animation (UpgradeModal deep-dive) */
+details.upgrade-tech-details > summary {
+  list-style: none;
+}
+
+details.upgrade-tech-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+details.upgrade-tech-details::details-content {
+  interpolate-size: allow-keywords;
+  overflow: clip;
+  contain: layout;
+}
+
+details.upgrade-tech-details:not([open])::details-content {
+  block-size: 0;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  details.upgrade-tech-details::details-content {
+    transition: block-size 0.28s ease-in-out, content-visibility 0.28s ease-in-out;
+    transition-behavior: allow-discrete;
+  }
+}
+
 #root {
   height: 100%;
 }

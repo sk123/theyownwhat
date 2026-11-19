@@ -772,6 +772,36 @@ def run_nightly_network_linking_optimization():
     logger.info("=" * 80)
 
 
+def run_post_rebuild_representative_label_audit():
+    """Daily post-rebuild representative-label & external-source verification pass across all jurisdictions."""
+    logger.info("=" * 80)
+    logger.info("Starting Scheduled Post-Rebuild Representative-Label & External-Source Audit")
+    logger.info("=" * 80)
+    recipient = (os.environ.get("NIGHTLY_OPTIMIZER_EMAIL_TO") or "salmun@storrsmagic.org").strip()
+    try:
+        cmd = [
+            sys.executable,
+            "updater/post_rebuild_label_audit.py",
+            "--jurisdiction", "all",
+            "--limit", "120",
+            "--with-web-audit",
+            "--web-max", "6",
+            "--send-email",
+            "--to", recipient,
+        ]
+        res = run_source_only(cmd, check=False, timeout=NETWORK_REBUILD_TIMEOUT)
+        if getattr(res, "returncode", 1) == 0:
+            logger.info("✓ Representative-label audit finished & approval digest dispatched to %s (if candidates queued).", recipient)
+        else:
+            logger.warning(
+                "⚠ Representative-label audit exited with code %s.",
+                getattr(res, "returncode", "unknown"),
+            )
+    except Exception as e:
+        logger.error("✘ Representative-label audit crashed: %s", e)
+    logger.info("=" * 80)
+
+
 def main():
     """Main scheduler loop"""
     logger.info("Vision Data Updater Service Starting")
@@ -795,6 +825,7 @@ def main():
     schedule.every().day.at("04:00").do(run_nightly_other_cities_update)
     schedule.every().day.at("04:30").do(run_nightly_lightweight_freshness_sync)
     schedule.every().day.at("05:15").do(run_nightly_network_linking_optimization)
+    schedule.every().day.at("05:50").do(run_post_rebuild_representative_label_audit)
     schedule.every().saturday.at("01:30").do(run_weekly_statewide_and_opencorporates_update)
     schedule.every().sunday.at("00:00").do(run_weekly_nightly_updates)
     schedule.every(30).days.at("01:00").do(run_monthly_other_updates)
@@ -812,6 +843,7 @@ def main():
     logger.info("  - Nightly multi-city source-only hook: 4:00 AM daily")
     logger.info("  - Nightly all-jurisdiction lightweight freshness & landing snapshot sync: 4:30 AM daily")
     logger.info("  - Nightly 5-Jurisdiction Recursive Network-Linking & Performance Optimizer (best-available Gemini -> salmun@storrsmagic.org): 5:15 AM daily")
+    logger.info("  - Nightly Post-Rebuild Representative-Label & Grounded External-Source Audit: 5:50 AM daily")
     logger.info("  - Weekly OpenCorporates SFTP poll & 9-Statewide GIS rotation (VT/CO/WI/NY/NC/AR/FL/MA/VA): 1:30 AM Saturday")
     logger.info("  - Rotating Jurisdiction Optimization Battery (Cycle 1 nightly -> Cycle 2+ weekly): 11:30 AM UTC daily [INDEPENDENT THREAD]")
     logger.info("  - Daily Server-Side Usage Analytics Email (salmunk@gmail.com): 8:00 AM daily [INDEPENDENT THREAD]")
