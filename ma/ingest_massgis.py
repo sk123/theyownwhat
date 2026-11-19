@@ -727,7 +727,7 @@ def build_and_save_ma_networks(conn) -> Tuple[int, int]:
         bos_alt_norms = {alt[1] for alt in boston_alt_by_bbl.values()}
         for anorm in bos_alt_norms:
             bbls = by_any_owner_norm.get(anorm) or []
-            if len(bbls) < 2 or len(bbls) > 150:
+            if len(bbls) < 2 or len(bbls) > 1000:
                 continue
             roots = list({bbl_to_r[b] for b in bbls if b in bbl_to_r})
             if len(roots) < 2:
@@ -737,7 +737,7 @@ def build_and_save_ma_networks(conn) -> Tuple[int, int]:
                 uo = _find_r(other)
                 if anchor == uo or pub_r.get(anchor) or pub_r.get(uo):
                     continue
-                if sz_r[anchor] + sz_r[uo] > 250:
+                if sz_r[anchor] + sz_r[uo] > 10_000:
                     continue
                 par_r[uo] = anchor
                 sz_r[anchor] += sz_r[uo]

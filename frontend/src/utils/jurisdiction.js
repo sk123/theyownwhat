@@ -48,6 +48,9 @@ const STATE_NAMES = {
   ILLINOIS: 'IL',
   ARKANSAS: 'AR',
   VIRGINIA: 'VA',
+  CALIFORNIA: 'CA',
+  MONTANA: 'MT',
+  OHIO: 'OH',
 };
 
 export const JURISDICTION_CONFIG = {
@@ -59,15 +62,15 @@ export const JURISDICTION_CONFIG = {
   },
   NY: {
     key: 'NY',
-    localLabel: 'NYC',
-    includeLabel: 'Include non-NYC properties',
-    outsideLabel: 'outside NYC',
+    localLabel: 'New York',
+    includeLabel: 'Include properties outside New York',
+    outsideLabel: 'outside New York',
   },
   NYS: {
     key: 'NYS',
-    localLabel: 'New York State',
-    includeLabel: 'Include properties outside NY State',
-    outsideLabel: 'outside NY State',
+    localLabel: 'New York',
+    includeLabel: 'Include properties outside New York',
+    outsideLabel: 'outside New York',
   },
   DC: {
     key: 'DC',
@@ -170,6 +173,36 @@ export const JURISDICTION_CONFIG = {
     localLabel: 'Virginia',
     includeLabel: 'Include properties outside Virginia',
     outsideLabel: 'outside Virginia',
+  },
+  IL: {
+    key: 'IL',
+    localLabel: 'Illinois',
+    includeLabel: 'Include properties outside Illinois',
+    outsideLabel: 'outside Illinois',
+  },
+  CA: {
+    key: 'CA',
+    localLabel: 'California',
+    includeLabel: 'Include properties outside California',
+    outsideLabel: 'outside California',
+  },
+  MN: {
+    key: 'MN',
+    localLabel: 'Minnesota',
+    includeLabel: 'Include properties outside Minnesota',
+    outsideLabel: 'outside Minnesota',
+  },
+  MT: {
+    key: 'MT',
+    localLabel: 'Montana',
+    includeLabel: 'Include properties outside Montana',
+    outsideLabel: 'outside Montana',
+  },
+  OH: {
+    key: 'OH',
+    localLabel: 'Ohio',
+    includeLabel: 'Include properties outside Ohio',
+    outsideLabel: 'outside Ohio',
   },
 };
 

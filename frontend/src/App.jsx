@@ -16,6 +16,7 @@ import { Sparkles, Loader2, Search, ArrowRight, ArrowUp, ArrowDown, Building2, T
 import LandlordMonitor from './components/LandlordMonitor';
 import CityExplorer from './components/CityExplorer';
 import DatasetLanding from './components/DatasetLanding';
+import AlgorithmicEstimateBanner from './components/AlgorithmicEstimateBanner';
 import { getCtPropertyUnitCount, getJurisdictionConfig, isPropertyInActiveJurisdiction } from './utils/jurisdiction';
 const BurstDetector = React.lazy(() => import('./components/BurstDetector'));
 
@@ -50,24 +51,30 @@ const LocalAnalyticsDashboard = React.lazy(() => {
 const CITY_EXPLORER_STATES = new Set([
   'NY', 'NYS', 'DC', 'BALTIMORE', 'BOSTON', 'DETROIT', 'PHILADELPHIA',
   'CHICAGO', 'MIAMI', 'MINNEAPOLIS', 'NJ',
-  'MA', 'FL', 'CO', 'VT', 'WI', 'NC', 'AR', 'VA',
+  'MA', 'FL', 'IL', 'CA', 'MN', 'MT', 'OH',
+  'CO', 'VT', 'WI', 'NC', 'AR', 'VA',
 ]);
 const DATASET_STORAGE_KEY = 'theyownwhat.dataset';
 const DATASET_PATHS = {
   CT: '/ct',
-  NY: '/nyc',
+  NY: '/ny',
   NYS: '/ny',
   DC: '/dc',
   BALTIMORE: '/baltimore',
   DETROIT: '/detroit',
   PHILADELPHIA: '/philadelphia',
-  CHICAGO: '/chicago',
-  MIAMI: '/miami',
-  MINNEAPOLIS: '/minneapolis',
+  CHICAGO: '/il',
+  IL: '/il',
+  MIAMI: '/fl',
+  FL: '/fl',
+  MINNEAPOLIS: '/mn',
+  MN: '/mn',
   NJ: '/nj',
   MA: '/ma',
   BOSTON: '/ma',
-  FL: '/fl',
+  CA: '/ca',
+  MT: '/mt',
+  OH: '/oh',
   CO: '/co',
   VT: '/vt',
   WI: '/wi',
@@ -79,6 +86,17 @@ const PATH_DATASETS = {
   ...Object.fromEntries(Object.entries(DATASET_PATHS).map(([state, path]) => [path, state])),
   '/ma': 'MA',
   '/boston': 'MA',
+  '/fl': 'FL',
+  '/miami': 'FL',
+  '/ny': 'NY',
+  '/nyc': 'NY',
+  '/il': 'IL',
+  '/chicago': 'IL',
+  '/mn': 'MN',
+  '/minneapolis': 'MN',
+  '/ca': 'CA',
+  '/mt': 'MT',
+  '/oh': 'OH',
 };
 
 const SEO_BY_DATASET = {
@@ -93,9 +111,9 @@ const SEO_BY_DATASET = {
     path: '/ct',
   },
   NY: {
-    title: 'They Own WHAT?? | NYC Property Owner Explorer',
-    description: 'Explore New York City property owner and building records using source-loaded HPD registration, PLUTO parcel, housing code, eviction, and subsidy data.',
-    path: '/nyc',
+    title: 'They Own WHAT?? | New York Statewide & NYC Property Owner Explorer',
+    description: 'Explore unified New York City (HPD, PLUTO, Class C code violations & Marshal evictions) and New York State county tax parcels, corporate links, and NHPD subsidies.',
+    path: '/ny',
   },
   DC: {
     title: 'They Own WHAT?? | Washington, D.C. Property Owner Explorer',
@@ -123,19 +141,29 @@ const SEO_BY_DATASET = {
     path: '/philadelphia',
   },
   CHICAGO: {
-    title: 'They Own WHAT?? | Chicago Property Owner Explorer',
-    description: 'Explore Chicago property records, owner networks, and municipal assessment database.',
-    path: '/chicago',
+    title: 'They Own WHAT?? | Illinois & Chicagoland Property Owner Explorer',
+    description: 'Explore Illinois property records across Chicago, suburban Cook County, DuPage County, Chicago building violations, and corporate networks.',
+    path: '/il',
+  },
+  IL: {
+    title: 'They Own WHAT?? | Illinois Statewide Property Owner Explorer',
+    description: 'Explore Illinois property parcels across Chicago, all 130+ Cook County suburbs, DuPage GIS, Chicago building violations, corporate filings, and NHPD subsidies.',
+    path: '/il',
   },
   MIAMI: {
-    title: 'They Own WHAT?? | Miami-Dade Property Owner Explorer',
-    description: 'Explore Miami-Dade property records, Florida Sunbiz corporate officer/manager networks, DBPR apartment licenses, and NHPD subsidies.',
-    path: '/miami',
+    title: 'They Own WHAT?? | Florida & Miami-Dade Property Owner Explorer',
+    description: 'Explore unified Florida & Miami-Dade property records across all 67 counties, Sunbiz corporate principals, DBPR apartment licenses, and code enforcement.',
+    path: '/fl',
   },
   MINNEAPOLIS: {
-    title: 'They Own WHAT?? | Minneapolis Property Owner Explorer',
-    description: 'Explore Minneapolis property records, active rental licenses, owner networks, and municipal database.',
-    path: '/minneapolis',
+    title: 'They Own WHAT?? | Minnesota & Twin Cities Property Owner Explorer',
+    description: 'Explore unified Minnesota property records across Hennepin & Ramsey Counties, Minneapolis active rental licenses, code cases, and corporate filings.',
+    path: '/mn',
+  },
+  MN: {
+    title: 'They Own WHAT?? | Minnesota Property Owner Explorer',
+    description: 'Explore unified Minnesota property records across Hennepin & Ramsey Counties, Minneapolis active rental licenses, code cases, and corporate filings.',
+    path: '/mn',
   },
   NJ: {
     title: 'They Own WHAT?? | New Jersey BHI Property Owner Explorer',
@@ -143,8 +171,8 @@ const SEO_BY_DATASET = {
     path: '/nj',
   },
   NYS: {
-    title: 'They Own WHAT?? | New York State Property Owner Explorer',
-    description: 'Explore New York State non-NYC county tax parcels linked to NY DOS corporate filings, Buffalo rental/code/court records, and NHPD subsidies.',
+    title: 'They Own WHAT?? | New York Statewide & NYC Property Owner Explorer',
+    description: 'Explore unified New York City and New York State county tax parcels linked to HPD registrations, NY DOS corporate filings, code cases, evictions, and NHPD.',
     path: '/ny',
   },
   MA: {
@@ -154,8 +182,23 @@ const SEO_BY_DATASET = {
   },
   FL: {
     title: 'They Own WHAT?? | Florida Statewide Property Owner Explorer',
-    description: 'Explore Florida statewide investor/multifamily property parcels across all 67 counties linked to Sunbiz corporate principals, DBPR apartment licenses, and NHPD.',
+    description: 'Explore unified Florida property parcels across all 67 counties (including Miami-Dade & Hillsborough CAMA), Sunbiz principals, DBPR Ch. 509 licenses, code enforcement, and NHPD.',
     path: '/fl',
+  },
+  CA: {
+    title: 'They Own WHAT?? | California Property Owner Explorer',
+    description: 'Explore California improved property rolls, SF & LA registered real-estate lessor businesses, eviction notices, code enforcement, NHPD subsidies, and 31.96M CA LLC/corporate officer filings.',
+    path: '/ca',
+  },
+  MT: {
+    title: 'They Own WHAT?? | Montana Statewide Property Owner Explorer',
+    description: 'Explore Montana MSDI / DOR ORION Cadastral improved property parcels across all 56 counties linked to corporate officer filings and NHPD subsidies.',
+    path: '/mt',
+  },
+  OH: {
+    title: 'They Own WHAT?? | Ohio Property Owner Explorer',
+    description: 'Explore Ohio County Auditor improved CAMA property parcels (Greater Cleveland / Cuyahoga), recent transfers, corporate officer filings, and NHPD subsidies.',
+    path: '/oh',
   },
   CO: {
     title: 'They Own WHAT?? | Colorado Statewide Property Owner Explorer',
@@ -202,6 +245,10 @@ function getStoredDataset() {
   try {
     const stored = window.localStorage.getItem(DATASET_STORAGE_KEY);
     if (stored === 'BOSTON') return 'MA';
+    if (stored === 'MIAMI') return 'FL';
+    if (stored === 'NYS') return 'NY';
+    if (stored === 'CHICAGO') return 'IL';
+    if (stored === 'MINNEAPOLIS') return 'MN';
     return DATASET_PATHS[stored] ? stored : null;
   } catch {
     return null;
@@ -1309,6 +1356,7 @@ function App() {
                        }
                      />
                    </DashboardErrorBoundary>
+                   <AlgorithmicEstimateBanner />
                  </div>
 
                 {/* Sticky Jump-Back Bar when cards have scrolled off-screen */}
@@ -1550,11 +1598,18 @@ function App() {
             >
               <CityExplorer
                 key={`${activeState}-${cityExplorerKey}`}
-                city={activeState === 'NY' ? 'nyc' : activeState === 'NYS' ? 'ny' : activeState === 'BOSTON' ? 'ma' : activeState.toLowerCase()}
+                city={
+                  activeState === 'NY' || activeState === 'NYS' ? 'ny' :
+                  activeState === 'BOSTON' ? 'ma' :
+                  activeState === 'MIAMI' ? 'fl' :
+                  activeState === 'CHICAGO' ? 'il' :
+                  activeState === 'MINNEAPOLIS' ? 'mn' :
+                  activeState.toLowerCase()
+                }
                 onBack={() => showDatasetPicker()}
                 onMapSelected={setSelectedMapProperties}
                 onOpenSiblingNetwork={(sibJur, sibNetworkKey) => {
-                  const targetState = sibJur === 'nyc' ? 'NY' : sibJur === 'ny' ? 'NYS' : sibJur.toUpperCase();
+                  const targetState = sibJur === 'nyc' || sibJur === 'ny' ? 'NY' : sibJur.toUpperCase();
                   openDataset(targetState, { initialTarget: { networkKey: sibNetworkKey } });
                 }}
                 initialNetworkKey={cityInitialTarget?.networkKey || null}

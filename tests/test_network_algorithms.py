@@ -307,6 +307,11 @@ class TestNetworkAlgorithmsAndNormalization(unittest.TestCase):
             ("CO", "co_networks", "building_count", 300000, 50, 10000),
             ("VT", "vt_networks", "building_count", 50000, 20, 5000),
             ("VA", "va_networks", "building_count", 500000, 100, 10000),
+            ("IL", "il_networks", "building_count", 500000, 100, 10000),
+            ("CA", "ca_networks", "building_count", 35000, 50, 10000),
+            ("MN", "mn_networks", "building_count", 200000, 50, 10000),
+            ("OH", "oh_networks", "building_count", 150000, 50, 10000),
+            ("MT", "mt_networks", "building_count", 150000, 25, 10000),
         ]
 
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:

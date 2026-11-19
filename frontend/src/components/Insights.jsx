@@ -1,5 +1,6 @@
 /* src/components/Insights.jsx */
 import React, { useEffect, useMemo, useState } from 'react';
+import AlgorithmicEstimateBanner from './AlgorithmicEstimateBanner';
 import { api } from '../api';
 import {
     AlertTriangle,
@@ -526,12 +527,7 @@ export default function Insights({ data, onSelect, activeState }) {
             </section>
 
             {/* 3. COMPACT SINGLE-LINE VISIBLE NETWORK ASSOCIATION DISCLAIMER */}
-            <div className="flex items-center gap-2 rounded-lg border border-amber-200/80 bg-amber-50/75 px-3 py-1.5 text-[11px] font-medium text-amber-900">
-                <Info size={13} className="shrink-0 text-amber-600" aria-hidden="true" />
-                <span>
-                    <strong className="font-bold">Algorithmic estimate:</strong> Network associations are algorithmic estimates; small backend tuning updates can shift counts slightly while fine-tuning is in progress.
-                </span>
-            </div>
+            <AlgorithmicEstimateBanner />
 
             <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
                 <div className="flex items-center justify-between gap-3 border-b border-slate-100 bg-slate-50 px-4 py-3">

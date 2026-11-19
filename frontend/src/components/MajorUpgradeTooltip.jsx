@@ -103,7 +103,7 @@ export default function MajorUpgradeButton({
                 <span>Data Expansion (1 &rarr; {jurisdictionCount})</span>
               </div>
               <p className="mt-1.5 text-[11px] text-slate-600 leading-relaxed">
-                Added statewide VA, FL, MA (all 351 towns incl. Boston), NY State (33 counties), NC (100 counties), AR (75 counties), WI (72 counties), CO, VT, and NJ alongside CT, NYC, Chicago, Philadelphia, D.C., Baltimore, Detroit, Miami-Dade, and Minneapolis—with NHPD subsidies &amp; recent parcel sales.
+                Expanded to {jurisdictionCount} unified explorers: statewide CT, FL (67 counties), NY (62 counties incl. NYC), MA (351 towns incl. Boston), IL (Chicagoland), CA (LA/SF + business lessors), VA, NC, MN (Twin Cities), OH (Cleveland), MT, WI, AR, CO, VT, and NJ alongside Philadelphia, D.C., Baltimore, and Detroit.
               </p>
             </div>
 

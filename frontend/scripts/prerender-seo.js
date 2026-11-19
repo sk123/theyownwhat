@@ -135,6 +135,36 @@ const routes = [
     title: 'They Own WHAT?? | Virginia Statewide Property Owner Explorer',
     description: 'Explore Virginia VGIN local-schema parcels, Hampton Roads HRGeo, and county CAMA rolls linked to VA SCC & OpenCorporates filings and NHPD subsidies.',
   },
+  {
+    path: '/il',
+    file: 'il.html',
+    title: 'They Own WHAT?? | Illinois Statewide Property Owner Explorer',
+    description: 'Explore Illinois property parcels across Chicago, all 130+ Cook County suburbs, DuPage County GIS, Chicago building violations, IL SOS corporate filings, and NHPD subsidies.',
+  },
+  {
+    path: '/ca',
+    file: 'ca.html',
+    title: 'They Own WHAT?? | California Property Owner Explorer',
+    description: 'Explore California improved property rolls, SF & LA registered real-estate lessor businesses, eviction notices, code enforcement, NHPD subsidies, and 31.96M CA SOS LLC/corporate officer records.',
+  },
+  {
+    path: '/mn',
+    file: 'mn.html',
+    title: 'They Own WHAT?? | Minnesota Property Owner Explorer',
+    description: 'Explore unified Minnesota property records across Hennepin & Ramsey Counties, Minneapolis active rental licenses, Regulatory Services code cases, and MN SOS filings.',
+  },
+  {
+    path: '/mt',
+    file: 'mt.html',
+    title: 'They Own WHAT?? | Montana Statewide Property Owner Explorer',
+    description: 'Explore Montana MSDI / DOR ORION Cadastral improved property parcels across all 56 counties linked to corporate officer filings and NHPD subsidies.',
+  },
+  {
+    path: '/oh',
+    file: 'oh.html',
+    title: 'They Own WHAT?? | Ohio Property Owner Explorer',
+    description: 'Explore Ohio County Auditor improved CAMA property parcels (Greater Cleveland / Cuyahoga), transfer sales, corporate officer filings, and NHPD subsidies.',
+  },
 ];
 
 function escapeHtml(value) {

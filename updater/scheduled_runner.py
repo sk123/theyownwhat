@@ -659,6 +659,67 @@ def _optimization_rotation_thread():
         opt_schedule.run_pending()
         time.sleep(30)
 
+def run_nightly_fl_cama_update():
+    """Nightly Florida 67-county CAMA & municipal code enforcement delta sync."""
+    logger.info("=" * 80)
+    logger.info("Starting Nightly Florida 67-County CAMA & Code Enforcement Sync")
+    logger.info("=" * 80)
+    sweep_stale_locks()
+    try:
+        cmd = [sys.executable, "fl/scrape_fl_cama.py", "--skip-hillsborough"]
+        res = run_source_only(cmd, check=False, timeout=NETWORK_REBUILD_TIMEOUT)
+        if getattr(res, "returncode", 1) == 0:
+            logger.info("✓ Nightly Florida CAMA & enforcement sync finished cleanly.")
+        else:
+            logger.warning("⚠ Nightly Florida CAMA sync exited with code %s.", getattr(res, "returncode", "unknown"))
+    except Exception as e:
+        logger.error("✘ Nightly Florida CAMA sync failed: %s", e)
+    logger.info("=" * 80)
+
+
+def run_nightly_ny_il_cama_update():
+    """Nightly New York SDG ImageMate CAMA cohort & Illinois Devnet/Chicago violations delta sync."""
+    logger.info("=" * 80)
+    logger.info("Starting Nightly NY (SDG ImageMate) & IL (Devnet / Chicago Violations) Cohort Sync")
+    logger.info("=" * 80)
+    sweep_stale_locks()
+    for label, cmd in [
+        ("NY 62-County SDG ImageMate Cohort", [sys.executable, "ny/scrape_ny_cama.py", "--due-nightly", "--max-counties", "10"]),
+        ("IL 102-County Devnet & Chicago Delta", [sys.executable, "il/scrape_il_cama.py", "--due-nightly"]),
+    ]:
+        try:
+            res = run_source_only(cmd, check=False, timeout=1800)
+            if getattr(res, "returncode", 1) == 0:
+                logger.info("✓ %s finished cleanly.", label)
+            else:
+                logger.warning("⚠ %s exited with code %s.", label, getattr(res, "returncode", "unknown"))
+        except Exception as e:
+            logger.error("✘ %s failed: %s", label, e)
+    logger.info("=" * 80)
+
+
+def run_nightly_lightweight_freshness_sync():
+    """Nightly O(1) upstream metadata & incremental-delta verifier across all jurisdictions,
+    keeping `data_source_status`, `completeness_matrix`, and `landing_snapshot:v1` transparent and current."""
+    logger.info("=" * 80)
+    logger.info("Starting All-Jurisdiction Lightweight Freshness & Upstream Watermark Sync")
+    logger.info("=" * 80)
+    for label, cmd in [
+        ("Lightweight State & City Refresher", [sys.executable, "updater/lightweight_state_refresher.py"]),
+        ("OpenCorporates Completeness Sync", [sys.executable, "scripts/sync_opencorporates_scheduled.py", "--sync-status-only"]),
+        ("Landing Snapshot Refresh", [sys.executable, "-m", "api.landing_cache"]),
+    ]:
+        try:
+            res = run_source_only(cmd, check=False, timeout=900)
+            if getattr(res, "returncode", 1) == 0:
+                logger.info("✓ %s finished cleanly.", label)
+            else:
+                logger.warning("⚠ %s exited with code %s.", label, getattr(res, "returncode", "unknown"))
+        except Exception as e:
+            logger.error("✘ %s failed: %s", label, e)
+    logger.info("=" * 80)
+
+
 def run_nightly_ma_cama_update():
     """Nightly Massachusetts municipal CAMA scraper across Vision/VGSI, MapGeo,
     Analyze Boston, and Cambridge FY2027 Assessing Open Data portals.
@@ -680,6 +741,37 @@ def run_nightly_ma_cama_update():
     logger.info("=" * 80)
 
 
+def run_nightly_network_linking_optimization():
+    """Nightly 5-jurisdiction, jurisdiction-by-jurisdiction recursive network-linking &
+    pipeline-performance optimization engine using best-available Gemini Pro advisory
+    review + deterministic verification gates, emailing reports to salmun@storrsmagic.org."""
+    logger.info("=" * 80)
+    logger.info("Starting Nightly 5-Jurisdiction Recursive Network-Linking Optimizer")
+    logger.info("=" * 80)
+    sweep_stale_locks()
+    recipient = (os.environ.get("NIGHTLY_OPTIMIZER_EMAIL_TO") or "salmun@storrsmagic.org").strip()
+    try:
+        cmd = [
+            sys.executable,
+            "updater/nightly_network_optimizer.py",
+            "--cohort-size", "5",
+            "--max-passes", "3",
+            "--send-email",
+            "--to", recipient,
+        ]
+        res = run_source_only(cmd, check=False, timeout=NETWORK_REBUILD_TIMEOUT)
+        if getattr(res, "returncode", 1) == 0:
+            logger.info("✓ Nightly 5-jurisdiction linking optimizer finished & reported to %s.", recipient)
+        else:
+            logger.warning(
+                "⚠ Nightly 5-jurisdiction linking optimizer exited with code %s.",
+                getattr(res, "returncode", "unknown"),
+            )
+    except Exception as e:
+        logger.error("✘ Nightly 5-jurisdiction linking optimizer crashed: %s", e)
+    logger.info("=" * 80)
+
+
 def main():
     """Main scheduler loop"""
     logger.info("Vision Data Updater Service Starting")
@@ -694,11 +786,15 @@ def main():
     opt_thread.start()
     
     # Schedule heavy jobs on the main loop
+    schedule.every().day.at("01:15").do(run_nightly_fl_cama_update)
     schedule.every().day.at("02:00").do(run_nightly_update)
     schedule.every().day.at("02:45").do(run_nightly_ma_cama_update)
+    schedule.every().day.at("03:15").do(run_nightly_ny_il_cama_update)
     schedule.every().day.at("03:30").do(run_nightly_nyc_update)
     schedule.every().day.at("03:45").do(run_nightly_nj_update)
     schedule.every().day.at("04:00").do(run_nightly_other_cities_update)
+    schedule.every().day.at("04:30").do(run_nightly_lightweight_freshness_sync)
+    schedule.every().day.at("05:15").do(run_nightly_network_linking_optimization)
     schedule.every().saturday.at("01:30").do(run_weekly_statewide_and_opencorporates_update)
     schedule.every().sunday.at("00:00").do(run_weekly_nightly_updates)
     schedule.every(30).days.at("01:00").do(run_monthly_other_updates)
@@ -707,11 +803,15 @@ def main():
     schedule.every().sunday.at("06:00").do(run_weekly_app_audit)
     
     logger.info("Scheduled jobs:")
+    logger.info("  - Nightly FL 67-county CAMA & code enforcement sync: 1:15 AM daily")
     logger.info("  - Nightly CT update (Vision/Current Owner): 2:00 AM daily")
     logger.info("  - Nightly MA municipal CAMA update (Vision/MapGeo/Boston/Cambridge): 2:45 AM daily")
+    logger.info("  - Nightly NY (SDG ImageMate) & IL (Devnet/Chicago delta) cohort sync: 3:15 AM daily")
     logger.info("  - Nightly NYC update (HPD + enrichment + networks): 3:30 AM daily")
     logger.info("  - Nightly NJ update (BHI + networks): 3:45 AM daily")
     logger.info("  - Nightly multi-city source-only hook: 4:00 AM daily")
+    logger.info("  - Nightly all-jurisdiction lightweight freshness & landing snapshot sync: 4:30 AM daily")
+    logger.info("  - Nightly 5-Jurisdiction Recursive Network-Linking & Performance Optimizer (best-available Gemini -> salmun@storrsmagic.org): 5:15 AM daily")
     logger.info("  - Weekly OpenCorporates SFTP poll & 9-Statewide GIS rotation (VT/CO/WI/NY/NC/AR/FL/MA/VA): 1:30 AM Saturday")
     logger.info("  - Rotating Jurisdiction Optimization Battery (Cycle 1 nightly -> Cycle 2+ weekly): 11:30 AM UTC daily [INDEPENDENT THREAD]")
     logger.info("  - Daily Server-Side Usage Analytics Email (salmunk@gmail.com): 8:00 AM daily [INDEPENDENT THREAD]")

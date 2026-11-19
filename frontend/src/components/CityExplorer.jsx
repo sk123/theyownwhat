@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { formatDisplayName } from '../utils/formatName';
+import AlgorithmicEstimateBanner from './AlgorithmicEstimateBanner';
 
 const validParcelCoords = (p) => {
   const lat = Number(p?.latitude);
@@ -193,20 +194,60 @@ const CITY_LIMITATIONS = {
     sponsor: false,
   },
   fl: {
-    gap: 'FDOR/FloridaGIO statewide non-homestead residential & multifamily parcels & sales across all 67 counties, bulk FL Sunbiz & OpenCorporates officer/LLC manager/foreign-branch filings, and DBPR Ch. 509 active apartment licenses are joined. County clerk eviction dockets are not published as a unified statewide feed.',
+    gap: 'Unifies all 67 Florida counties (fusing Miami-Dade Property Appraiser untruncated owners & Hillsborough HCPA CAMA with FDOR statewide parcels), bulk FL Sunbiz & OpenCorporates officer/LLC manager/foreign-branch filings, DBPR Ch. 509 active apartment licenses, and Miami-Dade RER / Orlando / Gainesville code cases.',
     needed: 'beneficial-ownership disclosures behind anonymous out-of-state parent shells and county clerk eviction dockets',
-    cost: 'FloridaGIO Statewide Parcels, Florida Sunbiz, and DBPR lodging extracts: $0; cross-state corporate graph via OpenCorporates (ODbL v1.0).',
+    cost: 'FloridaGIO Statewide Parcels, Miami-Dade PA, HCPA, Florida Sunbiz, and DBPR lodging extracts: $0; cross-state corporate graph via OpenCorporates (ODbL v1.0).',
     sourceUrl: 'https://dos.fl.gov/sunbiz/other-services/data-downloads/',
     ocRegisterUrl: 'https://opencorporates.com/registers/us_fl',
     sponsor: false,
   },
   ny: {
-    gap: 'Covers the 33 non-NYC counties that authorize public parcel publication in NYS GIS, joined with NY DOS & 61-jurisdiction corporate officer/foreign-branch filings and Buffalo rental/code/housing-court feeds. 24 non-participating counties withhold state GIS redistribution, and NY DOS omits passive domestic LLC members.',
-    needed: 'county-by-county FOIL assessment rolls for non-participating counties and NY LLC beneficial-owner member rosters',
-    cost: 'NYS GIS Public Tax Parcels, NY DOS Open Data, and OpenData Buffalo: $0; corporate registry graph via OpenCorporates (ODbL v1.0).',
+    gap: 'Unifies all 5 NYC boroughs (PLUTO, HPD registrations & contacts, Class C/Open code violations, Housing Litigations, Marshal Evictions & Rent Stabilization) with 33 NYS GIS counties, Buffalo & Syracuse rental/code registries, SDG ImageMate CAMA portals, and NY DOS / OpenCorporates filings. 24 non-NYC counties opt out of NYS ITS bulk GIS redistribution and are queued on county assessment rolls.',
+    needed: 'county assessment rolls for non-redistribution counties and NY LLC beneficial-owner member rosters',
+    cost: 'NYC Open Data, NYS GIS, NY DOS, Buffalo & Syracuse Open Data: $0; corporate registry graph via OpenCorporates (ODbL v1.0).',
     sourceUrl: 'https://gis.ny.gov/parcels',
     ocRegisterUrl: 'https://opencorporates.com/registers/us_ny',
-    sponsor: true,
+    sponsor: false,
+  },
+  il: {
+    gap: 'Unifies City of Chicago and all 130+ Cook County suburbs (1.67M improved PINs with mortgage-servicer swap & CCAO residential characteristics), DuPage County GIS (310K improved PINs), Chicago Dept. of Buildings violations, and bulk IL SOS / OpenCorporates officer, LLC manager, and foreign-branch filings. Downstate counties are queued on Devnet wEdge / Beacon CAMA portals, and Illinois land trust beneficiaries (765 ILCS 405) are confidential.',
+    needed: 'downstate county Devnet/Beacon CAMA rolls, Illinois land trust schedules, and Circuit Court eviction dockets',
+    cost: 'Cook County, DuPage County, and City of Chicago Open Data: $0; corporate registry graph via OpenCorporates (ODbL v1.0).',
+    sourceUrl: 'https://apps.ilsos.gov/businessentitysearch/',
+    ocRegisterUrl: 'https://opencorporates.com/registers/us_il',
+    sponsor: false,
+  },
+  ca: {
+    gap: 'Under CA Gov. Code § 7928.205 (AB 1785), California county assessors omit deed owner names from unrestricted online GIS downloads. Combines improved LA County & San Francisco assessment rolls with SF (g8m3-pdis) & LA (6rrh-rzua) registered real-estate lessor businesses, LAHD & SF eviction notices, LADBS & SF DBI code enforcement, NHPD, and 31.96M CA Form LLC-12 officer/member records, explicitly badging § 7928.205 redacted parcels until County Assessor CPRA Secured Rolls are loaded.',
+    needed: 'County Assessor CPRA Secured Assessment Roll files (Rev. & Tax. Code § 408.3) across California counties',
+    cost: 'SF, LA City, and LA County Open Data: $0; County Assessor CPRA Secured Rolls cost statutory duplication fees ($20+ per county); corporate graph via OpenCorporates (ODbL v1.0).',
+    sourceUrl: 'https://bizfileonline.sos.ca.gov/search/business',
+    ocRegisterUrl: 'https://opencorporates.com/registers/us_ca',
+    sponsor: false,
+  },
+  mn: {
+    gap: 'Unifies Hennepin County (414K improved CAMA parcels) and Ramsey County / St. Paul (158K improved CAMA parcels) with Minneapolis active rental licenses, owner contacts, Regulatory Services code cases, and bulk Minnesota corporate/LLC officer & foreign-branch filings.',
+    needed: 'Greater Minnesota outstate county CAMA rolls and District Court eviction dockets',
+    cost: 'Hennepin County, Ramsey County, and Minneapolis Open Data: $0; corporate registry graph via OpenCorporates (ODbL v1.0).',
+    sourceUrl: 'https://mblsportal.sos.mn.gov/Business/Search',
+    ocRegisterUrl: 'https://opencorporates.com/registers/us_mn',
+    sponsor: false,
+  },
+  mt: {
+    gap: 'All 56 Montana counties (MSDI / DOR ORION Cadastral improved parcels with Care-Of taxpayer & mailing addresses) and bulk Montana corporate/LLC officer & foreign-branch filings are joined. Montana is a statutory non-disclosure state for recorded deed sale prices.',
+    needed: 'municipal code-enforcement and court eviction feeds',
+    cost: 'Montana State Library MSDI Cadastral: $0; corporate registry graph via OpenCorporates (ODbL v1.0).',
+    sourceUrl: 'https://biz.sosmt.gov/search/business',
+    ocRegisterUrl: 'https://opencorporates.com/registers/us_mt',
+    sponsor: false,
+  },
+  oh: {
+    gap: 'Cuyahoga County (Greater Cleveland) Fiscal Officer improved CAMA parcels (with recorded transfer dates & prices) and bulk Ohio corporate/LLC & cross-state foreign-branch filings are joined. Additional Ohio county auditors are queued per-county.',
+    needed: 'remaining 87 Ohio County Auditor CAMA rolls, domestic OH LLC member disclosures, and Municipal Court eviction dockets',
+    cost: 'Cuyahoga County Open Data: $0; corporate registry graph via OpenCorporates (ODbL v1.0).',
+    sourceUrl: 'https://businesssearch.ohiosos.gov/',
+    ocRegisterUrl: 'https://opencorporates.com/registers/us_oh',
+    sponsor: false,
   },
   co: {
     gap: 'Colorado Statewide Public Parcels (including sale dates & prices), CO SOS entities & True Name statements, cross-state foreign-branch parent links, and Denver active residential rental licenses are joined. CO SOS open bulk files do not list multi-member domestic LLC rosters unless a True Name is filed.',
@@ -278,6 +319,11 @@ const CITY_STATE_CODES = {
   vt: 'VT',
   ar: 'AR',
   va: 'VA',
+  il: 'IL',
+  ca: 'CA',
+  mn: 'MN',
+  mt: 'MT',
+  oh: 'OH',
 };
 
 const CITY_CONFIG = {
@@ -989,11 +1035,11 @@ const CITY_CONFIG = {
     reliableUnits: true,
     recordLabel: 'parcels',
     boroughLabel: 'County / City',
-    dataSourceDesc: 'Data sourced from FloridaGIO / FDOR Statewide Parcels (non-homestead residential, multifamily, condo, mixed-use, and mobile-home park parcels across all 67 counties), bulk Florida Sunbiz corporate officer & LLC manager filings, DBPR Ch. 509 active apartment licenses, and NHPD.',
-    coverageNote: 'Homesteaded owner-occupied single-family residences are excluded to focus on non-homestead residential, rental, and multifamily ownership networks while quarantining commercial registered agents.',
+    dataSourceDesc: 'Data sourced from unified FloridaGIO / FDOR Statewide Parcels (67 counties), Miami-Dade Property Appraiser (untruncated owners & folios), Hillsborough HCPA CAMA, bulk Florida Sunbiz corporate officer & LLC manager filings, DBPR Ch. 509 active apartment licenses, Miami-Dade RER / Orlando / Gainesville code enforcement, and NHPD.',
+    coverageNote: 'Unifies Miami-Dade, Broward, Palm Beach, Orlando, Tampa, Jacksonville, and all 67 Florida counties into one statewide ownership graph while pruning vacant lots and quarantining commercial registered agents.',
     quickSearches: ['Progress Residential', 'Invitation Homes', 'FKH SFR', 'AMH Development', 'Marc Toscano'],
     defaultSearchQuery: 'apartments',
-    evictionNote: 'DBPR Ch. 509 active apartment licenses and NHPD federal subsidies are joined where matched.',
+    evictionNote: 'Miami-Dade RER, Orlando & Gainesville code cases, DBPR Ch. 509 apartment licenses, and NHPD federal subsidies are joined where matched.',
     officialRecords: [
       {
         label: 'Florida Statewide Parcel Map (FDOR)',
@@ -1035,29 +1081,29 @@ const CITY_CONFIG = {
     ],
   },
   ny: {
-    name: 'NY State',
-    title: 'New York State Owner Networks (Outside NYC)',
-    subTitle: '33 non-NYC NYS GIS counties, NY DOS corps & Buffalo enforcement · Switch to NYC for 5 boroughs',
+    name: 'New York',
+    title: 'New York Owner Networks',
+    subTitle: 'Unified 62-county NYC PLUTO/HPD/Marshal Evictions + NYS ORPTS + Buffalo & Syracuse enforcement',
     beta: true,
-    idLabel: 'SWIS-SBL',
-    idDesc: 'NYS Municipal SWIS & Section-Block-Lot identifier',
-    agencyLabel: 'Municipal / DOS',
-    hasViolationClasses: false,
-    registrationBadge: 'Registered Rental',
-    filingLabel: 'rental registration',
-    filingsLabel: 'rental registrations',
-    filingsStatLabel: 'Rental Filings',
+    idLabel: 'BBL / SWIS-SBL',
+    idDesc: 'NYC Borough-Block-Lot or NYS Municipal SWIS-SBL identifier',
+    agencyLabel: 'NYC HPD / NYS ORPTS',
+    hasViolationClasses: true,
+    registrationBadge: 'HPD / Rental Registered',
+    filingLabel: 'HPD / rental filing',
+    filingsLabel: 'HPD / rental filings',
+    filingsStatLabel: 'HPD & Rental Filings',
     codeRecordLabel: 'Open Code Cases',
     shortOpenCodeLabel: 'Open Cases',
     openRecordChipLabel: 'open code cases',
-    reliableUnits: false,
-    recordLabel: 'parcels',
-    boroughLabel: 'Municipality (County)',
-    dataSourceDesc: 'Data sourced from NYS GIS Clearinghouse Public Tax Parcels across 33 participating non-NYC counties, NY DOS Active Corporations (n9v6-gdp6), OpenData Buffalo rental registrations, code violations & Housing Court dockets, and NHPD.',
-    coverageNote: 'Covers the 33 non-NYC counties that authorize public parcel redistribution in NYS GIS (for NYC 5-borough HPD & PLUTO data, switch to NYC). 24 counties withhold public GIS redistribution.',
-    quickSearches: ['Sky Harbor Property', 'Whitman Village', 'Bryant Property', 'Limestone Ridge', 'Nikola Grishaj'],
-    defaultSearchQuery: 'properties',
-    evictionNote: 'Buffalo code violations and Housing Court cases are joined for Erie County / Buffalo parcels.',
+    reliableUnits: true,
+    recordLabel: 'properties',
+    boroughLabel: 'Borough / Municipality (County)',
+    dataSourceDesc: 'Data sourced from unified NYC DOF PLUTO, HPD Multiple Dwelling Registrations & Contacts, HPD Housing Maintenance Code Violations (Class A/B/C), Housing Litigations & Marshal Evictions (all 5 boroughs), NYS GIS ORPTS Public Tax Parcels, Buffalo & Syracuse rental/code registries, SDG ImageMate CAMA portals, NY DOS / OpenCorporates filings, and NHPD.',
+    coverageNote: 'Unifies Manhattan, Brooklyn, Queens, Bronx, and Staten Island directly with Westchester, Long Island, Hudson Valley, Buffalo, Syracuse, Albany, and participating NYS counties so cross-county portfolios surface in one network.',
+    quickSearches: ['Chestnut Holdings', 'Alma Realty', 'Zara Realty', 'Sky Harbor Property', 'Whitman Village'],
+    defaultSearchQuery: 'holdings',
+    evictionNote: 'NYC Marshal evictions, NYC HPD Housing Litigations, and Buffalo Housing Court cases are joined onto matched properties.',
     officialRecords: [
       {
         label: 'NYS Tax Parcels Interactive Map',
@@ -1419,6 +1465,247 @@ const CITY_CONFIG = {
       },
     ],
   },
+  il: {
+    name: 'Illinois',
+    title: 'Illinois Owner Networks',
+    subTitle: 'Cook County (Chicago + 130+ suburbs), DuPage GIS, Chicago DOB violations & IL SOS',
+    beta: true,
+    idLabel: 'County PIN',
+    idDesc: 'Illinois 14-digit / 10-digit Assessor Parcel Index Number',
+    agencyLabel: 'County Assessors / Chicago DOB',
+    hasViolationClasses: false,
+    registrationBadge: 'Tax Parcel',
+    filingLabel: 'filing',
+    filingsLabel: 'filings',
+    filingsStatLabel: 'Filings',
+    codeRecordLabel: 'Open Building Violations',
+    shortOpenCodeLabel: 'Open Violations',
+    openRecordChipLabel: 'open violations',
+    reliableUnits: false,
+    recordLabel: 'parcels',
+    boroughLabel: 'Municipality / Community (County)',
+    dataSourceDesc: 'Data sourced from Cook County Assessor Open Data (1.67M improved PINs across Chicago & 130+ suburbs with CCAO residential characteristics & mortgage-servicer swap), DuPage County GIS (310K improved PINs), Chicago Dept. of Buildings Violations (22u3-xenr), IL SOS / OpenCorporates corporate & LLC manager filings, and NHPD.',
+    coverageNote: 'Unifies City of Chicago neighborhoods with Evanston, Oak Park, Cicero, Skokie, Schaumburg, all Cook suburbs, and DuPage County in one Chicagoland/statewide graph.',
+    quickSearches: ['Cagan Management', 'Pangea', 'BJB Partners', 'Invitation Homes', 'TLC Management'],
+    defaultSearchQuery: 'properties',
+    evictionNote: 'Chicago Dept. of Buildings code violations and NHPD subsidies are joined onto matched parcels.',
+    officialRecords: [
+      {
+        label: 'Cook County Assessor PIN Lookup',
+        desc: 'Official Cook County Assessor property characteristics, valuation & exemptions',
+        getUrl: (p) => p.cama_site_link || 'https://www.cookcountyassessor.com/',
+        getIframeUrl: null,
+      },
+      {
+        label: 'Illinois SOS Corporation / LLC Search',
+        desc: 'Search Illinois Secretary of State officer & LLC manager filings',
+        getUrl: () => 'https://apps.ilsos.gov/businessentitysearch/',
+        getIframeUrl: null,
+      },
+      {
+        label: 'OpenCorporates Illinois Registry',
+        desc: 'OpenCorporates Illinois corporate & officer filings',
+        getUrl: (p) => (p.owner_name || p.owner)
+          ? `https://opencorporates.com/companies/us_il?q=${encodeURIComponent(p.owner_name || p.owner)}`
+          : 'https://opencorporates.com/registers/us_il',
+        getIframeUrl: null,
+      },
+      {
+        label: 'Google Maps',
+        desc: 'View property location',
+        getUrl: (p) => `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent((p.address || '') + ' ' + (p.borough || '') + ' IL ' + (p.zip_code || ''))}`,
+        getIframeUrl: (p) => `https://maps.google.com/maps?q=${encodeURIComponent((p.address || '') + ' ' + (p.borough || '') + ' IL ' + (p.zip_code || ''))}&output=embed`,
+      },
+    ],
+  },
+  ca: {
+    name: 'California',
+    title: 'California Owner Networks',
+    subTitle: 'LA & SF improved rolls, registered lessor businesses, evictions/violations & 31.96M CA SOS officers',
+    beta: true,
+    idLabel: 'APN / AIN',
+    idDesc: 'California County Assessor Parcel / Identification Number',
+    agencyLabel: 'Assessors / BizTax / Rent Boards',
+    hasViolationClasses: false,
+    registrationBadge: 'Tax Roll / Lessor',
+    filingLabel: 'filing',
+    filingsLabel: 'filings',
+    filingsStatLabel: 'Filings',
+    codeRecordLabel: 'Open Code Cases',
+    shortOpenCodeLabel: 'Open Cases',
+    openRecordChipLabel: 'open code cases',
+    reliableUnits: true,
+    recordLabel: 'parcels',
+    boroughLabel: 'City / Neighborhood (County)',
+    dataSourceDesc: 'Data sourced from Los Angeles County Assessor & San Francisco Secured Property Tax Rolls joined with SF (g8m3-pdis) & LA Office of Finance (6rrh-rzua) registered real-estate lessor businesses, LAHD & SF Rent Board eviction notices, LADBS & SF DBI code violations, NHPD, and 31.96M California SOS / OpenCorporates Form LLC-12 managers, members & officers.',
+    coverageNote: 'Explicitly badges parcels whose deed owner is withheld from online county GIS under CA Gov. Code § 7928.205 while piercing all business-tax-matched LLCs via California SOS Form LLC-12 member/manager filings.',
+    quickSearches: ['Mosser', 'Veritas Investments', 'Equity Residential', 'Essex Property', 'Invitation Homes'],
+    defaultSearchQuery: 'properties',
+    evictionNote: 'San Francisco Rent Board eviction notices (5cei-gny5) and Los Angeles LAHD eviction notices (2u8b-eyuu) are joined onto matched parcels.',
+    officialRecords: [
+      {
+        label: 'County Assessor Parcel Portal',
+        desc: 'Official LA County Assessor Portal or SF Planning Property Information Map',
+        getUrl: (p) => p.cama_site_link || 'https://portal.assessor.lacounty.gov/',
+        getIframeUrl: null,
+      },
+      {
+        label: 'CA SOS bizfile Online',
+        desc: 'Search California Secretary of State LLC-12 Statements of Information',
+        getUrl: () => 'https://bizfileonline.sos.ca.gov/search/business',
+        getIframeUrl: null,
+      },
+      {
+        label: 'OpenCorporates California Registry',
+        desc: 'OpenCorporates California corporate & LLC member/manager records',
+        getUrl: (p) => (p.owner_name || p.owner)
+          ? `https://opencorporates.com/companies/us_ca?q=${encodeURIComponent(p.owner_name || p.owner)}`
+          : 'https://opencorporates.com/registers/us_ca',
+        getIframeUrl: null,
+      },
+      {
+        label: 'Google Maps',
+        desc: 'View property location',
+        getUrl: (p) => `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent((p.address || '') + ' ' + (p.borough || '') + ' CA ' + (p.zip_code || ''))}`,
+        getIframeUrl: (p) => `https://maps.google.com/maps?q=${encodeURIComponent((p.address || '') + ' ' + (p.borough || '') + ' CA ' + (p.zip_code || ''))}&output=embed`,
+      },
+    ],
+  },
+  mn: {
+    name: 'Minnesota',
+    title: 'Minnesota Owner Networks',
+    subTitle: 'Hennepin & Ramsey CAMA rolls unified with Minneapolis Active Rental Licenses & MN SOS',
+    beta: true,
+    idLabel: 'County PID',
+    idDesc: 'Minnesota County Parcel Identification Number',
+    agencyLabel: 'County CAMA / Mpls Licensing',
+    hasViolationClasses: false,
+    registrationBadge: 'Licensed Rental',
+    filingLabel: 'rental license',
+    filingsLabel: 'rental licenses',
+    filingsStatLabel: 'Rental Licenses',
+    codeRecordLabel: 'Open Code Cases',
+    shortOpenCodeLabel: 'Open Cases',
+    openRecordChipLabel: 'open code cases',
+    reliableUnits: true,
+    recordLabel: 'parcels',
+    boroughLabel: 'Municipality (County)',
+    dataSourceDesc: 'Data sourced from Hennepin County & Ramsey County (St. Paul) improved CAMA tax parcels unified with Minneapolis Active Rental Licenses, owner contacts, Regulatory Services code cases, MN SOS / OpenCorporates filings, and NHPD.',
+    coverageNote: 'Connects owners across Minneapolis, Saint Paul, Bloomington, Brooklyn Park, Edina, and all Hennepin & Ramsey County municipalities.',
+    quickSearches: ['HavenBrook', 'Invitation Homes', 'Kleinman Realty', 'Mint Properties', 'Steven Scott'],
+    defaultSearchQuery: 'properties',
+    evictionNote: 'Minneapolis Regulatory Services code cases and NHPD federal subsidies are joined where matched.',
+    officialRecords: [
+      {
+        label: 'County Property Map / CAMA',
+        desc: 'Official Hennepin or Ramsey County parcel record lookup',
+        getUrl: (p) => p.cama_site_link || 'https://gis.hennepin.us/property/map/',
+        getIframeUrl: null,
+      },
+      {
+        label: 'Minnesota SOS Business Filings',
+        desc: 'Search Minnesota Secretary of State entity & officer filings',
+        getUrl: () => 'https://mblsportal.sos.mn.gov/Business/Search',
+        getIframeUrl: null,
+      },
+      {
+        label: 'Google Maps',
+        desc: 'View property location',
+        getUrl: (p) => `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent((p.address || '') + ' ' + (p.borough || '') + ' MN ' + (p.zip_code || ''))}`,
+        getIframeUrl: (p) => `https://maps.google.com/maps?q=${encodeURIComponent((p.address || '') + ' ' + (p.borough || '') + ' MN ' + (p.zip_code || ''))}&output=embed`,
+      },
+    ],
+  },
+  mt: {
+    name: 'Montana',
+    title: 'Montana Owner Networks',
+    subTitle: 'All 56 counties via Montana MSDI / DOR ORION Cadastral & MT SOS',
+    beta: true,
+    idLabel: 'Geocode / Parcel ID',
+    idDesc: 'Montana DOR ORION Cadastral parcel identifier',
+    agencyLabel: 'MT DOR / MSDI',
+    hasViolationClasses: false,
+    registrationBadge: 'Tax Parcel',
+    filingLabel: 'filing',
+    filingsLabel: 'filings',
+    filingsStatLabel: 'Filings',
+    codeRecordLabel: 'Open Code Cases',
+    shortOpenCodeLabel: 'Open Cases',
+    openRecordChipLabel: 'open code cases',
+    reliableUnits: false,
+    recordLabel: 'parcels',
+    boroughLabel: 'City (County)',
+    dataSourceDesc: 'Data sourced from Montana State Library MSDI / Dept. of Revenue ORION Cadastral improved parcels across all 56 Montana counties, linked to MT SOS / OpenCorporates filings and NHPD.',
+    coverageNote: 'Covers improved residential, multifamily, and commercial structures (`TotalBuildingValue > 0`) statewide across Billings, Missoula, Bozeman, Great Falls, Helena, Kalispell, and all 56 counties.',
+    quickSearches: ['Glacier', 'Yellowstone', 'Bozeman', 'Big Sky', 'Holdings'],
+    defaultSearchQuery: 'properties',
+    evictionNote: 'NHPD federal subsidies are joined onto matched Montana parcels.',
+    officialRecords: [
+      {
+        label: 'Montana Cadastral (MT MSL / DOR)',
+        desc: 'Official Montana State Library Cadastral parcel lookup',
+        getUrl: () => 'https://svc.mt.gov/msl/mtcadastral/',
+        getIframeUrl: null,
+      },
+      {
+        label: 'Montana SOS Business Search',
+        desc: 'Search Montana Secretary of State corporate & LLC filings',
+        getUrl: () => 'https://biz.sosmt.gov/search/business',
+        getIframeUrl: null,
+      },
+      {
+        label: 'Google Maps',
+        desc: 'View property location',
+        getUrl: (p) => `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent((p.address || '') + ' ' + (p.borough || '') + ' MT ' + (p.zip_code || ''))}`,
+        getIframeUrl: (p) => `https://maps.google.com/maps?q=${encodeURIComponent((p.address || '') + ' ' + (p.borough || '') + ' MT ' + (p.zip_code || ''))}&output=embed`,
+      },
+    ],
+  },
+  oh: {
+    name: 'Ohio',
+    title: 'Ohio Owner Networks',
+    subTitle: 'Cuyahoga County (Greater Cleveland) Fiscal Officer CAMA, transfer sales & OH SOS',
+    beta: true,
+    idLabel: 'Auditor Parcel PPN',
+    idDesc: 'Ohio County Auditor / Fiscal Officer Permanent Parcel Number',
+    agencyLabel: 'County Fiscal Officer',
+    hasViolationClasses: false,
+    registrationBadge: 'Tax Parcel',
+    filingLabel: 'filing',
+    filingsLabel: 'filings',
+    filingsStatLabel: 'Filings',
+    codeRecordLabel: 'Open Code Cases',
+    shortOpenCodeLabel: 'Open Cases',
+    openRecordChipLabel: 'open code cases',
+    reliableUnits: false,
+    recordLabel: 'parcels',
+    boroughLabel: 'Municipality (County)',
+    dataSourceDesc: 'Data sourced from Cuyahoga County (Greater Cleveland) Fiscal Officer improved CAMA tax parcels (`certified_tax_building > 0`, including transfer dates & prices), linked to OH SOS / OpenCorporates filings and NHPD.',
+    coverageNote: 'Covers Cleveland, Lakewood, Parma, Cleveland Heights, Euclid, Shaker Heights, East Cleveland, and all Cuyahoga County municipalities.',
+    quickSearches: ['K&D', 'Millennia', 'Holton Wise', ' VineBrook', 'Progress Residential'],
+    defaultSearchQuery: 'properties',
+    evictionNote: 'NHPD federal subsidies and recorded transfer sales are joined onto matched Ohio parcels.',
+    officialRecords: [
+      {
+        label: 'Cuyahoga MyPlace Property Search',
+        desc: 'Official Cuyahoga County Fiscal Officer MyPlace parcel lookup',
+        getUrl: (p) => p.cama_site_link || 'https://myplace.cuyahogacounty.gov/',
+        getIframeUrl: null,
+      },
+      {
+        label: 'Ohio SOS Business Search',
+        desc: 'Search Ohio Secretary of State corporate & LLC filings',
+        getUrl: () => 'https://businesssearch.ohiosos.gov/',
+        getIframeUrl: null,
+      },
+      {
+        label: 'Google Maps',
+        desc: 'View property location',
+        getUrl: (p) => `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent((p.address || '') + ' ' + (p.borough || '') + ' OH ' + (p.zip_code || ''))}`,
+        getIframeUrl: (p) => `https://maps.google.com/maps?q=${encodeURIComponent((p.address || '') + ' ' + (p.borough || '') + ' OH ' + (p.zip_code || ''))}&output=embed`,
+      },
+    ],
+  },
 };
 
 const BOROUGH_COLORS = {
@@ -1760,6 +2047,77 @@ const isPlaceholderSiteAddress = (rawAddr) => {
   return false;
 };
 
+const _STREET_SUFFIX_CANON_MAP = {
+  ST: 'STREET', STR: 'STREET', STREET: 'STREET',
+  AVE: 'AVENUE', AV: 'AVENUE', AVENUE: 'AVENUE',
+  RD: 'ROAD', ROAD: 'ROAD',
+  DR: 'DRIVE', DRV: 'DRIVE', DRIVE: 'DRIVE',
+  LN: 'LANE', LANE: 'LANE',
+  BLVD: 'BOULEVARD', BOULEVARD: 'BOULEVARD',
+  CT: 'COURT', COURT: 'COURT',
+  PL: 'PLACE', PLACE: 'PLACE',
+  TER: 'TERRACE', TERR: 'TERRACE', TERRACE: 'TERRACE',
+  CIR: 'CIRCLE', CIRCLE: 'CIRCLE',
+  PKWY: 'PARKWAY', PKY: 'PARKWAY', PARKWAY: 'PARKWAY',
+  HWY: 'HIGHWAY', HIGHWAY: 'HIGHWAY',
+  WAY: 'WAY',
+  SQ: 'SQUARE', SQUARE: 'SQUARE',
+  TRL: 'TRAIL', TRAIL: 'TRAIL',
+  TPKE: 'TURNPIKE', TURNPIKE: 'TURNPIKE',
+  WHARF: 'WHARF', PIER: 'PIER',
+};
+
+const _EXPLICIT_UNIT_TAIL_RE = /^(.*?)(?:\s*,\s*|\s+)((?:(?:UNIT|APT|APARTMENT|STE|SUITE|RM|ROOM|BLDG|BUILDING|PH|PENTHOUSE|SLIP|GARAGE|SPACE|SPC)\b\.?\s*#?\s*[A-Z0-9][A-Z0-9/-]*)|(?:FL(?:OOR|R)?\b\.?\s*#?\s*[A-Z0-9]{1,3})|(?:#\s*[A-Z0-9][A-Z0-9/-]*))$/i;
+const _BARE_UNIT_AFTER_SUFFIX_RE = /^(.*?\b(?:ST|STR|STREET|AVE|AV|AVENUE|RD|ROAD|DR|DRV|DRIVE|LN|LANE|BLVD|BOULEVARD|CT|COURT|PL|PLACE|TER|TERR|TERRACE|CIR|CIRCLE|PKWY|PKY|PARKWAY|WAY|SQ|SQUARE|TRL|TRAIL)\.?)\s+([A-Z0-9][A-Z0-9-]{0,4})$/i;
+const _DIRECTIONAL_TAIL_TOKENS = new Set(['N', 'S', 'E', 'W', 'NE', 'NW', 'SE', 'SW', 'NORTH', 'SOUTH', 'EAST', 'WEST']);
+
+const extractStreetBaseAndUnit = (rawAddr) => {
+  const raw = String(rawAddr || '').trim();
+  if (!raw || isPlaceholderSiteAddress(raw)) {
+    return { base: raw, unitLabel: null };
+  }
+  const mExplicit = raw.match(_EXPLICIT_UNIT_TAIL_RE);
+  if (mExplicit) {
+    const candidateBase = mExplicit[1].replace(/[,\s-]+$/, '').trim();
+    const rawUnit = mExplicit[2].trim().replace(/\s+/g, ' ');
+    if (candidateBase && /^\d/.test(candidateBase) && candidateBase.length >= 4) {
+      const normalizedUnit = rawUnit.startsWith('#') ? `#${rawUnit.slice(1).trim()}` : rawUnit.toUpperCase();
+      return { base: candidateBase, unitLabel: normalizedUnit };
+    }
+  }
+  const mBare = raw.match(_BARE_UNIT_AFTER_SUFFIX_RE);
+  if (mBare) {
+    const candidateBase = mBare[1].replace(/[,\s]+$/, '').trim();
+    const candidateTok = mBare[2].trim().toUpperCase();
+    if (
+      candidateBase &&
+      /^\d/.test(candidateBase) &&
+      /\d/.test(candidateTok) &&
+      !/^\d{5}$/.test(candidateTok) &&
+      !_DIRECTIONAL_TAIL_TOKENS.has(candidateTok)
+    ) {
+      return { base: candidateBase, unitLabel: `#${candidateTok}` };
+    }
+  }
+  return { base: raw, unitLabel: null };
+};
+
+const canonicalStreetGroupKey = (baseAddr, borough) => {
+  let s = String(baseAddr || '').trim().toUpperCase();
+  s = s.replace(/[^A-Z0-9\s-]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!s) return '';
+  const parts = s.split(' ');
+  if (parts.length > 1) {
+    const lastIdx = parts.length - 1;
+    const dirTail = _DIRECTIONAL_TAIL_TOKENS.has(parts[lastIdx]) && parts.length > 2;
+    const suffixIdx = dirTail ? lastIdx - 1 : lastIdx;
+    if (_STREET_SUFFIX_CANON_MAP[parts[suffixIdx]]) {
+      parts[suffixIdx] = _STREET_SUFFIX_CANON_MAP[parts[suffixIdx]];
+    }
+  }
+  return `${parts.join(' ')}|${String(borough || '').trim().toUpperCase()}`;
+};
+
 const formatPropertyAddress = (p, config) => {
   const raw = (p?.address || '').trim();
   const upper = raw.toUpperCase();
@@ -1817,7 +2175,7 @@ function BuildingDrawer({ p, networkName, onClose, onSelectParcel, config }) {
               {p.compliance_active && <span className="text-[9px] font-black px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">Compliant</span>}
               {p.registration_id && <span className="text-[9px] font-black px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 border border-blue-200">{config.registrationBadge || 'Registered Rental'}</span>}
             </div>
-            <h3 className="font-black text-slate-900 text-base leading-tight">{formatPropertyAddress(p, config)}</h3>
+            <h3 className="font-black text-slate-900 text-base leading-tight">{(multiUnits && p._baseAddress) ? p._baseAddress : formatPropertyAddress(p, config)}</h3>
             {networkName && <p className="text-[11px] text-slate-400 mt-0.5 truncate">{networkName}</p>}
           </div>
           <button type="button" aria-label="Close building details" onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 shrink-0"><X size={18} aria-hidden="true"/></button>
@@ -1856,11 +2214,19 @@ function BuildingDrawer({ p, networkName, onClose, onSelectParcel, config }) {
                     className="w-full px-4 py-2.5 flex items-center justify-between gap-2 text-left hover:bg-violet-50/70 transition-colors"
                   >
                     <div className="min-w-0">
-                      <div className="text-xs font-bold text-slate-800 truncate">
-                        {config.idLabel}: {unit.bbl || '—'}
+                      <div className="text-xs font-bold text-slate-800 truncate flex items-center gap-1.5">
+                        {unit._unitLabel && (
+                          <span className="inline-block px-1.5 py-0.5 rounded bg-violet-100 text-violet-800 text-[10px] font-black shrink-0">
+                            {unit._unitLabel}
+                          </span>
+                        )}
+                        <span className="truncate">
+                          {unit._unitLabel ? formatPropertyAddress(unit, config) : `${config.idLabel}: ${unit.bbl || '—'}`}
+                        </span>
                       </div>
                       <div className="text-[10px] text-slate-400 truncate">
                         {[
+                          unit._unitLabel && unit.bbl ? `${config.idLabel}: ${unit.bbl}` : null,
                           unit.assessed_total ? fmtMoney(unit.assessed_total) : null,
                           config.reliableUnits && unit.units_res > 0 ? `${unit.units_res} units` : null,
                           unit.violations_open > 0 ? `${unit.violations_open} open` : null,
@@ -3567,19 +3933,26 @@ function NetworkDetail({ networkKey, onBack, onSearchTrigger, onMapSelected, onO
       return true;
     };
 
-    // Group only when a real street-numbered building address exists; keep unaddressed / 0-unassigned parcels separate by parcel ID
+    // Group unit-suffixed & multi-parcel records sharing the same canonical street address
+    // (e.g. '6 STRATTON DR #104' .. '6 STRATTON DR #208' -> '6 STRATTON DR'); keep unaddressed parcels separate.
     const groups = {};
     baseList.forEach((p, idx) => {
-      const addr = (p.address || '').trim().toUpperCase();
+      const rawAddr = (p.address || '').trim();
       const borough = (p.borough || '').trim().toUpperCase();
-      const key = (!isPlaceholderSiteAddress(addr))
-        ? `${addr}|${borough}`
+      const parsed = extractStreetBaseAndUnit(rawAddr);
+      const baseUpper = (parsed.base || '').trim().toUpperCase();
+      const canGroup = !isPlaceholderSiteAddress(baseUpper) && /^\d/.test(baseUpper) && baseUpper.length >= 4;
+      const key = canGroup
+        ? canonicalStreetGroupKey(parsed.base, borough)
         : `__UNADDRESSED__:${p.bbl || idx}|${borough}`;
+      const unitItem = parsed.unitLabel ? { ...p, _unitLabel: parsed.unitLabel } : p;
+
       if (!groups[key]) {
         groups[key] = {
           ...p,
           _groupKey: key,
-          _units: [p],
+          _baseAddress: canGroup ? parsed.base.toUpperCase() : null,
+          _units: [unitItem],
           units_res: Number(p.units_res) || 0,
           violations_open: Number(p.violations_open) || 0,
           violations_open_c: Number(p.violations_open_c) || 0,
@@ -3588,7 +3961,7 @@ function NetworkDetail({ networkKey, onBack, onSearchTrigger, onMapSelected, onO
           assessed_total: Number(p.assessed_total) || 0,
         };
       } else {
-        groups[key]._units.push(p);
+        groups[key]._units.push(unitItem);
         groups[key].units_res += Number(p.units_res) || 0;
         groups[key].violations_open += Number(p.violations_open) || 0;
         groups[key].violations_open_c += Number(p.violations_open_c) || 0;
@@ -3606,10 +3979,20 @@ function NetworkDetail({ networkKey, onBack, onSearchTrigger, onMapSelected, onO
       }
     });
 
-    const allGroups = Object.values(groups).map(g => ({
-      ...g,
-      _unitCount: g._units.length,
-    }));
+    const allGroups = Object.values(groups).map(g => {
+      if (g._units.length > 1) {
+        g._units.sort((a, b) => {
+          const ua = a._unitLabel || a.address || a.bbl || '';
+          const ub = b._unitLabel || b.address || b.bbl || '';
+          return String(ua).localeCompare(String(ub), undefined, { numeric: true, sensitivity: 'base' });
+        });
+      }
+      return {
+        ...g,
+        _unitCount: g._units.length,
+        _hasUnitLabels: g._units.some(u => Boolean(u._unitLabel)),
+      };
+    });
     const sharedExist = allGroups.some(g => g._unitCount > 1);
 
     const groupedFiltered = allGroups.filter(matchesFlags).sort(compareRows);
@@ -3994,6 +4377,8 @@ function NetworkDetail({ networkKey, onBack, onSearchTrigger, onMapSelected, onO
           : (allTxns.length > 0 ? 'grid-cols-2' : 'grid-cols-1');
 
         return (
+          <>
+          <AlgorithmicEstimateBanner className="mb-3" />
           <div className={`grid ${gridCols} gap-3 mb-4`}>
             {/* Card 1: Portfolio Size */}
             <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm flex flex-col h-full">
@@ -4280,6 +4665,7 @@ function NetworkDetail({ networkKey, onBack, onSearchTrigger, onMapSelected, onO
               </div>
             )}
           </div>
+          </>
         );
       })()}
 
@@ -4447,7 +4833,7 @@ function NetworkDetail({ networkKey, onBack, onSearchTrigger, onMapSelected, onO
                     {displayProps.slice(0, visibleRows).map((p) => {
                       const isMulti = groupByAddress && p._unitCount > 1;
                       const expandedLimit = isMulti ? expandedGroups[p._groupKey] : null;
-                      const addrLabel = formatPropertyAddress(p, config);
+                      const addrLabel = (isMulti && p._baseAddress) ? p._baseAddress : formatPropertyAddress(p, config);
 
                       return (
                         <React.Fragment key={p._groupKey}>
@@ -4472,10 +4858,18 @@ function NetworkDetail({ networkKey, onBack, onSearchTrigger, onMapSelected, onO
                               )}
                               {isMulti && (
                                 <div className="flex flex-wrap items-center gap-1.5 mt-1">
-                                  <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-violet-100 text-violet-700 border border-violet-200">
+                                  <button
+                                    type="button"
+                                    aria-expanded={Boolean(expandedLimit)}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      toggleGroupExpand(p._groupKey);
+                                    }}
+                                    className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-violet-100 hover:bg-violet-200 text-violet-700 border border-violet-200 transition-colors"
+                                  >
                                     {expandedLimit ? <ChevronDown size={11} aria-hidden="true" /> : <ChevronRight size={11} aria-hidden="true" />}
-                                    {expandedLimit ? `Hide ${fmt(p._unitCount)} ${recordNoun}` : `Show ${fmt(p._unitCount)} ${recordNoun}`}
-                                  </span>
+                                    {fmt(p._unitCount)} {p._hasUnitLabels ? 'units' : recordNoun}
+                                  </button>
                                   <button
                                     type="button"
                                     onClick={(e) => {
@@ -4517,12 +4911,22 @@ function NetworkDetail({ networkKey, onBack, onSearchTrigger, onMapSelected, onO
                               className="bg-violet-50/25 hover:bg-violet-50 transition-colors cursor-pointer"
                               onClick={() => setSelBuilding(sub)}
                             >
-                              <th scope="row" className="text-left pl-6 pr-3 sm:pl-7 sm:pr-4 py-2 font-medium text-slate-600">
-                                <div className="text-[11px] font-bold text-slate-700">
-                                  {config.idLabel}: {sub.bbl || '—'}
+                              <th scope="row" className="text-left pl-6 pr-3 sm:pl-7 sm:pr-4 py-2 font-medium text-slate-600 max-w-[175px] sm:max-w-[230px]">
+                                <div className="text-[11px] font-bold text-slate-700 flex items-center gap-1.5 truncate">
+                                  {sub._unitLabel && (
+                                    <span className="inline-block px-1.5 py-0.5 rounded bg-violet-100 text-violet-800 text-[10px] font-black shrink-0">
+                                      {sub._unitLabel}
+                                    </span>
+                                  )}
+                                  <span className="truncate" title={formatPropertyAddress(sub, config)}>
+                                    {sub._unitLabel ? formatPropertyAddress(sub, config) : `${config.idLabel}: ${sub.bbl || '—'}`}
+                                  </span>
                                 </div>
-                                <div className="text-[10px] text-slate-400 font-normal">
-                                  {sub.assessed_total > 0 ? `Assessed ${fmtMoney(sub.assessed_total)}` : 'Tap for official record'}
+                                <div className="text-[10px] text-slate-400 font-normal truncate mt-0.5">
+                                  {[
+                                    sub._unitLabel && sub.bbl ? `${config.idLabel}: ${sub.bbl}` : null,
+                                    sub.assessed_total > 0 ? `Assessed ${fmtMoney(sub.assessed_total)}` : null,
+                                  ].filter(Boolean).join(' · ') || 'Tap for official record'}
                                 </div>
                               </th>
                               <td className="city-col-wide px-3 py-2">{sub.borough && <BoroughBadge borough={sub.borough}/>}</td>
@@ -4849,6 +5253,7 @@ export default function CityExplorer({ city = "nyc", onBack, onMapSelected, onOp
                 </div>
               )}
               <SourcesAndLimitationsBar config={config} limitation={limitation} cityKey={cityKey} />
+              <AlgorithmicEstimateBanner className="mb-3" />
 
               {cityKey === 'nyc' && stats?.code_data?.open_violations > 0 && (
                 <div className="mb-6 rounded-xl border border-red-200 bg-red-50 px-4 py-4 shadow-sm">

@@ -1,23 +1,25 @@
 import React from 'react';
 import { Home, AlertCircle, RefreshCw, LayoutDashboard, Database, MessageSquare, Heart, TrendingUp, ShieldAlert, Layers, ChevronLeft, ChevronRight } from 'lucide-react';
 import MajorUpgradeButton from './MajorUpgradeTooltip';
+import LiveIngestionBadge from './LiveIngestionBadge';
 
 const ALL_HEADER_JURISDICTIONS = [
     { key: 'AR', label: 'AR', mobileLabel: 'Arkansas', fullTitle: 'ARKANSAS' },
     { key: 'BALTIMORE', label: 'Balt', mobileLabel: 'Baltimore', fullTitle: 'BALTIMORE' },
-    { key: 'CHICAGO', label: 'Chicago', mobileLabel: 'Chicago', fullTitle: 'CHICAGO' },
+    { key: 'CA', label: 'CA', mobileLabel: 'California', fullTitle: 'CALIFORNIA' },
     { key: 'CO', label: 'CO', mobileLabel: 'Colorado', fullTitle: 'COLORADO' },
     { key: 'CT', label: 'CT', mobileLabel: 'CT', fullTitle: 'CONNECTICUT' },
     { key: 'DC', label: 'D.C.', mobileLabel: 'D.C.', fullTitle: 'D.C.' },
     { key: 'DETROIT', label: 'Detroit', mobileLabel: 'Detroit', fullTitle: 'DETROIT' },
     { key: 'FL', label: 'FL', mobileLabel: 'Florida', fullTitle: 'FLORIDA' },
+    { key: 'IL', label: 'IL', mobileLabel: 'Illinois', fullTitle: 'ILLINOIS' },
     { key: 'MA', label: 'MA', mobileLabel: 'Mass.', fullTitle: 'MASSACHUSETTS' },
-    { key: 'MIAMI', label: 'Miami', mobileLabel: 'Miami', fullTitle: 'MIAMI-DADE' },
-    { key: 'MINNEAPOLIS', label: 'Mpls', mobileLabel: 'Minneapolis', fullTitle: 'MINNEAPOLIS' },
+    { key: 'MN', label: 'MN', mobileLabel: 'Minnesota', fullTitle: 'MINNESOTA' },
+    { key: 'MT', label: 'MT', mobileLabel: 'Montana', fullTitle: 'MONTANA' },
     { key: 'NC', label: 'NC', mobileLabel: 'N. Carolina', fullTitle: 'NORTH CAROLINA' },
     { key: 'NJ', label: 'NJ', mobileLabel: 'NJ', fullTitle: 'NEW JERSEY' },
-    { key: 'NYS', label: 'NY State', mobileLabel: 'NY State', fullTitle: 'NEW YORK STATE' },
-    { key: 'NY', label: 'NYC', mobileLabel: 'NYC', fullTitle: 'NYC' },
+    { key: 'NY', label: 'NY', mobileLabel: 'New York', fullTitle: 'NEW YORK' },
+    { key: 'OH', label: 'OH', mobileLabel: 'Ohio', fullTitle: 'OHIO' },
     { key: 'PHILADELPHIA', label: 'Philly', mobileLabel: 'Philly', fullTitle: 'PHILADELPHIA' },
     { key: 'VA', label: 'VA', mobileLabel: 'Virginia', fullTitle: 'VIRGINIA' },
     { key: 'VT', label: 'VT', mobileLabel: 'Vermont', fullTitle: 'VERMONT' },
@@ -25,8 +27,8 @@ const ALL_HEADER_JURISDICTIONS = [
 ].sort((a, b) => a.label.localeCompare(b.label, 'en'));
 
 const DEFAULT_LIVE_KEYS = new Set([
-    'AR', 'BALTIMORE', 'CHICAGO', 'CO', 'CT', 'DC', 'DETROIT', 'FL', 'MA',
-    'MIAMI', 'MINNEAPOLIS', 'NC', 'NJ', 'NYS', 'NY', 'PHILADELPHIA', 'VA', 'VT', 'WI',
+    'AR', 'BALTIMORE', 'CA', 'CO', 'CT', 'DC', 'DETROIT', 'FL', 'IL', 'MA',
+    'MN', 'MT', 'NC', 'NJ', 'NY', 'OH', 'PHILADELPHIA', 'VA', 'VT', 'WI',
 ]);
 
 const HEADER_STATE_TITLES = Object.fromEntries(ALL_HEADER_JURISDICTIONS.map((j) => [j.key, j.fullTitle]));
@@ -536,15 +538,23 @@ export default function Header({ onHome, onDatasets, onReset, onAbout, onShowUpg
                         />
                     </div>
 
-                    {/* Mobile quick Major Upgrade trigger + prominent tooltip */}
-                    {onShowUpgrade && (
-                        <MajorUpgradeButton
-                            variant="mobile-header"
-                            jurisdictionCount={visibleJurisdictions.length}
-                            onShowUpgrade={onShowUpgrade}
-                            className="md:hidden"
-                        />
-                    )}
+                    {/* Mobile quick Live Ingestion + Major Upgrade triggers */}
+                    <div className="md:hidden flex items-center gap-1.5 shrink-0">
+                        {onShowFreshness && (
+                            <LiveIngestionBadge
+                                variant="mobile"
+                                jurisdictionCount={visibleJurisdictions.length}
+                                onShowFreshness={onShowFreshness}
+                            />
+                        )}
+                        {onShowUpgrade && (
+                            <MajorUpgradeButton
+                                variant="mobile-header"
+                                jurisdictionCount={visibleJurisdictions.length}
+                                onShowUpgrade={onShowUpgrade}
+                            />
+                        )}
+                    </div>
 
                     {/* Desktop-only buttons */}
                     <div className="hidden md:flex items-center gap-1.5 shrink-0">
@@ -569,6 +579,14 @@ export default function Header({ onHome, onDatasets, onReset, onAbout, onShowUpg
                         )}
 
                         {(user || onReset) && <div className="w-px h-5 bg-slate-200 mx-0.5 shrink-0"></div>}
+
+                        {onShowFreshness && (
+                            <LiveIngestionBadge
+                                variant="desktop"
+                                jurisdictionCount={visibleJurisdictions.length}
+                                onShowFreshness={onShowFreshness}
+                            />
+                        )}
 
                         {onShowUpgrade && (
                             <MajorUpgradeButton

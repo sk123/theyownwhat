@@ -19,23 +19,24 @@ import {
 } from 'lucide-react';
 
 const DATASET_ORDER = [
-    'CT', 'MA', 'NYC', 'PHILADELPHIA', 'DC', 'BALTIMORE',
-    'FL', 'MIAMI', 'CHICAGO', 'NYS', 'NJ', 'CO', 'NC', 'VA', 'AR', 'WI', 'VT', 'DETROIT', 'MINNEAPOLIS',
+    'CT', 'NY', 'CA', 'FL', 'IL', 'MA', 'NJ', 'PHILADELPHIA', 'DC', 'BALTIMORE',
+    'MN', 'OH', 'CO', 'NC', 'VA', 'AR', 'WI', 'MT', 'VT', 'DETROIT',
 ];
 
 const DATASET_META = {
-    CT: { label: 'Connecticut', short: 'CT', accent: 'blue' },
-    NYC: { label: 'New York City', short: 'NYC', accent: 'indigo' },
-    NYS: { label: 'New York State (33 Counties)', short: 'NY State', accent: 'indigo' },
+    CT: { label: 'Connecticut (All 169 Towns)', short: 'CT', accent: 'blue' },
+    NY: { label: 'New York (All 62 Counties incl. NYC)', short: 'NY', accent: 'indigo' },
+    CA: { label: 'California (All 58 Counties)', short: 'CA', accent: 'amber' },
+    FL: { label: 'Florida (All 67 Counties incl. Miami-Dade)', short: 'FL', accent: 'teal' },
+    IL: { label: 'Illinois (All 102 Counties incl. Chicago)', short: 'IL', accent: 'sky' },
+    MA: { label: 'Massachusetts (All 351 Cities & Towns)', short: 'MA', accent: 'emerald' },
     DC: { label: 'Washington, D.C.', short: 'D.C.', accent: 'cyan' },
     BALTIMORE: { label: 'Baltimore', short: 'Baltimore', accent: 'amber' },
-    MA: { label: 'Massachusetts (All 351 Cities & Towns)', short: 'MA', accent: 'emerald' },
     DETROIT: { label: 'Detroit', short: 'Detroit', accent: 'rose' },
     PHILADELPHIA: { label: 'Philadelphia', short: 'Philadelphia', accent: 'violet' },
-    CHICAGO: { label: 'Chicago', short: 'Chicago', accent: 'sky' },
-    FL: { label: 'Florida', short: 'FL', accent: 'teal' },
-    MIAMI: { label: 'Miami-Dade', short: 'Miami', accent: 'teal' },
-    MINNEAPOLIS: { label: 'Minneapolis', short: 'Mpls', accent: 'blue' },
+    MN: { label: 'Minnesota (Twin Cities & Statewide)', short: 'MN', accent: 'blue' },
+    OH: { label: 'Ohio (County Auditor CAMA)', short: 'OH', accent: 'rose' },
+    MT: { label: 'Montana (All 56 Counties)', short: 'MT', accent: 'cyan' },
     NJ: { label: 'New Jersey', short: 'NJ', accent: 'cyan' },
     CO: { label: 'Colorado', short: 'CO', accent: 'amber' },
     NC: { label: 'North Carolina', short: 'NC', accent: 'cyan' },
@@ -75,16 +76,17 @@ function getDatasetKey(row) {
     const municipality = String(row?.municipality || '').toUpperCase();
     if (state === 'CT' || row?.type === 'state') return 'CT';
     if (state === 'MA' || row?.type === 'ma_town' || municipality === 'MA' || municipality.includes('MASSACHUSETTS')) return 'MA';
-    if (municipality === 'NY' || municipality === 'NYS' || municipality === 'NEW YORK STATE') return 'NYS';
-    if (municipality.includes('NYC') || municipality.includes('NEW YORK CITY') || municipality.includes('NEW YORK')) return 'NYC';
+    if (state === 'NY' || municipality === 'NY' || municipality === 'NYS' || municipality.includes('NEW YORK') || municipality.includes('NYC')) return 'NY';
+    if (state === 'CA' || municipality === 'CA' || municipality.includes('CALIFORNIA')) return 'CA';
+    if (state === 'FL' || municipality === 'FL' || municipality.includes('FLORIDA') || municipality.includes('MIAMI')) return 'FL';
+    if (state === 'IL' || municipality === 'IL' || municipality.includes('ILLINOIS') || municipality.includes('CHICAGO')) return 'IL';
+    if (state === 'MN' || municipality === 'MN' || municipality.includes('MINNESOTA') || municipality.includes('MINNEAPOLIS')) return 'MN';
+    if (state === 'MT' || municipality === 'MT' || municipality.includes('MONTANA')) return 'MT';
+    if (state === 'OH' || municipality === 'OH' || municipality.includes('OHIO')) return 'OH';
     if (municipality === 'DC' || municipality.includes('WASHINGTON')) return 'DC';
     if (municipality.includes('BALTIMORE')) return 'BALTIMORE';
     if (municipality.includes('DETROIT')) return 'DETROIT';
     if (municipality.includes('PHILADELPHIA')) return 'PHILADELPHIA';
-    if (municipality.includes('CHICAGO')) return 'CHICAGO';
-    if (municipality.includes('MIAMI')) return 'MIAMI';
-    if (municipality === 'FL' || municipality.includes('FLORIDA')) return 'FL';
-    if (municipality.includes('MINNEAPOLIS')) return 'MINNEAPOLIS';
     if (state === 'NJ' || municipality.includes('NEW JERSEY') || municipality === 'NJ') return 'NJ';
     if (municipality === 'CO' || municipality.includes('COLORADO')) return 'CO';
     if (municipality === 'NC' || municipality.includes('NORTH CAROLINA')) return 'NC';
@@ -97,7 +99,7 @@ function getDatasetKey(row) {
 
 function getDisplayName(row) {
     const key = getDatasetKey(row);
-    if (key === 'CT' || row?.type === 'ma_town') return row.municipality || 'Unknown town';
+    if (key === 'CT' || row?.type === 'ma_town' || row?.type === 'locality_row') return row.municipality || 'Unknown locality';
     return DATASET_META[key]?.label || row.municipality || 'Unknown source';
 }
 
@@ -152,8 +154,8 @@ function getStatusClasses(status) {
     const value = String(status || '').toLowerCase();
     if (value === 'success') return 'bg-emerald-50 text-emerald-700 border-emerald-100';
     if (value === 'running') return 'bg-blue-50 text-blue-700 border-blue-100';
-    if (value === 'cama_queued') return 'bg-sky-50 text-sky-700 border-sky-200';
-    if (value === 'massgis_l3') return 'bg-slate-100 text-slate-700 border-slate-200';
+    if (value === 'cama_queued' || value === 'cpra_roll_ready') return 'bg-sky-50 text-sky-700 border-sky-200';
+    if (value === 'massgis_l3' || value === 'fdor_nal' || value === 'orpts_gis') return 'bg-slate-100 text-slate-700 border-slate-200';
     if (value === 'unavailable') return 'bg-slate-100 text-slate-500 border-slate-200';
     if (value === 'failed' || value === 'failure' || value === 'error') return 'bg-rose-50 text-rose-700 border-rose-100';
     return 'bg-amber-50 text-amber-700 border-amber-100';
@@ -319,11 +321,11 @@ const FreshnessModal = ({ isOpen, onClose }) => {
             0
         );
         const cityRows = allRows.filter((row) => row.type === 'city').length;
-        const townRows = allRows.filter((row) => row.datasetKey === 'CT' || row.type === 'ma_town').length;
+        const townRows = allRows.filter((row) => row.datasetKey === 'CT' || row.type === 'ma_town' || row.type === 'locality_row').length;
         const datasetRows = allRows.reduce((sum, row) => sum + (Array.isArray(row.datasets) ? row.datasets.length : 0), 0);
         const attentionRows = allRows.filter((row) => {
             const status = String(row.status || '').toLowerCase();
-            return status && !['success', 'massgis_l3', 'cama_queued'].includes(status);
+            return status && !['success', 'massgis_l3', 'cama_queued', 'fdor_nal', 'orpts_gis', 'cpra_roll_ready'].includes(status);
         }).length;
         return {
             sourceRows: allRows.filter((row) => !row.is_state_overview).length,
@@ -573,15 +575,19 @@ function SystemFreshnessCard({ label, value }) {
 
 function SourceSection({ group, onSort, getSortIcon }) {
     const { key, rows, meta } = group;
-    const townRows = rows.filter((row) => key === 'CT' || row.type === 'ma_town');
-    const overviewCards = rows.filter((row) => !(key === 'CT' || row.type === 'ma_town'));
-    const propertyRows = (townRows.length ? townRows : overviewCards).reduce(
+    const isLocalityRow = (row) => key === 'CT' || row.type === 'ma_town' || row.type === 'locality_row';
+    const townRows = rows.filter(isLocalityRow);
+    const overviewCards = rows.filter((row) => !isLocalityRow(row));
+    const [showAllLocalities, setShowAllLocalities] = useState(false);
+    const propertyRows = (overviewCards.length ? overviewCards : townRows).reduce(
         (sum, row) => sum + Number(row.total_properties || 0),
         0
     );
     const datasets = rows.reduce((sum, row) => sum + (row.datasets?.length || 0), 0);
     const accentClass = ACCENT_CLASSES[meta.accent] || ACCENT_CLASSES.slate;
     const hasTownTable = townRows.length > 0;
+    const visibleTownRows = showAllLocalities || townRows.length <= 25 ? townRows : townRows.slice(0, 20);
+    const headingId = `freshness-heading-${key}`;
 
     return (
         <section id={`freshness-section-${key}`} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -589,9 +595,9 @@ function SourceSection({ group, onSort, getSortIcon }) {
                 <div className="flex items-center gap-3">
                     <span className={`rounded-xl border px-3 py-2 text-sm font-black ${accentClass}`}>{meta.short}</span>
                     <div>
-                        <h3 className="text-lg font-black text-slate-950">{meta.label}</h3>
+                        <h3 id={headingId} className="text-lg font-black text-slate-950">{meta.label}</h3>
                         <p className="text-xs font-bold text-slate-400">
-                            {hasTownTable ? `${townRows.length.toLocaleString()} municipalities` : `${rows.length.toLocaleString()} source rows`} · {compactCount(propertyRows)} property rows
+                            {hasTownTable ? `${townRows.length.toLocaleString()} localities` : `${rows.length.toLocaleString()} source rows`} · {compactCount(propertyRows)} property rows
                             {datasets ? ` · ${datasets.toLocaleString()} statewide datasets` : ''}
                         </p>
                     </div>
@@ -621,11 +627,32 @@ function SourceSection({ group, onSort, getSortIcon }) {
             )}
 
             {hasTownTable && (
-                <div className="divide-y divide-slate-100">
-                    {townRows.map((row) => (
-                        <TownCompletenessRow key={`${row.datasetKey}-${row.municipality}`} row={row} />
-                    ))}
-                </div>
+                <>
+                    <div
+                        tabIndex={0}
+                        role="region"
+                        aria-labelledby={headingId}
+                        className="max-h-[540px] overflow-y-auto divide-y divide-slate-100 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-blue-600"
+                    >
+                        {visibleTownRows.map((row) => (
+                            <TownCompletenessRow key={`${row.datasetKey}-${row.municipality}`} row={row} />
+                        ))}
+                    </div>
+                    {townRows.length > 25 && (
+                        <div className="border-t border-slate-100 bg-slate-50 px-4 py-2.5 text-center">
+                            <button
+                                type="button"
+                                aria-expanded={showAllLocalities}
+                                onClick={() => setShowAllLocalities((prev) => !prev)}
+                                className="rounded-lg border border-slate-200 bg-white px-3.5 py-1.5 text-xs font-black text-blue-700 transition hover:border-blue-300 hover:bg-blue-50"
+                            >
+                                {showAllLocalities
+                                    ? `Collapse to top 20 of ${townRows.length.toLocaleString()} localities`
+                                    : `Show all ${townRows.length.toLocaleString()} counties / municipalities`}
+                            </button>
+                        </div>
+                    )}
+                </>
             )}
         </section>
     );
@@ -832,6 +859,9 @@ function DatasetStatusCard({ dataset }) {
                 {formatCount(parcelsEnriched) && (
                     <MetricChip label="Registry-Matched Parcels" value={formatCount(parcelsEnriched)} tone="indigo" />
                 )}
+                {details.refresh_cadence && (
+                    <MetricChip label="Cadence" value={details.refresh_cadence} tone="default" />
+                )}
 
                 {dataset.source_url && (
                     <a
@@ -898,12 +928,15 @@ function StatusBadge({ status }) {
     const Icon =
         normalized === 'success' ? CheckCircle :
         normalized === 'running' ? RefreshCw :
-        normalized === 'cama_queued' ? Clock :
-        normalized === 'massgis_l3' ? Database :
+        normalized === 'cama_queued' || normalized === 'cpra_roll_ready' ? Clock :
+        normalized === 'massgis_l3' || normalized === 'fdor_nal' || normalized === 'orpts_gis' ? Database :
         normalized === 'unavailable' ? ShieldAlert : AlertCircle;
     const label =
         normalized === 'cama_queued' ? 'CAMA QUEUED' :
-        normalized === 'massgis_l3' ? 'MASSGIS L3' : value;
+        normalized === 'cpra_roll_ready' ? 'CPRA ROLL READY' :
+        normalized === 'massgis_l3' ? 'MASSGIS L3' :
+        normalized === 'fdor_nal' ? 'FDOR NAL ROLL' :
+        normalized === 'orpts_gis' ? 'NYS ORPTS GIS' : value;
 
     return (
         <span className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-black uppercase tracking-[0.12em] ${getStatusClasses(value)}`}>

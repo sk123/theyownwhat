@@ -51,11 +51,71 @@ AMBIGUOUS_PRINCIPAL_MIN_MAIL_ADDRESSES = int(os.environ.get("AMBIGUOUS_PRINCIPAL
 AMBIGUOUS_PRINCIPAL_TOP_EMAIL_SHARE = float(os.environ.get("AMBIGUOUS_PRINCIPAL_TOP_EMAIL_SHARE", "0.35"))
 AMBIGUOUS_PRINCIPAL_MAIL_ADDRESS_SHARE = float(os.environ.get("AMBIGUOUS_PRINCIPAL_MAIL_ADDRESS_SHARE", "0.60"))
 MULTI_UNIT_BUILDING_MIN_DISTINCT_UNITS = int(os.environ.get("MULTI_UNIT_BUILDING_MIN_DISTINCT_UNITS", "3"))
-# Any single mailing address shared by more than this many property-owning
-# businesses is treated as a registered-agent office / virtual mailbox rather
-# than a real shared headquarters. Curated offices live in address_match_rules;
-# this cap catches the ones nobody has listed yet.
-SHARED_ADDRESS_MAX_BUSINESSES = int(os.environ.get("SHARED_ADDRESS_MAX_BUSINESSES", "75"))
+# Quota-free intermediary dispersion thresholds (no hard entity-count ceiling):
+# An unlisted address is quarantined ONLY when >=6 mutually disjoint principal/email
+# islands share it with no dominant operator (<35% share), OR when >=85% of >=30
+# registered businesses at that address own zero real estate (commercial RA / maildrop).
+DISPERSED_HUB_MIN_DISJOINT_ISLANDS = int(os.environ.get("DISPERSED_HUB_MIN_DISJOINT_ISLANDS", "6"))
+DISPERSED_HUB_MAX_DOMINANT_SHARE = float(os.environ.get("DISPERSED_HUB_MAX_DOMINANT_SHARE", "0.35"))
+NON_OWNING_RA_MIN_TOTAL_BIZ = int(os.environ.get("NON_OWNING_RA_MIN_TOTAL_BIZ", "30"))
+NON_OWNING_RA_MAX_OWNING_RATIO = float(os.environ.get("NON_OWNING_RA_MAX_OWNING_RATIO", "0.15"))
+
+
+def _is_dispersed_intermediary_business_hub(
+    uniq_biz_ids,
+    graph,
+    node_to_int,
+    *,
+    total_registered_at_coarse: int = 0,
+) -> bool:
+    """Distinguish an unlisted commercial agent / CPA / attorney / virtual-mailbox hub
+    from a genuine large landlord HQ (even with 500+ single-purpose LLCs) using graph
+    cohesion vs. disjoint-principal dispersion and real-estate-owning footprint ratio,
+    without imposing any artificial entity-count quota."""
+    n_owning = len(uniq_biz_ids)
+    if n_owning < 8:
+        return False
+
+    b_nodes = [node_to_int[("business", b)] for b in uniq_biz_ids if ("business", b) in node_to_int]
+    connected_b = [bn for bn in b_nodes if graph.get(bn)]
+
+    if len(connected_b) >= 8:
+        par = {bn: bn for bn in connected_b}
+
+        def _find(x):
+            while par[x] != x:
+                par[x] = par[par[x]]
+                x = par[x]
+            return x
+
+        nbr_anchor = {}
+        for bn in connected_b:
+            for nb in graph.get(bn, ()):
+                prev = nbr_anchor.get(nb)
+                if prev is None:
+                    nbr_anchor[nb] = bn
+                else:
+                    ra, rb = _find(prev), _find(bn)
+                    if ra != rb:
+                        par[ra] = rb
+
+        island_sizes = defaultdict(int)
+        for bn in connected_b:
+            island_sizes[_find(bn)] += 1
+        n_islands = len(island_sizes)
+        top_share = max(island_sizes.values()) / len(connected_b)
+        if n_islands >= DISPERSED_HUB_MIN_DISJOINT_ISLANDS and top_share < DISPERSED_HUB_MAX_DOMINANT_SHARE:
+            return True
+        return False
+
+    # Anonymous / out-of-state entities lacking local officer links: check whether the
+    # address is overwhelmingly a non-real-estate corporate filing hub (>85% non-owning).
+    if (
+        total_registered_at_coarse >= NON_OWNING_RA_MIN_TOTAL_BIZ
+        and (n_owning / total_registered_at_coarse) < NON_OWNING_RA_MAX_OWNING_RATIO
+    ):
+        return True
+    return False
 
 # Placeholder/Generic names to skip during linking to prevent bad merges
 SKIP_NAMES = {
@@ -784,13 +844,16 @@ def build_graph(conn, skip_emails=False):
                 holdco_edges = 0
                 for h_norm, h_bids in holdco_to_bids.items():
                     uniq_bids = sorted(set(h_bids))
-                    if 2 <= len(uniq_bids) <= 15:
-                        h_hub = get_id(("address", f"oc_holdco:{h_norm}"))
-                        for b_k in uniq_bids:
-                            b_int = get_id(("business", b_k))
-                            graph[b_int].add(h_hub)
-                            graph[h_hub].add(b_int)
-                            holdco_edges += 1
+                    if len(uniq_bids) < 2:
+                        continue
+                    if h_norm.startswith("hq:") and _is_dispersed_intermediary_business_hub(uniq_bids, graph, node_to_int):
+                        continue
+                    h_hub = get_id(("address", f"oc_holdco:{h_norm}"))
+                    for b_k in uniq_bids:
+                        b_int = get_id(("business", b_k))
+                        graph[b_int].add(h_hub)
+                        graph[h_hub].add(b_int)
+                        holdco_edges += 1
 
                 if oc_prin_pairs:
                     execute_values(
@@ -1027,6 +1090,8 @@ def build_graph(conn, skip_emails=False):
         )
         raw_addr_records = []
         coarse_distinct_units = defaultdict(set)
+        all_biz_count_by_coarse = defaultdict(int)
+        addr_key_to_coarse = {}
         law_office_coarse_addrs = set()
         third_party_entity_addr_counts = defaultdict(int)
         skipped_registrar_addresses = set()
@@ -1072,9 +1137,14 @@ def build_graph(conn, skip_emails=False):
                 if INSTITUTIONAL_PATTERN.search(b_name) and not WHITELIST_PATTERN.search(b_name):
                     continue
 
-                # Only include property-owning businesses (NOT bridge businesses)
-                # Bridge businesses connect via principal links, not shared addresses
+                # Count non-owning businesses per coarse building address for RA footprint ratio
                 if row['id'] not in property_owning_business_ids:
+                    if row['mail_address'] or row['business_address']:
+                        no_mail = compose_address(row['mail_address'], row['mail_city'], row['mail_state'], row['mail_zip'])
+                        no_biz = compose_address(row['business_address'], row['business_city'], row['business_state'], row['business_zip'])
+                        no_norm = first_normalized_mailing_address(no_mail, no_biz, coarse=True)
+                        if no_norm:
+                            all_biz_count_by_coarse[no_norm] += 1
                     continue
                 raw_comp_mail = compose_address(row['mail_address'], row['mail_city'],
                                                 row['mail_state'], row['mail_zip'])
@@ -1093,6 +1163,7 @@ def build_graph(conn, skip_emails=False):
                 # Additional junk filter for known placeholders
                 if not norm or norm in JUNK_ADDRS or len(norm) <= 4:
                     continue
+                all_biz_count_by_coarse[norm] += 1
                 if is_ignored_shared_address(norm):
                     continue
                 if is_excluded_third_party_address(f"{raw_comp_mail} ; {raw_comp_biz}", norm, registrar_substrings):
@@ -1128,8 +1199,10 @@ def build_graph(conn, skip_emails=False):
                 # sharing the exact same unit/mailbox number; never collapse the building.
                 if has_unit and fine_no_zip:
                     addr_map[fine_no_zip].append(bid)
+                    addr_key_to_coarse[fine_no_zip] = norm
             else:
                 addr_map[norm].append(bid)
+                addr_key_to_coarse[norm] = norm
 
         if law_office_coarse_addrs:
             logger.info(
@@ -1145,35 +1218,41 @@ def build_graph(conn, skip_emails=False):
 
         addr_membership_edge_count = 0
         addr_pair_equivalent_count = 0
-        skipped_frequent_addresses = 0
+        skipped_dispersed_addresses = 0
         for addr, biz_ids in addr_map.items():
-            if len(biz_ids) < 2:
+            uniq_biz = sorted(set(biz_ids))
+            if len(uniq_biz) < 2:
                 continue
-            if len(biz_ids) > SHARED_ADDRESS_MAX_BUSINESSES:
-                skipped_frequent_addresses += 1
+            coarse_ref = addr_key_to_coarse.get(addr, addr)
+            if _is_dispersed_intermediary_business_hub(
+                uniq_biz,
+                graph,
+                node_to_int,
+                total_registered_at_coarse=all_biz_count_by_coarse.get(coarse_ref, 0),
+            ):
+                skipped_dispersed_addresses += 1
                 logger.info(
-                    "    Skipping high-frequency address %s (%s businesses, cap %s) "
-                    "as a likely registered-agent office.",
-                    addr, len(biz_ids), SHARED_ADDRESS_MAX_BUSINESSES,
+                    "    Skipping dispersed intermediary address %s (%s businesses; disjoint principals or <15%% property-owning ratio).",
+                    addr, len(uniq_biz),
                 )
                 continue
             addr_node = get_id(('address', addr))
-            for bid in biz_ids:
+            for bid in uniq_biz:
                 biz_node = get_id(('business', bid))
                 graph[biz_node].add(addr_node)
                 graph[addr_node].add(biz_node)
                 addr_membership_edge_count += 1
-            addr_pair_equivalent_count += len(biz_ids) * (len(biz_ids) - 1) // 2
+            addr_pair_equivalent_count += len(uniq_biz) * (len(uniq_biz) - 1) // 2
 
         if skipped_registrar_addresses:
             logger.info(
                 "  - Excluded %s known registered-agent address(es) via address_match_rules.",
                 f"{len(skipped_registrar_addresses):,}",
             )
-        if skipped_frequent_addresses:
+        if skipped_dispersed_addresses:
             logger.info(
-                "  - Excluded %s address(es) over the %s-business frequency cap.",
-                f"{skipped_frequent_addresses:,}", SHARED_ADDRESS_MAX_BUSINESSES,
+                "  - Excluded %s address(es) failing principal-cohesion / real-estate footprint checks.",
+                f"{skipped_dispersed_addresses:,}",
             )
 
         logger.info(

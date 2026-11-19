@@ -648,16 +648,17 @@ def fetch_florida_parcels() -> List[Dict[str, Any]]:
         "Florida_Statewide_Parcel_Centroid_Version/FeatureServer/0/query"
     )
     fields = (
-        "OBJECTID,CO_NO,PARCEL_ID,STATE_PAR_,DOR_UC,JV,NO_RES_UNT,ACT_YR_BLT,EFF_YR_BLT,"
+        "OBJECTID,CO_NO,PARCEL_ID,STATE_PAR_,DOR_UC,JV,LND_VAL,NO_RES_UNT,ACT_YR_BLT,EFF_YR_BLT,"
         "SALE_PRC1,SALE_YR1,SALE_MO1,OWN_NAME,OWN_ADDR1,OWN_ADDR2,OWN_CITY,OWN_STATE_,OWN_ZIPCD,"
         "PHY_ADDR1,PHY_ADDR2,PHY_CITY,PHY_ZIPCD"
     )
     # Capture 100% of multifamily apartments (003, 008), co-ops (005), retirement housing (006),
-    # misc residential (007), mixed-use residential (012), mobile home parks (028), PLUS all
-    # non-homesteaded investor/landlord-owned single-family homes (001), mobile homes (002), and condos (004).
+    # improved misc residential (007), mixed-use residential (012), improved mobile home parks (028),
+    # PLUS all non-homesteaded investor/owner single-family homes (001), mobile homes (002), and condos (004).
     where = (
         "OWN_NAME IS NOT NULL AND PHY_ADDR1 IS NOT NULL AND "
-        "((DOR_UC IN ('003','005','006','007','008','012','028')) OR "
+        "((DOR_UC IN ('003','005','006','008','012')) OR "
+        "(DOR_UC IN ('007','028') AND (NO_RES_UNT > 0 OR ACT_YR_BLT > 0)) OR "
         "(DOR_UC IN ('001','002','004') AND (AV_HMSTD IS NULL OR AV_HMSTD = 0)))"
     )
 
@@ -1409,14 +1410,56 @@ def build_and_save_state_networks(conn, jur: str, state_code: str, source_tag: s
             """
         )
         for r in scan_cur:
+            # Exclude SF fractional-week timeshare assessor sub-lots (`bld_class = 'TS'`,
+            # e.g., 800+ timeshare-week rows at a single downtown hotel/garage) from CA
+            # private landlord portfolios.
+            if jur == "ca" and str(r.get("bld_class") or "").strip().upper() == "TS":
+                continue
             properties.append(dict(r))
 
+    prop_owner_by_bbl = {
+        p["bbl"]: normalize_owner_name(p.get("owner_name") or p.get("owner_name_norm"))
+        for p in properties
+        if p.get("bbl")
+    }
     bbl_reg_ids: Dict[str, Set[str]] = defaultdict(set)
+    bbl_contact_humans: Dict[str, Set[Tuple[str, str]]] = defaultdict(set)
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute(f"SELECT bbl, registration_id FROM {jur}_hpd_registrations WHERE bbl IS NOT NULL")
+        cur.execute(
+            f"""
+            SELECT r.bbl, r.registration_id,
+                   UPPER(COALESCE(r.lifecycle_stage, 'ACTIVE')) AS lifecycle_stage,
+                   UPPER(COALESCE(c.contact_type, '')) AS contact_type,
+                   c.full_name, c.full_name_norm,
+                   c.corporation_name, c.corporation_name_norm
+            FROM {jur}_hpd_registrations r
+            LEFT JOIN {jur}_hpd_contacts c
+              ON c.jurisdiction = r.jurisdiction AND c.registration_id = r.registration_id
+            WHERE r.bbl IS NOT NULL
+            """
+        )
         for r in cur.fetchall():
-            if r.get("bbl") and r.get("registration_id"):
-                bbl_reg_ids[r["bbl"]].add(r["registration_id"])
+            bbl = r.get("bbl")
+            rid = r.get("registration_id")
+            if bbl and rid:
+                bbl_reg_ids[bbl].add(rid)
+            stage = r.get("lifecycle_stage") or ""
+            if stage not in {"ACTIVE", "READY TO RENEW", "ISSUED", "REGISTERED", "APPROVED"}:
+                continue
+            cur_deed_owner = prop_owner_by_bbl.get(bbl) or ""
+            if not cur_deed_owner or cur_deed_owner in GENERIC_OWNER_NAMES or is_public_entity(cur_deed_owner):
+                continue
+            if (r.get("contact_type") or "") not in {"INDIVIDUALOWNER", "HEADOFFICER", "JOINTOWNER"}:
+                continue
+            corp_norm = normalize_owner_name(r.get("corporation_name_norm") or r.get("corporation_name"))
+            human_raw = (r.get("full_name") or "").strip()
+            human_norm = normalize_owner_name(r.get("full_name_norm") or human_raw)
+            if not ((corp_norm and corp_norm == cur_deed_owner) or (human_norm and human_norm == cur_deed_owner)):
+                continue
+            if human_raw and human_norm and len(human_norm) >= 5 and human_norm not in GENERIC_OWNER_NAMES and not is_public_entity(human_norm):
+                from api.shared_utils import canonicalize_person_name
+                h_canon = canonicalize_person_name(human_raw) or human_norm
+                bbl_contact_humans[bbl].add((h_canon, human_raw))
 
     if not properties:
         return 0, 0
@@ -1425,10 +1468,76 @@ def build_and_save_state_networks(conn, jur: str, state_code: str, source_tag: s
     n_municipalities = len({p.get("borough") for p in properties if p.get("borough")})
 
     from api.oc_linker import cluster_with_oc_and_series, load_oc_registered_agent_addresses
+    from api.shared_utils import extract_owner_family_key
     ra_addrs = load_oc_registered_agent_addresses(conn)
     network_groups = run_union_find_clustering(
         properties, jur, registrar_substrings=registrar_substrings, registered_agent_addrs=ra_addrs
     )
+
+    if bbl_contact_humans:
+        bbl_to_r_c: Dict[str, str] = {}
+        r_to_ps_c: Dict[str, List[dict]] = {}
+        bbl_hq_c: Dict[str, str] = {}
+        for rb, grp in network_groups.items():
+            ded = {p["bbl"]: p for p in grp if p.get("bbl")}
+            if ded:
+                for b_id, p_obj in ded.items():
+                    bbl_to_r_c[b_id] = rb
+                    if p_obj.get("_building_key") or p_obj.get("_coarse_mail"):
+                        bbl_hq_c[b_id] = p_obj.get("_building_key") or p_obj.get("_coarse_mail")
+                r_to_ps_c[rb] = list(ded.values())
+        par_rc = {r: r for r in r_to_ps_c}
+        sz_rc = {r: len(ps) for r, ps in r_to_ps_c.items()}
+        pub_rc = {
+            r: any(is_public_entity(p.get("owner_name_norm") or p.get("owner_name") or "") for p in ps)
+            for r, ps in r_to_ps_c.items()
+        }
+
+        def _find_rc(x: str) -> str:
+            while par_rc[x] != x:
+                par_rc[x] = par_rc[par_rc[x]]
+                x = par_rc[x]
+            return x
+
+        h_to_bbls_c: Dict[str, List[str]] = defaultdict(list)
+        h_fams_c: Dict[str, Set[str]] = defaultdict(set)
+        h_hqs_c: Dict[str, Dict[str, int]] = defaultdict(dict)
+        for b_id, pairs in bbl_contact_humans.items():
+            if b_id not in bbl_to_r_c:
+                continue
+            po = prop_owner_by_bbl.get(b_id, "")
+            pf = extract_owner_family_key(po) or po
+            bhq = bbl_hq_c.get(b_id) or ""
+            for hc, _ in pairs:
+                h_to_bbls_c[hc].append(b_id)
+                if pf:
+                    h_fams_c[hc].add(pf)
+                if bhq:
+                    h_hqs_c[hc][bhq] = h_hqs_c[hc].get(bhq, 0) + 1
+
+        c_merges = 0
+        for hc, b_list in h_to_bbls_c.items():
+            if len(h_fams_c[hc]) >= 8:
+                hm = h_hqs_c.get(hc) or {}
+                tot_m = sum(hm.values())
+                top2 = sum(sorted(hm.values(), reverse=True)[:2]) if hm else 0
+                if len(hm) >= 6 and (top2 / max(tot_m, 1)) < 0.30:
+                    continue
+            roots = list({bbl_to_r_c[b_id] for b_id in b_list if b_id in bbl_to_r_c})
+            if len(roots) >= 2:
+                anc = _find_rc(roots[0])
+                for oth in roots[1:]:
+                    uo = _find_rc(oth)
+                    if anc != uo and not pub_rc.get(anc) and not pub_rc.get(uo) and sz_rc[anc] + sz_rc[uo] <= 5000:
+                        par_rc[uo] = anc
+                        sz_rc[anc] += sz_rc[uo]
+                        c_merges += 1
+        if c_merges:
+            m_ng_c: Dict[str, List[dict]] = {}
+            for r, ps in r_to_ps_c.items():
+                m_ng_c.setdefault(_find_rc(r), []).extend(ps)
+            network_groups = m_ng_c
+            print(f"  [{jur.upper()}] Verified active registration contacts merged {c_merges:,} owner-principal links.")
     oc_keys = list({
         (p["oc_jurisdiction_code"], p["oc_company_number"])
         for p in properties
@@ -1476,6 +1585,10 @@ def build_and_save_state_networks(conn, jur: str, state_code: str, source_tag: s
             human_counts: Dict[str, int] = {
                 nm: cnt for nm, cnt in owner_counts.items() if looks_like_person_owner(nm)
             }
+            for p in group:
+                for _, h_raw in bbl_contact_humans.get(p["bbl"], ()):
+                    if looks_like_person_owner(h_raw):
+                        human_counts[h_raw] = human_counts.get(h_raw, 0) + 1
             oc_company_ids = set()
             oc_holding_entities = set()
             oc_raw_hq_addrs = set()

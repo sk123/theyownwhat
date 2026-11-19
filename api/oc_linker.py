@@ -23,10 +23,18 @@ from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from psycopg2.extras import RealDictCursor, execute_values
 
+from api.linking_rules import (
+    get_learned_officer_role_suffixes,
+    get_learned_ra_allowlist,
+    get_learned_third_party_hubs,
+)
 from api.shared_utils import (
     US_STATE_CODES,
+    canonicalize_business_name,
+    canonicalize_person_name,
     extract_corroborated_series_spv_key,
     extract_owner_family_key,
+    extract_postal_street_zip_key,
     extract_series_stem_info,
     is_excluded_third_party_address,
     is_excluded_third_party_entity,
@@ -299,11 +307,18 @@ def clean_oc_officer_name(raw_name: Optional[str]) -> str:
     if not nm or looks_like_business_name(nm):
         return nm
     m = _TRAILING_OFFICER_ROLE_IN_NAME_RE.search(nm)
-    if not m:
-        return nm
-    candidate = nm[: m.start()].strip(" ,;-")
-    if candidate and looks_like_person_owner(candidate):
-        return candidate
+    if m:
+        candidate = nm[: m.start()].strip(" ,;-")
+        if candidate and looks_like_person_owner(candidate):
+            return candidate
+    learned_roles = get_learned_officer_role_suffixes()
+    if learned_roles:
+        nm_up = nm.upper()
+        for role_tok in sorted(learned_roles, key=len, reverse=True):
+            if nm_up.endswith(" " + role_tok):
+                candidate = nm[: len(nm) - len(role_tok)].strip(" ,;-")
+                if candidate and looks_like_person_owner(candidate):
+                    return candidate
     return nm
 
 
@@ -507,6 +522,60 @@ def score_oc_candidates(
             # Multiple distinct active homonyms in scoped state(s) without address tie-breaker -> Tier 5 quarantine
             return None
 
+        # --- Tier 2b (CT parity): Legal-suffix-stripped & canonical business stem match ---
+        # Links assessor rolls that omit trailing legal suffixes ('CHESTNUT HILL REALTY' <->
+        # 'CHESTNUT HILL REALTY CORP', 'HAMILTON UNION ASSOCIATES' <-> 'HAMILTON UNION ASSOCIATES LP')
+        # without conflating distinct 'REALTY' vs 'PROPERTIES' entities unless address-corroborated.
+        owner_legal_stem = re.sub(r"^THE\s+", "", _CORPORATE_SUFFIX_STRIP_RE.sub("", demangled.owner_norm).strip()).strip()
+        owner_canon_biz = canonicalize_business_name(demangled.cleaned_owner)
+        if owner_legal_stem and len(owner_legal_stem) >= 8 and len(owner_legal_stem.split()) >= 2:
+            legal_stem_cands = [
+                c for c in scoped
+                if c.matched_previous_name_norm is None
+                and re.sub(r"^THE\s+", "", _CORPORATE_SUFFIX_STRIP_RE.sub("", c.name_norm).strip()).strip() == owner_legal_stem
+            ]
+            addr_stem_cands = [
+                c for c in legal_stem_cands
+                if _candidate_matches_parcel_address(c, parcel_addrs, ra_addrs)
+            ]
+            if addr_stem_cands:
+                canon_addr_ids = {
+                    (c.home_jurisdiction_code or c.jurisdiction_code, c.home_company_number or c.company_number)
+                    for c in addr_stem_cands
+                }
+                if len(canon_addr_ids) == 1:
+                    local_cb = [c for c in addr_stem_cands if c.is_active and c.jurisdiction_code == local_jur]
+                    chosen = local_cb[0] if local_cb else addr_stem_cands[0]
+                    return _build_match_result(chosen, 1, 0.95, "legal_stem_with_address")
+            if len(owner_legal_stem) >= 10 and looks_like_business_name(demangled.cleaned_owner):
+                active_local_ls = [
+                    c for c in legal_stem_cands
+                    if c.is_active and c.jurisdiction_code == local_jur
+                ]
+                canon_local_ids = {
+                    (c.home_jurisdiction_code or c.jurisdiction_code, c.home_company_number or c.company_number)
+                    for c in active_local_ls
+                }
+                if len(canon_local_ids) == 1 and active_local_ls:
+                    return _build_match_result(active_local_ls[0], 2, 0.89, "unique_active_legal_stem")
+
+        if owner_canon_biz and len(owner_canon_biz) >= 8 and len(owner_canon_biz.split()) >= 2:
+            canon_addr_only = [
+                c for c in scoped
+                if c.matched_previous_name_norm is None
+                and canonicalize_business_name(c.name) == owner_canon_biz
+                and _candidate_matches_parcel_address(c, parcel_addrs, ra_addrs)
+            ]
+            if canon_addr_only:
+                canon_cb_ids = {
+                    (c.home_jurisdiction_code or c.jurisdiction_code, c.home_company_number or c.company_number)
+                    for c in canon_addr_only
+                }
+                if len(canon_cb_ids) == 1:
+                    local_cb = [c for c in canon_addr_only if c.is_active and c.jurisdiction_code == local_jur]
+                    chosen = local_cb[0] if local_cb else canon_addr_only[0]
+                    return _build_match_result(chosen, 1, 0.93, "canonical_business_stem_with_address")
+
     # --- Tier 3: Truncated assessor owner prefix (`>= 18` chars) + exact non-agent address ---
     if demangled.is_truncated and demangled.prefix18 and len(demangled.owner_norm) >= 18:
         prefix_cands = [
@@ -555,8 +624,86 @@ def refresh_empirical_registered_agent_addresses(
     *,
     min_distinct_companies: int = 15,
 ) -> int:
-    """Populate `oc_registered_agent_addresses` from high-cardinality agent hubs in `oc_companies`."""
+    """Populate `oc_registered_agent_addresses` using quota-free structural 3rd-party
+    intermediary signals rather than raw company counts (so a genuine landlord serving
+    as Resident Agent for its own 400 LLCs at its own HQ — e.g. 39 Brighton Ave Allston,
+    1 Washington Mall Boston, 60 Leo Birmingham Pkwy, 300 Independence Dr, 399 Whalley Ave —
+    is NEVER falsely blacklisted as a commercial registered agent).
+
+    An address with >= `min_distinct_companies` filings is flagged ONLY when:
+      (a) >= 5 filings name a known commercial RA / law / CPA firm in `agent_name`, OR
+      (b) >= 10 external statutory-agent clients (`agent_address_coarse == addr` while the
+          company's own `mailing_address_coarse` / `registered_address_coarse` is elsewhere,
+          accounting for >= 40% of agent filings at `addr`), OR
+      (c) >= 5 distinct out-of-state `home_jurisdiction_code` charters share `addr`
+          (CT Corp / CSC / Cogency foreign-branch service-of-process hub), OR
+      (d) >= 12 officer-bearing companies at `addr` have mutually dispersed officers
+          (the single most common beneficial/corporate-parent officer covers < 20% of them).
+    """
     with conn.cursor() as cur:
+        cur.execute("SET LOCAL work_mem = '256MB'")
+        cur.execute(
+            """
+            DELETE FROM oc_registered_agent_addresses
+            WHERE source IN ('empirical_oc_agent_hub', 'empirical_oc_shared_office_hub', 'empirical_oc_address_hub')
+            """
+        )
+        cur.execute(
+            """
+            DELETE FROM oc_registered_agent_addresses
+            WHERE source IN ('empirical_oc_agent_hub', 'empirical_oc_shared_office_hub');
+            """
+        )
+        # Step 1: Single-pass scan over `oc_companies` computing structural RA & foreign-branch stats
+        cur.execute(
+            """
+            CREATE TEMP TABLE _ra_cand_stats ON COMMIT DROP AS
+            SELECT
+                v.addr_coarse,
+                MAX(v.sample_raw) AS sample_raw_address,
+                COUNT(*)::int AS total_cos,
+                COUNT(*) FILTER (WHERE v.is_agent_slot)::int AS agent_cos,
+                COUNT(*) FILTER (
+                    WHERE v.is_agent_slot
+                      AND hq.own_hq_coarse IS NOT NULL
+                      AND hq.own_hq_coarse != ''
+                      AND hq.own_hq_coarse != v.addr_coarse
+                )::int AS external_agent_clients,
+                COUNT(DISTINCT c.home_jurisdiction_code) FILTER (
+                    WHERE c.home_jurisdiction_code IS NOT NULL
+                      AND c.home_jurisdiction_code != ''
+                      AND c.home_jurisdiction_code != c.jurisdiction_code
+                )::int AS foreign_home_jurs,
+                COUNT(*) FILTER (
+                    WHERE c.agent_name IS NOT NULL
+                      AND c.agent_name ~* '(CORPORATION SERVICE|\\mCSC\\M|C\\.?\\s*T\\.?\\s*CORP|COGENCY|INCORP\\s+SERVICES|REGISTERED\\s+AGENTS?\\s+INC|NORTHWEST\\s+REGISTERED|NATIONAL\\s+REGISTERED|UNITED\\s+AGENT|LEGALINC|LEGALZOOM|PARACORP|CAPITOL\\s+CORPORATE|VCORP|ATTORNEYS?\\s+AT\\s+LAW|LAW\\s+(?:FIRM|OFFICES?|GROUP|PC|PLLC))'
+                )::int AS known_ra_agent_cos
+            FROM oc_companies c
+            CROSS JOIN LATERAL (
+                SELECT COALESCE(NULLIF(c.mailing_address_coarse, ''), NULLIF(c.registered_address_coarse, '')) AS own_hq_coarse
+            ) hq
+            CROSS JOIN LATERAL (
+                SELECT c.agent_address_coarse AS addr_coarse, c.agent_address_raw AS sample_raw, TRUE AS is_agent_slot
+                WHERE c.agent_address_coarse IS NOT NULL AND c.agent_address_coarse != ''
+                UNION ALL
+                SELECT c.registered_address_coarse, c.registered_address_raw, FALSE
+                WHERE c.registered_address_coarse IS NOT NULL AND c.registered_address_coarse != ''
+                  AND c.registered_address_coarse IS DISTINCT FROM c.agent_address_coarse
+                UNION ALL
+                SELECT c.mailing_address_coarse, c.mailing_address_raw, FALSE
+                WHERE c.mailing_address_coarse IS NOT NULL AND c.mailing_address_coarse != ''
+                  AND c.mailing_address_coarse IS DISTINCT FROM c.agent_address_coarse
+                  AND c.mailing_address_coarse IS DISTINCT FROM c.registered_address_coarse
+            ) v
+            GROUP BY v.addr_coarse
+            HAVING COUNT(*) >= %s;
+            """,
+            (min_distinct_companies,),
+        )
+
+        # Step 2: Insert deterministic commercial RA & multi-charter foreign-branch hubs immediately
+        # (never flag self-registered landlord/corporate HQs like 1 Washington Mall, 60 Leo Birmingham Pkwy,
+        # or 269 Mill Rd simply because property LLCs list site addresses in `registered_address_coarse`).
         cur.execute(
             """
             INSERT INTO oc_registered_agent_addresses (
@@ -568,26 +715,133 @@ def refresh_empirical_registered_agent_addresses(
                 computed_at
             )
             SELECT
-                agent_address_coarse,
-                MAX(agent_address_raw) AS sample_raw_address,
-                COUNT(DISTINCT (jurisdiction_code, company_number))::int AS distinct_company_count,
-                (ARRAY_AGG(DISTINCT agent_name) FILTER (WHERE agent_name IS NOT NULL))[1:10] AS distinct_agent_names,
-                'empirical_oc_agent_hub',
+                addr_coarse,
+                sample_raw_address,
+                total_cos,
+                NULL::text[],
+                CASE
+                    WHEN known_ra_agent_cos >= 5 THEN 'empirical_oc_agent_hub'
+                    ELSE 'empirical_oc_shared_office_hub'
+                END,
                 NOW()
-            FROM oc_companies
-            WHERE agent_address_coarse IS NOT NULL
-              AND agent_address_coarse != ''
-            GROUP BY agent_address_coarse
-            HAVING COUNT(DISTINCT (jurisdiction_code, company_number)) >= %s
+            FROM _ra_cand_stats
+            WHERE known_ra_agent_cos >= 5
+               OR (foreign_home_jurs >= 5 AND total_cos >= 15)
             ON CONFLICT (address_coarse) DO UPDATE SET
                 sample_raw_address = EXCLUDED.sample_raw_address,
                 distinct_company_count = EXCLUDED.distinct_company_count,
-                distinct_agent_names = EXCLUDED.distinct_agent_names,
+                source = EXCLUDED.source,
                 computed_at = NOW();
-            """,
-            (min_distinct_companies,),
+            """
         )
         upserted = cur.rowcount
+
+        # Step 3: For remaining external-agent candidates (`external_agent_clients >= 10`) OR large shared
+        # offices (`total_cos >= 35`), sample up to 80 companies per address and check officer dispersion
+        # via `idx_oc_officers_company`. Flag ONLY when officers are genuinely dispersed (`top_officer_share < 0.25`).
+        cur.execute(
+            """
+            CREATE TEMP TABLE _ra_need_off ON COMMIT DROP AS
+            SELECT addr_coarse, sample_raw_address, total_cos,
+                   (external_agent_clients >= 10 AND external_agent_clients >= 0.40 * GREATEST(agent_cos, 1)) AS is_ext_agent
+            FROM _ra_cand_stats
+            WHERE (
+                  total_cos >= 35
+                  OR (external_agent_clients >= 10 AND external_agent_clients >= 0.40 * GREATEST(agent_cos, 1))
+              )
+              AND NOT (
+                  known_ra_agent_cos >= 5
+                  OR (foreign_home_jurs >= 5 AND total_cos >= 15)
+              );
+            CREATE UNIQUE INDEX ON _ra_need_off (addr_coarse);
+            """
+        )
+        cur.execute("SELECT COUNT(*) FROM _ra_need_off;")
+        need_off_cnt = cur.fetchone()[0]
+        if need_off_cnt:
+            cur.execute(
+                """
+                WITH sampled_cos AS (
+                    SELECT addr_coarse, jurisdiction_code, company_number
+                    FROM (
+                        SELECT v.addr_coarse, c.jurisdiction_code, c.company_number,
+                               ROW_NUMBER() OVER (PARTITION BY v.addr_coarse) AS rn
+                        FROM oc_companies c
+                        CROSS JOIN LATERAL (
+                            SELECT c.agent_address_coarse AS addr_coarse
+                            WHERE c.agent_address_coarse IS NOT NULL AND c.agent_address_coarse != ''
+                            UNION ALL
+                            SELECT c.registered_address_coarse
+                            WHERE c.registered_address_coarse IS NOT NULL AND c.registered_address_coarse != ''
+                              AND c.registered_address_coarse IS DISTINCT FROM c.agent_address_coarse
+                            UNION ALL
+                            SELECT c.mailing_address_coarse
+                            WHERE c.mailing_address_coarse IS NOT NULL AND c.mailing_address_coarse != ''
+                              AND c.mailing_address_coarse IS DISTINCT FROM c.agent_address_coarse
+                              AND c.mailing_address_coarse IS DISTINCT FROM c.registered_address_coarse
+                        ) v
+                        JOIN _ra_need_off n ON n.addr_coarse = v.addr_coarse
+                    ) ranked
+                    WHERE rn <= 80
+                ),
+                co_off AS (
+                    SELECT sc.addr_coarse, sc.jurisdiction_code, sc.company_number, o.name_norm
+                    FROM sampled_cos sc
+                    JOIN oc_officers o
+                      ON o.jurisdiction_code = sc.jurisdiction_code
+                     AND o.company_number = sc.company_number
+                    WHERE COALESCE(o.is_current, TRUE) = TRUE
+                      AND o.role_class IN ('beneficial_principal', 'corporate_parent')
+                      AND o.name_norm IS NOT NULL AND o.name_norm != ''
+                ),
+                totals AS (
+                    SELECT addr_coarse, COUNT(DISTINCT (jurisdiction_code, company_number))::int AS cos_with_off
+                    FROM co_off
+                    GROUP BY addr_coarse
+                ),
+                top_off AS (
+                    SELECT addr_coarse, MAX(off_cos)::int AS top_off_cos
+                    FROM (
+                        SELECT addr_coarse, name_norm, COUNT(DISTINCT (jurisdiction_code, company_number)) AS off_cos
+                        FROM co_off
+                        GROUP BY addr_coarse, name_norm
+                    ) s
+                    GROUP BY addr_coarse
+                )
+                INSERT INTO oc_registered_agent_addresses (
+                    address_coarse,
+                    sample_raw_address,
+                    distinct_company_count,
+                    distinct_agent_names,
+                    source,
+                    computed_at
+                )
+                SELECT
+                    n.addr_coarse,
+                    n.sample_raw_address,
+                    n.total_cos,
+                    NULL::text[],
+                    CASE WHEN n.is_ext_agent THEN 'empirical_oc_agent_hub' ELSE 'empirical_oc_shared_office_hub' END,
+                    NOW()
+                FROM _ra_need_off n
+                JOIN totals t ON t.addr_coarse = n.addr_coarse
+                JOIN top_off to2 ON to2.addr_coarse = n.addr_coarse
+                WHERE t.cos_with_off >= 10
+                  AND (to2.top_off_cos::float / t.cos_with_off) < 0.25
+                ON CONFLICT (address_coarse) DO UPDATE SET
+                    sample_raw_address = EXCLUDED.sample_raw_address,
+                    distinct_company_count = EXCLUDED.distinct_company_count,
+                    source = EXCLUDED.source,
+                    computed_at = NOW();
+                """
+            )
+            upserted += cur.rowcount
+            allowlist = sorted(get_learned_ra_allowlist())
+            if allowlist:
+                cur.execute(
+                    "DELETE FROM oc_registered_agent_addresses WHERE address_coarse = ANY(%s)",
+                    (allowlist,),
+                )
     conn.commit()
     return upserted
 
@@ -596,10 +850,13 @@ def load_oc_registered_agent_addresses(conn) -> Set[str]:
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT address_coarse FROM oc_registered_agent_addresses")
-            return {row[0] for row in cur.fetchall() if row and row[0]}
+            addrs = {row[0] for row in cur.fetchall() if row and row[0]}
+        addrs |= set(get_learned_third_party_hubs())
+        addrs -= set(get_learned_ra_allowlist())
+        return addrs
     except Exception:
         conn.rollback()
-        return set()
+        return set(get_learned_third_party_hubs()) - set(get_learned_ra_allowlist())
 
 
 _EXCLUDED_OC_COMPANY_TYPE_RE = re.compile(
@@ -648,6 +905,7 @@ def resolve_oc_company_principals(
     # boards of directors never star-bridge unrelated private LLCs.
     counsel_re = re.compile(r"\b(?:ESQ|ESQUIRE|C\.?P\.?A\.?)\b", re.IGNORECASE)
     MAX_CLOSELY_HELD_OFFICERS = 12
+    MAX_CUMULATIVE_ROLLUP_OFFICERS = 24
     MAX_NONPROFIT_CLOSELY_HELD_OFFICERS = 2
 
     def _harvest_hq_addr(ckey: Tuple[str, str], raw_candidate: Optional[str], agent_coarse_set: Set[str]) -> Optional[str]:
@@ -678,6 +936,7 @@ def resolve_oc_company_principals(
             next_frontier: Set[Tuple[str, str]] = set()
             corp_officer_norms: Dict[Tuple[str, str], Set[str]] = {}
             unnumbered_home_links: List[Tuple[Tuple[str, str], str, str]] = []
+            company_agent_person_norm: Dict[Tuple[str, str], str] = {}
 
             for idx in range(0, len(batch), 4000):
                 chunk = batch[idx : idx + 4000]
@@ -690,7 +949,7 @@ def resolve_oc_company_principals(
                     SELECT c.jurisdiction_code, c.company_number, c.name, c.name_norm,
                            c.company_type, c.is_nonprofit,
                            c.registered_address_raw, c.mailing_address_raw,
-                           c.agent_address_raw, c.agent_address_coarse,
+                           c.agent_name, c.agent_address_raw, c.agent_address_coarse,
                            c.home_jurisdiction_code, c.home_company_number
                     FROM unnest(%s::text[], %s::text[]) AS k(j, n)
                     JOIN oc_companies c
@@ -714,6 +973,12 @@ def resolve_oc_company_principals(
                     ):
                         all_nonprofit_keys.add(key)
 
+                    raw_agent_nm = (row.get("agent_name") or "").strip()
+                    if raw_agent_nm and not looks_like_business_name(raw_agent_nm):
+                        ag_pnorm = normalize_person_name(clean_oc_officer_name(raw_agent_nm))
+                        if ag_pnorm:
+                            company_agent_person_norm[key] = ag_pnorm
+
                     hj = (row.get("home_jurisdiction_code") or "").strip()
                     hn = (row.get("home_company_number") or "").strip()
                     is_foreign_branch = bool((hj and hj != key[0]) or ("FOREIGN" in ctype.upper()))
@@ -725,7 +990,21 @@ def resolve_oc_company_principals(
                         ac = normalize_mailing_address_coarse(strip_benign_care_of_prefix(row["agent_address_raw"]))
                         if ac:
                             agent_coarse_set.add(ac)
-                    _harvest_hq_addr(key, row.get("mailing_address_raw"), agent_coarse_set)
+
+                    raw_mail_cand = row.get("mailing_address_raw")
+                    if raw_mail_cand:
+                        # On a non-seed foreign branch of a non-shell domestic charter (e.g. `us_wa` Costco
+                        # registered as foreign in `us_mn`), an in-branch-state mailing address ('405 2 AVE S MPLS MN')
+                        # is a local statutory service-of-process agent, whereas an out-of-branch home-state HQ
+                        # ('269 MILL RD CHELMSFORD MA' on a `us_pa` foreign branch of `us_ma`) is executive HQ.
+                        allow_branch_mail = True
+                        if is_foreign_branch and key not in seed_set and hj and hj not in FOREIGN_FORMATION_HUBS:
+                            branch_st = key[0].replace("us_", "").upper()
+                            m_st = extract_state_from_address(raw_mail_cand)
+                            if m_st and m_st == branch_st:
+                                allow_branch_mail = False
+                        if allow_branch_mail:
+                            _harvest_hq_addr(key, raw_mail_cand, agent_coarse_set)
                     # Foreign-branch `registered_address_raw` is statutorily an in-state agent/office for
                     # service of process (e.g. PA/NY/FL CSC or CT Corp office), never executive HQ.
                     if not is_foreign_branch and (key[0] not in ("us_de", "us_wy", "us_nv") or key in seed_set):
@@ -787,7 +1066,7 @@ def resolve_oc_company_principals(
                 cur.execute(
                     """
                     SELECT o.jurisdiction_code, o.company_number, o.name, o.name_norm,
-                           o.role_class, o.is_corporate_officer
+                           o.position, o.role_class, o.is_corporate_officer
                     FROM unnest(%s::text[], %s::text[]) AS k(j, n)
                     JOIN oc_officers o
                       ON o.jurisdiction_code = k.j AND o.company_number = k.n
@@ -808,6 +1087,12 @@ def resolve_oc_company_principals(
                         continue
                     if row["role_class"] == "beneficial_principal" and not row.get("is_corporate_officer"):
                         if looks_like_person_owner(nm):
+                            # Suppress untitled Sunbiz/SOS officer rows that simply duplicate the filing's
+                            # registered agent (e.g. `agent_name='BRIAN BUSSEY'` + `position=NULL`).
+                            if not (row.get("position") or "").strip():
+                                ag_nm = company_agent_person_norm.get(ckey)
+                                if ag_nm and normalize_person_name(nm) == ag_nm:
+                                    continue
                             direct_humans.setdefault(ckey, set()).add(nm)
                         elif looks_like_business_name(nm) and row.get("name_norm"):
                             corp_officer_norms.setdefault(ckey, set()).add(row["name_norm"])
@@ -926,6 +1211,164 @@ def resolve_oc_company_principals(
 
             frontier = next_frontier
 
+        # 6. CT-Parity Sideways Bipartite Hop:
+        #    Walk from verified non-homonym human principals -> their OTHER in-state
+        #    closely-held OC companies (even non-property-owning management/holding LLCs)
+        #    -> those companies' non-agent HQs & co-principals, bridging parcel LLCs
+        #    connected through an intermediate management/holding entity just like CT!
+        seed_jurs = list({k[0] for k in seed_keys if k[0]})
+        human_to_seed_ckeys: Dict[str, Set[Tuple[str, str]]] = {}
+        for ckey, hset in direct_humans.items():
+            if ckey in excluded_company_keys or ckey in all_nonprofit_keys:
+                continue
+            for raw_h in hset:
+                hn = normalize_person_name(raw_h)
+                toks = hn.split()
+                if len(toks) < 2:
+                    continue
+                surname = toks[-1]
+                if len(surname) < 4 or surname in _COMMON_HOMONYM_SURNAMES:
+                    continue
+                human_to_seed_ckeys.setdefault(hn, set()).add(ckey)
+
+        if human_to_seed_ckeys and seed_jurs:
+            cand_human_norms = sorted(human_to_seed_ckeys.keys())
+            human_other_cos: Dict[str, Set[Tuple[str, str]]] = {}
+            for hidx in range(0, len(cand_human_norms), 2000):
+                hchunk = cand_human_norms[hidx : hidx + 2000]
+                cur.execute(
+                    """
+                    SELECT o.name_norm, o.jurisdiction_code, o.company_number
+                    FROM oc_officers o
+                    WHERE o.name_norm = ANY(%s)
+                      AND o.jurisdiction_code = ANY(%s)
+                      AND o.role_class = 'beneficial_principal'
+                      AND COALESCE(o.is_current, TRUE) = TRUE
+                    """,
+                    (hchunk, seed_jurs),
+                )
+                for row in cur.fetchall():
+                    hn = row["name_norm"]
+                    oc_k = (row["jurisdiction_code"], row["company_number"])
+                    s = human_other_cos.setdefault(hn, set())
+                    if len(s) <= 85:
+                        s.add(oc_k)
+
+            # Only traverse principals with bounded closely-held fan-out (2..80 companies)
+            # so common names / serial agents never explode sideways.
+            sib_to_humans: Dict[Tuple[str, str], Set[str]] = {}
+            for hn, coset in human_other_cos.items():
+                if not (2 <= len(coset) <= 80):
+                    continue
+                for oc_k in coset:
+                    if oc_k in excluded_company_keys:
+                        continue
+                    sib_to_humans.setdefault(oc_k, set()).add(hn)
+
+            new_sib_keys = [k for k in sib_to_humans if k not in visited]
+            if new_sib_keys:
+                sib_valid: Set[Tuple[str, str]] = set()
+                sib_officers: Dict[Tuple[str, str], Set[str]] = {}
+                for sidx in range(0, len(new_sib_keys), 4000):
+                    schunk = new_sib_keys[sidx : sidx + 4000]
+                    sj = [k[0] for k in schunk]
+                    sn = [k[1] for k in schunk]
+                    cur.execute(
+                        """
+                        SELECT c.jurisdiction_code, c.company_number, c.name, c.company_type,
+                               c.is_nonprofit, c.registered_address_raw, c.mailing_address_raw,
+                               c.agent_address_raw, c.agent_address_coarse
+                        FROM unnest(%s::text[], %s::text[]) AS k(j, n)
+                        JOIN oc_companies c
+                          ON c.jurisdiction_code = k.j AND c.company_number = k.n
+                        WHERE COALESCE(c.is_active, TRUE) = TRUE
+                        """,
+                        (sj, sn),
+                    )
+                    for row in cur.fetchall():
+                        sk = (row["jurisdiction_code"], row["company_number"])
+                        cname = row.get("name") or ""
+                        ctype = (row.get("company_type") or "").strip()
+                        if (
+                            (cname and is_excluded_third_party_entity(cname))
+                            or (ctype and _EXCLUDED_OC_COMPANY_TYPE_RE.search(ctype))
+                            or row.get("is_nonprofit")
+                            or any(tok in ctype.upper() for tok in ("NONPROFIT", "NON-PROFIT", "CHARITABLE", "NOT-FOR-PROFIT"))
+                        ):
+                            excluded_company_keys.add(sk)
+                            continue
+                        if cname:
+                            entity_labels[sk] = cname
+                        ag_set: Set[str] = set()
+                        if row.get("agent_address_coarse"):
+                            ag_set.add(row["agent_address_coarse"])
+                        if row.get("agent_address_raw"):
+                            ac = normalize_mailing_address_coarse(strip_benign_care_of_prefix(row["agent_address_raw"]))
+                            if ac:
+                                ag_set.add(ac)
+                        _harvest_hq_addr(sk, row.get("mailing_address_raw"), ag_set)
+                        if "FOREIGN" not in ctype.upper():
+                            _harvest_hq_addr(sk, row.get("registered_address_raw"), ag_set)
+                        sib_valid.add(sk)
+
+                    valid_chunk = [k for k in schunk if k in sib_valid]
+                    if not valid_chunk:
+                        continue
+                    cur.execute(
+                        """
+                        SELECT o.jurisdiction_code, o.company_number, o.name, o.is_corporate_officer
+                        FROM unnest(%s::text[], %s::text[]) AS k(j, n)
+                        JOIN oc_officers o
+                          ON o.jurisdiction_code = k.j AND o.company_number = k.n
+                        WHERE COALESCE(o.is_current, TRUE) = TRUE
+                          AND o.role_class = 'beneficial_principal'
+                        """,
+                        ([k[0] for k in valid_chunk], [k[1] for k in valid_chunk]),
+                    )
+                    for row in cur.fetchall():
+                        sk = (row["jurisdiction_code"], row["company_number"])
+                        raw_nm = row.get("name") or ""
+                        if row.get("is_corporate_officer") or counsel_re.search(raw_nm):
+                            continue
+                        nm = clean_oc_officer_name(raw_nm)
+                        if nm and not is_excluded_third_party_entity(nm) and looks_like_person_owner(nm):
+                            sib_officers.setdefault(sk, set()).add(nm)
+
+                # Attach closely-held (<= 6 officers) intermediate companies onto seed companies
+                # strictly WITHOUT passive-investor chaining across independent landlord empires:
+                #   (a) `shared_hq`: intermediate company operates from the EXACT same verified
+                #       non-agent HQ address as `seed_ck` (true co-located management/holding co).
+                #   (b) `same_family_only`: every officer on `sk` shares `hn`'s surname (or sole
+                #       principal), so `sk` can contribute its verified HQ without injecting
+                #       unrelated co-investors who also invest with other landlords elsewhere.
+                for sk, hnorms in sib_to_humans.items():
+                    if sk in excluded_company_keys:
+                        continue
+                    sk_offs = sib_officers.get(sk) or direct_humans.get(sk) or set()
+                    if len(sk_offs) > 6:
+                        continue
+                    sk_hqs = direct_hq_addrs.get(sk) or set()
+                    sk_surnames = {
+                        normalize_person_name(o).split()[-1]
+                        for o in sk_offs
+                        if normalize_person_name(o)
+                    }
+                    for hn in hnorms:
+                        hn_surname = hn.split()[-1]
+                        low_fanout = len(human_other_cos.get(hn) or ()) <= 25
+                        same_family_only = bool(sk_surnames) and sk_surnames == {hn_surname}
+                        for seed_ck in human_to_seed_ckeys.get(hn, ()):
+                            seed_hqs = direct_hq_addrs.get(seed_ck) or set()
+                            shared_hq = bool(sk_hqs and seed_hqs and (sk_hqs & seed_hqs))
+                            if shared_hq:
+                                parent_edges.setdefault(seed_ck, set()).add(sk)
+                                if same_family_only and sk_offs and sk not in direct_humans:
+                                    direct_humans[sk] = set(sk_offs)
+                            elif low_fanout and same_family_only and sk_hqs:
+                                parent_edges.setdefault(seed_ck, set()).add(sk)
+                                if sk_offs and sk not in direct_humans:
+                                    direct_humans[sk] = set(sk_offs)
+
     # Roll up humans, holding entities, reached corporate nodes, and verified HQ addresses for each seed key
     resolved: Dict[Tuple[str, str], Dict[str, List[str]]] = {}
     for seed in seed_keys:
@@ -958,7 +1401,7 @@ def resolve_oc_company_principals(
                 if parent_node in entity_labels:
                     holdings.add(entity_labels[parent_node])
                 stack.append(parent_node)
-        if len(humans) > MAX_CLOSELY_HELD_OFFICERS:
+        if len(humans) > MAX_CUMULATIVE_ROLLUP_OFFICERS:
             humans = set()
         resolved[seed] = {
             "humans": sorted(humans),
@@ -970,6 +1413,50 @@ def resolve_oc_company_principals(
     return resolved
 
 
+_OC_PERSON_ROLE_STRIP_RE = re.compile(
+    r"\b(?:TRUSTEES?|TRST|TTES?|TRS|TS|TT|TR|LE|JR|SR|II|III|IV|ESQ|ESQUIRE|MD|PHD|CPA)\b",
+    re.IGNORECASE,
+)
+
+# High-frequency U.S. surnames where bare two-word officer strings (`JOHN SMITH`, `RONALD BROWN`,
+# `DAVID KATZ`, `JAY PATEL`) require HQ or co-principal corroboration before sideways/sparse-HQ
+# bridging so unrelated homonyms statewide never merge.
+_COMMON_HOMONYM_SURNAMES = frozenset({
+    "SMITH", "JOHNSON", "WILLIAMS", "BROWN", "JONES", "GARCIA", "MILLER", "DAVIS",
+    "RODRIGUEZ", "MARTINEZ", "HERNANDEZ", "LOPEZ", "GONZALEZ", "WILSON", "ANDERSON",
+    "THOMAS", "TAYLOR", "MOORE", "JACKSON", "MARTIN", "LEE", "PEREZ", "THOMPSON",
+    "WHITE", "HARRIS", "SANCHEZ", "CLARK", "RAMIREZ", "LEWIS", "ROBINSON", "WALKER",
+    "YOUNG", "ALLEN", "KING", "WRIGHT", "SCOTT", "TORRES", "NGUYEN", "HILL",
+    "FLORES", "GREEN", "ADAMS", "NELSON", "BAKER", "HALL", "RIVERA", "CAMPBELL",
+    "MITCHELL", "CARTER", "ROBERTS", "PATEL", "SHAH", "SINGH", "CHEN", "WANG",
+    "KIM", "PARK", "TRAN", "PHAM", "LIN", "LIU", "YANG", "WU", "HUANG", "ZHANG",
+    "KATZ", "COHEN", "LEVY", "GOLDSTEIN", "FRIEDMAN", "SCHWARTZ", "MILLER", "MURPHY",
+    "KELLY", "SULLIVAN", "WALSH", "RYAN", "O'BRIEN", "OBRIEN", "MCCARTHY",
+})
+
+
+def _extract_oc_person_mid_and_surname(raw_name: str) -> Tuple[str, str, List[str]]:
+    """Return `(middle_initial, surname, ordered_clean_tokens)` for CT-parity person matching."""
+    if not raw_name:
+        return ("", "", [])
+    s = str(raw_name).upper().strip()
+    if "," in s:
+        last_p, rest_p = s.split(",", 1)
+        s = f"{rest_p.strip()} {last_p.strip()}"
+    if " & " in s or " AND " in s or " / " in s or "+" in s:
+        s = re.split(r"\s*(?:&|\+|/|\bAND\b)\s*", s, maxsplit=1)[0]
+    s = re.sub(r"[,.'`\"]", "", s)
+    s = _OC_PERSON_ROLE_STRIP_RE.sub(" ", s)
+    raw_toks = [t for t in s.split() if t]
+    mid = ""
+    if len(raw_toks) == 3 and len(raw_toks[1]) == 1 and raw_toks[1].isalpha():
+        mid = raw_toks[1]
+    norm = normalize_person_name(raw_name)
+    ordered = norm.split() if norm else []
+    surname = ordered[-1] if len(ordered) >= 2 else ""
+    return (mid, surname, ordered)
+
+
 def cluster_with_oc_and_series(
     properties: Sequence[dict],
     network_groups: Dict[str, List[dict]],
@@ -978,15 +1465,15 @@ def cluster_with_oc_and_series(
     is_public_fn=None,
     generic_owner_names: Iterable[str] = (),
 ) -> Tuple[Dict[str, List[dict]], int]:
-    """Unified second-stage corporate-registry & corporate-series network clustering
-    used across ALL municipal and statewide jurisdictions:
+    """Unified CT-parity corporate-registry, direct-principal/trustee, co-principal &
+    corporate-series network clustering with ZERO artificial family/entity count quotas:
       1. Shared OC entity / corporate-parent / foreign-branch graph (`reached_companies`)
-      2. Shared verified non-agent corporate HQ / principal-office / mailing address (`hq_addresses`)
-      3. Shared OC beneficial human principal (`humans`)
-      4. Corroborated multi-word numbered corporate series SPVs (`extract_corroborated_series_spv_key`)
-    Preserves anti-meganet caps for unrelated families while allowing single/dual corporate
-    series portfolios (e.g. `BALTIMORE SFR PORTFOLIO 1A..VI`, `BALTIMORE EXCEL 01..S11`,
-    `PROGRESS RESIDENTIAL`, `FKH SFR`) to unify above 300 buildings without artificial splitting.
+      2. Shared verified non-agent corporate HQ (`hq_addresses`, ZIP-unified + island-dispersion guarded)
+      3. Order-independent canonical OC human principal (`canonicalize_person_name`), middle-name
+         variant alignment (`ALEXANDRA ANN SAMIA SOLIA` <-> `ALEXANDRA SAMIA SOLIA`), direct
+         human/trustee parcel <-> corporate officer bridging, and same-surname co-principal bridges,
+         guarded by structural HQ/co-principal cohesion rather than manufactured LLC quotas.
+      4. Corroborated multi-word numbered corporate series SPVs (`extract_series_stem_info`).
     """
     if not network_groups or not properties:
         return network_groups, 0
@@ -1009,21 +1496,23 @@ def cluster_with_oc_and_series(
 
     parent_root = {r: r for r in root_to_props}
     comp_size = {r: len(props) for r, props in root_to_props.items()}
-    comp_families: Dict[str, Set[str]] = {}
     comp_pub: Dict[str, bool] = {}
+    comp_hqs: Dict[str, Set[str]] = {}
+    comp_humans: Dict[str, Set[str]] = {}
     for r, props in root_to_props.items():
-        fams: Set[str] = set()
         is_pub = False
+        hq_set: Set[str] = set()
         for p in props:
             raw_nm = p.get("owner_name") or ""
             norm_nm = p.get("owner_name_norm") or raw_nm
             if pub_check(raw_nm) or pub_check(norm_nm):
                 is_pub = True
-            fk = extract_owner_family_key(raw_nm) or norm_nm
-            if fk:
-                fams.add(fk)
-        comp_families[r] = fams
+            bk = p.get("_building_key") or p.get("_coarse_mail")
+            if bk:
+                hq_set.add(bk)
         comp_pub[r] = is_pub
+        comp_hqs[r] = hq_set
+        comp_humans[r] = set()
 
     def find_r(r: str) -> str:
         while parent_root[r] != r:
@@ -1031,33 +1520,138 @@ def cluster_with_oc_and_series(
             r = parent_root[r]
         return r
 
-    def union_r(ra: str, rb: str, max_unrelated_bbls: int = 500, max_families: int = 60) -> bool:
+    def union_r(
+        ra: str,
+        rb: str,
+        max_total_bbls: int = 25_000,
+        *,
+        require_hq_compat: bool = False,
+    ) -> bool:
         ua, ub = find_r(ra), find_r(rb)
         if ua == ub or comp_pub.get(ua) or comp_pub.get(ub):
             return False
-        combined_fams = comp_families[ua] | comp_families[ub]
-        if len(combined_fams) > max_families:
+        if comp_size[ua] + comp_size[ub] > max_total_bbls:
             return False
-        # Single/closely-related owner families (<=3 distinct family stems) represent one
-        # corporate series operator and must not be artificially capped at 300-500 parcels.
-        eff_max_bbls = 25_000 if len(combined_fams) <= 3 else max_unrelated_bbls
-        if comp_size[ua] + comp_size[ub] > eff_max_bbls:
-            return False
+        if require_hq_compat and comp_size[ua] >= 15 and comp_size[ub] >= 15:
+            hqs_a = comp_hqs.get(ua)
+            hqs_b = comp_hqs.get(ub)
+            if hqs_a and hqs_b and not (hqs_a & hqs_b):
+                # Do not chain two independent >=15-building empires at completely disjoint
+                # HQs via a single shared officer/attorney/JV unless >=2 beneficial principals overlap.
+                if len(comp_humans.get(ua, set()) & comp_humans.get(ub, set())) < 2:
+                    return False
         parent_root[ua] = ub
         comp_size[ub] += comp_size[ua]
-        comp_families[ub] = combined_fams
+        comp_hqs[ub].update(comp_hqs[ua])
+        comp_humans[ub].update(comp_humans[ua])
         return True
+
+    # Unify neighborhood aliases on OC `raw_hq_addresses` via `(coarse_street, zip5)`
+    hq_zip_counts: Dict[str, Dict[str, int]] = {}
+    for info in oc_resolved.values():
+        for raw_hq in info.get("raw_hq_addresses", ()):
+            zk = extract_postal_street_zip_key(raw_hq)
+            chq = normalize_mailing_address_coarse(raw_hq)
+            if zk and chq:
+                zm = hq_zip_counts.setdefault(zk, {})
+                zm[chq] = zm.get(chq, 0) + 1
+    hq_coarse_alias: Dict[str, str] = {}
+    for zk, cmap in hq_zip_counts.items():
+        if len(cmap) > 1:
+            canon_hq = max(cmap.items(), key=lambda kv: (kv[1], len(kv[0]), kv[0]))[0]
+            for cv in cmap:
+                hq_coarse_alias[cv] = canon_hq
+
+    # Pre-index active OC human principals & middle initials across `oc_resolved`
+    active_oc_canons: Set[str] = set()
+    oc_canon_mids: Dict[str, Set[str]] = {}
+    oc_canon_ordered_variants: Dict[str, Set[Tuple[str, ...]]] = {}
+    oc_canon_hqs: Dict[str, Set[str]] = {}
+    oc_canon_surnames: Dict[str, Set[str]] = {}
+    oc_canon_primary_surname: Dict[str, str] = {}
+    for (oj, on), info in oc_resolved.items():
+        ent_hqs = {hq_coarse_alias.get(h, h) for h in info.get("hq_addresses", ()) if h}
+        for h_name in info.get("humans", ()):
+            if not looks_like_person_owner(h_name):
+                continue
+            hc = canonicalize_person_name(h_name)
+            if not hc or hc in generic_set or pub_check(hc):
+                continue
+            mid, surname, ordered = _extract_oc_person_mid_and_surname(h_name)
+            active_oc_canons.add(hc)
+            if mid:
+                oc_canon_mids.setdefault(hc, set()).add(mid)
+            if ordered:
+                oc_canon_ordered_variants.setdefault(hc, set()).add(tuple(ordered))
+            if ent_hqs:
+                oc_canon_hqs.setdefault(hc, set()).update(ent_hqs)
+            if surname and len(surname) >= 4:
+                oc_canon_surnames.setdefault(surname, set()).add(hc)
+                if hc not in oc_canon_primary_surname:
+                    oc_canon_primary_surname[hc] = surname
+
+    # Align 4-token ('ALEXANDRA ANN SAMIA SOLIA' -> 'ALEXANDRA SAMIA SOLIA') and corroborated
+    # 3-token ('LEONARD JOSEPH SAMIA' -> 'LEONARD SAMIA') middle-name variants onto active base canons
+    canon_person_alias: Dict[str, str] = {}
+    for hc, ord_sets in oc_canon_ordered_variants.items():
+        for ord_toks in ord_sets:
+            if len(ord_toks) >= 4:
+                dropped = " ".join((ord_toks[0], *ord_toks[2:]))
+                base_c = canonicalize_person_name(dropped)
+                if base_c and base_c != hc and base_c in active_oc_canons:
+                    mid_char = ord_toks[1][0]
+                    base_mids = oc_canon_mids.get(base_c) or set()
+                    if not base_mids or mid_char in base_mids:
+                        canon_person_alias[hc] = base_c
+                        break
+            elif len(ord_toks) == 3:
+                dropped = f"{ord_toks[0]} {ord_toks[2]}"
+                base_c = canonicalize_person_name(dropped)
+                if base_c and base_c != hc and base_c in active_oc_canons:
+                    mid_char = ord_toks[1][0]
+                    base_mids = oc_canon_mids.get(base_c) or set()
+                    if base_mids and mid_char not in base_mids:
+                        continue
+                    surname = ord_toks[2]
+                    shared_hq = bool((oc_canon_hqs.get(hc) or set()) & (oc_canon_hqs.get(base_c) or set()))
+                    rare_surname = len(surname) >= 4 and len(oc_canon_surnames.get(surname) or ()) <= 8
+                    if shared_hq or rare_surname:
+                        canon_person_alias[hc] = base_c
+                        break
+
+    def _resolve_human_key(raw_person: str) -> Tuple[str, str]:
+        hc = canonicalize_person_name(raw_person)
+        if not hc:
+            return ("", "")
+        hc = canon_person_alias.get(hc, hc)
+        mid, _, _ = _extract_oc_person_mid_and_surname(raw_person)
+        mids = oc_canon_mids.get(hc) or set()
+        if mid and len(mids) >= 2:
+            return (f"{hc}||MID:{mid}", mid)
+        return (hc, mid)
 
     by_oc_node: Dict[str, List[str]] = {}
     by_oc_hq: Dict[str, List[str]] = {}
     hq_family_fanout: Dict[str, Set[str]] = {}
+    hq_company_humans: Dict[str, Dict[Tuple[str, str], Set[str]]] = {}
     by_oc_human: Dict[str, List[str]] = {}
+    human_entity_bbls: Dict[str, Dict[Tuple[str, str], List[str]]] = {}
+    entity_hqs: Dict[Tuple[str, str], Set[str]] = {}
+    entity_humans: Dict[Tuple[str, str], Set[str]] = {}
     human_entity_fanout: Dict[str, Set[Tuple[str, str]]] = {}
+    human_family_fanout: Dict[str, Set[str]] = {}
+    human_hq_entity_counts: Dict[str, Dict[str, Set[Tuple[str, str]]]] = {}
+    human_coprincipal_entity_counts: Dict[str, Dict[str, Set[Tuple[str, str]]]] = {}
+    human_geos: Dict[str, Set[str]] = {}
+    human_hqs_all: Dict[str, Set[str]] = {}
+
     by_series_spv: Dict[str, List[str]] = {}
     series_explicit_variants: Dict[str, Set[str]] = {}
     series_base_variants: Dict[str, Set[str]] = {}
     series_explicit_geos: Dict[str, Set[str]] = {}
     series_base_geos: Dict[str, Set[str]] = {}
+    direct_person_parcels: List[Tuple[str, str, str, str, str]] = []
+    person_parcel_mail_diversity: Dict[str, Set[str]] = {}
 
     _INSTITUTIONAL_SERIES_KEYWORDS = frozenset({
         "SFR", "PROPCO", "BORROWER", "ASSETS", "PORTFOLIO", "RENTAL",
@@ -1072,33 +1666,57 @@ def cluster_with_oc_and_series(
         raw_nm = p.get("owner_name") or ""
         if pub_check(raw_nm):
             continue
-        fam_key = extract_owner_family_key(raw_nm) or (p.get("owner_name_norm") or raw_nm)
+        is_person_prop = bool(p.get("_is_person")) if "_is_person" in p else looks_like_person_owner(raw_nm)
+        geo_scope = (p.get("county") or p.get("borough") or "").strip().upper()
+        prop_coarse_mail = p.get("_building_key") or p.get("_coarse_mail") or ""
+        if not prop_coarse_mail and p.get("mailing_address") and (is_person_prop or p.get("oc_company_number")):
+            prop_coarse_mail = normalize_mailing_address_coarse(
+                strip_benign_care_of_prefix(p.get("mailing_address") or "")
+            )
+        if prop_coarse_mail:
+            prop_coarse_mail = hq_coarse_alias.get(prop_coarse_mail, prop_coarse_mail)
 
-        spv_stem, has_explicit_series, is_generic_landscape = extract_series_stem_info(raw_nm)
-        if spv_stem:
-            geo_scope = (p.get("county") or p.get("borough") or "").strip().upper()
-            bucket_key = f"{spv_stem}||{geo_scope}" if (is_generic_landscape and geo_scope) else spv_stem
-            norm_biz = normalize_business_name(raw_nm)
-            by_series_spv.setdefault(bucket_key, []).append(b)
-            geo_tokens: Set[str] = set()
-            if geo_scope:
-                geo_tokens.add(f"G:{geo_scope}")
-            muni = (p.get("municipality") or "").strip().upper()
-            if muni:
-                geo_tokens.add(f"M:{muni}")
-            m_zip = _ZIP5_RE.search(str(p.get("mailing_address") or ""))
-            if m_zip:
-                geo_tokens.add(f"Z:{m_zip.group(1)}")
-            if has_explicit_series:
-                series_explicit_variants.setdefault(bucket_key, set()).add(norm_biz)
-                series_explicit_geos.setdefault(bucket_key, set()).update(geo_tokens)
-            else:
-                series_base_variants.setdefault(bucket_key, set()).add(norm_biz)
-                series_base_geos.setdefault(bucket_key, set()).update(geo_tokens)
+        if is_person_prop and active_oc_canons:
+            raw_canon = p.get("_canon_person") or canonicalize_person_name(raw_nm)
+            mapped_canon = canon_person_alias.get(raw_canon, raw_canon)
+            if mapped_canon and mapped_canon in active_oc_canons:
+                p_hkey, p_mid = _resolve_human_key(raw_nm)
+                if p_hkey:
+                    direct_person_parcels.append((b, p_hkey, p_mid, prop_coarse_mail, geo_scope))
+                    if prop_coarse_mail:
+                        person_parcel_mail_diversity.setdefault(p_hkey, set()).add(prop_coarse_mail)
+
+        if not is_person_prop:
+            spv_stem, has_explicit_series, is_generic_landscape = extract_series_stem_info(raw_nm)
+            if spv_stem:
+                bucket_key = f"{spv_stem}||{geo_scope}" if (is_generic_landscape and geo_scope) else spv_stem
+                norm_biz = normalize_business_name(raw_nm)
+                by_series_spv.setdefault(bucket_key, []).append(b)
+                geo_tokens: Set[str] = set()
+                if geo_scope:
+                    geo_tokens.add(f"G:{geo_scope}")
+                muni = (p.get("municipality") or "").strip().upper()
+                if muni:
+                    geo_tokens.add(f"M:{muni}")
+                m_zip = _ZIP5_RE.search(str(p.get("mailing_address") or ""))
+                if m_zip:
+                    geo_tokens.add(f"Z:{m_zip.group(1)}")
+                if has_explicit_series:
+                    series_explicit_variants.setdefault(bucket_key, set()).add(norm_biz)
+                    series_explicit_geos.setdefault(bucket_key, set()).update(geo_tokens)
+                else:
+                    series_base_variants.setdefault(bucket_key, set()).add(norm_biz)
+                    series_base_geos.setdefault(bucket_key, set()).update(geo_tokens)
 
         oj, on = p.get("oc_jurisdiction_code"), p.get("oc_company_number")
         if oj and on:
-            info = oc_resolved.get((oj, on))
+            fam_key = p.get("_family_key") or (
+                canonicalize_person_name(raw_nm)
+                if is_person_prop
+                else extract_owner_family_key(raw_nm)
+            ) or (p.get("owner_name_norm") or raw_nm)
+            ckey = (oj, on)
+            info = oc_resolved.get(ckey)
             nodes = info.get("reached_companies") if info else None
             if nodes:
                 for node_id in nodes:
@@ -1107,53 +1725,277 @@ def cluster_with_oc_and_series(
                 by_oc_node.setdefault(f"{oj}/{on}", []).append(b)
 
             if info:
-                for hq in info.get("hq_addresses", ()):
-                    by_oc_hq.setdefault(hq, []).append(b)
-                    if fam_key:
-                        hq_family_fanout.setdefault(hq, set()).add(fam_key)
+                ent_hkeys: List[str] = []
                 for h_name in info.get("humans", ()):
                     if not looks_like_person_owner(h_name):
                         continue
-                    h_norm = normalize_owner_name(h_name)
-                    if h_norm and h_norm not in generic_set and not pub_check(h_norm):
-                        by_oc_human.setdefault(h_norm, []).append(b)
-                        human_entity_fanout.setdefault(h_norm, set()).add((oj, on))
+                    h_key, _ = _resolve_human_key(h_name)
+                    if h_key and h_key not in generic_set and not pub_check(h_key):
+                        ent_hkeys.append(h_key)
+
+                ent_hqs = {hq_coarse_alias.get(hq, hq) for hq in info.get("hq_addresses", ()) if hq}
+                if prop_coarse_mail:
+                    ent_hqs.add(prop_coarse_mail)
+                if ent_hqs:
+                    entity_hqs.setdefault(ckey, set()).update(ent_hqs)
+                    comp_hqs[find_r(bbl_to_root[b])].update(ent_hqs)
+                if ent_hkeys:
+                    entity_humans.setdefault(ckey, set()).update(ent_hkeys)
+
+                for hq in info.get("hq_addresses", ()):
+                    canon_hq = hq_coarse_alias.get(hq, hq)
+                    by_oc_hq.setdefault(canon_hq, []).append(b)
+                    if fam_key:
+                        hq_family_fanout.setdefault(canon_hq, set()).add(fam_key)
+                    if ent_hkeys:
+                        hq_company_humans.setdefault(canon_hq, {}).setdefault(ckey, set()).update(ent_hkeys)
+
+                for h_key in ent_hkeys:
+                    by_oc_human.setdefault(h_key, []).append(b)
+                    human_entity_bbls.setdefault(h_key, {}).setdefault(ckey, []).append(b)
+                    human_entity_fanout.setdefault(h_key, set()).add(ckey)
+                    if fam_key:
+                        human_family_fanout.setdefault(h_key, set()).add(fam_key)
+                    if geo_scope:
+                        human_geos.setdefault(h_key, set()).add(geo_scope)
+                    for chq in ent_hqs:
+                        human_hqs_all.setdefault(h_key, set()).add(chq)
+                        human_hq_entity_counts.setdefault(h_key, {}).setdefault(chq, set()).add(ckey)
+                    for peer_h in ent_hkeys:
+                        if peer_h != h_key:
+                            human_coprincipal_entity_counts.setdefault(h_key, {}).setdefault(peer_h, set()).add(ckey)
+
+    # Collect corroborated direct human/trustee parcels per `h_key` (attached in Step 3 to the
+    # matching disambiguated person sub-cluster so common names never bridge unrelated landlords).
+    human_direct_parcels: Dict[str, List[Tuple[str, str, str]]] = {}
+    for b, p_hkey, p_mid, p_mail, p_geo in direct_person_parcels:
+        if p_hkey not in by_oc_human:
+            continue
+        base_hc = p_hkey.split("||", 1)[0]
+        mids = oc_canon_mids.get(base_hc) or set()
+        if p_mid and mids and p_mid not in mids:
+            continue
+        shared_mail = bool(p_mail and p_mail in (human_hqs_all.get(p_hkey) or set()))
+        shared_geo = bool(p_geo and p_geo in (human_geos.get(p_hkey) or set()))
+        _, surname, ord_toks = _extract_oc_person_mid_and_surname(base_hc)
+        rare_or_full = (
+            len(ord_toks) >= 3
+            or (len(surname) >= 4 and len(oc_canon_surnames.get(surname) or ()) <= 8)
+        ) and len(person_parcel_mail_diversity.get(p_hkey) or ()) <= 4
+        if shared_mail or (shared_geo and len(person_parcel_mail_diversity.get(p_hkey) or ()) <= 3) or rare_or_full:
+            human_direct_parcels.setdefault(p_hkey, []).append((b, p_mail, p_geo))
 
     merges = 0
 
-    # 1. Shared OC entity / corporate parent / foreign branch
+    # 1. Shared OC entity / corporate parent / foreign branch (zero family quota)
     for bbls in by_oc_node.values():
         roots = list({bbl_to_root[b] for b in bbls})
         for other in roots[1:]:
-            if union_r(roots[0], other, max_unrelated_bbls=1500, max_families=60):
+            if union_r(roots[0], other):
                 merges += 1
 
-    # 2. Shared verified non-agent corporate HQ / principal-office / mailing address
+    # 2. Shared verified non-agent corporate HQ (quota-free disjoint-principal island check)
     for hq, bbls in by_oc_hq.items():
         fams = hq_family_fanout.get(hq, set())
-        max_fams_at_hq = 4 if hq.startswith("PO BOX ") else 25
-        if len(fams) > max_fams_at_hq:
+        co_humans = hq_company_humans.get(hq) or {}
+        if hq.startswith("PO BOX ") and len(fams) >= 5 and len(co_humans) < 2:
             continue
+        if len(co_humans) >= 6:
+            # Build disjoint human-principal islands across officer-bearing companies at `hq`
+            ckeys = list(co_humans.keys())
+            par_c = {ck: ck for ck in ckeys}
+
+            def _find_c(x):
+                while par_c[x] != x:
+                    par_c[x] = par_c[par_c[x]]
+                    x = par_c[x]
+                return x
+
+            h_anchor: Dict[str, Tuple[str, str]] = {}
+            for ck, hset in co_humans.items():
+                for hk in hset:
+                    prev = h_anchor.get(hk)
+                    if prev is None:
+                        h_anchor[hk] = ck
+                    else:
+                        ra_c, rb_c = _find_c(prev), _find_c(ck)
+                        if ra_c != rb_c:
+                            par_c[ra_c] = rb_c
+            isl_counts: Dict[Tuple[str, str], int] = {}
+            for ck in ckeys:
+                rc = _find_c(ck)
+                isl_counts[rc] = isl_counts.get(rc, 0) + 1
+            if len(isl_counts) >= 5 and (max(isl_counts.values()) / len(ckeys)) < 0.35:
+                continue
+
         roots = list({bbl_to_root[b] for b in bbls})
         for other in roots[1:]:
-            if union_r(roots[0], other, max_unrelated_bbls=1500, max_families=25):
+            if union_r(roots[0], other):
                 merges += 1
 
-    # 3. Shared OC beneficial human principal
-    for h_norm, bbls in by_oc_human.items():
-        fanout = len(human_entity_fanout.get(h_norm, ()))
-        tokens = h_norm.split()
-        max_fanout = 60 if len(tokens) >= 3 else 20
-        if fanout > max_fanout:
+    # 3. Shared OC beneficial human principal with quota-free cohesion AND same-person
+    #    disambiguation:
+    #    - Quarantines uncorroborated CPAs/incorporators spanning >=8 unrelated families with
+    #      no HQ or co-principal concentration.
+    #    - Partitions multi-HQ / common statewide names ('RONALD BROWN', 'DAVID KATZ', 'JAY PATEL')
+    #      into disambiguated same-person sub-clusters corroborated by shared HQ, Pass-1 root, or
+    #      shared co-principal — so Hamilton Co's 157 Ronald Brown LLCs unify 100% without ever
+    #      absorbing 15 unrelated Ronald Browns across Massachusetts!
+    accepted_humans: Set[str] = set()
+    for h_key, bbls in by_oc_human.items():
+        ents = human_entity_fanout.get(h_key) or set()
+        fams = human_family_fanout.get(h_key) or set()
+        if len(fams) >= 8 and len(ents) >= 8:
+            hq_map = human_hq_entity_counts.get(h_key) or {}
+            top2_hq_ents = sum(sorted((len(s) for s in hq_map.values()), reverse=True)[:2]) if hq_map else 0
+            top_hq_share = top2_hq_ents / max(len(ents), 1)
+
+            cop_map = human_coprincipal_entity_counts.get(h_key) or {}
+            max_cop_ents = max((len(s) for s in cop_map.values()), default=0)
+            cop_share = max_cop_ents / max(len(ents), 1)
+
+            root_counts: Dict[str, int] = {}
+            for b in set(bbls):
+                rr = find_r(bbl_to_root[b])
+                root_counts[rr] = root_counts.get(rr, 0) + 1
+            top_root_share = (max(root_counts.values()) / max(len(set(bbls)), 1)) if root_counts else 0.0
+
+            if top_hq_share < 0.30 and cop_share < 0.35 and top_root_share < 0.35:
+                continue
+
+        accepted_humans.add(h_key)
+        for b in bbls:
+            comp_humans[find_r(bbl_to_root[b])].add(h_key)
+
+    # Now merge entities within each accepted human's disambiguated same-person sub-clusters
+    for h_key in accepted_humans:
+        ent_bbl_map = human_entity_bbls.get(h_key) or {}
+        ent_list = list(ent_bbl_map.keys())
+        if not ent_list:
             continue
-        max_fams = 80 if len(tokens) >= 3 else 30
-        roots = list({bbl_to_root[b] for b in bbls})
-        for other in roots[1:]:
-            if union_r(roots[0], other, max_unrelated_bbls=1500, max_families=max_fams):
-                merges += 1
+        base_hc = h_key.split("||", 1)[0]
+        ord_toks = base_hc.split()
+        surname = oc_canon_primary_surname.get(base_hc, "")
+        all_hqs_h = human_hqs_all.get(h_key) or set()
+        is_uncommon_surname = bool(len(surname) >= 4 and surname not in _COMMON_HOMONYM_SURNAMES)
+        globally_unambiguous = (
+            (len(all_hqs_h) <= 2 and (len(ent_list) <= 8 or is_uncommon_surname))
+            or (len(ord_toks) >= 3 and len(all_hqs_h) <= 3)
+        )
 
-    # 4. Corroborated corporate series & container-suffix siblings (unifies numbered/Roman/year
-    #    tranches AND their unnumbered base entity, while scoping generic landscape stems by county)
+        if globally_unambiguous:
+            person_subclusters: List[List[Tuple[str, str]]] = [ent_list]
+        else:
+            par_e = {ck: ck for ck in ent_list}
+
+            def _find_e(x):
+                while par_e[x] != x:
+                    par_e[x] = par_e[par_e[x]]
+                    x = par_e[x]
+                return x
+
+            def _union_e(a, b):
+                ra_e, rb_e = _find_e(a), _find_e(b)
+                if ra_e != rb_e:
+                    par_e[ra_e] = rb_e
+
+            hq_anchor_e: Dict[str, Tuple[str, str]] = {}
+            root_anchor_e: Dict[str, Tuple[str, str]] = {}
+            cop_anchor_e: Dict[str, Tuple[str, str]] = {}
+            for ck in ent_list:
+                for chq in entity_hqs.get(ck, ()):
+                    prev = hq_anchor_e.get(chq)
+                    if prev is None:
+                        hq_anchor_e[chq] = ck
+                    else:
+                        _union_e(prev, ck)
+                for b_id in ent_bbl_map[ck]:
+                    rr = find_r(bbl_to_root[b_id])
+                    prev_r = root_anchor_e.get(rr)
+                    if prev_r is None:
+                        root_anchor_e[rr] = ck
+                    else:
+                        _union_e(prev_r, ck)
+                for peer_h in entity_humans.get(ck, ()):
+                    if peer_h == h_key or peer_h not in accepted_humans:
+                        continue
+                    # Do not let a widespread common name bridge two unrelated homonyms of `h_key`
+                    if len(human_hqs_all.get(peer_h, ())) > 6 and len(human_entity_fanout.get(peer_h, ())) > 25:
+                        continue
+                    prev_p = cop_anchor_e.get(peer_h)
+                    if prev_p is None:
+                        cop_anchor_e[peer_h] = ck
+                    else:
+                        _union_e(prev_p, ck)
+
+            grouped_e: Dict[Tuple[str, str], List[Tuple[str, str]]] = {}
+            for ck in ent_list:
+                grouped_e.setdefault(_find_e(ck), []).append(ck)
+            person_subclusters = list(grouped_e.values())
+
+        # Attach direct human/trustee parcels to their matching person sub-cluster
+        sub_hqs_list = [
+            {chq for ck in sub_ents for chq in entity_hqs.get(ck, ())}
+            for sub_ents in person_subclusters
+        ]
+        sub_bbl_lists: List[List[str]] = [
+            [b_id for ck in sub_ents for b_id in ent_bbl_map[ck]]
+            for sub_ents in person_subclusters
+        ]
+        for b_dir, p_mail, _p_geo in human_direct_parcels.get(h_key, ()):
+            matched_idx = None
+            if p_mail:
+                for s_idx, shqs in enumerate(sub_hqs_list):
+                    if p_mail in shqs:
+                        matched_idx = s_idx
+                        break
+            if matched_idx is None and len(person_subclusters) == 1:
+                matched_idx = 0
+            if matched_idx is not None:
+                sub_bbl_lists[matched_idx].append(b_dir)
+
+        for sub_bbls in sub_bbl_lists:
+            roots = list({find_r(bbl_to_root[b_id]) for b_id in sub_bbls})
+            if len(roots) < 2:
+                continue
+            for other in roots[1:]:
+                if union_r(roots[0], other, require_hq_compat=True):
+                    merges += 1
+
+    # 3b. CT-Parity Same-Surname Co-Principal Bridges:
+    # When >=2 accepted property-owning principals share an uncommon surname (len>=4, <=12 principals
+    # in the jurisdiction) AND co-appear on an `oc_resolved` company, bridge their co-located portfolios.
+    for ckey, hset in entity_humans.items():
+        if not hset:
+            continue
+        by_surname: Dict[str, List[str]] = {}
+        for hk in hset:
+            if hk not in accepted_humans:
+                continue
+            base_hc = hk.split("||", 1)[0]
+            surname = oc_canon_primary_surname.get(base_hc, "")
+            if len(surname) >= 4 and len(oc_canon_surnames.get(surname) or ()) <= 12:
+                by_surname.setdefault(surname, []).append(hk)
+        ck_hqs = entity_hqs.get(ckey) or set()
+        for s_hkeys in by_surname.values():
+            uniq_hk = sorted(set(s_hkeys))
+            if len(uniq_hk) < 2:
+                continue
+            # Only bridge entities of those family co-principals that share an HQ with `ckey` or
+            # belong to globally unambiguous single-person names, preventing homonym spillover.
+            co_bbls: List[str] = []
+            for hk in uniq_hk:
+                for ent_k, ent_bs in (human_entity_bbls.get(hk) or {}).items():
+                    if ent_k == ckey or (ck_hqs and (entity_hqs.get(ent_k, set()) & ck_hqs)) or len(human_hqs_all.get(hk, ())) <= 3:
+                        co_bbls.extend(ent_bs)
+            roots = list({find_r(bbl_to_root[b_id]) for b_id in co_bbls})
+            if len(roots) < 2:
+                continue
+            for other in roots[1:]:
+                if union_r(roots[0], other, require_hq_compat=True):
+                    merges += 1
+
+    # 4. Corroborated corporate series & container-suffix siblings
     for bucket_key, bbls in by_series_spv.items():
         exp_vars = series_explicit_variants.get(bucket_key, set())
         base_vars = series_base_variants.get(bucket_key, set())
@@ -1166,18 +2008,13 @@ def cluster_with_oc_and_series(
 
         allow_series_merge = False
         if len(exp_vars) >= 2:
-            # >=2 distinct numbered/lettered/Roman/year series tranches (e.g. Crestwood 1/2/3/IV,
-            # Tricon SFR 2020..2026, FKH SFR Propco A..Q, Shelby Company 2/3 + base Shelby Company)
             allow_series_merge = True
         elif len(exp_vars) == 1 and len(base_vars) >= 1:
-            # 1 numbered tranche + its unnumbered base entity: require geographic/ZIP overlap or SPV keyword
             exp_geos = series_explicit_geos.get(bucket_key, set())
             b_geos = series_base_geos.get(bucket_key, set())
             if has_inst_kw or bool(exp_geos & b_geos):
                 allow_series_merge = True
         elif len(exp_vars) == 0 and len(base_vars) >= 2 and "||" not in bucket_key and total_vars <= 8:
-            # Non-generic multi-word corporate name differing only by trailing legal/container suffix
-            # (e.g. 'CHAMPLAIN HOUSING TRUST' + 'CHAMPLAIN HOUSING TRUST INC') in overlapping geography
             b_geos = series_base_geos.get(bucket_key, set())
             if len(b_geos) >= 1:
                 allow_series_merge = True
@@ -1186,7 +2023,7 @@ def cluster_with_oc_and_series(
             continue
         roots = list({bbl_to_root[b] for b in bbls})
         for other in roots[1:]:
-            if union_r(roots[0], other, max_unrelated_bbls=25_000, max_families=10):
+            if union_r(roots[0], other):
                 merges += 1
 
     merged_groups: Dict[str, List[dict]] = {}
@@ -1220,6 +2057,17 @@ def link_jurisdiction_parcels_to_oc(
     lookup_norms: Set[str] = set()
     lookup_prefixes: Set[str] = set()
     scoped_jurs: Set[str] = {f"us_{parcel_state.lower()}", *FOREIGN_FORMATION_HUBS}
+
+    _LEGAL_EXPANSION_SUFFIXES = (
+        "LIMITED LIABILITY COMPANY",
+        "CORPORATION",
+        "INCORPORATED",
+        "LIMITED PARTNERSHIP",
+        "LIMITED LIABILITY PARTNERSHIP",
+        "COMPANY",
+        "LIMITED",
+    )
+    unsuffixed_expansions_by_bbl: Dict[str, Tuple[str, ...]] = {}
 
     with conn.cursor(name=f"oc_link_scan_{jurisdiction}", cursor_factory=RealDictCursor) as scan_cur:
         scan_cur.itersize = 50000
@@ -1260,12 +2108,21 @@ def link_jurisdiction_parcels_to_oc(
             if not rec.is_business or not rec.owner_norm:
                 continue
             demangled_by_bbl[bbl] = rec
-            coarse_by_bbl[bbl] = (
-                row.get("mailing_address_coarse")
-                or normalize_mailing_address_coarse(row.get("mailing_address") or "")
+            fresh_coarse = normalize_mailing_address_coarse(
+                strip_benign_care_of_prefix(row.get("mailing_address") or "")
             )
+            coarse_by_bbl[bbl] = fresh_coarse or (row.get("mailing_address_coarse") or "")
             sale_by_bbl[bbl] = row.get("last_sale_date")
             lookup_norms.add(rec.owner_norm)
+            if (
+                len(rec.owner_norm) >= 8
+                and len(rec.owner_norm.split()) >= 2
+                and not _CORPORATE_SUFFIX_STRIP_RE.search(rec.owner_norm)
+                and not is_generic_homonym_stem(rec.owner_norm)
+            ):
+                exps = tuple(f"{rec.owner_norm} {sfx}" for sfx in _LEGAL_EXPANSION_SUFFIXES)
+                unsuffixed_expansions_by_bbl[bbl] = exps
+                lookup_norms.update(exps)
             if rec.is_truncated and rec.prefix18:
                 lookup_prefixes.add(rec.prefix18)
             if rec.mailing_state:
@@ -1392,6 +2249,8 @@ def link_jurisdiction_parcels_to_oc(
 
     for bbl, rec in demangled_by_bbl.items():
         pool: List[OCCandidate] = list(candidates_by_norm.get(rec.owner_norm, ()))
+        for exp_norm in unsuffixed_expansions_by_bbl.get(bbl, ()):
+            pool.extend(candidates_by_norm.get(exp_norm, ()))
         if rec.is_truncated and rec.prefix18:
             pool.extend(candidates_by_prefix18.get(rec.prefix18, ()))
         match = score_oc_candidates(

@@ -14,6 +14,14 @@ services:
       - ./api:/app/api
       - ./reporter:/app/reporter
       - ./nyc:/app/nyc
+      - ./ma:/app/ma
+      - ./va:/app/va
+      - ./fl:/app/fl
+      - ./ny:/app/ny
+      - ./il:/app/il
+      - ./ca:/app/ca
+      - ./states:/app/states
+      - ./updater:/app/updater
       - ./data:/app/data
       - ./docs:/app/docs
     environment:
@@ -30,6 +38,8 @@ services:
       - ALERT_EMAIL_TO=${ALERT_EMAIL_TO:-salmunk@gmail.com}
       - ALERT_EMAIL_FROM=${ALERT_EMAIL_FROM:-salmunk@gmail.com}
       - ALERT_EMAIL_PASS=${ALERT_EMAIL_PASS}
+      - NIGHTLY_OPTIMIZER_EMAIL_TO=${NIGHTLY_OPTIMIZER_EMAIL_TO:-salmun@storrsmagic.org}
+      - GEMINI_OPTIMIZER_MODEL=${GEMINI_OPTIMIZER_MODEL:-}
       - AUDIT_REVIEW_SECRET=${AUDIT_REVIEW_SECRET:-}
       - OPENCORPORATES_SFTP_HOST=${OPENCORPORATES_SFTP_HOST:-}
       - OPENCORPORATES_SFTP_PORT=${OPENCORPORATES_SFTP_PORT:-22}
@@ -83,6 +93,8 @@ services:
       - ALERT_EMAIL_TO=${ALERT_EMAIL_TO:-salmunk@gmail.com}
       - ALERT_EMAIL_FROM=${ALERT_EMAIL_FROM:-salmunk@gmail.com}
       - ALERT_EMAIL_PASS=${ALERT_EMAIL_PASS}
+      - NIGHTLY_OPTIMIZER_EMAIL_TO=${NIGHTLY_OPTIMIZER_EMAIL_TO:-salmun@storrsmagic.org}
+      - GEMINI_OPTIMIZER_MODEL=${GEMINI_OPTIMIZER_MODEL:-}
       - AUDIT_REVIEW_SECRET=${AUDIT_REVIEW_SECRET:-}
       - OPENCORPORATES_SFTP_HOST=${OPENCORPORATES_SFTP_HOST:-}
       - OPENCORPORATES_SFTP_PORT=${OPENCORPORATES_SFTP_PORT:-22}

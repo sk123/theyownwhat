@@ -3,6 +3,15 @@ import re
 from functools import lru_cache
 from typing import Set
 
+from api.linking_rules import (
+    get_learned_address_aliases,
+    get_learned_benign_care_of_tokens,
+    get_learned_biz_abbrevs,
+    get_learned_ra_allowlist,
+    get_learned_third_party_hubs,
+    get_rules_version,
+)
+
 _TRAILING_COMMA_THE_RE = re.compile(r",\s*THE\s*$")
 _DBA_RE = re.compile(r"\bD\s*/\s*B\s*/\s*A\b")
 _TA_RE = re.compile(r"\bT\s*/\s*A\b")
@@ -59,8 +68,43 @@ _BIZ_ABBREV_MAP = {
     'APTS': 'APARTMENTS',
     'GDNS': 'GARDENS',
     'DISTR': 'DISTRIBUTORS',
+    'PTRN': 'PARTNERSHIP',
+    'PTNR': 'PARTNERSHIP',
+    'PTNSHP': 'PARTNERSHIP',
+    'PTNRSHP': 'PARTNERSHIP',
+    'PTRSHP': 'PARTNERSHIP',
+    'PTR': 'PARTNERSHIP',
+    'LIM': 'LIMITED',
+    'RLTY': 'REALTY',
 }
 _BIZ_ABBREV_RE = re.compile(r"\b(" + "|".join(sorted(_BIZ_ABBREV_MAP, key=len, reverse=True)) + r")\b")
+_LEARNED_BIZ_ABBREV_CACHE = {"version": -1, "map": {}, "re": None}
+
+
+def _apply_learned_biz_abbrevs(text: str) -> str:
+    ver = get_rules_version()
+    if _LEARNED_BIZ_ABBREV_CACHE["version"] != ver:
+        learned = get_learned_biz_abbrevs()
+        if learned:
+            pat = re.compile(r"\b(" + "|".join(re.escape(k) for k in sorted(learned, key=len, reverse=True)) + r")\b")
+        else:
+            pat = None
+        _LEARNED_BIZ_ABBREV_CACHE["version"] = ver
+        _LEARNED_BIZ_ABBREV_CACHE["map"] = learned
+        _LEARNED_BIZ_ABBREV_CACHE["re"] = pat
+    pat = _LEARNED_BIZ_ABBREV_CACHE["re"]
+    if pat is None:
+        return text
+    lmap = _LEARNED_BIZ_ABBREV_CACHE["map"]
+    return pat.sub(lambda m: lmap[m.group(1)], text)
+
+
+def clear_shared_utils_caches() -> None:
+    """Clear LRU caches after learned linking rules are updated."""
+    normalize_business_name.cache_clear()
+    _registrar_pattern.cache_clear()
+    _LEARNED_BIZ_ABBREV_CACHE["version"] = -1
+_SAID_OWNER_PREFIX_RE = re.compile(r"^S\s*/\s*O\s+")
 _SPURIOUS_MID_AND_RE = re.compile(
     r"\s+\bAND\s+(?=(?:BORROWER|PROPCO|PORTFOLIO|LLC|LLP|LP|INCORPORATED|CORPORATION|DISTRIBUTORS|[0-9]{1,3}\s+(?:LLC|LP|INCORPORATED|CORPORATION|BORROWER))\b)"
 )
@@ -79,6 +123,8 @@ def normalize_business_name(name: str) -> str:
 
     if "," in normalized:
         normalized = _TRAILING_COMMA_THE_RE.sub("", normalized)
+    if "/" in normalized:
+        normalized = _SAID_OWNER_PREFIX_RE.sub("", normalized)
     if "/" in normalized or "\\" in normalized or "@" in normalized:
         normalized = _DBA_RE.sub(" DBA ", normalized)
         normalized = _TA_RE.sub(" TA ", normalized)
@@ -110,6 +156,7 @@ def normalize_business_name(name: str) -> str:
     if 'CO' in normalized:
         normalized = _STANDALONE_CO_RE.sub("COMPANY", normalized)
     normalized = _BIZ_ABBREV_RE.sub(lambda m: _BIZ_ABBREV_MAP[m.group(1)], normalized)
+    normalized = _apply_learned_biz_abbrevs(normalized)
 
     if ' AND ' in normalized:
         normalized = _SPURIOUS_MID_AND_RE.sub(" ", normalized)
@@ -170,17 +217,24 @@ def normalize_person_name(name: str) -> str:
     normalized = re.sub(r"[,.'`\"]", '', normalized)
     normalized = re.sub(r"\s+", ' ', normalized).strip()
 
-    # Remove standard suffixes
+    # Remove standard suffixes and fiduciary/nominee-trustee role markers
     for pattern in PERSON_SUFFIX_PATTERNS:
         normalized = pattern.sub('', normalized)
+    normalized = _PERSON_FIDUCIARY_ROLE_RE.sub(' ', normalized)
+    normalized = re.sub(r"\s+\bTR$", "", normalized)
+    normalized = re.sub(r"\s+", ' ', normalized).strip()
 
-    # Remove standalone initials after suffix cleanup. This covers both
-    # FIRST M LAST and assessor-style LAST FIRST M owner names.
-    parts = normalized.split()
+    # Remove standalone initials after suffix cleanup, and collapse adjacent
+    # repeated tokens from SOS data-entry typos (e.g. 'ALEXANDRA SAMIA SOLIA SOLIA').
+    parts = []
+    for tok in normalized.split():
+        if not parts or parts[-1] != tok:
+            parts.append(tok)
     if len(parts) > 2:
         non_initial_parts = [part for part in parts if len(part) > 1]
         if len(non_initial_parts) >= 2:
-            normalized = " ".join(non_initial_parts)
+            parts = non_initial_parts
+    normalized = " ".join(parts)
 
     return normalized.strip()
 
@@ -221,7 +275,8 @@ def looks_like_business_name(name: str) -> bool:
     return False
 
 
-PERSON_OWNER_ROLE_TERMS = {'TR', 'TRS', 'TS', 'TRUSTEE', 'TRUSTEES'}
+PERSON_OWNER_ROLE_TERMS = {'TR', 'TRS', 'TS', 'TT', 'TTE', 'TTES', 'TRST', 'TRUSTEE', 'TRUSTEES', 'LE'}
+_PERSON_FIDUCIARY_ROLE_RE = re.compile(r"\b(?:TRUSTEES?|TRST|TTES?|TRS|TS|TT)\b")
 NON_PERSON_COMPLEX_OR_PREPOSITION_TOKENS = {
     'THE', 'AT', 'OF', 'IN', 'ON', 'FOR', 'BY', 'DBA', 'TA', 'AKA', 'FKA',
     'ENT', 'BLDRS', 'BUILDERS', 'HOMES', 'GARDENS', 'VILLAGE', 'VILLAS',
@@ -689,7 +744,50 @@ def normalize_mailing_address_coarse(address: str) -> str:
     if len(norm) < 5 or not re.search(r'\d.*[A-Z]', norm):
         return ""
 
+    aliases = get_learned_address_aliases()
+    if aliases and norm in aliases:
+        return aliases[norm]
+
     return norm
+
+
+_POSTAL_STREET_ANCHOR_WORDS = STREET_SUFFIX_WORDS | {
+    'MALL', 'BROADWAY', 'COMMONS', 'CONCOURSE', 'TURNPIKE', 'HIGHWAY', 'PARKWAY',
+}
+_POSTAL_STREET_PREFIX_RE = re.compile(
+    rf'^(\d+[A-Z0-9-]*\s+(?:[A-Z0-9]+\s+){{0,4}}?(?:{"|".join(sorted(_POSTAL_STREET_ANCHOR_WORDS, key=len, reverse=True))}))\b'
+)
+
+
+def extract_postal_street_zip_key(address: str) -> str:
+    """Return a city-typo & postal-neighborhood-invariant `(coarse_street_or_pobox||zip5)` key
+    when a valid 5-digit ZIP code is present (e.g. `'39 BRIGHTON AVE, ALLSTON, MA 02134'` and
+    `'39 BRIGHTON AV, BOSTON, MA 02134-2013'` -> `'39 BRIGHTON AVENUE||02134'`; `'PO BOX 31236
+    SALT LAKE CTY 84131'` -> `'PO BOX 31236||84131'`). Returns `''` when no 5-digit ZIP exists."""
+    fine = normalize_mailing_address(address)
+    if not fine:
+        return ""
+    m_zip = re.search(r'\b(\d{5})\s*$', fine)
+    if not m_zip or m_zip.group(1) == "00000":
+        return ""
+    zip5 = m_zip.group(1)
+    body = fine[: m_zip.start()].strip()
+    body = re.sub(r'\s*#\s*[A-Z0-9][A-Z0-9-]*', ' ', body).replace('#', ' ')
+    body = re.sub(r'\b(\d+)(?:ST|ND|RD|TH)\b', r'\1', body)
+    body = re.sub(r'\s+', ' ', body).strip()
+    m_po = re.match(r'^(PO BOX [A-Z0-9-]+)\b', body)
+    key = ""
+    if m_po:
+        key = f"{m_po.group(1)}||{zip5}"
+    else:
+        m_st = _POSTAL_STREET_PREFIX_RE.match(body)
+        if m_st:
+            key = f"{m_st.group(1)}||{zip5}"
+    if key:
+        aliases = get_learned_address_aliases()
+        if aliases and key in aliases:
+            return aliases[key]
+    return key
 
 
 def first_normalized_mailing_address(*addresses: str, coarse: bool = False) -> str:
@@ -738,8 +836,23 @@ def load_registrar_address_substrings(conn) -> frozenset:
                 if expanded:
                     substrings.add(expanded)
     except Exception:
-        # Table missing or unreadable — fall back to the hardcoded set only.
-        return frozenset()
+        # Table missing or unreadable — fall back to the hardcoded + learned set.
+        pass
+    for extra in get_learned_third_party_hubs():
+        cleaned = str(extra).upper().strip()
+        if cleaned and cleaned not in GENERIC_ADDRESS_RULE_SUBSTRINGS:
+            expanded = _expand_address_tokens(re.sub(r"[.,'`\"]", '', cleaned))
+            substrings.add(cleaned)
+            if expanded:
+                substrings.add(expanded)
+    allowlist = get_learned_ra_allowlist()
+    if allowlist:
+        allow_expanded = set(allowlist)
+        for a in allowlist:
+            exp = _expand_address_tokens(re.sub(r"[.,'`\"]", '', a))
+            if exp:
+                allow_expanded.add(exp)
+        substrings -= allow_expanded
     return frozenset(substrings)
 
 
@@ -959,7 +1072,9 @@ THIRD_PARTY_ENTITY_REGEX_BODY = (
     r"CELINK|LONGBRIDGE\s+FINANCIAL|REVERSE\s+MORTGAGE\s+FUNDING|"
     r"CHAMPION\s+MORTGAGE|FINANCE\s+OF\s+AMERICA\s+REVERSE|"
     r"CORELOGIC|LERETA|SAFEGUARD\s+PROPERTIES|GUARDIAN\s+ASSET\s+MANAGEMENT|"
-    r"REO\s+MANAGEMENT\s+SOLUTIONS|ALTISOURCE|CYPREXX|H\s*&\s*R\s+BLOCK)\b|"
+    r"REO\s+MANAGEMENT\s+SOLUTIONS|ALTISOURCE|CYPREXX|H\s*&\s*R\s+BLOCK|"
+    r"PROPARK\s+AMERICA|SP\s+PLUS\s+CORPORATION|LAZ\s+PARKING|IMPARK|ACE\s+PARKING|CENTRAL\s+PARKING|"
+    r"COM\s*ED|COMMONWEALTH\s+EDISON)\b|"
     r"\b(?:MORTGAGE|LOAN)\s+SERVICING\b|"
     # 4. Commercial Registered Agents & Corporate Formation Services
     r"\b(?:CORPORATION\s+SERVICE\s+COMPANY|CSC\s+LAWYERS|CSC\s+ENTITY|"
@@ -986,8 +1101,9 @@ THIRD_PARTY_ENTITY_REGEX_BODY = (
     r"HIGHWAY\s+COMM(?:ISSION)?|STATE\s+HWY\s+COMM(?:ISSION)?|(?:STATE|ARKANSAS\s+STATE)\s+HIGHWAY|STATE\s+HIGHWAY\s+ADMIN(?:ISTRATION)?|VDOT|FORESTRY\s+COMM(?:ISSION)?|GAME\s+(?:AND|&)\s+FISH|CORPS\s+OF\s+ENGINEERS|"
     r"BOARD\s+OF\s+(?:COUNTY\s+)?SUPERVISORS|BD\s+(?:OF\s+)?CO(?:UNTY)?\s+SUPERVISORS|SANITARY\s+DIST(?:RICT)?|"
     r"DEPT\s+OF\s+HUD|HUD\s+PROP(?:ER?TY)?\s+DISP|GOVERNMENTAUCTION|WITHHELD\s+AT\s+REQUEST(?:\s+OF\s+OWNER)?|"
-    r"BOARD\s+OF\s+ED(?:UC(?:ATION)?)?|SCHOOL\s+BOARD|SCHOOL\s+DISTRICT|PUBLIC\s+SCHOOLS|"
-    r"CHICAGO\s+PARK\s+DIST(?:RICT)?|PARK\s+DISTRICT|PUB(?:LIC)?\s+BLDG\s+COMM(?:ISSION)?|PUBLIC\s+BUILDING\s+COMMISSION|"
+    r"BOARD\s+OF\s+ED(?:UC(?:ATION)?)?|SCHOOL\s+BOARD|SCHOOL\s+DIST(?:RICT)?|PUBLIC\s+SCHOOLS|"
+    r"FIRE\s+DIST(?:RICT)?|WATER\s+DIST(?:RICT)?|IRRIGATION\s+DIST(?:RICT)?|DRAINAGE\s+DIST(?:RICT)?|LEVEE\s+DIST(?:RICT)?|CEMETERY\s+ASS(?:OC|OCIATION|N)|"
+    r"CHICAGO\s+PARK\s+DIST(?:RICT)?|PARK\s+DIST(?:RICT)?|PUB(?:LIC)?\s+BLDG\s+COMM(?:ISSION)?|PUBLIC\s+BUILDING\s+COMMISSION|"
     r"MEDICAL\s+DIST(?:RICT)?\.?\s+COM|METRO\s+PIER\s+(?:AND|&)\s+EXPO|WESTSIDE\s+HEALTH\s+AUTHOR|"
     r"PARKS\s+(?:AND|&)\s+RECREATION|DEPT\s+OF\s+TRANSPORTATION|DEPARTMENT\s+OF\s+TRANSPORTATION|"
     r"(?:IL|ILLINOIS|US|U\.?\s*S\.?)\s+DEPT\.?\s+(?:OF\s+)?[A-Z]+|COMM\s+OF\s+MASS|"
@@ -1100,6 +1216,20 @@ KNOWN_THIRD_PARTY_HUB_SUBSTRINGS = frozenset({
     "90 STATE STREET", "90 STATE ST",
     "418 BROADWAY",
     "28 LIBERTY STREET", "28 LIBERTY ST",
+    "405 2 AVENUE SOUTH", "405 2ND AVE S", "405 SECOND AVENUE SOUTH",
+    "5511 STAPLES MILL ROAD", "5511 STAPLES MILL RD",
+    "100 SHOCKOE SLIP",
+    "1201 HAYS STREET", "1201 HAYS ST",
+    "1200 SOUTH PINE ISLAND", "1200 S PINE ISLAND",
+    "208 SOUTH LASALLE", "208 S LASALLE", "208 SO LASALLE",
+    "1500 NORTH GRANT STREET", "1500 N GRANT ST",
+    "7700 EAST ARAPAHOE ROAD", "7700 E ARAPAHOE RD",
+    "701 SOUTH CARSON STREET", "701 S CARSON ST",
+    "112 SOUTH FRENCH STREET", "112 S FRENCH ST",
+    "1675 SOUTH STATE STREET", "1675 S STATE ST",
+    "1930 HARRISON STREET", "1930 HARRISON ST",
+    "1000 BRICKELL AVENUE", "1000 BRICKELL AVE",
+    "11098 BISCAYNE BOULEVARD", "11098 BISCAYNE BLVD",
     # Known UPS Store / PMB / lender / IRA custodian / 3rd-party management hubs uncovered in live city audits
     "1 EQUITY WAY",
     "7901 FISH POND ROAD", "7901 FISH POND RD",
@@ -1113,18 +1243,30 @@ KNOWN_THIRD_PARTY_HUB_SUBSTRINGS = frozenset({
     "2424 RIDGE ROAD", "2424 RIDGE RD",
     "6920 POINTE INVERNESS",
     "PO BOX 80615",
+    "PO BOX 35370",
+    "PO BOX 1159 DEERFIELD", "200 WILMOT ROAD", "200 WILMOT RD", "104 WILMOT ROAD", "104 WILMOT RD",
+    "1 CVS DRIVE", "1 CVS DR",
+    "1 DAVE THOMAS BOULEVARD", "1 DAVE THOMAS BLVD",
+    "PO BOX 2198 MEMPHIS",
+    "PO BOX 2710 ROANOKE", "5008 AIRPORT ROAD", "5008 AIRPORT RD",
+    "11995 EL CAMINO REAL",
     "15 WEST 6TH STREET", "15 W 6TH ST",
     "10950 GRANDVIEW DRIVE", "10950 GRANDVIEW DR",
     "3200 HACKBERRY ROAD", "3200 HACKBERRY RD",
     "1722 ROUTH STREET", "1722 ROUTH ST",
     "PO BOX 711 DALLAS", "711 PO BOX DALLAS", "PO BOX 711 CORPORATE",
     "500 VOLVO PARKWAY", "500 VOLVO PKWY",
+    "510 VOLVO PARKWAY", "510 VOLVO PKWY",
     "2202 NORTH WEST SHORE", "2202 N WEST SHORE",
     "1 HORMEL PLACE", "1 HORMEL PL",
     "5010 CELL TOWER",
 })
 
 _PMB_MAILBOX_RE = re.compile(r"\bPMB\s*#?\s*[A-Z0-9]+\b", re.IGNORECASE)
+_UNCLOSED_TRUNCATED_UNIT_RE = re.compile(
+    r"\(\s*(?:UNIT|APT|APARTMENT|STE|SUITE)\b(?![^)]*\))",
+    re.IGNORECASE,
+)
 _CARE_OF_LEAD_RE = re.compile(
     r"^\s*(?:C\s*/?\s*O|CIO|CARE\s+OF|ATTN\.?:?|ATTENTION:?|%)(?:\s|$)",
     re.IGNORECASE,
@@ -1136,11 +1278,17 @@ _INLINE_CARE_OF_PREFIX_RE = re.compile(
     re.IGNORECASE,
 )
 _THIRD_PARTY_CARE_OF_AGENT_RE = re.compile(
+    r"(?:^\s*(?:REAL\s+ESTATE\s+|PROPERTY\s+)?TAX\s+DEP(?:T|ARTMENT)\b|"
     r"\b(?:ESQ|ESQUIRE|LAW\b|ATTORNEYS?|COUNSEL|C\.?P\.?A\.?|ACCOUNTING|ACCOUNTANTS?|"
     r"REGISTERED\s+AGENT|RYAN\s*,?\s*LLC|BADEN\s+TAX|CHARTER\s+CENTRAL|KE\s+ANDREWS|DUCHARME|PARADIGM\s+TAX|"
-    r"TAX\s+(?:SERV(?:ICE|ICES)?|MANAG(?:EMENT|ER|ERS)|CONSULT(?:ING|ANTS)?|ADVISORS?)|ESCROW|"
-    r"FAMILY\s+DOLLAR|DOLLAR\s+TREE|DOLLAR\s+GENERAL|7[- ]?ELEVEN|WALGREENS|CVS\s+PHARMACY|CHIPOTLE|MCDONALD'?S|AUTOZONE|O'?REILLY\s+AUTO|"
-    r"PROPERTY\s+MANAG(?:EMENT|ER|ERS)|PROP\s+MGMT|REALTY\s+MANAG(?:EMENT|ER))\b",
+    r"MARVIN\s+F\.?\s+POER|ALTUS\s+GROUP|DUFF\s*(?:&|AND)\s*PHELPS|VERSATAX|PIVOTAL\s+TAX|POPP\s+HUTCHESON|"
+    r"TAX\s+(?:SERV(?:ICE|ICES)?|MANAG(?:EMENT|ER|ERS)|CONSULT(?:ING|ANTS)?|ADVISORS?)|LEASE\s+ADMIN(?:ISTRATION)?|ESCROW|"
+    r"KFC\b|YUM\s*!?\s*BRANDS|TACO\s+BELL|PIZZA\s+HUT|WENDY'?S|BURGER\s+KING|MCDONALD'?S|CHICK[- ]FIL[- ]A|"
+    r"STARBUCKS|CHIPOTLE|DUNKIN|WAWA|SHEETZ|CIRCLE\s+K|7[- ]?ELEVEN|CUMBERLAND\s+FARMS|EG\s+AMERICA|SPEEDWAY|CASEY'?S|"
+    r"FAMILY\s+DOLLAR|DOLLAR\s+TREE|DOLLAR\s+GENERAL|WALGREENS?|CVS(?:\s*[/ ]\s*HEALTH|\s+PHARMACY|\b)|RITE\s+AID|"
+    r"AUTOZONE|O'?REILLY\s+AUTO|ADVANCE\s+AUTO|ADVANCE\s+STORES|MONRO\s+INC|TRACTOR\s+SUPPLY|"
+    r"HOME\s+DEPOT|LOWE'?S|WAL[- ]?MART|COSTCO|ALDI\b|KROGER|SAFEWAY|PUBLIX|FOOD\s+LION|DEPT\s+\d{3,6}|"
+    r"PROPERTY\s+MANAG(?:EMENT|ER|ERS)|PROP\s+MGMT|REALTY\s+MANAG(?:EMENT|ER))\b)",
     re.IGNORECASE,
 )
 _HAS_STREET_OR_POBOX_RE = re.compile(
@@ -1156,10 +1304,22 @@ _LEADING_RECIPIENT_ADDR_RE = re.compile(
 )
 
 
+_BENIGN_COUNTRY_CARE_OF_TOKENS = frozenset({
+    "US", "USA", "U S", "U S A", "UNITED STATES", "UNITED STATES OF AMERICA", "CANADA", "CAN",
+})
+
+
+def _is_third_party_care_of_target(target: str) -> bool:
+    t_clean = re.sub(r"[^A-Z0-9]+", " ", (target or "").upper()).strip()
+    if not t_clean or t_clean in _BENIGN_COUNTRY_CARE_OF_TOKENS or t_clean in get_learned_benign_care_of_tokens():
+        return False
+    return bool(is_excluded_third_party_entity(target) or _THIRD_PARTY_CARE_OF_AGENT_RE.search(target))
+
+
 def strip_benign_care_of_prefix(raw_addr: str | None) -> str:
     """Strip a leading 'C/O <Parent Company>,' or '<Recipient LLC>, <Street>' prefix when
     the prefix is NOT a 3rd-party agent/bank/law/CPA firm, so 'C/O INVITATION HOMES, 2525 W FRYE RD',
-    'BALTIMORE EXCEL 01, LLC, 829 N 29TH ST, PHILADELPHIA, PA', and '2525 W FRYE RD' normalize
+    'C/O US, 60 LEO BIRMINGHAM PKWY, BRIGHTON, MA', and '2525 W FRYE RD' normalize
     to the same HQ address. If the C/O or recipient IS a 3rd-party intermediary, leave it intact
     so `is_excluded_third_party_address` rejects it.
     """
@@ -1169,14 +1329,14 @@ def strip_benign_care_of_prefix(raw_addr: str | None) -> str:
     m = _INLINE_CARE_OF_PREFIX_RE.match(s)
     if m:
         target = m.group(1).strip()
-        if is_excluded_third_party_entity(target) or _THIRD_PARTY_CARE_OF_AGENT_RE.search(target):
+        if _is_third_party_care_of_target(target):
             return s
         rest = s[m.end():].strip()
         return rest if rest else s
     m_rec = _LEADING_RECIPIENT_ADDR_RE.match(s)
     if m_rec:
         target = m_rec.group(1).strip()
-        if is_excluded_third_party_entity(target) or _THIRD_PARTY_CARE_OF_AGENT_RE.search(target):
+        if _is_third_party_care_of_target(target):
             return s
         rest = s[m_rec.end():].strip()
         return rest if rest else s
@@ -1199,19 +1359,25 @@ def is_excluded_third_party_address(
 
     if _PMB_MAILBOX_RE.search(raw_text) or _PMB_MAILBOX_RE.search(norm_text):
         return True
+    if _UNCLOSED_TRUNCATED_UNIT_RE.search(raw_text):
+        return True
 
+    effective_raw = raw_text
     m = _INLINE_CARE_OF_PREFIX_RE.match(raw_text) or _LEADING_RECIPIENT_ADDR_RE.match(raw_text)
     if m:
         target = m.group(1).strip()
-        if is_excluded_third_party_entity(target) or _THIRD_PARTY_CARE_OF_AGENT_RE.search(target):
+        if _is_third_party_care_of_target(target):
             return True
+        rem = raw_text[m.end():].strip()
+        if rem:
+            effective_raw = rem
 
     # If the raw address itself starts with C/O / ATTN and has no street remainder
     if _CARE_OF_LEAD_RE.match(raw_text) and not m:
         return True
 
     combined_rules = frozenset(registrar_substrings or ()) | KNOWN_THIRD_PARTY_HUB_SUBSTRINGS
-    check_target = norm_text or normalize_mailing_address_coarse(raw_text) or raw_text.upper()
+    check_target = norm_text or normalize_mailing_address_coarse(effective_raw) or effective_raw.upper()
     if not _HAS_STREET_OR_POBOX_RE.search(check_target):
         return True
     if is_registrar_address(check_target, combined_rules):

@@ -260,9 +260,12 @@ def ensure_nationwide_parent_tables(conn) -> None:
                 business_city         TEXT,
                 business_state        TEXT,
                 business_zip          TEXT,
+                source_tag            TEXT,
                 created_at            TIMESTAMP DEFAULT NOW(),
                 PRIMARY KEY (jurisdiction, contact_id)
             ) PARTITION BY LIST (jurisdiction);
+
+            ALTER TABLE us_hpd_contacts ADD COLUMN IF NOT EXISTS source_tag TEXT;
 
             CREATE TABLE IF NOT EXISTS us_bbl_stats (
                 jurisdiction           TEXT NOT NULL,
@@ -273,6 +276,7 @@ def ensure_nationwide_parent_tables(conn) -> None:
                 violations_class_b     INTEGER DEFAULT 0,
                 violations_class_a     INTEGER DEFAULT 0,
                 violations_open_c      INTEGER DEFAULT 0,
+                violations_last_365d   INTEGER DEFAULT 0,
                 last_violation_date    DATE,
                 litigations_total      INTEGER DEFAULT 0,
                 litigations_open       INTEGER DEFAULT 0,
@@ -288,6 +292,8 @@ def ensure_nationwide_parent_tables(conn) -> None:
                 nhpd_expiration        DATE,
                 PRIMARY KEY (jurisdiction, bbl)
             ) PARTITION BY LIST (jurisdiction);
+
+            ALTER TABLE us_bbl_stats ADD COLUMN IF NOT EXISTS violations_last_365d INTEGER DEFAULT 0;
             """
         )
     conn.commit()

@@ -5,9 +5,13 @@ import re
 import psycopg2
 import requests
 from psycopg2.extras import RealDictCursor, execute_values
+from api.linking_rules import get_learned_placeholder_owners
 from api.shared_utils import (
     US_STATE_CODES,
+    canonicalize_person_name,
+    compose_address,
     extract_owner_family_key,
+    extract_postal_street_zip_key,
     get_email_match_key,
     is_excluded_third_party_address,
     is_excluded_third_party_entity,
@@ -16,7 +20,9 @@ from api.shared_utils import (
     looks_like_business_name,
     looks_like_person_owner,
     normalize_business_name,
+    normalize_mailing_address,
     normalize_mailing_address_coarse,
+    normalize_person_name,
     strip_benign_care_of_prefix,
 )
 
@@ -32,14 +38,34 @@ GENERIC_OWNER_NAMES = {
     "UNKNOWN HEIRS",
     "UNKNOWN HEIRS OF",
     "CURRENT OWNER",
+    "CURRENT OWNER OF",
+    "CURRENT OWNER OF RECORD",
+    "OWNER OF RECORD",
+    "RECORD OWNER",
+    "PRESENT OWNER",
     "OCCUPANT",
     "RESIDENT",
     "CURRENT RESIDENT",
     "REFERENCE ONLY",
     "NO INFORMATION PROVIDED",
+    "NOT PROVIDED",
+    "NAME NOT PROVIDED",
     "NOT AVAILABLE",
+    "OWNER NOT AVAILABLE",
     "UNAVAILABLE",
+    "UNAVAILABLE OWNER",
+    "UNAVAILABLE OWNERS",
+    "OWNER UNAVAILABLE",
+    "OWNERS UNAVAILABLE",
     "NAME NOT AVAILABLE",
+    "NAME NOT ON FILE",
+    "OWNER NOT ON FILE",
+    "OWNER NAME NOT ON FILE",
+    "NO OWNER ON FILE",
+    "NO NAME ON FILE",
+    "OWNER NOT LISTED",
+    "NO OWNER LISTED",
+    "NOT LISTED",
     "NAME WITHHELD",
     "WITHHELD",
     "REDACTED",
@@ -82,7 +108,7 @@ GENERIC_OWNER_NAMES = {
 }
 
 _GENERIC_OWNER_PREFIX_RE = re.compile(
-    r"^(?:TAXPAYER\s+OF(?:\b|F\b)|TAX\s+PAYER\s+OF\b|EXEMPT\s+(?:STATUS|PROPERTY)\b|CONDO\s+(?:MASTER|MAIN)\b)",
+    r"^(?:TAXPAYER\s+OF(?:\b|F\b)|TAX\s+PAYER\s+OF\b|EXEMPT\s+(?:STATUS|PROPERTY)\b|CONDO\s+(?:MASTER|MAIN)\b|CA\s+GOV\s+CODE\s+7928)",
     re.IGNORECASE,
 )
 
@@ -90,14 +116,22 @@ _JOINT_OWNER_SPLIT_RE = re.compile(r"(?:\s*[&,;/+]\s*|\s+AND\s+)", re.IGNORECASE
 
 
 def _is_single_generic_owner_token(part: str) -> bool:
-    n = normalize_owner_name(part)
-    if not n or n in GENERIC_OWNER_NAMES:
+    cleaned_part = re.sub(r"[*#_~-]+", " ", str(part or "")).strip()
+    n = normalize_owner_name(cleaned_part)
+    if not n or n in GENERIC_OWNER_NAMES or n in get_learned_placeholder_owners():
         return True
     if _GENERIC_OWNER_PREFIX_RE.match(n):
         return True
     # Handle repeated space-joined redaction tokens like "NOT AVAILABLE NOT AVAILABLE"
     for phrase in (
+        "UNAVAILABLE OWNER",
+        "OWNER UNAVAILABLE",
+        "NAME NOT ON FILE",
+        "OWNER NOT ON FILE",
+        "OWNER OF RECORD",
+        "CURRENT OWNER",
         "NOT AVAILABLE",
+        "NOT ON FILE",
         "CONFIDENTIAL OWNER",
         "PRIVATE OWNER",
         "UNKNOWN OWNER",
@@ -161,26 +195,56 @@ PUBLIC_ADDRESS_KEYWORDS = [
     "2 WOODWARD AVE", "500 GRISWOLD", "111 NW 1ST ST", "111 NW 1 ST",
 ]
 
-MAIL_LINK_MAX_DISTINCT_OWNERS = {
-    # Maximum distinct owner families allowed to link via a single fine mailing address.
-    # Tightened from 25 -> 10 (plus coarse-building <= 12 and PO Box <= 4) so registered
-    # agents, mortgage servicers, CPA/law offices, and UPS Store maildrops never bridge
-    # unrelated landlords, while preserving numbered SFR/developer series (FKH, IH, Excel).
-    "dc": 10,
-    "baltimore": 10,
-    "boston": 10,
-    "detroit": 10,
-    "philadelphia": 10,
-    "chicago": 10,
-    "miami": 10,
-    "minneapolis": 10,
-    "ma": 10,
+# CT-parity smart building-vs.-suite & structural dispersion constants (zero artificial owner-count quotas):
+MULTI_UNIT_BUILDING_MIN_DISTINCT_UNITS = 3
+DIVERGENT_EXTERNAL_HQ_MIN_FAMILIES = 5
+DIVERGENT_EXTERNAL_HQ_MIN_DISTINCT_ADDRS = 4
+MULTI_HQ_CHAIN_MIN_BUILDINGS = 150
+MULTI_HQ_CHAIN_MIN_ANCHOR_HQS = 4
+MULTI_HQ_CHAIN_MIN_PARCELS_PER_HQ = 10
+MULTI_HQ_CHAIN_MAX_DOMINANT_HQ_SHARE = 0.45
+
+_CITY_DEFAULT_STATE = {
+    "dc": "DC",
+    "baltimore": "MD",
+    "boston": "MA",
+    "detroit": "MI",
+    "philadelphia": "PA",
+    "chicago": "IL",
+    "miami": "FL",
+    "minneapolis": "MN",
+    "nyc": "NY",
 }
 
-MAIL_LINK_MAX_COARSE_BUILDING_FAMILIES = 12
-PO_BOX_MAX_OWNER_FAMILIES = 4
-MEGANET_SPLIT_MIN_BUILDINGS = 150
-MEGANET_SPLIT_MAX_OWNER_FAMILIES = 30
+_LAW_CARE_OF_RE = re.compile(
+    r"\bC\s*/?\s*O\b.*\b(?:LAW\b|ESQ\b|ESQUIRE\b|ATTORNEYS?\b|C\.?P\.?A\.?\b|ACCOUNTING\b|ACCOUNTANTS?\b)|GREENE\s+LAW",
+    re.IGNORECASE,
+)
+_LAW_OFFICE_ADDR_RE = re.compile(
+    r"\bLAW\s+(?:PC|P\.C\.|PLLC|FIRM|OFFICES?|GROUP)\b|\bATTORNEYS?\s+AT\s+LAW\b",
+    re.IGNORECASE,
+)
+_PERSON_ROLE_SUFFIX_RE = re.compile(
+    r"\b(?:TRUSTEES?|TRST|TTES?|TRS|TS|TT|TR|LE|JR|SR|II|III|IV|ESQ|ESQUIRE|MD|PHD|CPA)\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_person_middle_initial(raw_person_name: str) -> str:
+    if not raw_person_name:
+        return ""
+    s = str(raw_person_name).upper().strip()
+    if "," in s:
+        last_part, rest = s.split(",", 1)
+        s = f"{rest.strip()} {last_part.strip()}"
+    if " & " in s or " AND " in s or " / " in s or "+" in s:
+        s = re.split(r"\s*(?:&|\+|/|\bAND\b)\s*", s, maxsplit=1)[0]
+    s = re.sub(r"[,.'`\"-]", " ", s)
+    s = _PERSON_ROLE_SUFFIX_RE.sub(" ", s)
+    tokens = [t for t in s.split() if t]
+    if len(tokens) == 3 and len(tokens[1]) == 1 and tokens[1].isalpha():
+        return tokens[1]
+    return ""
 
 _MIAMI_COORD_TRANSFORMER = None
 
@@ -300,8 +364,13 @@ def is_public_or_generic_address(address_norm: str, registrar_substrings: tuple 
         return True
     return False
 
+def mailing_link_enabled(city: str) -> bool:
+    return (city or "").strip().lower() != "nyc"
+
+
 def mailing_link_owner_limit(city: str) -> int:
-    return MAIL_LINK_MAX_DISTINCT_OWNERS.get((city or "").lower(), 25)
+    # Backwards-compatible helper: 0 disables direct mail linking (NYC); positive enables quota-free structural linking.
+    return 0 if not mailing_link_enabled(city) else 100_000
 
 def create_tables(conn, target_cities=None):
     if target_cities is None:
@@ -1503,40 +1572,228 @@ def run_union_find_clustering(properties, city, registrar_substrings: tuple = ()
         return get_email_match_key(email, {}) is None
 
     # Pre-pass: normalize all fields (needed by save_city_data for all parcels),
-    # detect data-driven 3rd-party/servicer mailing addresses used by >=2 excluded
-    # bank/trustee/government parcels, and filter out excluded 3rd-party entities
-    # so they never form or contaminate landlord networks.
+    # detect data-driven 3rd-party/servicer/law-office mailing addresses, detect
+    # multi-owner condo residential buildings, unify neighborhood/ZIP aliases of the
+    # same physical building ('39 BRIGHTON AVE ALLSTON MA 02134' <-> 'BOSTON MA 02134'),
+    # preserve suite-level separation at >=3-unit office/PMB buildings (CT parity),
+    # and apply quota-free structural divergence guards instead of arbitrary LLC caps.
+    _street_sig_re = re.compile(
+        r"^\s*(\d+[A-Z0-9-]*)\s+(?:(?:NORTH|SOUTH|EAST|WEST|[NSEW]{1,2})\b\.?\s+)?([A-Z0-9]{2,})",
+        re.IGNORECASE,
+    )
+    _has_state_or_zip_tail_re = re.compile(
+        r"(?:\b[A-Z]{2}\s+\d{5}(?:-\d{4})?\s*$|\b[A-Z]{2}\s*$|\b\d{5}(?:-\d{4})?\s*$)",
+        re.IGNORECASE,
+    )
+    city_l = (city or "").strip().lower()
+    state_hint = city_l.upper() if city_l.upper() in US_STATE_CODES else _CITY_DEFAULT_STATE.get(city_l, "")
+
     excluded_coarse_addr_counts = {}
+    law_tainted_coarse_addrs = set()
+    onsite_condo_families = {}
+    person_coarse_mails = {}
+    person_nomail_geos = {}
+    person_distinct_mids = {}
+    entity_mail_counts = {}
+    zip_key_coarse_counts = {}
     eligible_properties = []
     excluded_entity_parcels = 0
+
     for p in all_valid_properties:
         raw_owner = (p.get('owner_name') or '').strip()
         owner = normalize_owner_name(raw_owner or p.get('owner_name_norm'))
         raw_mail = p.get('mailing_address') or ''
         clean_mail = strip_benign_care_of_prefix(raw_mail)
-        mail = normalize_link_address(clean_mail)
-        coarse_mail = normalize_mailing_address_coarse(clean_mail)
+        # When an assessor omits city/state/zip on an in-town tax-bill street address,
+        # compose with the parcel's municipality + state so it matches full addresses.
+        composed_mail = clean_mail
+        if (
+            clean_mail
+            and state_hint
+            and not _has_state_or_zip_tail_re.search(clean_mail)
+            and _street_sig_re.match(clean_mail)
+        ):
+            p_boro_raw = (p.get('borough') or '').strip()
+            if p_boro_raw and not p_boro_raw.upper().startswith("WARD ") and not p_boro_raw.isdigit():
+                muni_clean = p_boro_raw.split("(")[0].strip()
+                if muni_clean:
+                    composed_mail = compose_address(clean_mail, muni_clean, state_hint, None)
+
+        mail = normalize_link_address(composed_mail)
+        coarse_mail = normalize_mailing_address_coarse(composed_mail)
+        zip_key = extract_postal_street_zip_key(composed_mail)
+        fine_full = normalize_mailing_address(composed_mail)
+        fine_no_zip = re.sub(r"\s+\d{5}\b\s*$", "", fine_full).strip() if fine_full else ""
+        fine_no_zip = re.sub(r"\b(\d+)(?:ST|ND|RD|TH)\b", r"\1", fine_no_zip)
+        unit_tokens = tuple(re.findall(r"#\s*([A-Z0-9][A-Z0-9-]*)", fine_no_zip))
+
         email = (p.get('email') or p.get('owner_email') or '').strip().lower()
         p['owner_name_norm'] = owner
         p['mailing_address_norm'] = mail
         p['_coarse_mail'] = coarse_mail
+        p['_zip_key'] = zip_key
+        p['_unit_tokens'] = unit_tokens
         p['owner_email_norm'] = email
+
+        if raw_mail and (_LAW_CARE_OF_RE.search(raw_mail) or _LAW_OFFICE_ADDR_RE.search(raw_mail)):
+            if coarse_mail:
+                law_tainted_coarse_addrs.add(coarse_mail)
+            stripped_law = re.sub(r"\bC\s*/?\s*O\b[^,\d]*", " ", raw_mail, flags=re.IGNORECASE)
+            c_law = normalize_mailing_address_coarse(stripped_law)
+            if c_law:
+                law_tainted_coarse_addrs.add(c_law)
 
         if is_public_entity(raw_owner) or is_public_entity(owner):
             excluded_entity_parcels += 1
             if coarse_mail:
                 excluded_coarse_addr_counts[coarse_mail] = excluded_coarse_addr_counts.get(coarse_mail, 0) + 1
             continue
+
+        if zip_key and coarse_mail:
+            zk_map = zip_key_coarse_counts.setdefault(zip_key, {})
+            zk_map[coarse_mail] = zk_map.get(coarse_mail, 0) + 1
+
+        is_person = looks_like_person_owner(raw_owner)
+        p['_is_person'] = is_person
+        canon_person = canonicalize_person_name(raw_owner) if is_person else ""
+        mid_init = _extract_person_middle_initial(raw_owner) if is_person else ""
+        p['_canon_person'] = canon_person
+        p['_mid_init'] = mid_init
+
+        family = (canon_person if is_person else extract_owner_family_key(raw_owner)) or owner
+        p['_family_key'] = family
+        if is_person and canon_person:
+            if mid_init:
+                person_distinct_mids.setdefault(canon_person, set()).add(mid_init)
+            if coarse_mail:
+                person_coarse_mails.setdefault(canon_person, set()).add(coarse_mail)
+            else:
+                geo_tok = f"{(p.get('borough') or '').strip().upper()}:{(p.get('zip_code') or '')[:5]}"
+                person_nomail_geos.setdefault(canon_person, set()).add(geo_tok)
+        elif not is_person and owner and coarse_mail:
+            mc = entity_mail_counts.setdefault(owner, {})
+            mc[coarse_mail] = mc.get(coarse_mail, 0) + 1
+
+        if coarse_mail and family:
+            m_site = _street_sig_re.match(str(p.get('address') or '').upper())
+            m_mail = _street_sig_re.match(coarse_mail)
+            if m_site and m_mail and m_site.group(1) == m_mail.group(1) and m_site.group(2)[:5] == m_mail.group(2)[:5]:
+                p_zip = str(p.get('zip_code') or '').strip()[:5]
+                p_boro = str(p.get('borough') or '').strip().upper()
+                if (p_zip and p_zip in raw_mail) or (p_boro and len(p_boro) >= 4 and p_boro in coarse_mail):
+                    onsite_condo_families.setdefault(coarse_mail, set()).add(family)
+
         eligible_properties.append(p)
 
-    contaminated_coarse_addrs = {
-        caddr for caddr, cnt in excluded_coarse_addr_counts.items() if cnt >= 2
+    # Map neighborhood aliases sharing an identical `(coarse_street, zip5)` key
+    # (e.g. '39 BRIGHTON AVENUE ALLSTON MA' and '39 BRIGHTON AVENUE BOSTON MA' in '02134')
+    # onto a single canonical `building_key`.
+    coarse_to_building_key = {}
+    for zk, cmap in zip_key_coarse_counts.items():
+        if len(cmap) == 1:
+            only_c = next(iter(cmap))
+            coarse_to_building_key[only_c] = only_c
+        else:
+            canon_c = max(cmap.items(), key=lambda kv: (kv[1], len(kv[0]), kv[0]))[0]
+            for c_variant in cmap:
+                coarse_to_building_key[c_variant] = canon_c
+
+    contaminated_coarse_addrs = (
+        {caddr for caddr, cnt in excluded_coarse_addr_counts.items() if cnt >= 2}
+        | {caddr for caddr, fams in onsite_condo_families.items() if len(fams) >= 5}
+        | law_tainted_coarse_addrs
+    )
+    contaminated_building_keys = {
+        coarse_to_building_key.get(c, c)
+        for c in (contaminated_coarse_addrs | ra_addrs)
     }
+
+    outlier_entity_building_pairs = set()
+    for ent_owner, mcounts in entity_mail_counts.items():
+        bcounts = {}
+        for caddr, cnt in mcounts.items():
+            bkey = coarse_to_building_key.get(caddr, caddr)
+            bcounts[bkey] = bcounts.get(bkey, 0) + cnt
+        total_mailed = sum(bcounts.values())
+        if total_mailed < 15:
+            continue
+        top_cnt = max(bcounts.values())
+        if top_cnt < 10:
+            continue
+        for bkey, cnt in bcounts.items():
+            if cnt <= 2 and (cnt / total_mailed) < 0.10:
+                outlier_entity_building_pairs.add((ent_owner, bkey))
+
     if excluded_entity_parcels:
         print(
             f"  Excluded {excluded_entity_parcels} 3rd-party/institutional parcel(s) and "
-            f"{len(contaminated_coarse_addrs)} shared servicer/institutional mail hub(s) for {city}."
+            f"{len(contaminated_building_keys)} shared servicer/law/RA/condo mail hub(s) for {city}."
         )
+
+    # Inspect building unit-token diversity (CT parity: >=3 distinct #units -> suite-level only;
+    # <3 distinct #units -> building-level) and per-family primary building footprints.
+    building_distinct_units = {}
+    family_building_parcel_counts = {}
+    usable_mail_records = []
+
+    for p in eligible_properties:
+        bbl = p['bbl']
+        owner = p['owner_name_norm']
+        is_person = bool(p.get('_is_person'))
+        canon_person = p.get('_canon_person') or ''
+        mid_init = p.get('_mid_init') or ''
+        family = p.get('_family_key') or owner
+        raw_mail = p.get('mailing_address') or ''
+        mail = p['mailing_address_norm']
+        coarse_mail = p.get('_coarse_mail') or ''
+        bkey = coarse_to_building_key.get(coarse_mail, coarse_mail) if coarse_mail else ''
+        p['_building_key'] = bkey
+
+        owner_link_key = canon_person if (is_person and canon_person) else owner
+        if is_person and canon_person:
+            # Separate conflicting middle initials ('JOHN A SMITH' vs 'JOHN B SMITH') only when
+            # multiple distinct middle initials appear for that canonical person name.
+            if mid_init and len(person_distinct_mids.get(canon_person) or ()) >= 2:
+                owner_link_key = f"{canon_person}||MID:{mid_init}"
+            n_toks = len(canon_person.split())
+            max_person_addrs = 7 if n_toks >= 3 else 3
+            distinct_addrs = len({coarse_to_building_key.get(c, c) for c in (person_coarse_mails.get(canon_person) or ())})
+            distinct_nomail_geos = len(person_nomail_geos.get(canon_person) or ())
+            if distinct_addrs > max_person_addrs or (not bkey and (distinct_nomail_geos >= 3 or distinct_addrs >= 2)):
+                scope_tok = bkey or f"GEO:{(p.get('borough') or '').strip().upper()}:{(p.get('zip_code') or '')[:5]}"
+                owner_link_key = f"{owner_link_key}||{scope_tok}"
+        p['_owner_link_key'] = owner_link_key
+
+        if (
+            mail
+            and len(mail) > 6
+            and bkey
+            and bkey not in contaminated_building_keys
+            and coarse_mail not in contaminated_coarse_addrs
+            and coarse_mail not in ra_addrs
+            and (owner, bkey) not in outlier_entity_building_pairs
+            and not is_public_or_generic_address(mail, registrar_substrings, raw_address=raw_mail)
+        ):
+            utoks = p.get('_unit_tokens') or ()
+            if utoks and not bkey.startswith("PO BOX "):
+                building_distinct_units.setdefault(bkey, set()).add(utoks)
+            if family:
+                fbc = family_building_parcel_counts.setdefault(family, {})
+                fbc[bkey] = fbc.get(bkey, 0) + 1
+            usable_mail_records.append((bbl, bkey, utoks, family))
+
+    multi_unit_buildings = {
+        bkey for bkey, units in building_distinct_units.items()
+        if len(units) >= MULTI_UNIT_BUILDING_MIN_DISTINCT_UNITS
+    }
+
+    # Determine each owner family's dominant mailing building so we can structurally detect
+    # 3rd-party property-management / tax-billing / lockbox hubs where >=5 independent families
+    # maintain >=4 mutually distinct primary HQs elsewhere (zero hard family-count quota!).
+    family_primary_bkey = {}
+    for fam, bcounts in family_building_parcel_counts.items():
+        top_b, top_cnt = max(bcounts.items(), key=lambda kv: (kv[1], kv[0]))
+        family_primary_bkey[fam] = (top_b, top_cnt)
 
     parent = {p['bbl']: p['bbl'] for p in eligible_properties}
 
@@ -1557,37 +1814,30 @@ def run_union_find_clustering(properties, city, registrar_substrings: tuple = ()
             parent[root_x] = root_y
 
     by_owner = {}
-    by_mail = {}
     by_email = {}
-    mail_families = {}
-    mail_to_coarse = {}
-    coarse_families = {}
-
     for p in eligible_properties:
         bbl = p['bbl']
-        raw_owner = p.get('owner_name') or ''
-        owner = p['owner_name_norm']
-        family = extract_owner_family_key(raw_owner) or owner
-        raw_mail = p.get('mailing_address') or ''
-        mail = p['mailing_address_norm']
-        coarse_mail = p.get('_coarse_mail') or ''
+        okey = p.get('_owner_link_key')
         email = p['owner_email_norm']
-
-        if owner:
-            by_owner.setdefault(owner, []).append(bbl)
-        if (
-            mail
-            and len(mail) > 6
-            and (not coarse_mail or (coarse_mail not in contaminated_coarse_addrs and coarse_mail not in ra_addrs))
-            and not is_public_or_generic_address(mail, registrar_substrings, raw_address=raw_mail)
-        ):
-            by_mail.setdefault(mail, []).append(bbl)
-            mail_families.setdefault(mail, set()).add(family)
-            if coarse_mail:
-                mail_to_coarse[mail] = coarse_mail
-                coarse_families.setdefault(coarse_mail, set()).add(family)
+        if okey:
+            by_owner.setdefault(okey, []).append(bbl)
         if email and not is_generic_email(email):
             by_email.setdefault(email, []).append(bbl)
+
+    by_addr_key = {}
+    addr_key_to_bkey = {}
+    addr_key_families = {}
+    for bbl, bkey, utoks, family in usable_mail_records:
+        if bkey in multi_unit_buildings:
+            if not utoks:
+                continue
+            akey = f"{bkey}||UNIT:{'-'.join(utoks)}"
+        else:
+            akey = bkey
+        by_addr_key.setdefault(akey, []).append(bbl)
+        addr_key_to_bkey[akey] = bkey
+        if family:
+            addr_key_families.setdefault(akey, set()).add(family)
 
     for owner, bbls in by_owner.items():
         first = bbls[0]
@@ -1595,21 +1845,40 @@ def run_union_find_clustering(properties, city, registrar_substrings: tuple = ()
             union(first, other)
 
     skipped_mail_links = 0
-    owner_limit = mailing_link_owner_limit(city)
-    for mail, bbls in by_mail.items():
-        if owner_limit <= 0:
+    allow_mail = mailing_link_enabled(city)
+    accepted_addr_keys = set()
+    for akey, bbls in by_addr_key.items():
+        if not allow_mail:
             skipped_mail_links += 1
             continue
-        is_po_box = mail.startswith("PO BOX ")
-        has_dedicated_suite = ("#" in mail) and not is_po_box
-        max_fine = PO_BOX_MAX_OWNER_FAMILIES if is_po_box else (30 if has_dedicated_suite else owner_limit)
-        max_coarse = 30 if has_dedicated_suite else MAIL_LINK_MAX_COARSE_BUILDING_FAMILIES
-        distinct_family_count = len(mail_families.get(mail) or ())
-        coarse_key = mail_to_coarse.get(mail)
-        coarse_family_count = len(coarse_families.get(coarse_key) or ()) if coarse_key else distinct_family_count
-        if distinct_family_count > max_fine or coarse_family_count > max_coarse:
-            skipped_mail_links += 1
-            continue
+        bkey = addr_key_to_bkey[akey]
+        fams = addr_key_families.get(akey) or set()
+        if len(fams) >= DIVERGENT_EXTERNAL_HQ_MIN_FAMILIES:
+            divergent_primaries = set()
+            divergent_fams = 0
+            for fam in fams:
+                prim_b, prim_cnt = family_primary_bkey.get(fam, (bkey, 0))
+                here_cnt = (family_building_parcel_counts.get(fam) or {}).get(bkey, 0)
+                if prim_b != bkey and (prim_cnt >= 2 and prim_cnt > here_cnt):
+                    divergent_fams += 1
+                    divergent_primaries.add(prim_b)
+            if (
+                divergent_fams >= DIVERGENT_EXTERNAL_HQ_MIN_FAMILIES
+                and len(divergent_primaries) >= DIVERGENT_EXTERNAL_HQ_MIN_DISTINCT_ADDRS
+            ):
+                skipped_mail_links += 1
+                continue
+        # Guard shared rural/commercial PO Boxes only when >=6 distinct families use a PO Box
+        # AND >=3 of them also use external street addresses (lockbox dispersion).
+        if bkey.startswith("PO BOX ") and len(fams) >= 6:
+            ext_fams = sum(
+                1 for fam in fams
+                if len(family_building_parcel_counts.get(fam) or ()) >= 2
+            )
+            if ext_fams >= 3:
+                skipped_mail_links += 1
+                continue
+        accepted_addr_keys.add(akey)
         first = bbls[0]
         for other in bbls[1:]:
             union(first, other)
@@ -1624,19 +1893,35 @@ def run_union_find_clustering(properties, city, registrar_substrings: tuple = ()
         bbl = p['bbl']
         pass1_groups.setdefault(find(bbl), []).append(p)
 
-    # Pass 2: Anti-meganet guard. If transitive shared-mail hubs chain >30 unrelated
-    # owner families into a >150-building cluster, re-cluster that component using
-    # direct owner-name and corporate-email signals only (dropping mail bridges).
+    # Pass 2: Quota-free Multi-HQ Chaining Guard.
+    # Single-HQ multi-LLC landlords (even with 500+ street-named LLCs at 39 Brighton Ave or
+    # 1 Washington Mall) concentrate around 1-2 executive HQs (top HQ share >> 45%) and are
+    # NEVER split. Only when a >150-building component chains together >=4 independent anchor
+    # HQs (>=10 parcels each, >=4 distinct families, top HQ <45% share) via weak cross-mail
+    # bridges do we sever minority (<15%-share) mail bridges while keeping each landlord's own HQ intact.
     groups = {}
     meganets_split = 0
     for root_bbl, comp_props in pass1_groups.items():
-        if len(comp_props) > MEGANET_SPLIT_MIN_BUILDINGS:
+        if len(comp_props) > MULTI_HQ_CHAIN_MIN_BUILDINGS:
             comp_fams = {
-                extract_owner_family_key(p.get('owner_name')) or p.get('owner_name_norm')
+                p.get('_family_key') or p.get('owner_name_norm')
                 for p in comp_props
-                if p.get('owner_name') or p.get('owner_name_norm')
+                if p.get('_family_key') or p.get('owner_name_norm')
             }
-            if len(comp_fams) > MEGANET_SPLIT_MAX_OWNER_FAMILIES:
+            hq_counts = {}
+            for p in comp_props:
+                bk = p.get('_building_key')
+                if bk and bk not in contaminated_building_keys:
+                    hq_counts[bk] = hq_counts.get(bk, 0) + 1
+            anchor_hqs = [
+                bk for bk, cnt in hq_counts.items() if cnt >= MULTI_HQ_CHAIN_MIN_PARCELS_PER_HQ
+            ]
+            top_hq_share = (max(hq_counts.values()) / len(comp_props)) if hq_counts else 1.0
+            if (
+                len(comp_fams) >= MULTI_HQ_CHAIN_MIN_ANCHOR_HQS
+                and len(anchor_hqs) >= MULTI_HQ_CHAIN_MIN_ANCHOR_HQS
+                and top_hq_share < MULTI_HQ_CHAIN_MAX_DOMINANT_HQ_SHARE
+            ):
                 meganets_split += 1
                 sub_parent = {p['bbl']: p['bbl'] for p in comp_props}
 
@@ -1653,16 +1938,28 @@ def run_union_find_clustering(properties, city, registrar_substrings: tuple = ()
 
                 sub_by_owner = {}
                 sub_by_email = {}
+                sub_by_primary_hq = {}
                 for p in comp_props:
                     b = p['bbl']
-                    if p.get('owner_name_norm'):
-                        sub_by_owner.setdefault(p['owner_name_norm'], []).append(b)
+                    okey = p.get('_owner_link_key') or p.get('owner_name_norm')
+                    if okey:
+                        sub_by_owner.setdefault(okey, []).append(b)
                     if p.get('owner_email_norm') and not is_generic_email(p['owner_email_norm']):
                         sub_by_email.setdefault(p['owner_email_norm'], []).append(b)
+                    # Preserve each family's own primary HQ (when non-multi-unit and accepted) while dropping weak cross-HQ bridges
+                    fam = p.get('_family_key') or ''
+                    bk = p.get('_building_key') or ''
+                    prim_b, _ = family_primary_bkey.get(fam, ('', 0))
+                    if bk and bk == prim_b and bk in accepted_addr_keys and bk not in multi_unit_buildings:
+                        sub_by_primary_hq.setdefault(bk, []).append(b)
+
                 for b_list in sub_by_owner.values():
                     for oth in b_list[1:]:
                         sub_union(b_list[0], oth)
                 for b_list in sub_by_email.values():
+                    for oth in b_list[1:]:
+                        sub_union(b_list[0], oth)
+                for b_list in sub_by_primary_hq.values():
                     for oth in b_list[1:]:
                         sub_union(b_list[0], oth)
                 for p in comp_props:
@@ -1671,9 +1968,9 @@ def run_union_find_clustering(properties, city, registrar_substrings: tuple = ()
         groups[root_bbl] = comp_props
 
     if skipped_mail_links:
-        print(f"  Skipped {skipped_mail_links} high-cardinality/building mailing-address linkers for {city}.")
+        print(f"  Skipped {skipped_mail_links} divergent/intermediary mailing-address hub(s) for {city}.")
     if meganets_split:
-        print(f"  Re-split {meganets_split} diffuse mail-chained mega-network(s) into direct-owner portfolios for {city}.")
+        print(f"  Unchained {meganets_split} multi-HQ mail-bridged component(s) into cohesive HQ portfolios for {city}.")
     print(f"  Discovered {len(groups)} unique private landlord networks for {city}.")
     return groups
 
@@ -2162,18 +2459,20 @@ def rebuild_city_networks_from_db(conn, city: str):
     )
 
     # Second-stage untangling over verified ACTIVE license/registration owner contacts
-    # with strict anti-managing-agent, anti-public-entity, and cluster-size caps.
-    MAX_CONTACT_CLUSTER_BBLS = 250
-    MAX_DISTINCT_OWNERS_PER_HUMAN = 12
+    # using canonicalized person names and structural HQ-cohesion checks (no artificial 12-LLC quota).
+    MAX_CONTACT_CLUSTER_BBLS = 5000
     if bbl_contact_humans or bbl_contact_addrs:
         bbl_to_root = {}
         root_to_props = {}
+        bbl_coarse_mail = {}
         for root_bbl, group in network_groups.items():
             dedup = {}
             for p in group:
                 if p.get("bbl") and p["bbl"] not in dedup:
                     dedup[p["bbl"]] = p
                     bbl_to_root[p["bbl"]] = root_bbl
+                    if p.get("_building_key") or p.get("_coarse_mail"):
+                        bbl_coarse_mail[p["bbl"]] = p.get("_building_key") or p.get("_coarse_mail")
             root_to_props[root_bbl] = list(dedup.values())
 
         parent_root = {r: r for r in root_to_props}
@@ -2201,22 +2500,33 @@ def rebuild_city_networks_from_db(conn, city: str):
             comp_size[ub] += comp_size[ua]
             return True
 
-        owner_limit = min(max(mailing_link_owner_limit(city), 1), MAX_DISTINCT_OWNERS_PER_HUMAN)
         human_to_bbls = {}
-        human_distinct_owners = {}
+        human_families = {}
+        human_hq_counts = {}
         for bbl, pairs in bbl_contact_humans.items():
             if bbl not in bbl_to_root:
                 continue
             prop_owner = prop_owner_by_bbl.get(bbl, "")
-            for h_norm, _ in pairs:
-                human_to_bbls.setdefault(h_norm, []).append(bbl)
-                if prop_owner:
-                    human_distinct_owners.setdefault(h_norm, set()).add(prop_owner)
+            prop_fam = extract_owner_family_key(prop_owner) or prop_owner
+            c_mail = bbl_coarse_mail.get(bbl) or ""
+            for h_norm, h_raw in pairs:
+                h_canon = canonicalize_person_name(h_raw or h_norm) or h_norm
+                human_to_bbls.setdefault(h_canon, []).append(bbl)
+                if prop_fam:
+                    human_families.setdefault(h_canon, set()).add(prop_fam)
+                if c_mail:
+                    hm = human_hq_counts.setdefault(h_canon, {})
+                    hm[c_mail] = hm.get(c_mail, 0) + 1
 
         contact_human_merges = 0
-        for h_norm, bbls in human_to_bbls.items():
-            if len(human_distinct_owners.get(h_norm, set())) > MAX_DISTINCT_OWNERS_PER_HUMAN:
-                continue
+        for h_canon, bbls in human_to_bbls.items():
+            fams = human_families.get(h_canon, set())
+            if len(fams) >= 8:
+                hm = human_hq_counts.get(h_canon) or {}
+                tot_m = sum(hm.values())
+                top2 = sum(sorted(hm.values(), reverse=True)[:2]) if hm else 0
+                if len(hm) >= 6 and (top2 / max(tot_m, 1)) < 0.30:
+                    continue
             roots = list({bbl_to_root[b] for b in bbls if b in bbl_to_root})
             if len(roots) >= 2:
                 anchor = roots[0]
@@ -2225,21 +2535,26 @@ def rebuild_city_networks_from_db(conn, city: str):
                         contact_human_merges += 1
 
         caddr_to_bbls = {}
-        caddr_distinct_owners = {}
+        caddr_families = {}
         for bbl, addrs in bbl_contact_addrs.items():
             if bbl not in bbl_to_root:
                 continue
             prop_owner = prop_owner_by_bbl.get(bbl, "")
+            prop_fam = extract_owner_family_key(prop_owner) or prop_owner
             for addr_norm in addrs:
                 caddr_to_bbls.setdefault(addr_norm, []).append(bbl)
-                if prop_owner:
-                    caddr_distinct_owners.setdefault(addr_norm, set()).add(prop_owner)
+                if prop_fam:
+                    caddr_families.setdefault(addr_norm, set()).add(prop_fam)
 
         contact_addr_merges = 0
-        if mailing_link_owner_limit(city) > 0:
+        if mailing_link_enabled(city):
             for addr_norm, bbls in caddr_to_bbls.items():
-                if len(caddr_distinct_owners.get(addr_norm, set())) > owner_limit:
-                    continue
+                fams = caddr_families.get(addr_norm, set())
+                if len(fams) >= 8:
+                    # Skip 3rd-party license billing offices where parcels mail tax bills to >=5 distinct HQs
+                    ext_mails = {bbl_coarse_mail.get(b) for b in bbls if bbl_coarse_mail.get(b)}
+                    if len(ext_mails) >= 5:
+                        continue
                 roots = list({bbl_to_root[b] for b in bbls if b in bbl_to_root})
                 if len(roots) >= 2:
                     anchor = roots[0]

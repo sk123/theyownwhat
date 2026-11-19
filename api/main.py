@@ -126,10 +126,11 @@ def _async_log_analytic(path: str, query_params: dict, headers: dict, client_ip:
         if not raw_city:
             path_parts = [p.upper() for p in path.strip("/").split("/")]
             city_map = {
-                "NYC": "NYC", "NY": "NYC", "DC": "DC", "WASHINGTON": "DC",
-                "BOSTON": "BOSTON", "BALTIMORE": "BALTIMORE", "DETROIT": "DETROIT",
-                "MINNEAPOLIS": "MINNEAPOLIS", "PHILADELPHIA": "PHILADELPHIA", "PHILLY": "PHILADELPHIA",
-                "CHICAGO": "CHICAGO", "MIAMI": "MIAMI", "NJ": "NJ"
+                "NYC": "NY", "NY": "NY", "DC": "DC", "WASHINGTON": "DC",
+                "BOSTON": "MA", "MA": "MA", "BALTIMORE": "BALTIMORE", "DETROIT": "DETROIT",
+                "MINNEAPOLIS": "MN", "MN": "MN", "PHILADELPHIA": "PHILADELPHIA", "PHILLY": "PHILADELPHIA",
+                "CHICAGO": "IL", "IL": "IL", "MIAMI": "FL", "FL": "FL", "NJ": "NJ",
+                "CA": "CA", "VA": "VA", "NC": "NC", "CO": "CO", "WI": "WI", "VT": "VT", "AR": "AR", "MT": "MT", "OH": "OH",
             }
             for part in path_parts:
                 if part in city_map:
@@ -1426,7 +1427,8 @@ def get_ai_analysis(entity_name: str, entity_type: str):
                 )
                 user_msg = f"Entity: {entity_name}\nSnippets:\n" + "\n".join(snippets)
 
-                model = genai.GenerativeModel('gemini-3.5-flash', system_instruction=system_prompt)
+                from api.gemini_models import get_cached_gemini_model
+                model = genai.GenerativeModel(get_cached_gemini_model(GEMINI_KEY, task="fast"), system_instruction=system_prompt)
                 resp = model.generate_content(
                     user_msg,
                     generation_config=genai.types.GenerationConfig(
@@ -4930,18 +4932,80 @@ STATEWIDE_PARCEL_PROVENANCE: Dict[str, Dict[str, Any]] = {
     },
     "FL": {
         "source_url": "https://geodata.floridagio.gov/datasets/FGIO::florida-statewide-cadastral/about",
-        "message": "FloridaGIO / Florida Dept. of Revenue (FDOR) Statewide Cadastral Parcels across all 67 counties (non-homestead residential, multifamily, condo, mixed-use, and mobile-home parks), linked to Florida Sunbiz & DBPR Ch. 509 apartment licenses.",
+        "message": (
+            "All 67 Florida counties unified: FDOR / FloridaGIO Statewide Cadastral Parcels fused with Miami-Dade Property Appraiser "
+            "(untruncated TRUE_OWNER1..3 & folios) and Hillsborough HCPA CAMA, linked to Florida Sunbiz / OpenCorporates (`us_fl`), "
+            "DBPR Ch. 509 apartment licenses, and Miami-Dade RER / Orlando / Gainesville code enforcement."
+        ),
         "sources": [
             {"source": "FloridaGIO / FDOR 67-County Statewide Cadastral Parcels", "url": "https://geodata.floridagio.gov/datasets/FGIO::florida-statewide-cadastral/about"},
+            {"source": "Miami-Dade Property Appraiser & Hillsborough HCPA Live CAMA", "url": "https://www.miamidade.gov/Apps/PA/propertysearch/"},
             {"source": "Florida Division of Corporations (Sunbiz) & OpenCorporates (us_fl)", "url": "https://dos.fl.gov/sunbiz/"},
         ],
     },
     "NY": {
         "source_url": "https://data.gis.ny.gov/datasets/sharegisny::nys-tax-parcels-public/about",
-        "message": "NYS ITS Geospatial Services / ORPTS Public Tax Parcels across 33 participating non-NYC counties, linked to NY Dept. of State corporate filings, Buffalo rental/code/Housing Court feeds, and OpenCorporates (us_ny).",
+        "message": (
+            "Unified 62-County New York Explorer: fuses all 5 NYC Boroughs (DOF PLUTO, HPD Registrations & Contacts, "
+            "HPD Open/Class-C Violations, Housing Litigations, Marshal Evictions & Rent Stabilization) with NYS ITS / ORPTS "
+            "Public Tax Parcels, Buffalo & Syracuse rental/code feeds, SDG ImageMate CAMA portals, and NY DOS / OpenCorporates (`us_ny`)."
+        ),
         "sources": [
-            {"source": "NYS GIS / ORPTS Public Tax Parcels (Non-NYC Participating Counties)", "url": "https://data.gis.ny.gov/datasets/sharegisny::nys-tax-parcels-public/about"},
+            {"source": "NYC DOF PLUTO, HPD Registrations/Contacts/Violations & Marshal Evictions (5 Boroughs)", "url": "https://opendata.cityofnewyork.us/"},
+            {"source": "NYS GIS / ORPTS Public Tax Parcels + County SDG ImageMate CAMA Portals", "url": "https://data.gis.ny.gov/datasets/sharegisny::nys-tax-parcels-public/about"},
             {"source": "NY Department of State Corporations & OpenCorporates (us_ny)", "url": "https://apps.dos.ny.gov/publicInquiry/"},
+        ],
+    },
+    "IL": {
+        "source_url": "https://datacatalog.cookcountyil.gov/Property-Taxation/Assessor-Parcel-Addresses/3723-97qp",
+        "message": (
+            "Illinois Statewide Explorer: unifies City of Chicago & all 130+ Cook County suburbs (1.67M improved PINs + CCAO "
+            "residential characteristics & mortgage-servicer swap) with DuPage County GIS CAMA, Chicago Dept. of Buildings "
+            "Violations (`22u3-xenr`), 102-county Devnet wEdge / Beacon CAMA portals, and IL SOS / OpenCorporates (`us_il`)."
+        ),
+        "sources": [
+            {"source": "Cook County Assessor Open Data (Parcel Addresses 3723-97qp, Values uzyt-m557, Characteristics x54s-btds)", "url": "https://datacatalog.cookcountyil.gov/"},
+            {"source": "DuPage County GIS Real Estate Parcels + Chicago Dept. of Buildings Violations (22u3-xenr)", "url": "https://data.cityofchicago.org/Buildings/Building-Violations/22u3-xenr"},
+            {"source": "Illinois Secretary of State Business Services & OpenCorporates (us_il)", "url": "https://apps.ilsos.gov/corporatellc/"},
+        ],
+    },
+    "CA": {
+        "source_url": "https://data.sfgov.org/Economy-and-Community/Registered-Business-Locations-San-Francisco/g8m3-pdis",
+        "message": (
+            "California 58-County Explorer: combines San Francisco & Los Angeles County improved assessment rolls with SF (`g8m3-pdis`) "
+            "& LA (`6rrh-rzua`) registered real-estate lessor businesses, SF DBI & LADBS code enforcement, SF & LAHD eviction notices, "
+            "NHPD subsidies, and 9.42M CA SOS / OpenCorporates (`us_ca`) entities & 31.96M Form LLC-12 managers/members. "
+            "Explicitly flags parcels where online county GIS strips deed owners under CA Gov. Code § 7928.205."
+        ),
+        "sources": [
+            {"source": "LA County Assessor GIS & San Francisco Secured Property Tax Roll (wv5m-vpq2)", "url": "https://portal.assessor.lacounty.gov/"},
+            {"source": "SF Registered Business Locations (g8m3-pdis) & LA Office of Finance Active Businesses (6rrh-rzua)", "url": "https://data.lacity.org/resource/6rrh-rzua"},
+            {"source": "CA Secretary of State BizFile & OpenCorporates (us_ca — 9.42M Entities / 31.96M Officers)", "url": "https://bizfileonline.sos.ca.gov/search/business"},
+        ],
+    },
+    "MT": {
+        "source_url": "https://svc.mt.gov/msl/mtcadastral/",
+        "message": "Montana State Library MSDI / Dept. of Revenue ORION Cadastral improved parcels (`TotalBuildingValue > 0`) across all 56 counties, linked to MT SOS & OpenCorporates (`us_mt`).",
+        "sources": [
+            {"source": "Montana MSDI / DOR ORION Statewide Cadastral Parcels (All 56 Counties)", "url": "https://svc.mt.gov/msl/mtcadastral/"},
+            {"source": "Montana Secretary of State Business Services & OpenCorporates (us_mt)", "url": "https://biz.sosmt.gov/search/business"},
+        ],
+    },
+    "MN": {
+        "source_url": "https://gis.hennepin.us/",
+        "message": "Unified Minnesota Explorer: fuses Hennepin County & Ramsey County (St. Paul) improved CAMA rolls with Minneapolis Active Rental Licenses, owner contacts, code enforcement, NHPD subsidies, and MN SOS / OpenCorporates (`us_mn`).",
+        "sources": [
+            {"source": "Hennepin County & Ramsey County (St. Paul) Attributed Tax Parcels", "url": "https://gis.hennepin.us/"},
+            {"source": "City of Minneapolis Active Rental Licenses & Code Enforcement", "url": "https://opendata.minneapolismn.gov/"},
+            {"source": "Minnesota Secretary of State Business Filings & OpenCorporates (us_mn)", "url": "https://mblsportal.sos.state.mn.us/"},
+        ],
+    },
+    "OH": {
+        "source_url": "https://myplace.cuyahogacounty.gov/",
+        "message": "Ohio Explorer: Cuyahoga County (Greater Cleveland) Fiscal Officer improved CAMA parcels (`certified_tax_building > 0`) with transfer dates & prices, linked to OH Secretary of State & OpenCorporates (`us_oh`).",
+        "sources": [
+            {"source": "Cuyahoga County Fiscal Officer / Auditor Tax Parcels & MyPlace CAMA", "url": "https://myplace.cuyahogacounty.gov/"},
+            {"source": "Ohio Secretary of State Business Search & OpenCorporates (us_oh)", "url": "https://businesssearch.ohiosos.gov/"},
         ],
     },
     "CO": {
@@ -5008,12 +5072,13 @@ def _calculate_completeness_matrix(conn):
         ma_muni_status_key = lambda t: f"MA_MUNI_{(t or '').strip().upper()}"
 
     with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        # Check active cities & statewide partitions (Boston is unified into MA)
+        # Check active cities & unified statewide partitions
+        # (Boston -> MA, NYC -> NY, Miami -> FL, Chicago -> IL, Minneapolis -> MN)
         active_cities = []
         for city in [
-            "nyc", "dc", "baltimore", "detroit", "philadelphia",
-            "chicago", "miami", "minneapolis", "nj",
-            "ma", "fl", "ny", "co", "vt", "wi", "nc", "ar", "va",
+            "dc", "baltimore", "detroit", "philadelphia", "nj",
+            "ma", "fl", "ny", "il", "ca", "mn", "mt", "oh",
+            "co", "vt", "wi", "nc", "ar", "va",
         ]:
             try:
                 cursor.execute("SELECT to_regclass(%s) IS NOT NULL AS exists", (f"public.{city}_properties",))
@@ -5026,9 +5091,14 @@ def _calculate_completeness_matrix(conn):
 
         union_subqueries = []
         for city in active_cities:
-            has_cama_cols = city in ("ma", "fl", "ny", "co", "vt", "wi", "nc", "ar", "va")
+            has_cama_cols = city in ("ma", "fl", "ny", "il", "ca", "mn", "mt", "oh", "co", "vt", "wi", "nc", "ar", "va")
             photos_expr = "COUNT(CASE WHEN building_photo_url IS NOT NULL THEN 1 END)" if has_cama_cols else "0"
             cama_expr = "COUNT(CASE WHEN cama_site_link IS NOT NULL THEN 1 END)" if has_cama_cols else "0"
+            owner_filter = (
+                "owner_name IS NOT NULL AND UPPER(owner_name) NOT LIKE 'CURRENT OWNER%' AND UPPER(owner_name) NOT LIKE 'CA GOV CODE 7928%'"
+                if city == "ca"
+                else "owner_name IS NOT NULL AND UPPER(owner_name) NOT LIKE 'CURRENT OWNER%'"
+            )
             union_subqueries.append(f"""
                 SELECT
                     '{city.upper()}' as town,
@@ -5036,7 +5106,7 @@ def _calculate_completeness_matrix(conn):
                     {photos_expr} as with_photos,
                     {cama_expr} as with_cama,
                     COUNT(CASE WHEN latitude IS NOT NULL THEN 1 END) as with_coords,
-                    COUNT(CASE WHEN owner_name IS NOT NULL AND UPPER(owner_name) NOT LIKE 'CURRENT OWNER%' THEN 1 END) as with_owner,
+                    COUNT(CASE WHEN {owner_filter} THEN 1 END) as with_owner,
                     COUNT(CASE WHEN year_built IS NOT NULL THEN 1 END) as with_year_built,
                     0 as with_living_area
                 FROM {city}_properties
@@ -5044,6 +5114,18 @@ def _calculate_completeness_matrix(conn):
 
         ct_prop_rows = _get_or_compute_ct_prop_stats(cursor)
         ma_muni_rows = _get_or_compute_ma_prop_stats(cursor) if "ma" in active_cities else []
+        state_county_caches: Dict[str, List[Dict[str, Any]]] = {}
+        for st_code, cache_key in (
+            ("FL", "fl_prop_stats:v1"),
+            ("NY", "ny_prop_stats:v1"),
+            ("IL", "il_prop_stats:v1"),
+            ("CA", "ca_prop_stats:v1"),
+        ):
+            if st_code.lower() in active_cities:
+                cursor.execute("SELECT value FROM kv_cache WHERE key = %s", (cache_key,))
+                crow = cursor.fetchone()
+                if crow and isinstance(crow.get("value"), list):
+                    state_county_caches[st_code] = crow["value"]
         conn.commit()
 
         city_prop_rows = []
@@ -5094,18 +5176,19 @@ def _calculate_completeness_matrix(conn):
              system_freshness[key] = r['last_refreshed_at'].isoformat() if r['last_refreshed_at'] else None
 
         city_dataset_prefixes = {
-            "NYC": ["NYC", "NY_DOS", "OC_US_NY"],
-            "NY": ["NY", "NY_DOS", "BUFFALO", "OC_US_NY"],
+            "NY": ["NY", "NYC", "NY_DOS", "BUFFALO", "SYRACUSE", "OC_US_NY"],
             "DC": ["DC", "OC_US_DC"],
             "BALTIMORE": ["BALTIMORE", "OC_US_MD"],
             "DETROIT": ["DETROIT", "OC_US_MI"],
             "PHILADELPHIA": ["PHILADELPHIA", "PA_DOS", "OC_US_PA"],
-            "CHICAGO": ["CHICAGO", "OC_US_IL"],
-            "MIAMI": ["MIAMI", "FL_SUNBIZ", "FL_DBPR", "OC_US_FL"],
-            "MINNEAPOLIS": ["MINNEAPOLIS", "OC_US_MN"],
             "NJ": ["NJ", "OC_US_NJ"],
             "MA": ["MA", "BOSTON", "OC_US_MA"],
-            "FL": ["FL", "FL_SUNBIZ", "FL_DBPR", "OC_US_FL"],
+            "FL": ["FL", "MIAMI", "FL_SUNBIZ", "FL_DBPR", "OC_US_FL"],
+            "IL": ["IL", "CHICAGO", "OC_US_IL"],
+            "CA": ["CA", "OC_US_CA"],
+            "MN": ["MN", "MINNEAPOLIS", "OC_US_MN"],
+            "MT": ["MT", "OC_US_MT"],
+            "OH": ["OH", "OC_US_OH"],
             "CO": ["CO", "DENVER", "OC_US_CO"],
             "VT": ["VT", "OC_US_VT"],
             "WI": ["WI", "OC_US_WI"],
@@ -5121,6 +5204,7 @@ def _calculate_completeness_matrix(conn):
                   source_name LIKE 'NYC%%'
                OR source_name = 'NY' OR source_name LIKE 'NY_%%'
                OR source_name LIKE 'BUFFALO_%%'
+               OR source_name LIKE 'SYRACUSE_%%'
                OR source_name LIKE 'DC%%'
                OR source_name LIKE 'BALTIMORE%%'
                OR source_name LIKE 'BOSTON%%'
@@ -5128,8 +5212,13 @@ def _calculate_completeness_matrix(conn):
                OR source_name LIKE 'PHILADELPHIA%%'
                OR source_name LIKE 'PA_DOS%%'
                OR source_name LIKE 'CHICAGO%%'
+               OR source_name = 'IL' OR source_name LIKE 'IL_%%'
                OR source_name LIKE 'MIAMI%%'
                OR source_name LIKE 'MINNEAPOLIS%%'
+               OR source_name = 'MN' OR source_name LIKE 'MN_%%'
+               OR source_name = 'CA' OR source_name LIKE 'CA_%%'
+               OR source_name = 'MT' OR source_name LIKE 'MT_%%'
+               OR source_name = 'OH' OR source_name LIKE 'OH_%%'
                OR source_name LIKE 'NJ%%'
                OR source_name = 'MA' OR source_name LIKE 'MA_%%'
                OR source_name = 'FL' OR source_name LIKE 'FL_%%'
@@ -5143,6 +5232,10 @@ def _calculate_completeness_matrix(conn):
                OR source_name LIKE 'OC_%%'
             )
             AND source_name NOT LIKE 'MA_MUNI_%%'
+            AND source_name NOT LIKE 'FL_COUNTY_%%'
+            AND source_name NOT LIKE 'NY_COUNTY_%%'
+            AND source_name NOT LIKE 'IL_COUNTY_%%'
+            AND source_name NOT LIKE 'CA_COUNTY_%%'
             ORDER BY source_name
         """)
         city_dataset_rows = cursor.fetchall()
@@ -5155,8 +5248,14 @@ def _calculate_completeness_matrix(conn):
                 prefix_base = source_name[: -len("_ENFORCEMENT")]
                 if f"{prefix_base}_CODE_ENFORCEMENT" in all_ds_names_upper:
                     continue
-            # Under unified MA, MA_NHPD_ENRICHMENT already covers all 351 towns including Boston
-            if source_name == "BOSTON_NHPD_ENRICHMENT" and "MA_NHPD_ENRICHMENT" in all_ds_names_upper:
+            # Under unified statewide explorers, skip legacy city NHPD rows when the statewide NHPD row exists
+            if (
+                (source_name == "BOSTON_NHPD_ENRICHMENT" and "MA_NHPD_ENRICHMENT" in all_ds_names_upper)
+                or (source_name == "MIAMI_NHPD_ENRICHMENT" and "FL_NHPD_ENRICHMENT" in all_ds_names_upper)
+                or (source_name == "NYC_NHPD_ENRICHMENT" and "NY_NHPD_ENRICHMENT" in all_ds_names_upper)
+                or (source_name == "CHICAGO_NHPD_ENRICHMENT" and "IL_NHPD_ENRICHMENT" in all_ds_names_upper)
+                or (source_name == "MINNEAPOLIS_NHPD_ENRICHMENT" and "MN_NHPD_ENRICHMENT" in all_ds_names_upper)
+            ):
                 continue
 
             matched_city_keys = [
@@ -5341,6 +5440,21 @@ def _calculate_completeness_matrix(conn):
             elif town_upper == "VA":
                 state = "VA"
                 portal_url = "https://vgin.vdem.virginia.gov/pages/parcels"
+            elif town_upper == "IL":
+                state = "IL"
+                portal_url = "https://datacatalog.cookcountyil.gov/Property-Taxation/Assessor-Parcel-Addresses/3723-97qp"
+            elif town_upper == "CA":
+                state = "CA"
+                portal_url = "https://portal.assessor.lacounty.gov/"
+            elif town_upper == "MN":
+                state = "MN"
+                portal_url = "https://gis.hennepin.us/"
+            elif town_upper == "MT":
+                state = "MT"
+                portal_url = "https://svc.mt.gov/msl/mtcadastral/"
+            elif town_upper == "OH":
+                state = "OH"
+                portal_url = "https://myplace.cuyahogacounty.gov/"
 
             sources.append({
                 "municipality": row['town'],
@@ -5351,7 +5465,10 @@ def _calculate_completeness_matrix(conn):
                 "portal_url": portal_url,
                 "state": state,
                 "type": "city" if state != "CT" else "state",
-                "is_state_overview": bool(town_upper == "MA" and ma_muni_rows),
+                "is_state_overview": bool(
+                    (town_upper == "MA" and ma_muni_rows)
+                    or (town_upper in state_county_caches and state_county_caches[town_upper])
+                ),
                 "datasets": city_datasets.get(town_upper, []) if state != "CT" else [],
                 "metrics": {
                     "photos": row['with_photos'],
@@ -5434,6 +5551,51 @@ def _calculate_completeness_matrix(conn):
                     "details": round((mrow.get("with_year_built", 0) / tot) * 100, 1) if tot else 0,
                 },
             })
+
+        # Append per-county completeness rows for unified FL (67), NY (62), IL (102), and CA (58)
+        for st_code, county_rows in state_county_caches.items():
+            parent_ds = ds_by_name.get(st_code, {})
+            parent_ref = parent_ds.get("last_refreshed_at")
+            for crow in county_rows:
+                cname = (crow.get("county") or crow.get("town") or "").strip().upper()
+                if not cname:
+                    continue
+                skey_clean = re.sub(r"[^A-Z0-9]+", "_", cname.replace(" COUNTY", "")).strip("_")
+                cds = ds_by_name.get(f"{st_code}_COUNTY_{skey_clean}", {})
+                cstatus = cds.get("refresh_status") or crow.get("refresh_status") or "unknown"
+                clast_ref = cds.get("last_refreshed_at") or parent_ref
+                cfreq = crow.get("frequency") or "Periodic"
+                cext = crow.get("max_sale_date") or cds.get("external_last_updated")
+                eff_str = clast_ref.strftime("%Y-%m-%d") if hasattr(clast_ref, "strftime") else str(clast_ref or "")[:10]
+                if cstatus == "success":
+                    csrc_date = f"{cfreq} ({cext or eff_str})" if (cext or eff_str) else cfreq
+                else:
+                    csrc_date = f"{cfreq} ({cstatus.replace('_', ' ').upper()})"
+                tot_c = int(crow.get("total_properties") or 0)
+                sources.append({
+                    "municipality": crow.get("town") or f"{cname} COUNTY",
+                    "status": cstatus,
+                    "last_updated": clast_ref,
+                    "source_date": csrc_date,
+                    "total_properties": tot_c,
+                    "portal_url": crow.get("portal_url"),
+                    "state": st_code,
+                    "type": "locality_row",
+                    "datasets": [],
+                    "metrics": {
+                        "photos": crow.get("with_photos", 0),
+                        "cama_links": crow.get("with_cama", 0),
+                        "coords": crow.get("with_coords", 0),
+                        "owner": crow.get("with_owner", 0),
+                        "details": crow.get("with_year_built", 0),
+                    },
+                    "percentages": {
+                        "photos": round((crow.get("with_photos", 0) / tot_c) * 100, 1) if tot_c else 0,
+                        "cama_links": round((crow.get("with_cama", 0) / tot_c) * 100, 1) if tot_c else 0,
+                        "coords": round((crow.get("with_coords", 0) / tot_c) * 100, 1) if tot_c else 0,
+                        "details": round((crow.get("with_year_built", 0) / tot_c) * 100, 1) if tot_c else 0,
+                    },
+                })
 
         # Return composite object (frontend must handle)
         return {
@@ -5545,28 +5707,36 @@ def get_reports(conn=Depends(get_db_connection)):
     return reports
 
 NON_CT_MONITOR_CITIES = {
-    "NYC": {"db_prefix": "nyc", "name": "New York City", "state": "NY"},
-    "NY": {"db_prefix": "nyc", "name": "New York City", "state": "NY"},
-    "NEW YORK CITY": {"db_prefix": "nyc", "name": "New York City", "state": "NY"},
-    "NYS": {"db_prefix": "ny", "name": "New York State", "state": "NY"},
-    "NEW YORK STATE": {"db_prefix": "ny", "name": "New York State", "state": "NY"},
+    "NYC": {"db_prefix": "ny", "name": "New York", "state": "NY"},
+    "NY": {"db_prefix": "ny", "name": "New York", "state": "NY"},
+    "NEW YORK CITY": {"db_prefix": "ny", "name": "New York", "state": "NY"},
+    "NYS": {"db_prefix": "ny", "name": "New York", "state": "NY"},
+    "NEW YORK STATE": {"db_prefix": "ny", "name": "New York", "state": "NY"},
     "DETROIT": {"db_prefix": "detroit", "name": "Detroit", "state": "MI"},
     "MI": {"db_prefix": "detroit", "name": "Detroit", "state": "MI"},
     "DC": {"db_prefix": "dc", "name": "Washington, D.C.", "state": "DC"},
     "BALTIMORE": {"db_prefix": "baltimore", "name": "Baltimore", "state": "MD"},
     "MD": {"db_prefix": "baltimore", "name": "Baltimore", "state": "MD"},
-    "BOSTON": {"db_prefix": "boston", "name": "Boston", "state": "MA"},
+    "BOSTON": {"db_prefix": "ma", "name": "Massachusetts", "state": "MA"},
     "MA": {"db_prefix": "ma", "name": "Massachusetts", "state": "MA"},
     "MASSACHUSETTS": {"db_prefix": "ma", "name": "Massachusetts", "state": "MA"},
     "PHILADELPHIA": {"db_prefix": "philadelphia", "name": "Philadelphia", "state": "PA"},
     "PA": {"db_prefix": "philadelphia", "name": "Philadelphia", "state": "PA"},
-    "CHICAGO": {"db_prefix": "chicago", "name": "Chicago", "state": "IL"},
-    "IL": {"db_prefix": "chicago", "name": "Chicago", "state": "IL"},
-    "MIAMI": {"db_prefix": "miami", "name": "Miami", "state": "FL"},
+    "CHICAGO": {"db_prefix": "il", "name": "Illinois", "state": "IL"},
+    "IL": {"db_prefix": "il", "name": "Illinois", "state": "IL"},
+    "ILLINOIS": {"db_prefix": "il", "name": "Illinois", "state": "IL"},
+    "MIAMI": {"db_prefix": "fl", "name": "Florida", "state": "FL"},
     "FL": {"db_prefix": "fl", "name": "Florida", "state": "FL"},
     "FLORIDA": {"db_prefix": "fl", "name": "Florida", "state": "FL"},
-    "MINNEAPOLIS": {"db_prefix": "minneapolis", "name": "Minneapolis", "state": "MN"},
-    "MN": {"db_prefix": "minneapolis", "name": "Minneapolis", "state": "MN"},
+    "MINNEAPOLIS": {"db_prefix": "mn", "name": "Minnesota", "state": "MN"},
+    "MN": {"db_prefix": "mn", "name": "Minnesota", "state": "MN"},
+    "MINNESOTA": {"db_prefix": "mn", "name": "Minnesota", "state": "MN"},
+    "CA": {"db_prefix": "ca", "name": "California", "state": "CA"},
+    "CALIFORNIA": {"db_prefix": "ca", "name": "California", "state": "CA"},
+    "MT": {"db_prefix": "mt", "name": "Montana", "state": "MT"},
+    "MONTANA": {"db_prefix": "mt", "name": "Montana", "state": "MT"},
+    "OH": {"db_prefix": "oh", "name": "Ohio", "state": "OH"},
+    "OHIO": {"db_prefix": "oh", "name": "Ohio", "state": "OH"},
     "NJ": {"db_prefix": "nj", "name": "New Jersey", "state": "NJ"},
     "NEW JERSEY": {"db_prefix": "nj", "name": "New Jersey", "state": "NJ"},
     "CO": {"db_prefix": "co", "name": "Colorado", "state": "CO"},
@@ -8098,7 +8268,8 @@ def _draft_ai_report_text(context: Dict[str, Any], length: Optional[str] = 'comp
     )
 
     try:
-        model = genai.GenerativeModel('gemini-3.5-flash', system_instruction="You are a meticulous investigative analyst.")
+        from api.gemini_models import get_cached_gemini_model
+        model = genai.GenerativeModel(get_cached_gemini_model(GEMINI_KEY, task="deep_audit"), system_instruction="You are a meticulous investigative analyst.")
         resp = model.generate_content(
             prompt,
             generation_config=genai.types.GenerationConfig(
@@ -8546,7 +8717,8 @@ def create_network_digest(req: NetworkDigestRequest, conn=Depends(get_db_connect
                 f"Web Search Data:\n{full_text_context}\n"
             )
             try:
-                model = genai.GenerativeModel('gemini-3.5-flash', system_instruction="You are a meticulous investigative analyst.")
+                from api.gemini_models import get_cached_gemini_model
+                model = genai.GenerativeModel(get_cached_gemini_model(GEMINI_KEY, task="deep_audit"), system_instruction="You are a meticulous investigative analyst.")
                 resp = model.generate_content(
                     prompt,
                     generation_config=genai.types.GenerationConfig(

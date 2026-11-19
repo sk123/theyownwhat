@@ -28,18 +28,19 @@ DAILY_TTL_SECONDS = 86400  # 24 hours
 MEMORY_CHECK_TTL_SECONDS = 15  # Re-check DB created_at every 15s so rebuilds appear immediately
 
 DATASET_KEY_TO_CITY_PREFIX = {
-    "NY": "nyc",
-    "NYS": "ny",
+    "NY": "ny",
     "DC": "dc",
     "BALTIMORE": "baltimore",
     "DETROIT": "detroit",
     "PHILADELPHIA": "philadelphia",
-    "CHICAGO": "chicago",
-    "MIAMI": "miami",
-    "MINNEAPOLIS": "minneapolis",
     "NJ": "nj",
     "MA": "ma",
     "FL": "fl",
+    "IL": "il",
+    "CA": "ca",
+    "MN": "mn",
+    "MT": "mt",
+    "OH": "oh",
     "CO": "co",
     "VT": "vt",
     "WI": "wi",
@@ -49,10 +50,10 @@ DATASET_KEY_TO_CITY_PREFIX = {
 }
 
 CODE_CASE_DATASET_KEYS = {
-    "CT", "NY", "MA", "DC", "DETROIT", "BALTIMORE", "PHILADELPHIA", "MINNEAPOLIS", "NYS",
+    "CT", "NY", "MA", "FL", "IL", "CA", "MN", "DC", "DETROIT", "BALTIMORE", "PHILADELPHIA",
 }
 EVICTION_DATASET_KEYS = {
-    "CT", "NY", "BALTIMORE", "NYS",
+    "CT", "NY", "CA", "BALTIMORE",
 }
 
 _LOCK = threading.Lock()

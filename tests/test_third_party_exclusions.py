@@ -284,6 +284,13 @@ class ThirdPartyExclusionTests(unittest.TestCase):
         for redacted in (
             "NOT AVAILABLE & NOT AVAILABLE",
             "Unavailable",
+            "Unavailable Owner",
+            "UNAVAILABLE OWNER",
+            "Name Not on File",
+            "NAME NOT ON FILE",
+            "** CONFIDENTIAL **",
+            "OWNER OF RECORD",
+            "CURRENT OWNER OF",
             "Confidential Owner & Confidential Owner",
             "Confidential Owner",
             "Private Owner & Private Owner",
@@ -440,6 +447,315 @@ class ThirdPartyExclusionTests(unittest.TestCase):
         self.assertEqual(MA_MUNICIPAL_DATA_SOURCES["SOMERVILLE"]["type"], "vision_appraisal")
         self.assertEqual(MA_MUNICIPAL_DATA_SOURCES["NEWTON"]["type"], "mapgeo")
         self.assertEqual(ma_muni_status_key("Watertown"), "MA_MUNI_WATERTOWN")
+
+    def test_false_positive_network_hardening_guards(self):
+        from api.oc_linker import cluster_with_oc_and_series
+        from ca.ca_county_config import ALL_58_CA_COUNTIES
+        from fl.fl_county_config import FL_COUNTY_CONFIG
+        from il.il_county_config import ALL_102_IL_COUNTIES
+        from ny.ny_county_config import ALL_62_NY_COUNTIES
+
+        # 1. Statewide county registries cover 100% of statutory counties
+        self.assertEqual(len(FL_COUNTY_CONFIG), 67)
+        self.assertEqual(len(ALL_62_NY_COUNTIES), 62)
+        self.assertEqual(len(ALL_102_IL_COUNTIES), 102)
+        self.assertEqual(len(ALL_58_CA_COUNTIES), 58)
+
+        # 2. Abbreviated special districts & NNN/RA/truncated-unit hubs excluded
+        self.assertTrue(is_excluded_third_party_entity("SCHOOL DIST # 65"))
+        self.assertTrue(is_excluded_third_party_entity("FIRE DIST # 3"))
+        for bad_hub in (
+            "% KFC #X975058, PO BOX 35370, LOUISVILLE, KY 40232",
+            "C/O WENDY'S PROPERTY TAX DEPT, 1 DAVE THOMAS BLVD, DUBLIN, OH 43017",
+            "%CVS/HEALTH #7570-02, 1 CVS DRIVE MC 2320, WOONSOCKET, RI 02895",
+            "405 2ND AVE S, MINNEAPOLIS, MN 55401",
+            "5511 STAPLES MILL RD, RICHMOND, VA 23228",
+            "1000 BRICKELL AVE STE 715, MIAMI, FL 33131",
+            "508 CENTRAL PK AVE (UNIT SCARSDALE NY 10583",
+        ):
+            with self.subTest(bad_hub=bad_hub):
+                self.assertTrue(is_excluded_third_party_address(bad_hub))
+
+        # 3. Institutional 1-parcel stale address outlier ('13510 MANGO BAY DR') never sucks
+        #    small buyer LLC ('BALCORP GROUP LLC') into a 20-home REIT SPV
+        reit_props = [
+            {
+                "bbl": f"fl-prog-{i}",
+                "address": f"{100 + i} PALM DR",
+                "borough": "HILLSBOROUGH",
+                "zip_code": "33579",
+                "owner_name": "PROGRESS RESIDENTIAL BORROWER 12 LLC",
+                "mailing_address": "PO BOX 31236, SALT LAKE CITY, UT 84131",
+            }
+            for i in range(18)
+        ]
+        reit_props.append({
+            "bbl": "fl-prog-stale",
+            "address": "12941 KINGS LAKE DR",
+            "borough": "HILLSBOROUGH",
+            "zip_code": "33579",
+            "owner_name": "PROGRESS RESIDENTIAL BORROWER 12 LLC",
+            "mailing_address": "13510 MANGO BAY DR, RIVERVIEW, FL 33579",
+        })
+        reit_props.append({
+            "bbl": "fl-balcorp-1",
+            "address": "2402 N ARMENIA AVE",
+            "borough": "HILLSBOROUGH",
+            "zip_code": "33607",
+            "owner_name": "BALCORP GROUP LLC",
+            "mailing_address": "13510 MANGO BAY DR, RIVERVIEW, FL 33579",
+        })
+        groups = run_union_find_clustering(reit_props, "fl")
+        cluster_sets = [frozenset(p["bbl"] for p in grp) for grp in groups.values()]
+        self.assertIn(frozenset({"fl-balcorp-1"}), cluster_sets)
+        self.assertEqual(len(groups), 2)
+
+        # 4. Natural-person homonyms across >=4 unrelated home addresses stay distinct,
+        #    AND >=5 owner-occupants in the same condo building never merge into 1 landlord
+        ny_props = [
+            {"bbl": f"ny-wei-{i}", "address": f"{10 + i} MAIN ST", "borough": f"COUNTY_{i}", "zip_code": f"1000{i}",
+             "owner_name": "LI, WEI", "mailing_address": f"{500 + i} OAK RD, TOWN{i}, NY 1000{i}"}
+            for i in range(5)
+        ]
+        ny_props.append({
+            "bbl": "ny-wei-pair", "address": "99 ELM ST", "borough": "COUNTY_0", "zip_code": "10000",
+            "owner_name": "LI, WEI", "mailing_address": "500 OAK RD, TOWN0, NY 10000",
+        })
+        for idx, u_owner in enumerate(("ANTIARIS MARGARET", "APEL ANATOLY", "BRAGIN BELLA", "CHOI NOAH", "FRIED IRENE")):
+            ny_props.append({
+                "bbl": f"ny-condo-{idx}",
+                "address": "508 CENTRAL PARK AVE",
+                "borough": "WESTCHESTER",
+                "zip_code": "10583",
+                "owner_name": u_owner,
+                "mailing_address": "508 CENTRAL PARK AVE, SCARSDALE, NY 10583",
+            })
+        ny_groups = run_union_find_clustering(ny_props, "ny")
+        ny_sets = [frozenset(p["bbl"] for p in grp) for grp in ny_groups.values()]
+        self.assertIn(frozenset({"ny-wei-0", "ny-wei-pair"}), ny_sets)
+        self.assertIn(frozenset({"ny-wei-1"}), ny_sets)
+        self.assertIn(frozenset({"ny-condo-0"}), ny_sets)
+        self.assertIn(frozenset({"ny-condo-4"}), ny_sets)
+
+        # 5. CPA/incorporator human spanning >12 unrelated 2-token LLC families is suppressed
+        cpa_props = [
+            {
+                "bbl": f"fl-cpa-{i}",
+                "owner_name": f"RANDOMALPHA{i} INVESTMENTS LLC",
+                "oc_jurisdiction_code": "us_fl",
+                "oc_company_number": f"L{i}",
+            }
+            for i in range(15)
+        ]
+        cpa_init = {p["bbl"]: [p] for p in cpa_props}
+        cpa_oc = {
+            ("us_fl", f"L{i}"): {
+                "humans": ["JOHN CPAAGENT"],
+                "holding_entities": [],
+                "reached_companies": [f"us_fl/L{i}"],
+                "hq_addresses": [],
+                "raw_hq_addresses": [],
+            }
+            for i in range(15)
+        }
+        cpa_merged, cpa_m_cnt = cluster_with_oc_and_series(cpa_props, cpa_init, cpa_oc)
+        self.assertEqual(cpa_m_cnt, 0)
+        self.assertEqual(len(cpa_merged), 15)
+
+    def test_ct_parity_quota_free_large_networks_and_trustee_samia_bridges(self):
+        from api.oc_linker import (
+            OCCandidate,
+            cluster_with_oc_and_series,
+            demangle_assessor_owner,
+            score_oc_candidates,
+        )
+        from api.shared_utils import strip_benign_care_of_prefix
+
+        # 1. MassGIS 'C/O US,' / 'C/O USA,' country-column shift is stripped cleanly, never excluded as US Gov
+        samia_hq_raw = "C/O US, 60 LEO BIRMINGHAM PKWY, BRIGHTON, MA, 02135"
+        self.assertEqual(
+            strip_benign_care_of_prefix(samia_hq_raw),
+            "60 LEO BIRMINGHAM PKWY, BRIGHTON, MA, 02135",
+        )
+        self.assertFalse(is_excluded_third_party_address(samia_hq_raw))
+
+        # 2. 120 street-named LLCs at one cohesive landlord HQ ('39 BRIGHTON AVE ALLSTON' + 'BOSTON' 02134)
+        #    unify into ONE single 180-building network without hitting any 12 / 30 / 75 quota!
+        hamilton_props = []
+        for i in range(120):
+            city_alias = "ALLSTON" if (i % 2 == 0) else "BOSTON"
+            hamilton_props.append({
+                "bbl": f"ma-ham-{i}",
+                "address": f"{10 + i} COMMONWEALTH AVE",
+                "borough": "BOSTON",
+                "zip_code": "02134",
+                "owner_name": f"{10 + i} COMMONWEALTH STREET LLC",
+                "mailing_address": f"39 BRIGHTON AVE, {city_alias}, MA, 02134",
+            })
+            if i < 60:
+                hamilton_props.append({
+                    "bbl": f"ma-ham-extra-{i}",
+                    "address": f"{500 + i} BEACON ST",
+                    "borough": "BROOKLINE",
+                    "zip_code": "02446",
+                    "owner_name": f"{10 + i} COMMONWEALTH STREET LLC",
+                    "mailing_address": f"39 BRIGHTON AV, {city_alias}, MA, 02134",
+                })
+        ham_groups = run_union_find_clustering(hamilton_props, "ma")
+        self.assertEqual(len(ham_groups), 1)
+        self.assertEqual(len(next(iter(ham_groups.values()))), 180)
+
+        # 3. Multi-suite office tower (>=3 distinct #suites) keeps suites separate without collapsing building
+        tower_props = [
+            {"bbl": "t-1", "address": "1 A ST", "borough": "BOSTON", "owner_name": "ALPHA TOWER LLC", "mailing_address": "100 HIGH ST STE 101, BOSTON, MA 02110"},
+            {"bbl": "t-2", "address": "2 A ST", "borough": "BOSTON", "owner_name": "BETA TOWER LLC", "mailing_address": "100 HIGH ST #101, BOSTON, MA 02110"},
+            {"bbl": "t-3", "address": "3 A ST", "borough": "BOSTON", "owner_name": "GAMMA TOWER LLC", "mailing_address": "100 HIGH ST STE 202, BOSTON, MA 02110"},
+            {"bbl": "t-4", "address": "4 A ST", "borough": "BOSTON", "owner_name": "DELTA TOWER LLC", "mailing_address": "100 HIGH ST STE 303, BOSTON, MA 02110"},
+        ]
+        tower_groups = run_union_find_clustering(tower_props, "ma")
+        tower_sets = [frozenset(p["bbl"] for p in grp) for grp in tower_groups.values()]
+        self.assertIn(frozenset({"t-1", "t-2"}), tower_sets)
+        self.assertIn(frozenset({"t-3"}), tower_sets)
+        self.assertIn(frozenset({"t-4"}), tower_sets)
+
+        # 4. Divergent external-HQ lockbox/manager address (>=5 families with >=4 external primary HQs) is quarantined
+        div_props = []
+        for f_idx in range(6):
+            fam_nm = f"INDEPOWNER{f_idx} HOLDINGS LLC"
+            for k in range(3):
+                div_props.append({
+                    "bbl": f"div-home-{f_idx}-{k}",
+                    "address": f"{20 + k} ELM ST",
+                    "borough": "WORCESTER",
+                    "owner_name": fam_nm,
+                    "mailing_address": f"{800 + f_idx * 10} MAIN ST, TOWN{f_idx}, MA 0160{f_idx}",
+                })
+            div_props.append({
+                "bbl": f"div-mgr-{f_idx}",
+                "address": f"{90 + f_idx} OAK ST",
+                "borough": "WORCESTER",
+                "owner_name": fam_nm,
+                "mailing_address": "777 SHARED MANAGER WAY, WORCESTER, MA 01609",
+            })
+        div_groups = run_union_find_clustering(div_props, "ma")
+        self.assertEqual(len(div_groups), 6)
+
+        # 5. Tier 2b canonical stem match ('CHESTNUT HILL REALTY' -> 'CHESTNUT HILL REALTY CORPORATION'),
+        #    Samia middle-name/repeated-token collapse, and direct trustee parcel ('ZUKER EDWARD E TS') bridge!
+        rec_chr = demangle_assessor_owner("CHESTNUT HILL REALTY", mailing_address="300 INDEPENDENCE DR, CHESTNUT HILL, MA 02467")
+        cand_chr = OCCandidate(
+            jurisdiction_code="us_ma",
+            company_number="042000001",
+            name="CHESTNUT HILL REALTY CORP.",
+            name_norm="CHESTNUT HILL REALTY CORPORATION",
+            is_active=True,
+            registered_address_coarse="300 INDEPENDENCE DRIVE CHESTNUT HILL MA",
+        )
+        m_chr = score_oc_candidates(
+            rec_chr,
+            parcel_state="MA",
+            parcel_mailing_coarse="300 INDEPENDENCE DRIVE CHESTNUT HILL MA",
+            candidates=[cand_chr],
+        )
+        self.assertIsNotNone(m_chr)
+        self.assertEqual(m_chr.company_number, "042000001")
+
+        oc_props = [
+            {"bbl": "s-1", "owner_name": "SAMIA ALPHA LLC", "borough": "BOSTON", "oc_jurisdiction_code": "us_ma", "oc_company_number": "S1"},
+            {"bbl": "s-2", "owner_name": "MARLBORO GARDENS LP", "borough": "MARLBOROUGH", "oc_jurisdiction_code": "us_ma", "oc_company_number": "S2"},
+            {"bbl": "s-3", "owner_name": "ARLINGTON VIEW LLC", "borough": "ARLINGTON", "oc_jurisdiction_code": "us_ma", "oc_company_number": "S3"},
+            {"bbl": "s-4", "owner_name": "SAMIA LEONARD J", "borough": "ANDOVER", "mailing_address": samia_hq_raw},
+            {"bbl": "z-1", "owner_name": "CHR VILLAGE LLC", "borough": "BROOKLINE", "oc_jurisdiction_code": "us_ma", "oc_company_number": "Z1"},
+            {"bbl": "z-2", "owner_name": "ZUKER EDWARD E TS", "borough": "BROOKLINE", "mailing_address": "300 INDEPENDENCE DR, CHESTNUT HILL, MA 02467"},
+        ]
+        oc_init = {p["bbl"]: [p] for p in oc_props}
+        oc_res = {
+            ("us_ma", "S1"): {"humans": ["ALEXANDRA SAMIA SOLIA", "LEONARD SAMIA"], "holding_entities": [], "reached_companies": ["us_ma/S1"], "hq_addresses": ["60 LEO BIRMINGHAM PARKWAY BRIGHTON MA"], "raw_hq_addresses": ["60 LEO BIRMINGHAM PKWY, BRIGHTON, MA 02135"]},
+            ("us_ma", "S2"): {"humans": ["ALEXANDRA ANN SAMIA SOLIA"], "holding_entities": [], "reached_companies": ["us_ma/S2"], "hq_addresses": [], "raw_hq_addresses": []},
+            ("us_ma", "S3"): {"humans": ["ALEXANDRA SAMIA SOLIA SOLIA"], "holding_entities": [], "reached_companies": ["us_ma/S3"], "hq_addresses": [], "raw_hq_addresses": []},
+            ("us_ma", "Z1"): {"humans": ["EDWARD ZUKER"], "holding_entities": [], "reached_companies": ["us_ma/Z1"], "hq_addresses": ["300 INDEPENDENCE DRIVE CHESTNUT HILL MA"], "raw_hq_addresses": ["300 INDEPENDENCE DR, CHESTNUT HILL, MA 02467"]},
+        }
+        oc_merged, _ = cluster_with_oc_and_series(oc_props, oc_init, oc_res)
+        oc_sets = [frozenset(p["bbl"] for p in grp) for grp in oc_merged.values()]
+        self.assertIn(frozenset({"s-1", "s-2", "s-3", "s-4"}), oc_sets)
+        self.assertIn(frozenset({"z-1", "z-2"}), oc_sets)
+
+        # 6. Statewide common-name homonym disambiguation: 'RONALD BROWN' with 10 Hamilton LLCs at
+        #    39 Brighton Ave must unify 100% WITHOUT absorbing unrelated 'RONALD BROWN's at
+        #    different HQs ('74 Clarendon St', '99 Elm St', '200 Oak St')!
+        hom_props = [
+            {"bbl": f"hb-{i}", "owner_name": f"{10 + i} BRIGHTON STREET LLC", "borough": "BOSTON",
+             "mailing_address": "39 BRIGHTON AVE, ALLSTON, MA, 02134",
+             "oc_jurisdiction_code": "us_ma", "oc_company_number": f"HB{i}"}
+            for i in range(10)
+        ] + [
+            {"bbl": "rb-other-1", "owner_name": "CLARENDON TOWER LLC", "borough": "BOSTON",
+             "mailing_address": "74 CLARENDON ST, BOSTON, MA, 02116",
+             "oc_jurisdiction_code": "us_ma", "oc_company_number": "RBO1"},
+            {"bbl": "rb-other-2", "owner_name": "WORCESTER MILL LLC", "borough": "WORCESTER",
+             "mailing_address": "99 ELM ST, WORCESTER, MA, 01609",
+             "oc_jurisdiction_code": "us_ma", "oc_company_number": "RBO2"},
+            {"bbl": "rb-other-3", "owner_name": "SPRINGFIELD PLAZA LLC", "borough": "SPRINGFIELD",
+             "mailing_address": "200 OAK ST, SPRINGFIELD, MA, 01103",
+             "oc_jurisdiction_code": "us_ma", "oc_company_number": "RBO3"},
+        ]
+        hom_init = {p["bbl"]: [p] for p in hom_props}
+        hom_oc = {
+            ("us_ma", f"HB{i}"): {
+                "humans": ["RONALD BROWN", "JAMESON BROWN"],
+                "holding_entities": [],
+                "reached_companies": [f"us_ma/HB{i}"],
+                "hq_addresses": ["39 BRIGHTON AVENUE ALLSTON MA"],
+                "raw_hq_addresses": ["39 BRIGHTON AVE, ALLSTON, MA 02134"],
+            }
+            for i in range(10)
+        }
+        hom_oc[("us_ma", "RBO1")] = {"humans": ["RONALD BROWN"], "holding_entities": [], "reached_companies": ["us_ma/RBO1"], "hq_addresses": ["74 CLARENDON STREET BOSTON MA"], "raw_hq_addresses": []}
+        hom_oc[("us_ma", "RBO2")] = {"humans": ["RONALD BROWN"], "holding_entities": [], "reached_companies": ["us_ma/RBO2"], "hq_addresses": ["99 ELM STREET WORCESTER MA"], "raw_hq_addresses": []}
+        hom_oc[("us_ma", "RBO3")] = {"humans": ["RONALD BROWN"], "holding_entities": [], "reached_companies": ["us_ma/RBO3"], "hq_addresses": ["200 OAK STREET SPRINGFIELD MA"], "raw_hq_addresses": []}
+        hom_merged, _ = cluster_with_oc_and_series(hom_props, hom_init, hom_oc)
+        hom_sets = [frozenset(p["bbl"] for p in grp) for grp in hom_merged.values()]
+        self.assertIn(frozenset(f"hb-{i}" for i in range(10)), hom_sets)
+        self.assertIn(frozenset({"rb-other-1"}), hom_sets)
+        self.assertIn(frozenset({"rb-other-2"}), hom_sets)
+        self.assertIn(frozenset({"rb-other-3"}), hom_sets)
+
+    def test_sparse_hq_uncommon_principal_and_parking_exclusion(self):
+        from api.oc_linker import cluster_with_oc_and_series
+
+        # 1. Commercial parking garage operators are excluded from residential landlord networks
+        self.assertTrue(is_excluded_third_party_entity("Propark America West LLC"))
+        self.assertTrue(is_excluded_third_party_entity("LAZ PARKING CALIFORNIA LLC"))
+        self.assertFalse(is_excluded_third_party_entity("Portola Heights LLC"))
+
+        # 2. Sparse-HQ uncommon principal (e.g. CA redacted/blank mailing addresses + RA LLCs):
+        #    12 separate LLCs owned by uncommon principal 'NEVEO MOSSER' with 0 mailing HQs
+        #    still bridge cleanly into 1 network (not artificially stopped at 8 entities!).
+        ca_props = [
+            {
+                "bbl": f"ca-{i}",
+                "owner_name": f"MOSSER BUILDING {i} LLC",
+                "borough": "SAN FRANCISCO",
+                "mailing_address": "",
+                "oc_jurisdiction_code": "us_ca",
+                "oc_company_number": f"CA{i}",
+            }
+            for i in range(12)
+        ]
+        ca_init = {p["bbl"]: [p] for p in ca_props}
+        ca_oc = {
+            ("us_ca", f"CA{i}"): {
+                "humans": ["NEVEO MOSSER"],
+                "holding_entities": [],
+                "reached_companies": [f"us_ca/CA{i}"],
+                "hq_addresses": [],
+                "raw_hq_addresses": [],
+            }
+            for i in range(12)
+        }
+        ca_merged, _ = cluster_with_oc_and_series(ca_props, ca_init, ca_oc)
+        self.assertEqual(len(ca_merged), 1)
+        self.assertEqual(len(next(iter(ca_merged.values()))), 12)
 
 
 if __name__ == "__main__":

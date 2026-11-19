@@ -80,6 +80,10 @@ EXCLUDED_MODEL_SUBSTRINGS = (
     "gemma",
     "veo",
     "aqa",
+    "live",
+    "transcribe",
+    "nano",
+    "omni",
 )
 
 LIVE_NON_CT_JURISDICTIONS: Tuple[Tuple[str, str, str], ...] = (
@@ -152,22 +156,36 @@ def score_gemini_model_candidate(model_obj: Dict[str, Any], desired_tier: str = 
     if model_id.endswith("-latest") and not re.search(r"^gemini-\d", model_id):
         return None
 
-    tier = desired_tier.lower()
-    if tier == "pro":
-        if "-pro" not in model_id:
-            return None
-    elif tier == "flash":
-        if "-flash" not in model_id or "flash-lite" in model_id:
-            return None
-    elif tier == "flash-lite":
-        if "flash-lite" not in model_id:
-            return None
-
     ver_match = re.match(r"^gemini-(\d+)(?:\.(\d+))?-", model_id)
     if not ver_match:
         return None
     major = int(ver_match.group(1))
     minor = int(ver_match.group(2) or 0)
+
+    is_lite = ("flash-lite" in model_id or "-lite" in model_id)
+    is_flash = ("-flash" in model_id and not is_lite)
+    is_pro = ("-pro" in model_id)
+
+    tier = desired_tier.lower()
+    if tier == "pro":
+        # Allow both traditional `-pro` models and Gemini 4+ flagship named tiers
+        # (e.g. `gemini-4-neon`, `gemini-4-hydrogen`) that omit `-pro`.
+        if is_lite or is_flash or (major < 4 and not is_pro):
+            return None
+    elif tier == "flash":
+        if not is_flash:
+            return None
+    elif tier == "flash-lite":
+        if not is_lite:
+            return None
+
+    out_limit = int(model_obj.get("outputTokenLimit") or 0)
+    if "-ultra" in model_id or "-neon" in model_id or is_pro:
+        cap_rank = 4
+    elif out_limit >= 65536:
+        cap_rank = 3
+    else:
+        cap_rank = 2
 
     # Within the exact same (major, minor), prefer stable GA > -latest > preview > exp
     if "exp" in model_id:
@@ -183,7 +201,7 @@ def score_gemini_model_candidate(model_obj: Dict[str, Any], desired_tier: str = 
     date_nums = [int(x) for x in re.findall(r"-(\d{2,4})", model_id)]
     recency_tie = sum(date_nums) if date_nums else 0
 
-    return (major, minor, stability, recency_tie, raw_name.split("/", 1)[1])
+    return (major, minor, cap_rank, stability, recency_tie, raw_name.split("/", 1)[1])
 
 
 def discover_latest_gemini_model(
@@ -217,7 +235,7 @@ def discover_latest_gemini_model(
                     scored.append(s)
         if scored:
             scored.sort(reverse=True)
-            return scored[0][4]
+            return scored[0][-1]
     except Exception as exc:
         logger.warning("Dynamic Gemini model discovery (%s) fell back (%s)", tier, exc)
     return fallback

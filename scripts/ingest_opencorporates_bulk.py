@@ -83,6 +83,9 @@ WAVE1_JURISDICTIONS = [
     "us_ny",
     "us_fl",
     "us_ar",
+    "us_ca",
+    "us_mt",
+    "us_oh",
 ]
 
 SECONDARY_INDEX_NAMES = [

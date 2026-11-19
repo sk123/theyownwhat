@@ -16,17 +16,17 @@ const BEFORE_NOW_ROWS = [
   {
     area: 'Geographic Coverage',
     before: 'Connecticut only (municipal assessments + CT business filings).',
-    now: '19 live jurisdictions: Statewide CT (all 169 towns), MA (all 351 municipalities including Boston Assessing & 112 municipal CAMA portals), FL (67 counties), VA (VGIN + regional/county CAMA), NY State (33 participating counties), NC (100 counties), AR (75 counties), WI (72 counties), CO, VT (250+ towns), and NJ (DCA BHI) alongside NYC, Chicago, Philadelphia, Miami-Dade, Detroit, Baltimore, Washington, D.C., and Minneapolis.',
+    now: '20 unified live explorers: Statewide CT (all 169 towns), NY (all 62 counties unified incl. NYC, Buffalo & Syracuse), MA (all 351 municipalities incl. Boston & 112 CAMA portals), FL (all 67 counties incl. Miami-Dade & Tampa), IL (full Cook/Chicago + DuPage + 102-county CAMA), CA (LA & SF rolls + registered lessors + evictions/violations + us_ca), VA (~88 localities), NC (100 counties), MN (Twin Cities CAMA + Minneapolis unified), OH (Cuyahoga/Cleveland), MT (all 56 counties), AR (75 counties), WI (72 counties), CO, VT (250+ towns), and NJ alongside Philadelphia, Detroit, Baltimore, and Washington, D.C.',
   },
   {
     area: 'Enforcement, Evictions & Subsidies',
     before: 'Parcel assessments and basic corporate lookups; limited enforcement context.',
-    now: 'Owner Rap Sheets & portfolio rankings across court evictions (CT Judicial, NYC DOI, Baltimore, Buffalo Housing Court), housing code cases (NYC HPD Open & Class C, Philadelphia L&I, Hartford, D.C. DOB, Boston ISD, Detroit blight, Baltimore, Minneapolis, Buffalo), recent parcel transaction histories where GIS rolls publish sale dates/prices, and NHPD federal/state subsidy expirations across all datasets.',
+    now: 'Owner Rap Sheets & portfolio rankings across court/board evictions (CT Judicial, NYC DOI, LAHD, SF Rent Board, Baltimore, Buffalo Housing Court), housing & building code cases (NYC HPD, Chicago DOB, Philadelphia L&I, LADBS, SF DBI, Miami-Dade/Orlando/Gainesville, Hartford, D.C. DOB, Boston ISD, Detroit blight, Baltimore, Minneapolis, Buffalo, Syracuse), and NHPD federal/state subsidy expirations across all datasets.',
   },
   {
     area: 'Entity Untangling & Graph Accuracy',
     before: 'First-pass name/address clustering vulnerable to commercial agent and c/o over-merging.',
-    now: 'North American 61-jurisdiction corporate, officer, DBA/trading-name, and cross-state foreign-branch graph (from OpenCorporates under ODbL v1.0) combined with CT SOTS, FL Sunbiz & DBPR Ch. 509, PA DOS Governors, NY DOS, CO SOS True Names, D.C. DLCP, Denver, Baltimore DHCD, Detroit BSEED, Minneapolis, and NJ DCA BHI—guarded by 217K+ registered-agent, bank/servicer, managing-agent, and HDFC firewalls.',
+    now: 'North American 61-jurisdiction corporate, officer, DBA/trading-name, and cross-state foreign-branch graph (from OpenCorporates under ODbL v1.0) combined with state registries and municipal rental licenses—guarded by 220K+ registered-agent, foreign-branch service-of-process, NNN lessee tax-department, bank/servicer, CPA/incorporator fanout, natural-person homonym, and condo-building firewalls.',
   },
   {
     area: 'Source Integrity & Auditing',

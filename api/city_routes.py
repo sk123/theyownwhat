@@ -26,6 +26,7 @@ from api.shared_utils import (
     is_excluded_third_party_address,
     is_excluded_third_party_entity,
     looks_like_person_owner,
+    normalize_business_name,
 )
 
 logger = logging.getLogger("city-api")
@@ -35,9 +36,9 @@ router = APIRouter(prefix="/api/{city}", tags=["city"])
 VALID_CITIES = {
     "nyc", "dc", "baltimore", "boston", "detroit", "philadelphia",
     "chicago", "miami", "minneapolis", "nj",
-    "ma", "fl", "ny", "co", "vt", "wi", "nc", "ar", "va",
+    "ma", "fl", "ny", "il", "ca", "co", "vt", "wi", "nc", "ar", "va", "mt", "mn", "oh",
 }
-RELIABLE_UNIT_CITIES = {"nyc", "baltimore", "philadelphia", "miami", "minneapolis", "nj", "fl"}
+RELIABLE_UNIT_CITIES = {"nyc", "baltimore", "philadelphia", "miami", "minneapolis", "nj", "fl", "ny", "ca", "mn"}
 # Python `re` pattern (\b word boundaries) exported for Python callers & battery checks;
 # PostgreSQL `!~*` queries use INSTITUTIONAL_NETWORK_SQL_PATTERN (\y word boundaries).
 INSTITUTIONAL_NETWORK_PATTERN = THIRD_PARTY_ENTITY_REGEX_BODY
@@ -174,10 +175,26 @@ def _query(sql: str, params=None) -> list[dict]:
     finally:
         db_module.db_pool.putconn(conn)
 
+_PLACEHOLDER_OWNER_SQL_PATTERN = (
+    r"^\s*[*#_~\-\s]*(?:"
+    r"UNAVAILABLE(?:\s+OWNERS?)?|OWNERS?\s+UNAVAILABLE|"
+    r"(?:NAME|OWNER|OWNER\s+NAME|NO\s+OWNER|NO\s+NAME)\s+NOT\s+ON\s+FILE|NOT\s+ON\s+FILE|"
+    r"(?:CURRENT\s+)?OWNERS?\s+OF(?:\s+RECORD)?|RECORD\s+OWNER|CURRENT\s+OWNER|PRESENT\s+OWNER|"
+    r"(?:NAME|OWNER)\s+NOT\s+(?:AVAILABLE|PROVIDED|LISTED)|NOT\s+(?:AVAILABLE|PROVIDED|LISTED)|"
+    r"UNKNOWN(?:\s+OWNERS?|\s+HEIRS(?:\s+OF)?)?|OWNER\s+UNKNOWN|"
+    r"CONFIDENTIAL(?:\s+OWNERS?)?|REDACTED|WITHHELD|NAME\s+WITHHELD|PRIVATE\s+OWNERS?"
+    r")[*#_~\-\s]*$"
+)
+
+
 def _institutional_filter(include_institutional: bool, column: str = "display_name") -> tuple[str, list]:
+    display_col = "n.display_name" if "n.display_name" in column else column
     if include_institutional:
-        return "", []
-    return f" AND COALESCE({column}, '') !~* %s", [INSTITUTIONAL_NETWORK_SQL_PATTERN]
+        return f" AND COALESCE({display_col}, '') !~* %s", [_PLACEHOLDER_OWNER_SQL_PATTERN]
+    return (
+        f" AND COALESCE({column}, '') !~* %s AND COALESCE({display_col}, '') !~* %s",
+        [INSTITUTIONAL_NETWORK_SQL_PATTERN, _PLACEHOLDER_OWNER_SQL_PATTERN],
+    )
 
 _PROP_COLUMNS_CACHE: dict[str, tuple[float, set[str]]] = {}
 
@@ -485,15 +502,20 @@ def city_stats(city: str, force_refresh: bool = False):
         "miami": "Miami-Dade Parcels + Florida Sunbiz + DBPR Apartment Licenses",
         "minneapolis": "Minneapolis Active Rental Licenses + MapIT GIS",
         "nj": "New Jersey DCA BHI Active Building Records",
-        "ma": "MassGIS Level 3 Property Tax Parcels (All 351 Municipalities)",
-        "fl": "FloridaGIO Statewide Parcels (67 Counties) + Sunbiz + DBPR Ch. 509 Licenses",
-        "ny": "NYS Public Tax Parcels (33 Non-NYC Counties) + NY DOS + Buffalo Enforcement",
+        "ma": "MassGIS Level 3 Property Tax Parcels + 112 Municipal CAMA Scrapers (All 351 Municipalities)",
+        "fl": "Florida Unified 67-County Parcels (FDOR + Miami-Dade PA + Hillsborough HCPA) + Sunbiz + DBPR Ch. 509",
+        "ny": "New York Unified 62-County Explorer (NYC PLUTO/HPD/Marshal Evictions + NYS ORPTS + Buffalo/Syracuse + SDG ImageMate)",
+        "il": "Illinois Statewide Explorer (Cook County 1.67M PINs + DuPage GIS + Chicago DOB Violations + Devnet/Beacon CAMA)",
+        "ca": "California 58-County Explorer (LA & SF Rolls + Registered Lessor Businesses + Evictions/Violations + CA SOS)",
         "co": "Colorado OIT Public Parcels + CO SOS + Denver Active Rental Licenses",
         "vt": "Vermont VCGI Standardized Parcels + Statewide Grand List",
         "wi": "Wisconsin SCO/DOA Statewide Parcels (Class 1 Residential & Class 2 Multifamily)",
         "nc": "North Carolina NC OneMap Parcels (All 100 Counties)",
         "ar": "Arkansas GIS Office Statewide Parcels (All 75 Counties) + AR SOS",
         "va": "Virginia VGIN Local Schema Parcels + HRGeo + County CAMA + VA SCC",
+        "mt": "Montana MSDI / DOR ORION Cadastral Parcels (All 56 Counties) + MT SOS",
+        "mn": "Minnesota Unified Explorer (Hennepin & Ramsey CAMA + Minneapolis Active Rental Licenses) + MN SOS",
+        "oh": "Ohio County Auditor CAMA Parcels (Cuyahoga / Greater Cleveland) + OH SOS",
     }
 
     result = {
@@ -1194,11 +1216,11 @@ def city_top_networks(
 
 
 SIBLING_EXPLORER_PAIRS = {
-    "nyc": ("ny", "NY State (Outside NYC)"),
-    "ny": ("nyc", "New York City (5 Boroughs)"),
+    "nyc": ("ny", "New York Unified (All 62 Counties)"),
     "boston": ("ma", "Massachusetts Statewide"),
-    "miami": ("fl", "Florida Statewide"),
-    "fl": ("miami", "Miami-Dade All-Parcels"),
+    "miami": ("fl", "Florida Unified (All 67 Counties)"),
+    "chicago": ("il", "Illinois Statewide"),
+    "minneapolis": ("mn", "Minnesota Unified"),
 }
 
 
@@ -1956,8 +1978,12 @@ def _fetch_oc_enrichment_for_cids(
         pass
 
     all_cids = sorted(set(seed_cids) | set(comp_by_cid.keys()))[:40]
-    oc_links = []
-    for cid in all_cids:
+    seed_cid_set = set(seed_cids)
+    # Deduplicate foreign-branch registrations of the same company (e.g. PROPARK AMERICA WEST LLC
+    # filed in CA, CO, CT, NV) into one canonical corporate filing entry while keeping `all_cids`
+    # intact for officer/principal resolution below.
+    grouped_oc_links: dict[str, dict] = {}
+    for cid in sorted(all_cids, key=lambda x: (0 if x in seed_cid_set else 1, x)):
         r = comp_by_cid.get(cid) or {}
         j_code, c_num = cid.split("/", 1)
         hq_addr = None
@@ -1965,23 +1991,53 @@ def _fetch_oc_enrichment_for_cids(
             if cand_addr and cand_addr != r.get("agent_address_raw") and not is_excluded_third_party_address(cand_addr):
                 hq_addr = cand_addr
                 break
-        oc_links.append({
+        home_cid = (
+            f"{r['home_jurisdiction_code']}/{r['home_company_number']}"
+            if (r.get("home_jurisdiction_code") and r.get("home_company_number"))
+            else None
+        )
+        cname = r.get("name") or cid
+        cname_norm = normalize_business_name(cname) or cname.upper().strip()
+        dedup_key = f"home:{home_cid}" if home_cid else f"name:{cname_norm}"
+        existing = grouped_oc_links.get(dedup_key)
+        if existing is None and home_cid:
+            # Also coalesce with the home company entry itself if already inserted under its name
+            existing = grouped_oc_links.get(f"name:{cname_norm}")
+        if existing is not None:
+            j_short = j_code.replace("us_", "").upper()
+            if j_short and j_short != existing["jurisdiction_code"].replace("us_", "").upper():
+                branches = existing.setdefault("branch_jurisdictions", [])
+                if j_short not in branches:
+                    branches.append(j_short)
+            if not existing.get("registered_address") and hq_addr:
+                existing["registered_address"] = hq_addr
+            if not existing.get("registry_url") and r.get("registry_url"):
+                existing["registry_url"] = r.get("registry_url")
+            continue
+
+        entry = {
             "id": cid,
             "jurisdiction_code": j_code,
             "company_number": c_num,
-            "company_name": r.get("name") or cid,
+            "company_name": cname,
             "company_type": r.get("company_type"),
             "status": r.get("current_status"),
             "incorporation_date": str(r["incorporation_date"]) if r.get("incorporation_date") else None,
             "registered_address": hq_addr,
-            "home_company_id": (
-                f"{r['home_jurisdiction_code']}/{r['home_company_number']}"
-                if (r.get("home_jurisdiction_code") and r.get("home_company_number"))
-                else None
-            ),
+            "home_company_id": home_cid,
+            "branch_jurisdictions": [],
             "registry_url": r.get("registry_url"),
             "url": r.get("opencorporates_url") or f"https://opencorporates.com/companies/{cid}",
-        })
+        }
+        grouped_oc_links[dedup_key] = entry
+        grouped_oc_links.setdefault(f"name:{cname_norm}", entry)
+
+    seen_link_ids = set()
+    oc_links = []
+    for entry in grouped_oc_links.values():
+        if entry["id"] not in seen_link_ids:
+            seen_link_ids.add(entry["id"])
+            oc_links.append(entry)
 
     # Fetch beneficial principals & corporate parents across all linked OC companies
     oc_contacts: list[dict] = []
@@ -2092,6 +2148,11 @@ CITY_STATE_MAP = {
     "nc": "NC",
     "ar": "AR",
     "va": "VA",
+    "il": "IL",
+    "ca": "CA",
+    "mt": "MT",
+    "mn": "MN",
+    "oh": "OH",
 }
 
 
@@ -2150,6 +2211,8 @@ def _format_property(r: dict, city: str | None = None) -> dict:
         "oc_match_tier": _safe_int(r.get("oc_match_tier")),
         "oc_match_confidence": _safe_num(r.get("oc_match_confidence")),
         "opencorporates_url": f"https://opencorporates.com/companies/{oc_jur}/{oc_num}" if (oc_jur and oc_num) else None,
+        "cama_site_link": r.get("cama_site_link"),
+        "building_photo_url": r.get("building_photo_url"),
     }
 
 
