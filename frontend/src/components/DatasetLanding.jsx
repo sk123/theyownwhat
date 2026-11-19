@@ -351,7 +351,7 @@ export default function DatasetLanding({
 
   return (
     <div className="landing-viewport-shell w-full bg-slate-50/80 text-slate-900">
-      <div className="mx-auto w-full max-w-5xl xl:max-w-[1140px] px-4 sm:px-6 pt-5 sm:pt-7 pb-24 md:pb-8 flex flex-col gap-5">
+      <div className="mx-auto w-full max-w-5xl xl:max-w-[1160px] px-4 sm:px-6 pt-5 sm:pt-7 pb-24 md:pb-8 flex flex-col gap-5">
         {/* Clean Header with Optional Understated Overall Totals */}
         <header className="mx-auto w-full max-w-3xl text-center">
           <h2 className="text-2xl sm:text-3xl font-black tracking-tight text-slate-900 [text-wrap:balance]">
@@ -393,21 +393,21 @@ export default function DatasetLanding({
         {/* TWO CRYSTAL-CLEAR ENTRY PATHS */}
         <div className="relative grid grid-cols-1 lg:grid-cols-2 gap-5 items-stretch">
           {/* PATH 1: SEARCH */}
-          <article className="rounded-2xl border-2 border-blue-200/90 bg-white p-5 sm:p-6 shadow-sm flex flex-col justify-between gap-4">
-            <div className="flex flex-col gap-4">
-              <header>
-                <div className="inline-flex items-center gap-2 rounded-full bg-blue-50 border border-blue-200/80 px-3 py-1 text-[11px] font-black uppercase tracking-wider text-blue-700">
-                  <Search className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span>Path 1 &middot; Search</span>
-                </div>
-                <h3 className="mt-3 text-lg sm:text-xl font-black tracking-tight text-slate-900">
-                  Search an address, landlord, or LLC
-                </h3>
-                <p className="mt-1 text-xs sm:text-sm text-slate-600 leading-relaxed">
-                  Type a street address, management company, officer name, or shell LLC to jump directly to matching records.
-                </p>
-              </header>
+          <article className="rounded-2xl border-2 border-blue-200/90 bg-white p-5 sm:p-6 shadow-sm flex flex-col gap-4">
+            <header>
+              <div className="inline-flex items-center gap-2 rounded-full bg-blue-50 border border-blue-200/80 px-3 py-1 text-[11px] font-black uppercase tracking-wider text-blue-700">
+                <Search className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>Path 1 &middot; Search</span>
+              </div>
+              <h3 className="mt-3 text-lg sm:text-xl font-black tracking-tight text-slate-900">
+                Search an address, landlord, or LLC
+              </h3>
+              <p className="mt-1 text-xs sm:text-sm text-slate-600 leading-relaxed">
+                Type a street address, management company, officer name, or shell LLC to jump directly to matching records.
+              </p>
+            </header>
 
+            <div className="flex flex-col gap-4">
               <search ref={omniRef} className="relative z-30">
                 <form
                   onSubmit={handleOmniSubmit}
@@ -565,26 +565,63 @@ export default function DatasetLanding({
                   </div>
                 )}
               </search>
-            </div>
 
-            {/* Quiet Sample Queries */}
-            <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center gap-1.5 text-xs">
-              <span className="font-semibold text-slate-400 mr-1">Try:</span>
-              {QUICK_OMNI_EXAMPLES.map((ex) => (
-                <button
-                  key={`${ex.scope}-${ex.label}`}
-                  type="button"
-                  onClick={() => {
-                    setOmniScope(ex.scope);
-                    setOmniTerm(ex.label);
-                    setOmniOpen(true);
-                    omniInputRef.current?.focus();
-                  }}
-                  className="min-h-[30px] rounded-lg border border-slate-200 bg-slate-50 hover:border-blue-300 hover:bg-blue-50 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:text-blue-700 transition-colors cursor-pointer"
-                >
-                  {ex.label} <span className="text-slate-400 font-normal">({ex.tag})</span>
-                </button>
-              ))}
+              {/* Quiet Sample Queries right beneath search controls */}
+              <div className="pt-3 border-t border-slate-100 landing-try-chips text-xs">
+                <span className="font-semibold text-slate-400 mr-1">Try:</span>
+                {QUICK_OMNI_EXAMPLES.map((ex) => (
+                  <button
+                    key={`${ex.scope}-${ex.label}`}
+                    type="button"
+                    onClick={() => {
+                      setOmniScope(ex.scope);
+                      setOmniTerm(ex.label);
+                      setOmniOpen(true);
+                      omniInputRef.current?.focus();
+                    }}
+                    className="min-h-[30px] rounded-lg border border-slate-200 bg-slate-50 hover:border-blue-300 hover:bg-blue-50 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:text-blue-700 transition-colors cursor-pointer"
+                  >
+                    {ex.label} <span className="text-slate-400 font-normal">({ex.tag})</span>
+                  </button>
+                ))}
+              </div>
+
+              {/* Concise guide to what the search checks */}
+              <dl className="rounded-xl border border-slate-200/80 bg-slate-50/70 p-3.5 grid grid-cols-1 gap-2.5">
+                <div className="flex items-start gap-2.5 min-w-0">
+                  <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-white border border-slate-200/80 text-blue-600">
+                    <MapPinned className="w-3.5 h-3.5" aria-hidden="true" />
+                  </div>
+                  <div className="min-w-0">
+                    <dt className="text-xs font-bold text-slate-800">Building or street address</dt>
+                    <dd className="text-xs text-slate-500 leading-snug">
+                      Find the deeded owner, linked LLCs, and other properties tied to the same ownership network.
+                    </dd>
+                  </div>
+                </div>
+                <div className="flex items-start gap-2.5 min-w-0">
+                  <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-white border border-slate-200/80 text-blue-600">
+                    <Briefcase className="w-3.5 h-3.5" aria-hidden="true" />
+                  </div>
+                  <div className="min-w-0">
+                    <dt className="text-xs font-bold text-slate-800">Shell LLC or management company</dt>
+                    <dd className="text-xs text-slate-500 leading-snug">
+                      Trace single-purpose entities through shared mailing addresses and public corporate registries.
+                    </dd>
+                  </div>
+                </div>
+                <div className="flex items-start gap-2.5 min-w-0">
+                  <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-white border border-slate-200/80 text-blue-600">
+                    <User className="w-3.5 h-3.5" aria-hidden="true" />
+                  </div>
+                  <div className="min-w-0">
+                    <dt className="text-xs font-bold text-slate-800">Corporate officer or principal</dt>
+                    <dd className="text-xs text-slate-500 leading-snug">
+                      Look up registered principals and agents listed on loaded state business filings.
+                    </dd>
+                  </div>
+                </div>
+              </dl>
             </div>
           </article>
 
@@ -597,55 +634,53 @@ export default function DatasetLanding({
           </div>
 
           {/* PATH 2: SELECT A JURISDICTION & EXPLORE NETWORKS */}
-          <article className="rounded-2xl border-2 border-indigo-200/90 bg-white p-5 sm:p-6 shadow-sm flex flex-col justify-between gap-4">
-            <div className="flex flex-col gap-4">
-              <header className="flex flex-wrap items-start justify-between gap-2">
-                <div>
-                  <div className="inline-flex items-center gap-2 rounded-full bg-indigo-50 border border-indigo-200/80 px-3 py-1 text-[11px] font-black uppercase tracking-wider text-indigo-700">
-                    <Building2 className="w-3.5 h-3.5" aria-hidden="true" />
-                    <span>Path 2 &middot; Select a Network</span>
-                  </div>
-                  <h3 className="mt-3 text-lg sm:text-xl font-black tracking-tight text-slate-900">
-                    Pick a place to browse ownership networks
-                  </h3>
-                  <p className="mt-1 text-xs sm:text-sm text-slate-600 leading-relaxed">
-                    Jump straight into any jurisdiction&rsquo;s directory of notable ownership networks, operating companies, and portfolios.
-                  </p>
+          <article className="landing-places-card rounded-2xl border-2 border-indigo-200/90 bg-white p-5 sm:p-6 shadow-sm flex flex-col gap-4">
+            <header className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <div className="inline-flex items-center gap-2 rounded-full bg-indigo-50 border border-indigo-200/80 px-3 py-1 text-[11px] font-black uppercase tracking-wider text-indigo-700">
+                  <Building2 className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>Path 2 &middot; Select a Network</span>
                 </div>
-              </header>
+                <h3 className="mt-3 text-lg sm:text-xl font-black tracking-tight text-slate-900">
+                  Pick a place to browse ownership networks
+                </h3>
+                <p className="mt-1 text-xs sm:text-sm text-slate-600 leading-relaxed">
+                  Jump straight into any jurisdiction&rsquo;s directory of notable ownership networks, operating companies, and portfolios.
+                </p>
+              </div>
+            </header>
 
-              <ul
-                role="list"
-                aria-label="Available jurisdictions to browse ownership networks"
-                className="grid grid-cols-2 sm:grid-cols-2 gap-2"
-              >
-                {baseDatasets.map((ds) => (
-                  <li key={ds.key} className="min-w-0">
-                    <button
-                      type="button"
-                      onClick={() => onSelect(ds.key)}
-                      className="w-full min-h-[44px] flex items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50/60 hover:bg-indigo-50/70 hover:border-indigo-400 px-3 py-2 text-left transition-all cursor-pointer group focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
-                    >
-                      <span className="min-w-0">
-                        <span className="block text-sm font-bold text-slate-900 group-hover:text-indigo-800 truncate">
-                          {ds.title}
-                        </span>
-                        <span className="block text-[10.5px] font-medium text-slate-400 group-hover:text-indigo-600/80 truncate">
-                          {ds.scope}
-                        </span>
+            <ul
+              role="list"
+              aria-label="Available jurisdictions to browse ownership networks"
+              className="landing-places-grid"
+            >
+              {baseDatasets.map((ds) => (
+                <li key={ds.key} className="min-w-0">
+                  <button
+                    type="button"
+                    onClick={() => onSelect(ds.key)}
+                    className="w-full min-h-[44px] flex items-center justify-between gap-1.5 rounded-xl border border-slate-200 bg-slate-50/60 hover:bg-indigo-50/70 hover:border-indigo-400 px-2.5 py-2 text-left transition-all cursor-pointer group focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
+                  >
+                    <span className="min-w-0">
+                      <span className="block text-[13px] font-bold text-slate-900 group-hover:text-indigo-800 truncate">
+                        {ds.title}
                       </span>
-                      <ArrowRight
-                        className="w-4 h-4 shrink-0 text-slate-300 group-hover:text-indigo-600 group-hover:translate-x-0.5 transition-all"
-                        aria-hidden="true"
-                      />
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
+                      <span className="block text-[10.5px] font-medium text-slate-400 group-hover:text-indigo-600/80 truncate">
+                        {ds.scope}
+                      </span>
+                    </span>
+                    <ArrowRight
+                      className="w-3.5 h-3.5 shrink-0 text-slate-300 group-hover:text-indigo-600 group-hover:translate-x-0.5 transition-all"
+                      aria-hidden="true"
+                    />
+                  </button>
+                </li>
+              ))}
+            </ul>
 
             {lastDatasetObj && (
-              <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2 text-xs">
+              <footer className="mt-auto pt-3 border-t border-slate-100 flex items-center justify-between gap-2 text-xs">
                 <span className="text-slate-500">Continue where you left off:</span>
                 <button
                   type="button"
@@ -655,7 +690,7 @@ export default function DatasetLanding({
                   <span>Open {lastDatasetObj.title} networks</span>
                   <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
                 </button>
-              </div>
+              </footer>
             )}
           </article>
         </div>
