@@ -65,11 +65,28 @@ HTTP_HEADERS = {
 }
 
 PA_DOS_CSV_URL = "https://data.pa.gov/api/views/xvd7-5r2c/rows.csv?accessType=DOWNLOAD"
+PA_DOS_META_URL = "https://data.pa.gov/api/views/xvd7-5r2c.json"
 NY_DOS_CSV_URL = "https://data.ny.gov/api/views/n9v6-gdp6/rows.csv?accessType=DOWNLOAD"
+NY_DOS_META_URL = "https://data.ny.gov/api/views/n9v6-gdp6.json"
 CO_SOS_CSV_URL = "https://data.colorado.gov/api/views/4ykn-tg5h/rows.csv?accessType=DOWNLOAD"
+CO_SOS_META_URL = "https://data.colorado.gov/api/views/4ykn-tg5h.json"
 CO_TRUE_CSV_URL = "https://data.colorado.gov/api/views/qpft-q492/rows.csv?accessType=DOWNLOAD"
 FL_SUNBIZ_SFTP_URL = "sftp://sftp.floridados.gov/Public/doc/Quarterly/Cor/cordata.zip"
 FL_SUNBIZ_USER = "Public:PubAccess1845!"
+DC_DLCP_FS_BASE = "https://maps2.dcgis.dc.gov/dcgis/rest/services/DCGIS_DATA/Business_Licensing_and_Grants_WebMercator/FeatureServer"
+IRS_EO_BMF_URLS = (
+    "https://www.irs.gov/pub/irs-soi/eo1.csv",
+    "https://www.irs.gov/pub/irs-soi/eo2.csv",
+    "https://www.irs.gov/pub/irs-soi/eo3.csv",
+    "https://www.irs.gov/pub/irs-soi/eo4.csv",
+)
+
+NONPROFIT_COMPANY_TYPE_RE = re.compile(
+    r"(?:non[- ]?profit|not[- ]?for[- ]?profit|non[- ]?stock|charit(?:able|y)|"
+    r"benevolent|relig(?:ious|ion)|church|ecclesiastical|public\s+benefit|"
+    r"mutual\s+benefit|housing\s+development\s+fund|501\s*\(\s*c\s*\)|eleemosynary)",
+    re.IGNORECASE,
+)
 
 SUNBIZ_TITLE_MAP = {
     "MGR": "Manager",
@@ -202,8 +219,10 @@ def _tsv_cell(val: Any) -> str:
 
 
 class BulkOCStagingWriter:
-    """Streams companies and officers for a single `jurisdiction_code` into PostgreSQL
-    using `COPY` into temporary tables followed by atomic swap/upsert."""
+    """Streams companies, officers, and optional trade/previous names for a
+    single `jurisdiction_code` into PostgreSQL using `COPY` into temporary
+    tables followed by NON-DESTRUCTIVE upsert (preserving historical
+    OpenCorporates `2026-11-17` rows & officers by default)."""
 
     COMPANY_COLS = (
         "jurisdiction_code",
@@ -214,6 +233,7 @@ class BulkOCStagingWriter:
         "company_type",
         "current_status",
         "is_active",
+        "is_nonprofit",
         "incorporation_date",
         "registered_address_raw",
         "registered_address_coarse",
@@ -242,14 +262,31 @@ class BulkOCStagingWriter:
         "address_coarse",
     )
 
-    def __init__(self, conn, jurisdiction_code: str, flush_every: int = 75000):
+    PREV_NAME_COLS = (
+        "jurisdiction_code",
+        "company_number",
+        "company_name",
+        "company_name_norm",
+        "name_type",
+    )
+
+    def __init__(
+        self,
+        conn,
+        jurisdiction_code: str,
+        flush_every: int = 75000,
+        replace_all: bool = False,
+    ):
         self.conn = conn
         self.jur = jurisdiction_code
         self.flush_every = flush_every
+        self.replace_all = bool(replace_all)
         self.comp_buf: List[str] = []
         self.off_buf: List[str] = []
+        self.prev_buf: List[str] = []
         self.comp_total = 0
         self.off_total = 0
+        self.prev_total = 0
         self._init_temp_tables()
 
     def _init_temp_tables(self) -> None:
@@ -266,6 +303,7 @@ class BulkOCStagingWriter:
                     company_type              TEXT,
                     current_status            TEXT,
                     is_active                 BOOLEAN DEFAULT TRUE,
+                    is_nonprofit              BOOLEAN DEFAULT FALSE,
                     incorporation_date        DATE,
                     registered_address_raw    TEXT,
                     registered_address_coarse TEXT,
@@ -293,6 +331,14 @@ class BulkOCStagingWriter:
                     address_raw          TEXT,
                     address_coarse       TEXT
                 );
+                DROP TABLE IF EXISTS tmp_oc_prev_names_stage;
+                CREATE TEMP TABLE tmp_oc_prev_names_stage (
+                    jurisdiction_code TEXT NOT NULL,
+                    company_number    TEXT NOT NULL,
+                    company_name      TEXT NOT NULL,
+                    company_name_norm TEXT NOT NULL,
+                    name_type         TEXT
+                );
                 """
             )
 
@@ -304,6 +350,7 @@ class BulkOCStagingWriter:
         company_type: str = "",
         current_status: str = "Active",
         is_active: bool = True,
+        is_nonprofit: Optional[bool] = None,
         incorporation_date: Optional[str] = None,
         registered_address_raw: str = "",
         registered_state: str = "",
@@ -322,6 +369,10 @@ class BulkOCStagingWriter:
         mail_coarse = normalize_mailing_address_coarse(mailing_address_raw) if mailing_address_raw else None
         ag_coarse = normalize_mailing_address_coarse(agent_address_raw) if agent_address_raw else None
         ag_norm = normalize_business_name(agent_name) if agent_name else None
+        if is_nonprofit is None:
+            is_np = bool(company_type and NONPROFIT_COMPANY_TYPE_RE.search(company_type))
+        else:
+            is_np = bool(is_nonprofit)
 
         row = "\t".join(
             _tsv_cell(v)
@@ -334,6 +385,7 @@ class BulkOCStagingWriter:
                 company_type or None,
                 current_status or None,
                 is_active,
+                is_np,
                 incorporation_date,
                 registered_address_raw or None,
                 reg_coarse or None,
@@ -400,6 +452,27 @@ class BulkOCStagingWriter:
         if len(self.off_buf) >= self.flush_every:
             self._flush_officers()
 
+    def add_previous_name(
+        self,
+        company_number: str,
+        alt_name: str,
+        name_type: str = "trade_name",
+    ) -> None:
+        nm = _clean_text(alt_name)
+        if not nm or not company_number:
+            return
+        norm = normalize_business_name(nm)
+        if not norm:
+            return
+        row = "\t".join(
+            _tsv_cell(v)
+            for v in (self.jur, company_number, nm, norm, name_type or "trade_name")
+        )
+        self.prev_buf.append(row)
+        self.prev_total += 1
+        if len(self.prev_buf) >= self.flush_every:
+            self._flush_prev_names()
+
     def _flush_companies(self) -> None:
         if not self.comp_buf:
             return
@@ -416,52 +489,143 @@ class BulkOCStagingWriter:
             cur.copy_from(data, "tmp_oc_officers_stage", columns=self.OFFICER_COLS)
         self.off_buf.clear()
 
+    def _flush_prev_names(self) -> None:
+        if not self.prev_buf:
+            return
+        data = io.StringIO("\n".join(self.prev_buf) + "\n")
+        with self.conn.cursor() as cur:
+            cur.copy_from(data, "tmp_oc_prev_names_stage", columns=self.PREV_NAME_COLS)
+        self.prev_buf.clear()
+
     def finalize(self) -> Tuple[int, int]:
         self._flush_companies()
         self._flush_officers()
+        self._flush_prev_names()
         with self.conn.cursor() as cur:
-            cur.execute("DELETE FROM oc_officers WHERE jurisdiction_code = %s", (self.jur,))
-            cur.execute("DELETE FROM oc_companies WHERE jurisdiction_code = %s", (self.jur,))
+            if self.replace_all:
+                cur.execute("DELETE FROM oc_officers WHERE jurisdiction_code = %s", (self.jur,))
+                cur.execute("DELETE FROM oc_companies WHERE jurisdiction_code = %s", (self.jur,))
+
             cur.execute(
                 """
                 INSERT INTO oc_companies (
                     jurisdiction_code, company_number, name, name_norm, name_prefix18,
-                    company_type, current_status, is_active, incorporation_date,
+                    company_type, current_status, is_active, is_nonprofit, incorporation_date,
                     registered_address_raw, registered_address_coarse, registered_state,
                     mailing_address_raw, mailing_address_coarse, mailing_state,
                     agent_name, agent_name_norm, agent_address_raw, agent_address_coarse,
-                    home_jurisdiction_code, opencorporates_url, retrieved_at, updated_at
+                    home_jurisdiction_code, opencorporates_url, registry_url, retrieved_at, updated_at
                 )
                 SELECT DISTINCT ON (jurisdiction_code, company_number)
                     jurisdiction_code, company_number, name, name_norm, name_prefix18,
-                    company_type, current_status, is_active, incorporation_date,
+                    company_type, current_status, is_active, is_nonprofit, incorporation_date,
                     registered_address_raw, registered_address_coarse, registered_state,
                     mailing_address_raw, mailing_address_coarse, mailing_state,
                     agent_name, agent_name_norm, agent_address_raw, agent_address_coarse,
-                    home_jurisdiction_code, opencorporates_url, NOW(), NOW()
+                    home_jurisdiction_code, opencorporates_url, opencorporates_url, NOW(), NOW()
                 FROM tmp_oc_companies_stage
-                ORDER BY jurisdiction_code, company_number;
+                ORDER BY jurisdiction_code, company_number
+                ON CONFLICT (jurisdiction_code, company_number) DO UPDATE SET
+                    name                      = COALESCE(NULLIF(EXCLUDED.name, ''), oc_companies.name),
+                    name_norm                 = COALESCE(NULLIF(EXCLUDED.name_norm, ''), oc_companies.name_norm),
+                    name_prefix18             = COALESCE(NULLIF(EXCLUDED.name_prefix18, ''), oc_companies.name_prefix18),
+                    company_type              = COALESCE(NULLIF(EXCLUDED.company_type, ''), oc_companies.company_type),
+                    current_status            = COALESCE(NULLIF(EXCLUDED.current_status, ''), oc_companies.current_status),
+                    is_active                 = EXCLUDED.is_active,
+                    is_nonprofit              = (COALESCE(oc_companies.is_nonprofit, FALSE) OR COALESCE(EXCLUDED.is_nonprofit, FALSE)),
+                    incorporation_date        = COALESCE(EXCLUDED.incorporation_date, oc_companies.incorporation_date),
+                    registered_address_raw    = COALESCE(NULLIF(EXCLUDED.registered_address_raw, ''), oc_companies.registered_address_raw),
+                    registered_address_coarse = COALESCE(NULLIF(EXCLUDED.registered_address_coarse, ''), oc_companies.registered_address_coarse),
+                    registered_state          = COALESCE(NULLIF(EXCLUDED.registered_state, ''), oc_companies.registered_state),
+                    mailing_address_raw       = COALESCE(NULLIF(EXCLUDED.mailing_address_raw, ''), oc_companies.mailing_address_raw),
+                    mailing_address_coarse    = COALESCE(NULLIF(EXCLUDED.mailing_address_coarse, ''), oc_companies.mailing_address_coarse),
+                    mailing_state             = COALESCE(NULLIF(EXCLUDED.mailing_state, ''), oc_companies.mailing_state),
+                    agent_name                = COALESCE(NULLIF(EXCLUDED.agent_name, ''), oc_companies.agent_name),
+                    agent_name_norm           = COALESCE(NULLIF(EXCLUDED.agent_name_norm, ''), oc_companies.agent_name_norm),
+                    agent_address_raw         = COALESCE(NULLIF(EXCLUDED.agent_address_raw, ''), oc_companies.agent_address_raw),
+                    agent_address_coarse      = COALESCE(NULLIF(EXCLUDED.agent_address_coarse, ''), oc_companies.agent_address_coarse),
+                    home_jurisdiction_code    = COALESCE(NULLIF(EXCLUDED.home_jurisdiction_code, ''), oc_companies.home_jurisdiction_code),
+                    registry_url              = COALESCE(NULLIF(EXCLUDED.registry_url, ''), oc_companies.registry_url),
+                    retrieved_at              = NOW(),
+                    updated_at                = NOW();
                 """
             )
             inserted_companies = cur.rowcount
 
-            cur.execute(
-                """
-                INSERT INTO oc_officers (
-                    jurisdiction_code, company_number, name, name_norm, position,
-                    role_class, is_corporate_officer, is_current, address_raw, address_coarse
+            if self.replace_all:
+                cur.execute(
+                    """
+                    INSERT INTO oc_officers (
+                        jurisdiction_code, company_number, name, name_norm, position,
+                        role_class, is_corporate_officer, is_current, address_raw, address_coarse
+                    )
+                    SELECT DISTINCT ON (jurisdiction_code, company_number, name_norm, role_class)
+                        jurisdiction_code, company_number, name, name_norm, position,
+                        role_class, is_corporate_officer, is_current, address_raw, address_coarse
+                    FROM tmp_oc_officers_stage
+                    ORDER BY jurisdiction_code, company_number, name_norm, role_class;
+                    """
                 )
-                SELECT DISTINCT ON (jurisdiction_code, company_number, name_norm, role_class)
-                    jurisdiction_code, company_number, name, name_norm, position,
-                    role_class, is_corporate_officer, is_current, address_raw, address_coarse
-                FROM tmp_oc_officers_stage
-                ORDER BY jurisdiction_code, company_number, name_norm, role_class;
-                """
-            )
+            else:
+                # Non-destructive merge: insert new official-registry officers while preserving
+                # historical OpenCorporates 2026-11-17 officer records.
+                cur.execute(
+                    """
+                    WITH dedup_stage AS (
+                        SELECT DISTINCT ON (jurisdiction_code, company_number, name_norm, role_class)
+                            jurisdiction_code, company_number, name, name_norm, position,
+                            role_class, is_corporate_officer, is_current, address_raw, address_coarse
+                        FROM tmp_oc_officers_stage
+                        ORDER BY jurisdiction_code, company_number, name_norm, role_class
+                    )
+                    INSERT INTO oc_officers (
+                        jurisdiction_code, company_number, name, name_norm, position,
+                        role_class, is_corporate_officer, is_current, address_raw, address_coarse
+                    )
+                    SELECT
+                        s.jurisdiction_code, s.company_number, s.name, s.name_norm, s.position,
+                        s.role_class, s.is_corporate_officer, s.is_current, s.address_raw, s.address_coarse
+                    FROM dedup_stage s
+                    WHERE NOT EXISTS (
+                        SELECT 1
+                        FROM oc_officers o
+                        WHERE o.jurisdiction_code = s.jurisdiction_code
+                          AND o.company_number = s.company_number
+                          AND o.name_norm = s.name_norm
+                          AND o.role_class = s.role_class
+                    );
+                    """
+                )
             inserted_officers = cur.rowcount
+
+            if self.prev_total > 0:
+                cur.execute(
+                    """
+                    WITH dedup_prev AS (
+                        SELECT DISTINCT ON (jurisdiction_code, company_number, company_name_norm)
+                            jurisdiction_code, company_number, company_name, company_name_norm, name_type
+                        FROM tmp_oc_prev_names_stage
+                        ORDER BY jurisdiction_code, company_number, company_name_norm
+                    )
+                    INSERT INTO oc_previous_names (
+                        jurisdiction_code, company_number, company_name, company_name_norm, name_type
+                    )
+                    SELECT
+                        p.jurisdiction_code, p.company_number, p.company_name, p.company_name_norm, p.name_type
+                    FROM dedup_prev p
+                    WHERE NOT EXISTS (
+                        SELECT 1
+                        FROM oc_previous_names e
+                        WHERE e.jurisdiction_code = p.jurisdiction_code
+                          AND e.company_number = p.company_number
+                          AND e.company_name_norm = p.company_name_norm
+                    );
+                    """
+                )
 
             cur.execute("DROP TABLE IF EXISTS tmp_oc_companies_stage;")
             cur.execute("DROP TABLE IF EXISTS tmp_oc_officers_stage;")
+            cur.execute("DROP TABLE IF EXISTS tmp_oc_prev_names_stage;")
         self.conn.commit()
         return inserted_companies, inserted_officers
 
@@ -490,31 +654,87 @@ def _stream_csv_via_curl(url: str):
             raise RuntimeError(f"curl stream exited with code {ret} for {url}")
 
 
-def _record_status(conn, source_name: str, source_type: str, details: Dict[str, Any]) -> None:
+def _probe_socrata_updated_date(meta_url: str) -> Optional[dt.date]:
+    """Fetch O(1) Socrata view metadata (`rowsUpdatedAt`) without downloading the CSV."""
+    try:
+        r = requests.get(meta_url, headers=HTTP_HEADERS, timeout=15)
+        if r.status_code == 200:
+            ts = r.json().get("rowsUpdatedAt")
+            if ts:
+                return dt.datetime.fromtimestamp(int(ts), dt.timezone.utc).date()
+    except Exception:
+        pass
+    return None
+
+
+def _get_stored_external_date(conn, source_name: str) -> Optional[dt.date]:
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT external_last_updated FROM data_source_status WHERE source_name = %s",
+                (source_name,),
+            )
+            row = cur.fetchone()
+            if row and row[0]:
+                v = row[0]
+                return v.date() if hasattr(v, "date") else v
+    except Exception:
+        pass
+    return None
+
+
+def _should_skip_unchanged(
+    conn,
+    source_name: str,
+    upstream_date: Optional[dt.date],
+    only_if_changed: bool,
+) -> bool:
+    if not only_if_changed or upstream_date is None:
+        return False
+    stored = _get_stored_external_date(conn, source_name)
+    if stored is not None and upstream_date <= stored:
+        print(f"  ✓ [{source_name}] Upstream unchanged ({upstream_date} <= stored {stored}); skipping download.")
+        return True
+    return False
+
+
+def _record_status(
+    conn,
+    source_name: str,
+    source_type: str,
+    details: Dict[str, Any],
+    external_last_updated: Optional[dt.date] = None,
+    refresh_status: str = "success",
+) -> None:
     with conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO data_source_status (
-                source_name, source_type, last_refreshed_at, refresh_status, details
+                source_name, source_type, external_last_updated,
+                last_refreshed_at, refresh_status, details
             )
-            VALUES (%s, %s, NOW(), 'success', %s)
+            VALUES (%s, %s, %s, NOW(), %s, %s)
             ON CONFLICT (source_name) DO UPDATE SET
                 source_type = EXCLUDED.source_type,
+                external_last_updated = COALESCE(EXCLUDED.external_last_updated, data_source_status.external_last_updated),
                 last_refreshed_at = NOW(),
-                refresh_status = 'success',
+                refresh_status = EXCLUDED.refresh_status,
                 details = EXCLUDED.details;
             """,
-            (source_name, source_type, Json(details)),
+            (source_name, source_type, external_last_updated, refresh_status, Json(details)),
         )
         cur.execute("DELETE FROM kv_cache WHERE key = 'completeness_matrix'")
     conn.commit()
 
 
-def ingest_pa_dos(conn) -> Tuple[int, int]:
+def ingest_pa_dos(conn, only_if_changed: bool = False, replace_all: bool = False) -> Tuple[int, int]:
     """Stream Pennsylvania DOS Registered Businesses & Governors/Officers (`xvd7-5r2c`)."""
     t0 = time.time()
-    print("▶ [PA DOS] Streaming bulk CSV from data.pa.gov (xvd7-5r2c)...")
-    writer = BulkOCStagingWriter(conn, "us_pa")
+    ext_date = _probe_socrata_updated_date(PA_DOS_META_URL)
+    if _should_skip_unchanged(conn, "PA_DOS_CORPORATIONS", ext_date, only_if_changed):
+        return 0, 0
+    print(f"▶ [PA DOS] Streaming bulk CSV from data.pa.gov (xvd7-5r2c, upstream={ext_date})...")
+    writer = BulkOCStagingWriter(conn, "us_pa", replace_all=replace_all)
     seen_filings = set()
     rows_read = 0
 
@@ -605,19 +825,25 @@ def ingest_pa_dos(conn) -> Tuple[int, int]:
             "companies_count": c_cnt,
             "officers_count": o_cnt,
             "csv_rows_processed": rows_read,
+            "refresh_mode": "live_full",
+            "merge_mode": "replace_all" if replace_all else "non_destructive_upsert",
             "source_url": "https://data.pa.gov/Businesses/Registered-Businesses-in-PA-Current-by-County/xvd7-5r2c",
             "elapsed_sec": elapsed,
         },
+        external_last_updated=ext_date,
     )
-    print(f"✓ [PA DOS] Loaded {c_cnt:,} PA companies and {o_cnt:,} Governors/Officers in {elapsed}s.")
+    print(f"✓ [PA DOS] Merged {c_cnt:,} PA companies and {o_cnt:,} new Governors/Officers in {elapsed}s.")
     return c_cnt, o_cnt
 
 
-def ingest_ny_dos(conn) -> Tuple[int, int]:
+def ingest_ny_dos(conn, only_if_changed: bool = False, replace_all: bool = False) -> Tuple[int, int]:
     """Stream New York DOS Active Corporations (`n9v6-gdp6`) into `us_ny`."""
     t0 = time.time()
-    print("▶ [NY DOS] Streaming bulk CSV from data.ny.gov (n9v6-gdp6)...")
-    writer = BulkOCStagingWriter(conn, "us_ny")
+    ext_date = _probe_socrata_updated_date(NY_DOS_META_URL)
+    if _should_skip_unchanged(conn, "NY_DOS_CORPORATIONS", ext_date, only_if_changed):
+        return 0, 0
+    print(f"▶ [NY DOS] Streaming bulk CSV from data.ny.gov (n9v6-gdp6, upstream={ext_date})...")
+    writer = BulkOCStagingWriter(conn, "us_ny", replace_all=replace_all)
     rows_read = 0
 
     with _stream_csv_via_curl(NY_DOS_CSV_URL) as reader:
@@ -735,19 +961,26 @@ def ingest_ny_dos(conn) -> Tuple[int, int]:
             "companies_count": c_cnt,
             "officers_count": o_cnt,
             "csv_rows_processed": rows_read,
+            "refresh_mode": "live_partial",
+            "merge_mode": "replace_all" if replace_all else "non_destructive_upsert",
             "source_url": "https://data.ny.gov/Economic-Development/Active-Corporations-Beginning-1800/n9v6-gdp6",
             "elapsed_sec": elapsed,
         },
+        external_last_updated=ext_date,
+        refresh_status="partial_live",
     )
-    print(f"✓ [NY DOS] Loaded {c_cnt:,} NY companies and {o_cnt:,} CEOs in {elapsed}s.")
+    print(f"✓ [NY DOS] Merged {c_cnt:,} active NY companies and {o_cnt:,} new CEOs in {elapsed}s.")
     return c_cnt, o_cnt
 
 
-def ingest_co_sos(conn) -> Tuple[int, int]:
+def ingest_co_sos(conn, only_if_changed: bool = False, replace_all: bool = False) -> Tuple[int, int]:
     """Stream Colorado SOS Business Entities (`4ykn-tg5h`) + True Names (`qpft-q492`) into `us_co`."""
     t0 = time.time()
-    print("▶ [CO SOS] Streaming True Names CSV (qpft-q492) & Business Entities CSV (4ykn-tg5h)...")
-    writer = BulkOCStagingWriter(conn, "us_co")
+    ext_date = _probe_socrata_updated_date(CO_SOS_META_URL)
+    if _should_skip_unchanged(conn, "CO_SOS_CORPORATIONS", ext_date, only_if_changed):
+        return 0, 0
+    print(f"▶ [CO SOS] Streaming True Names CSV (qpft-q492) & Business Entities CSV (4ykn-tg5h, upstream={ext_date})...")
+    writer = BulkOCStagingWriter(conn, "us_co", replace_all=replace_all)
 
     # 1. Load True Names map (`entityid -> list of true names`)
     true_names: Dict[str, List[str]] = {}
@@ -865,11 +1098,15 @@ def ingest_co_sos(conn) -> Tuple[int, int]:
             "companies_count": c_cnt,
             "officers_count": o_cnt,
             "csv_rows_processed": rows_read,
+            "refresh_mode": "live_partial",
+            "merge_mode": "replace_all" if replace_all else "non_destructive_upsert",
             "source_url": "https://data.colorado.gov/Business/Business-Entities-in-Colorado/4ykn-tg5h",
             "elapsed_sec": elapsed,
         },
+        external_last_updated=ext_date,
+        refresh_status="partial_live",
     )
-    print(f"✓ [CO SOS] Loaded {c_cnt:,} active CO companies and {o_cnt:,} True Name principals in {elapsed}s.")
+    print(f"✓ [CO SOS] Merged {c_cnt:,} active CO companies and {o_cnt:,} new True Name principals in {elapsed}s.")
     return c_cnt, o_cnt
 
 
@@ -965,13 +1202,66 @@ def _download_sunbiz_zip(dest_path: str) -> None:
     )
 
 
-def ingest_fl_sunbiz(conn, zip_path: str = "/tmp/sunbiz_cordata.zip", keep_zip: bool = False) -> Tuple[int, int]:
+def _probe_sunbiz_remote_meta() -> Tuple[int, Optional[dt.date]]:
+    """Return `(remote_size_bytes, remote_date)` for Sunbiz `cordata.zip` via O(1) SFTP listing."""
+    try:
+        listing = subprocess.check_output(
+            ["curl", "-sk", "--user", FL_SUNBIZ_USER, "sftp://sftp.floridados.gov/Public/doc/Quarterly/Cor/"],
+            timeout=30,
+        ).decode("utf-8", errors="replace")
+        for ln in listing.splitlines():
+            if "cordata.zip" not in ln:
+                continue
+            parts = ln.split()
+            size = 0
+            for tok in parts:
+                if tok.isdigit() and int(tok) > 100_000_000:
+                    size = int(tok)
+                    break
+            # Typical `ls -l` date tokens: Month Day Year-or-HH:MM (indices 5,6,7)
+            rem_dt: Optional[dt.date] = None
+            if len(parts) >= 8:
+                mon_s, day_s, yr_or_tm = parts[5], parts[6], parts[7]
+                yr = dt.date.today().year if ":" in yr_or_tm else int(yr_or_tm)
+                try:
+                    rem_dt = dt.datetime.strptime(f"{mon_s} {day_s} {yr}", "%b %d %Y").date()
+                except ValueError:
+                    rem_dt = None
+            return size, rem_dt
+    except Exception:
+        pass
+    return 0, None
+
+
+def ingest_fl_sunbiz(
+    conn,
+    zip_path: str = "/tmp/sunbiz_cordata.zip",
+    keep_zip: bool = False,
+    only_if_changed: bool = False,
+    replace_all: bool = False,
+) -> Tuple[int, int]:
     """Download & stream-parse Florida Sunbiz 1440-byte corporate/LLC master (`cordata.zip`) into `us_fl`."""
     t0 = time.time()
-    print("▶ [FL Sunbiz] Starting quarterly master corporate/LLC ingestion...")
+    rem_size, ext_date = _probe_sunbiz_remote_meta()
+    if only_if_changed:
+        stored_ext = _get_stored_external_date(conn, "FL_SUNBIZ_CORPORATIONS")
+        stored_size = 0
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT details->>'remote_zip_bytes' FROM data_source_status WHERE source_name = 'FL_SUNBIZ_CORPORATIONS'")
+                r = cur.fetchone()
+                if r and r[0] and str(r[0]).isdigit():
+                    stored_size = int(r[0])
+        except Exception:
+            pass
+        if (rem_size and stored_size == rem_size) or (ext_date and stored_ext and ext_date <= stored_ext):
+            print(f"  ✓ [FL Sunbiz] Upstream cordata.zip unchanged (size={rem_size:,}, date={ext_date}); skipping download.")
+            return 0, 0
+
+    print(f"▶ [FL Sunbiz] Starting quarterly master corporate/LLC ingestion (upstream={ext_date})...")
     _download_sunbiz_zip(zip_path)
 
-    writer = BulkOCStagingWriter(conn, "us_fl")
+    writer = BulkOCStagingWriter(conn, "us_fl", replace_all=replace_all)
     lines_read = 0
 
     @contextmanager
@@ -1121,22 +1411,460 @@ def ingest_fl_sunbiz(conn, zip_path: str = "/tmp/sunbiz_cordata.zip", keep_zip: 
             "officers_count": o_cnt,
             "quarantined_agent_hubs": ra_cnt,
             "records_scanned": lines_read,
+            "remote_zip_bytes": rem_size or None,
+            "refresh_mode": "live_full",
+            "merge_mode": "replace_all" if replace_all else "non_destructive_upsert",
             "source_url": "https://dos.fl.gov/sunbiz/other-services/data-downloads/",
             "elapsed_sec": elapsed,
         },
+        external_last_updated=ext_date or dt.date.today(),
     )
-    print(f"✓ [FL Sunbiz] Loaded {c_cnt:,} active FL companies and {o_cnt:,} Officers/LLC Managers in {elapsed}s.")
+    print(f"✓ [FL Sunbiz] Merged {c_cnt:,} active FL companies and {o_cnt:,} new Officers/LLC Managers in {elapsed}s.")
     return c_cnt, o_cnt
 
 
+def _arcgis_epoch_to_date(ms_val: Any) -> Optional[str]:
+    if ms_val is None or ms_val == "":
+        return None
+    try:
+        ms = int(ms_val)
+        d = dt.datetime.fromtimestamp(ms / 1000.0, dt.timezone.utc).date()
+        if 1750 <= d.year <= 2035:
+            return d.isoformat()
+    except Exception:
+        pass
+    return None
+
+
+def _probe_dc_dlcp_max_mod_date(layer_id: int = 0) -> Optional[dt.date]:
+    try:
+        r = requests.get(
+            f"{DC_DLCP_FS_BASE}/{layer_id}/query",
+            params={
+                "where": "DCS_LAST_MOD_DTTM IS NOT NULL",
+                "outFields": "DCS_LAST_MOD_DTTM",
+                "orderByFields": "DCS_LAST_MOD_DTTM DESC",
+                "resultRecordCount": 1,
+                "f": "json",
+            },
+            headers=HTTP_HEADERS,
+            timeout=20,
+        )
+        if r.status_code == 200:
+            feats = r.json().get("features") or []
+            if feats:
+                ms = (feats[0].get("attributes") or {}).get("DCS_LAST_MOD_DTTM")
+                if ms:
+                    return dt.datetime.fromtimestamp(int(ms) / 1000.0, dt.timezone.utc).date()
+    except Exception:
+        pass
+    return None
+
+
+def _iter_arcgis_table_keyset(
+    layer_id: int,
+    out_fields: str,
+    where_extra: str = "",
+    page_size: int = 2000,
+):
+    """Deterministic `OBJECTID > last_oid` keyset pagination over Open Data DC ArcGIS tables."""
+    url = f"{DC_DLCP_FS_BASE}/{layer_id}/query"
+    last_oid = 0
+    while True:
+        where = f"OBJECTID > {last_oid}"
+        if where_extra:
+            where = f"({where_extra}) AND {where}"
+        params = {
+            "where": where,
+            "outFields": out_fields,
+            "orderByFields": "OBJECTID ASC",
+            "resultRecordCount": page_size,
+            "f": "json",
+        }
+        payload = None
+        for attempt in range(4):
+            try:
+                resp = requests.get(url, params=params, headers=HTTP_HEADERS, timeout=45)
+                if resp.status_code == 200:
+                    payload = resp.json()
+                    if "error" not in payload:
+                        break
+            except Exception:
+                pass
+            time.sleep(1.5 * (attempt + 1))
+        if not payload or "error" in payload:
+            raise RuntimeError(f"DC DLCP layer {layer_id} query failed after retries at OBJECTID > {last_oid}")
+        feats = payload.get("features") or []
+        if not feats:
+            break
+        for feat in feats:
+            attrs = feat.get("attributes") or {}
+            oid = attrs.get("OBJECTID")
+            if oid is not None and int(oid) > last_oid:
+                last_oid = int(oid)
+            yield attrs
+        if len(feats) < page_size:
+            break
+
+
+def ingest_dc_dlcp(
+    conn,
+    since_days: Optional[int] = None,
+    only_if_changed: bool = False,
+    replace_all: bool = False,
+) -> Tuple[int, int]:
+    """Stream official Open Data DC DLCP Corporate Registration (Table 0),
+    Trade Names (Table 1), and Beneficial Owners (Table 2) into `us_dc`."""
+    t0 = time.time()
+    ext_date = _probe_dc_dlcp_max_mod_date(0) or _probe_dc_dlcp_max_mod_date(2)
+    if _should_skip_unchanged(conn, "DC_DLCP_CORPORATIONS", ext_date, only_if_changed):
+        return 0, 0
+
+    where_corp = ""
+    where_tn = ""
+    if since_days is not None and since_days > 0:
+        cutoff_str = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=since_days)).strftime("%Y-%m-%d 00:00:00")
+        # DC stamps DCS_LAST_MOD_DTTM on every row during nightly ETL, so incremental mode filters
+        # by newly formed or newly reported entities, then pulls matching Beneficial Owners by FILE_NUMBER.
+        where_corp = (
+            f"EFFECTIVE_DATE >= TIMESTAMP '{cutoff_str}' "
+            f"OR DATE_LAST_REPORT_FILED >= TIMESTAMP '{cutoff_str}'"
+        )
+        where_tn = f"EFFECTIVE_DATE >= TIMESTAMP '{cutoff_str}'"
+
+    mode_lbl = f"incremental last {since_days}d" if where_corp else "full sync"
+    print(f"▶ [DC DLCP] Streaming Open Data DC Corporate Registration + Beneficial Owners + Trade Names ({mode_lbl}, upstream={ext_date})...", flush=True)
+    writer = BulkOCStagingWriter(conn, "us_dc", replace_all=replace_all)
+
+    # 1. Table 0: Corporate Registration (507K entities full; ~1K-5K rows/month incremental)
+    corp_rows = 0
+    touched_fnums: List[str] = []
+    corp_fields = (
+        "OBJECTID,FILE_NUMBER,ENTITY_STATUS,LOCALE,MODELTYPE,BUSINESS_NAME,"
+        "BUSNIESS_ADDRESS_LINE1,BUSNIESS_ADDRESS_LINE2,BUSINESS_CITY,BUSINESS_STATE,ZIPCODE,"
+        "RA_NAME,RA_ADDRESS1,RA_ADDRESS2,RA_CITY,RA_STATE,RA_ZIPCODE,EFFECTIVE_DATE"
+    )
+    for attrs in _iter_arcgis_table_keyset(0, corp_fields, where_extra=where_corp):
+        corp_rows += 1
+        fnum = _clean_text(attrs.get("FILE_NUMBER"))
+        bname = _clean_text(attrs.get("BUSINESS_NAME"))
+        if not fnum or not bname:
+            continue
+        if where_corp:
+            touched_fnums.append(fnum)
+        status = _clean_text(attrs.get("ENTITY_STATUS"))
+        is_act = "ACTIVE" in status.upper() or "GOOD STANDING" in status.upper()
+        bstreet = " ".join(
+            p for p in (_clean_text(attrs.get("BUSNIESS_ADDRESS_LINE1")), _clean_text(attrs.get("BUSNIESS_ADDRESS_LINE2"))) if p
+        )
+        bst = _clean_state(attrs.get("BUSINESS_STATE"), fallback="DC")
+        baddr = compose_address(bstreet, _clean_text(attrs.get("BUSINESS_CITY")), bst, _clean_zip(attrs.get("ZIPCODE")))
+
+        ra_name = _clean_text(attrs.get("RA_NAME"))
+        rastreet = " ".join(
+            p for p in (_clean_text(attrs.get("RA_ADDRESS1")), _clean_text(attrs.get("RA_ADDRESS2"))) if p
+        )
+        rast = _clean_state(attrs.get("RA_STATE"), fallback="DC")
+        ra_addr = compose_address(rastreet, _clean_text(attrs.get("RA_CITY")), rast, _clean_zip(attrs.get("RA_ZIPCODE")))
+
+        writer.add_company(
+            fnum,
+            bname,
+            company_type=_clean_text(attrs.get("MODELTYPE")),
+            current_status=status or "Unknown",
+            is_active=is_act,
+            incorporation_date=_arcgis_epoch_to_date(attrs.get("EFFECTIVE_DATE")),
+            registered_address_raw=baddr,
+            registered_state=bst,
+            mailing_address_raw=baddr,
+            mailing_state=bst,
+            agent_name=ra_name,
+            agent_address_raw=ra_addr,
+            source_url="https://corponline.dlcp.dc.gov/",
+        )
+        if corp_rows % 100000 == 0:
+            print(f"  [DC DLCP] Table 0 Corporate Registration: {corp_rows:,} rows...", flush=True)
+
+    # 2. Table 2: Official Beneficial Owners (494K beneficial owners -> oc_officers!)
+    bo_rows = 0
+    bo_fields = "OBJECTID,NAME,ADDRESS,BUSINESSNAME,MODELTYPE,INITIALFILENUMBER,STATUS"
+    if where_corp:
+        # Incremental mode: fetch beneficial owners for all newly formed / newly filed entities
+        uniq_fnums = sorted(set(touched_fnums))
+        for start in range(0, len(uniq_fnums), 80):
+            chunk = uniq_fnums[start : start + 80]
+            quoted = ",".join("'" + fn.replace("'", "''") + "'" for fn in chunk)
+            in_where = f"INITIALFILENUMBER IN ({quoted})"
+            for attrs in _iter_arcgis_table_keyset(2, bo_fields, where_extra=in_where):
+                bo_rows += 1
+                raw_fnum = _clean_text(attrs.get("INITIALFILENUMBER"))
+                if raw_fnum.upper().startswith("US-DC-FN"):
+                    raw_fnum = raw_fnum[8:].strip()
+                oname = _clean_text(attrs.get("NAME"))
+                if not raw_fnum or not oname:
+                    continue
+                writer.add_officer(
+                    raw_fnum,
+                    oname,
+                    "Beneficial Owner",
+                    is_corporate_flag=looks_like_business_name(oname),
+                    address_raw=_clean_text(attrs.get("ADDRESS")),
+                )
+    else:
+        for attrs in _iter_arcgis_table_keyset(2, bo_fields, where_extra=""):
+            bo_rows += 1
+            raw_fnum = _clean_text(attrs.get("INITIALFILENUMBER"))
+            if raw_fnum.upper().startswith("US-DC-FN"):
+                raw_fnum = raw_fnum[8:].strip()
+            oname = _clean_text(attrs.get("NAME"))
+            if not raw_fnum or not oname:
+                continue
+            writer.add_officer(
+                raw_fnum,
+                oname,
+                "Beneficial Owner",
+                is_corporate_flag=looks_like_business_name(oname),
+                address_raw=_clean_text(attrs.get("ADDRESS")),
+            )
+            if bo_rows % 100000 == 0:
+                print(f"  [DC DLCP] Table 2 Beneficial Owners: {bo_rows:,} rows...", flush=True)
+
+    # 3. Table 1: Trade Names / DBAs (63K -> oc_previous_names)
+    tn_rows = 0
+    tn_fields = "OBJECTID,TRADE_NAME,INITIAL_FILENUMBER"
+    for attrs in _iter_arcgis_table_keyset(1, tn_fields, where_extra=where_tn):
+        tn_rows += 1
+        raw_fnum = _clean_text(attrs.get("INITIAL_FILENUMBER"))
+        tname = _clean_text(attrs.get("TRADE_NAME"))
+        if raw_fnum and tname:
+            writer.add_previous_name(raw_fnum, tname, name_type="trade_name")
+
+    c_cnt, o_cnt = writer.finalize()
+    elapsed = round(time.time() - t0, 1)
+    _record_status(
+        conn,
+        "DC_DLCP_CORPORATIONS",
+        "corporate_registry",
+        {
+            "companies_count": c_cnt,
+            "officers_count": o_cnt,
+            "trade_names_scanned": tn_rows,
+            "beneficial_owner_rows_scanned": bo_rows,
+            "corporate_rows_scanned": corp_rows,
+            "sync_mode": mode_lbl,
+            "refresh_mode": "live_full",
+            "merge_mode": "replace_all" if replace_all else "non_destructive_upsert",
+            "source_url": f"{DC_DLCP_FS_BASE}",
+            "elapsed_sec": elapsed,
+        },
+        external_last_updated=ext_date,
+    )
+    print(f"✓ [DC DLCP] Merged {c_cnt:,} DC entities, {o_cnt:,} new Beneficial Owners, {tn_rows:,} Trade Names in {elapsed}s.")
+    return c_cnt, o_cnt
+
+
+def ingest_ct_sots_mirror(conn) -> Tuple[int, int]:
+    """Mirror freshly-synced CT SOTS `businesses` & `principals` into `oc_companies` & `oc_officers` (`us_ct`)
+    non-destructively so cross-state corporate piercing uses live CT SOTS updates."""
+    t0 = time.time()
+    print("▶ [CT SOTS Mirror] Syncing live CT SOTS businesses & principals into oc_companies/oc_officers (`us_ct`)...")
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO oc_companies (
+                jurisdiction_code, company_number, name, name_norm, name_prefix18,
+                company_type, current_status, is_active, is_nonprofit, incorporation_date,
+                registered_address_raw, registered_state,
+                mailing_address_raw, mailing_state,
+                registry_url, retrieved_at, updated_at
+            )
+            SELECT
+                'us_ct',
+                b.id::text,
+                b.name,
+                b.name_norm,
+                CASE WHEN LENGTH(b.name_norm) >= 18 THEN LEFT(b.name_norm, 18) ELSE NULL END,
+                b.business_type,
+                b.status,
+                (UPPER(COALESCE(b.status, '')) LIKE 'ACTIVE%%'),
+                (COALESCE(b.business_type, '') ~* '(non[- ]?stock|non[- ]?profit|not[- ]?for[- ]?profit|charit|relig|church|benevolent|housing\\s+development\\s+fund)'),
+                CASE WHEN b.date_of_formation ~ '^\\d{4}-\\d{2}-\\d{2}' THEN SUBSTRING(b.date_of_formation, 1, 10)::date ELSE NULL END,
+                NULLIF(TRIM(CONCAT_WS(', ', NULLIF(b.business_address, ''), NULLIF(b.business_city, ''), NULLIF(b.business_state, ''), NULLIF(b.business_zip, ''))), ''),
+                NULLIF(UPPER(TRIM(COALESCE(b.business_state, 'CT'))), ''),
+                NULLIF(TRIM(CONCAT_WS(', ', NULLIF(b.mail_address, ''), NULLIF(b.mail_city, ''), NULLIF(b.mail_state, ''), NULLIF(b.mail_zip, ''))), ''),
+                NULLIF(UPPER(TRIM(COALESCE(b.mail_state, ''))), ''),
+                'https://data.ct.gov/Business/Business-Master/n7gp-d28j',
+                NOW(),
+                NOW()
+            FROM businesses b
+            WHERE b.id IS NOT NULL
+              AND b.name IS NOT NULL
+              AND b.name_norm IS NOT NULL
+              AND LENGTH(b.name_norm) > 0
+              AND NOT EXISTS (
+                  SELECT 1 FROM oc_companies oc
+                  WHERE oc.jurisdiction_code = 'us_ct' AND oc.company_number = b.id::text
+              )
+            ON CONFLICT (jurisdiction_code, company_number) DO NOTHING;
+            """
+        )
+        new_co = cur.rowcount
+
+        cur.execute(
+            """
+            SELECT MAX(last_refreshed_at)::date
+            FROM data_source_status
+            WHERE source_name IN ('businesses', 'principals')
+            """
+        )
+        r = cur.fetchone()
+        ext_dt = r[0] if (r and r[0]) else dt.date.today()
+
+    conn.commit()
+    elapsed = round(time.time() - t0, 1)
+    _record_status(
+        conn,
+        "CT_SOTS_CORPORATIONS",
+        "corporate_registry",
+        {
+            "newly_mirrored_companies": new_co,
+            "refresh_mode": "live_full",
+            "merge_mode": "non_destructive_upsert",
+            "source_url": "https://data.ct.gov/Business/Business-Master/n7gp-d28j",
+            "elapsed_sec": elapsed,
+        },
+        external_last_updated=ext_dt,
+    )
+    print(f"✓ [CT SOTS Mirror] Added {new_co:,} newly filed CT SOTS entities into oc_companies (`us_ct`) in {elapsed}s.")
+    return new_co, 0
+
+
+def ingest_irs_eo_bmf(conn, only_if_changed: bool = False) -> Tuple[int, int]:
+    """Stream official monthly IRS Exempt Organizations Business Master File (`eo1.csv`..`eo4.csv`)
+    and flag matching 501(c) organizations `is_nonprofit = TRUE` across all loaded US jurisdictions
+    so the nonprofit-board firewall stays continuously updated even in frozen-snapshot states."""
+    from email.utils import parsedate_to_datetime
+
+    t0 = time.time()
+    ext_date: Optional[dt.date] = None
+    try:
+        hr = requests.head(IRS_EO_BMF_URLS[0], headers=HTTP_HEADERS, timeout=15, allow_redirects=True)
+        lm = hr.headers.get("Last-Modified")
+        if lm:
+            ext_date = parsedate_to_datetime(lm).date()
+    except Exception:
+        pass
+
+    if _should_skip_unchanged(conn, "IRS_EO_BMF_NONPROFITS", ext_date, only_if_changed):
+        return 0, 0
+
+    print(f"▶ [IRS EO BMF] Streaming official 50-state 501(c) nonprofit master files (Last-Modified={ext_date})...")
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            DROP TABLE IF EXISTS tmp_irs_nonprofits;
+            CREATE TEMP TABLE tmp_irs_nonprofits (
+                jurisdiction_code TEXT NOT NULL,
+                name_norm         TEXT NOT NULL
+            );
+            """
+        )
+
+    rows_read = 0
+    buf: List[str] = []
+    seen = set()
+    for url in IRS_EO_BMF_URLS:
+        with _stream_csv_via_curl(url) as reader:
+            header = next(reader, None)
+            if not header:
+                continue
+            idx = {c.strip().upper(): i for i, c in enumerate(header)}
+            i_name = idx.get("NAME", 1)
+            i_st = idx.get("STATE", 5)
+            for row in reader:
+                rows_read += 1
+                if len(row) <= max(i_name, i_st):
+                    continue
+                st = _clean_state(row[i_st])
+                if not st:
+                    continue
+                norm = normalize_business_name(row[i_name])
+                if not norm or len(norm) < 4:
+                    continue
+                key = (f"us_{st.lower()}", norm)
+                if key in seen:
+                    continue
+                seen.add(key)
+                buf.append(f"{_tsv_cell(key[0])}\t{_tsv_cell(key[1])}")
+                if len(buf) >= 100000:
+                    with conn.cursor() as cur:
+                        cur.copy_from(io.StringIO("\n".join(buf) + "\n"), "tmp_irs_nonprofits", columns=("jurisdiction_code", "name_norm"))
+                    buf.clear()
+    if buf:
+        with conn.cursor() as cur:
+            cur.copy_from(io.StringIO("\n".join(buf) + "\n"), "tmp_irs_nonprofits", columns=("jurisdiction_code", "name_norm"))
+        buf.clear()
+
+    with conn.cursor() as cur:
+        cur.execute("CREATE INDEX idx_tmp_irs_np ON tmp_irs_nonprofits (jurisdiction_code, name_norm);")
+        cur.execute(
+            """
+            UPDATE oc_companies c
+            SET is_nonprofit = TRUE, updated_at = NOW()
+            FROM tmp_irs_nonprofits t
+            WHERE c.jurisdiction_code = t.jurisdiction_code
+              AND c.name_norm = t.name_norm
+              AND COALESCE(c.is_nonprofit, FALSE) = FALSE;
+            """
+        )
+        flagged = cur.rowcount
+        cur.execute("DROP TABLE IF EXISTS tmp_irs_nonprofits;")
+    conn.commit()
+
+    elapsed = round(time.time() - t0, 1)
+    _record_status(
+        conn,
+        "IRS_EO_BMF_NONPROFITS",
+        "system",
+        {
+            "irs_rows_scanned": rows_read,
+            "unique_501c_names": len(seen),
+            "newly_flagged_oc_nonprofits": flagged,
+            "source_url": "https://www.irs.gov/charities-non-profits/exempt-organizations-business-master-file-extract-eo-bmf",
+            "elapsed_sec": elapsed,
+        },
+        external_last_updated=ext_date or dt.date.today(),
+    )
+    print(f"✓ [IRS EO BMF] Scanned {rows_read:,} IRS 501(c) rows -> newly flagged {flagged:,} oc_companies as is_nonprofit=TRUE in {elapsed}s.")
+    return flagged, 0
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Bulk ingest state corporate/LLC registries into oc_companies & oc_officers.")
+    parser = argparse.ArgumentParser(
+        description="Non-destructive live refresher for free official state corporate/LLC registries & IRS 501(c) nonprofits."
+    )
     parser.add_argument(
         "--states",
         nargs="+",
-        default=["pa", "ny", "co", "fl"],
-        choices=["pa", "ny", "co", "fl"],
-        help="State corporate registries to ingest.",
+        default=["ct", "dc", "pa", "ny", "co", "fl", "irs_nonprofits"],
+        choices=["ct", "dc", "pa", "ny", "co", "fl", "irs_nonprofits"],
+        help="Public corporate/nonprofit registries to refresh.",
+    )
+    parser.add_argument(
+        "--only-if-changed",
+        action="store_true",
+        help="Skip multi-GB bulk downloads when upstream Socrata/ArcGIS/SFTP/HTTP watermark has not advanced.",
+    )
+    parser.add_argument(
+        "--dc-since-days",
+        type=int,
+        default=None,
+        help="Incremental window (days) for Open Data DC DLCP sync (e.g. 30 for weekly scheduled runs).",
+    )
+    parser.add_argument(
+        "--replace-all",
+        action="store_true",
+        help="Dangerous: wipe existing jurisdiction rows before load (default is non-destructive upsert preserving 2026-11-17 OC history).",
     )
     parser.add_argument("--keep-sunbiz-zip", action="store_true", help="Keep /tmp/sunbiz_cordata.zip after load.")
     args = parser.parse_args()
@@ -1144,18 +1872,42 @@ def main() -> None:
     conn = psycopg2.connect(DATABASE_URL)
     try:
         ensure_opencorporates_tables(conn)
+        any_company_update = False
         for st in args.states:
-            if st == "pa":
-                ingest_pa_dos(conn)
+            if st == "ct":
+                ingest_ct_sots_mirror(conn)
+                any_company_update = True
+            elif st == "dc":
+                c, _ = ingest_dc_dlcp(
+                    conn,
+                    since_days=args.dc_since_days,
+                    only_if_changed=args.only_if_changed,
+                    replace_all=args.replace_all,
+                )
+                any_company_update = any_company_update or (c > 0)
+            elif st == "pa":
+                c, _ = ingest_pa_dos(conn, only_if_changed=args.only_if_changed, replace_all=args.replace_all)
+                any_company_update = any_company_update or (c > 0)
             elif st == "ny":
-                ingest_ny_dos(conn)
+                c, _ = ingest_ny_dos(conn, only_if_changed=args.only_if_changed, replace_all=args.replace_all)
+                any_company_update = any_company_update or (c > 0)
             elif st == "co":
-                ingest_co_sos(conn)
+                c, _ = ingest_co_sos(conn, only_if_changed=args.only_if_changed, replace_all=args.replace_all)
+                any_company_update = any_company_update or (c > 0)
             elif st == "fl":
-                ingest_fl_sunbiz(conn, keep_zip=args.keep_sunbiz_zip)
+                c, _ = ingest_fl_sunbiz(
+                    conn,
+                    keep_zip=args.keep_sunbiz_zip,
+                    only_if_changed=args.only_if_changed,
+                    replace_all=args.replace_all,
+                )
+                any_company_update = any_company_update or (c > 0)
+            elif st == "irs_nonprofits":
+                ingest_irs_eo_bmf(conn, only_if_changed=args.only_if_changed)
 
-        ra_cnt = refresh_empirical_registered_agent_addresses(conn, min_distinct_companies=15)
-        print(f"✓ Quarantined {ra_cnt:,} empirical high-volume registered-agent addresses across oc_companies.")
+        if any_company_update:
+            ra_cnt = refresh_empirical_registered_agent_addresses(conn, min_distinct_companies=15)
+            print(f"✓ Quarantined {ra_cnt:,} empirical high-volume registered-agent addresses across oc_companies.")
     finally:
         conn.close()
 

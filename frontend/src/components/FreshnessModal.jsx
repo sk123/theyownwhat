@@ -154,6 +154,8 @@ function getStatusClasses(status) {
     const value = String(status || '').toLowerCase();
     if (value === 'success') return 'bg-emerald-50 text-emerald-700 border-emerald-100';
     if (value === 'running') return 'bg-blue-50 text-blue-700 border-blue-100';
+    if (value === 'partial_live') return 'bg-sky-50 text-sky-800 border-sky-200';
+    if (value === 'snapshot_frozen') return 'bg-amber-50 text-amber-900 border-amber-200';
     if (value === 'cama_queued' || value === 'cpra_roll_ready') return 'bg-sky-50 text-sky-700 border-sky-200';
     if (value === 'massgis_l3' || value === 'fdor_nal' || value === 'orpts_gis') return 'bg-slate-100 text-slate-700 border-slate-200';
     if (value === 'unavailable') return 'bg-slate-100 text-slate-500 border-slate-200';
@@ -339,6 +341,7 @@ const FreshnessModal = ({ isOpen, onClose }) => {
     }, [allRows]);
 
     const systemFreshness = data?.system_freshness || {};
+    const corporateRegistrySummary = data?.corporate_registry_summary || null;
 
     const handleSort = (field) => {
         if (sortField === field) {
@@ -514,6 +517,9 @@ const FreshnessModal = ({ isOpen, onClose }) => {
                         <SystemFreshnessCard label="CT Business DB" value={systemFreshness.businesses_last_updated} />
                         <SystemFreshnessCard label="Hartford code" value={systemFreshness.hartford_ce_last_updated} />
                     </div>
+                    {corporateRegistrySummary && (
+                        <CorporateRegistryDisclosure summary={corporateRegistrySummary} />
+                    )}
                     {loading ? (
                         <div className="flex flex-col items-center justify-center gap-4 py-20 text-slate-500">
                             <RefreshCw className="h-10 w-10 animate-spin text-blue-500" />
@@ -569,6 +575,111 @@ function SystemFreshnessCard({ label, value }) {
         <div className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
             <span className="font-black uppercase tracking-[0.12em] text-slate-400">{label}</span>
             <span className="font-mono font-bold text-slate-700">{value ? formatDateTime(value) : 'Unknown'}</span>
+        </div>
+    );
+}
+
+function CorporateRegistryDisclosure({ summary }) {
+    const liveFull = Array.isArray(summary.live_full_states) ? summary.live_full_states : [];
+    const livePartial = Array.isArray(summary.live_partial_states) ? summary.live_partial_states : [];
+    const frozenActive = Array.isArray(summary.snapshot_frozen_states) ? summary.snapshot_frozen_states : [];
+    const frozenHavens = Array.isArray(summary.frozen_holding_haven_states) ? summary.frozen_holding_haven_states : [];
+    const registries = Array.isArray(summary.registries) ? summary.registries : [];
+    const snapDate = summary.snapshot_date || '2026-11-17';
+
+    return (
+        <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50/70 p-3.5 text-xs text-slate-800">
+            <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                <div className="flex items-start gap-2.5">
+                    <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" aria-hidden="true" />
+                    <div>
+                        <h3 className="text-xs font-black uppercase tracking-[0.12em] text-amber-950">
+                            Corporate Registry Freshness &amp; Point-in-Time Snapshot Notice
+                        </h3>
+                        <p className="mt-1 leading-5 font-medium text-slate-700">
+                            Property tax rolls, rental licenses, and code-enforcement feeds continue auto-refreshing
+                            independently. Corporate/LLC registry auto-refresh is only available where states publish free
+                            official bulk APIs; all other states reflect a frozen OpenCorporates point-in-time snapshot
+                            ({snapDate})—entities formed or officers changed after that date will not appear automatically.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <div className="mt-3 flex flex-wrap gap-2">
+                <span className="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1 font-bold text-emerald-900">
+                    Live Auto-Refresh (Entities + Officers, {liveFull.length}): <span className="font-black">{liveFull.join(', ') || 'None'}</span>
+                </span>
+                <span className="rounded-lg border border-sky-200 bg-sky-50 px-2.5 py-1 font-bold text-sky-900">
+                    Partial Live (Entities Live · Older Officers Frozen, {livePartial.length}): <span className="font-black">{livePartial.join(', ') || 'None'}</span>
+                </span>
+                <span className="rounded-lg border border-amber-300 bg-white px-2.5 py-1 font-bold text-amber-950">
+                    Frozen Snapshot {snapDate} ({frozenActive.length} active{frozenHavens.length ? ` + ${frozenHavens.join('/')} holding` : ''}):{' '}
+                    <span className="font-black">{frozenActive.join(', ')}</span>
+                </span>
+            </div>
+
+            {registries.length > 0 && (
+                <details className="mt-3 rounded-lg border border-amber-200/90 bg-white">
+                    <summary className="cursor-pointer select-none px-3 py-2 text-xs font-black text-slate-700 hover:text-slate-950 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-blue-600">
+                        View state-by-state corporate registry refresh policy ({registries.length} loaded registries)
+                    </summary>
+                    <div className="overflow-x-auto border-t border-slate-100">
+                        <table className="w-full min-w-[680px] border-collapse text-left text-xs">
+                            <caption className="sr-only">
+                                Corporate registry live refresh status and frozen snapshot disclosures by state
+                            </caption>
+                            <thead className="bg-slate-50 text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">
+                                <tr>
+                                    <th scope="col" className="px-3 py-2">State</th>
+                                    <th scope="col" className="px-3 py-2">Status</th>
+                                    <th scope="col" className="px-3 py-2">Entities / Officers</th>
+                                    <th scope="col" className="px-3 py-2">Coverage &amp; Reason</th>
+                                    <th scope="col" className="px-3 py-2">Official Portal</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                                {registries.map((reg) => (
+                                    <tr key={reg.jurisdiction_code} className="align-top">
+                                        <td className="px-3 py-2 font-black text-slate-900 whitespace-nowrap">
+                                            {reg.state}
+                                            {reg.dataset_key === 'CROSS_STATE' && (
+                                                <span className="ml-1.5 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-500">
+                                                    Holding
+                                                </span>
+                                            )}
+                                        </td>
+                                        <td className="px-3 py-2 whitespace-nowrap">
+                                            <StatusBadge status={reg.status} />
+                                        </td>
+                                        <td className="px-3 py-2 whitespace-nowrap text-slate-700 font-semibold">
+                                            <div>Entities: {reg.entities_live ? 'Live' : `Frozen (${reg.snapshot_date || snapDate})`}</div>
+                                            <div>Officers: {reg.officers_live ? 'Live' : `Frozen (${reg.snapshot_date || snapDate})`}</div>
+                                        </td>
+                                        <td className="px-3 py-2 text-slate-600 leading-5">
+                                            {reg.frozen_reason || reg.coverage_note || reg.cadence}
+                                        </td>
+                                        <td className="px-3 py-2 whitespace-nowrap">
+                                            {reg.source_url ? (
+                                                <a
+                                                    href={reg.source_url}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    className="inline-flex items-center gap-1 font-bold text-blue-700 underline decoration-blue-200 underline-offset-2 hover:decoration-blue-600"
+                                                >
+                                                    Registry <ExternalLink className="h-3 w-3" aria-hidden="true" />
+                                                </a>
+                                            ) : (
+                                                <span className="text-slate-400">-</span>
+                                            )}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </details>
+            )}
         </div>
     );
 }
@@ -862,6 +973,15 @@ function DatasetStatusCard({ dataset }) {
                 {details.refresh_cadence && (
                     <MetricChip label="Cadence" value={details.refresh_cadence} tone="default" />
                 )}
+                {isCorpRegistry && details.is_frozen_snapshot && (
+                    <MetricChip label="Snapshot" value={`Frozen (${details.snapshot || '2026-11-17'})`} tone="amber" />
+                )}
+                {isCorpRegistry && details.refresh_mode === 'live_full' && (
+                    <MetricChip label="Registry Sync" value="Live Official API/SFTP" tone="emerald" />
+                )}
+                {isCorpRegistry && details.refresh_mode === 'live_partial' && (
+                    <MetricChip label="Registry Sync" value="Live Entities · Frozen Officers" tone="amber" />
+                )}
 
                 {dataset.source_url && (
                     <a
@@ -886,6 +1006,11 @@ function DatasetStatusCard({ dataset }) {
             {dataset.message && (
                 <div className="mt-2.5 rounded-lg bg-slate-50 px-3 py-2 text-xs font-medium leading-5 text-slate-500">
                     {dataset.message}
+                    {isCorpRegistry && details.frozen_reason && !String(dataset.message).includes(details.frozen_reason) && (
+                        <div className="mt-1 font-semibold text-amber-900">
+                            Why frozen: {details.frozen_reason}
+                        </div>
+                    )}
                 </div>
             )}
 
@@ -928,10 +1053,14 @@ function StatusBadge({ status }) {
     const Icon =
         normalized === 'success' ? CheckCircle :
         normalized === 'running' ? RefreshCw :
+        normalized === 'partial_live' ? RefreshCw :
+        normalized === 'snapshot_frozen' ? Clock :
         normalized === 'cama_queued' || normalized === 'cpra_roll_ready' ? Clock :
         normalized === 'massgis_l3' || normalized === 'fdor_nal' || normalized === 'orpts_gis' ? Database :
         normalized === 'unavailable' ? ShieldAlert : AlertCircle;
     const label =
+        normalized === 'snapshot_frozen' ? 'SNAPSHOT FROZEN' :
+        normalized === 'partial_live' ? 'PARTIAL LIVE' :
         normalized === 'cama_queued' ? 'CAMA QUEUED' :
         normalized === 'cpra_roll_ready' ? 'CPRA ROLL READY' :
         normalized === 'massgis_l3' ? 'MASSGIS L3' :

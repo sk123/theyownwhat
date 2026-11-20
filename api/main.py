@@ -13,6 +13,11 @@ from urllib.parse import urlparse
 from typing import Any, Dict, List, Optional, Set, Tuple
 from collections import defaultdict
 
+from api.corporate_registry_manifest import (
+    build_corporate_registry_summary,
+    get_registry_policy,
+    refresh_status_for_mode,
+)
 from api.shared_utils import (
     BUSINESS_SUFFIX_PATTERNS,
     THIRD_PARTY_INSTITUTIONAL_SQL_PATTERN,
@@ -5319,6 +5324,41 @@ def _calculate_completeness_matrix(conn):
                 or details.get("join_note")
                 or prov.get("message")
             )
+            effective_status = ds.get("refresh_status") or "unknown"
+            if is_corp_registry:
+                jur_code_hint = (details.get("jurisdiction_code") or "").strip().lower()
+                if not jur_code_hint and source_name.startswith("OC_US_"):
+                    jur_code_hint = source_name[3:].lower()
+                elif not jur_code_hint:
+                    for prefix_map, jcode in (
+                        ("PA_DOS", "us_pa"),
+                        ("NY_DOS", "us_ny"),
+                        ("CO_SOS", "us_co"),
+                        ("FL_SUNBIZ", "us_fl"),
+                        ("DC_DLCP", "us_dc"),
+                        ("CT_SOTS", "us_ct"),
+                    ):
+                        if source_name.startswith(prefix_map):
+                            jur_code_hint = jcode
+                            break
+                if jur_code_hint:
+                    policy = get_registry_policy(jur_code_hint)
+                    mode = policy["refresh_mode"]
+                    details = dict(details)
+                    details.setdefault("refresh_mode", mode)
+                    details.setdefault("is_frozen_snapshot", mode == "snapshot_frozen")
+                    details.setdefault("entities_live", bool(policy["entities_live"]))
+                    details.setdefault("officers_live", bool(policy["officers_live"]))
+                    details.setdefault("refresh_cadence", policy["cadence"])
+                    if policy.get("frozen_reason"):
+                        details.setdefault("frozen_reason", policy["frozen_reason"])
+                    if policy.get("live_registry_name"):
+                        details.setdefault("live_registry_name", policy["live_registry_name"])
+                    # Ensure frozen/partial corporate registries never misreport a plain green "success"
+                    if effective_status in ("success", "unknown", None):
+                        effective_status = refresh_status_for_mode(mode)
+                    if not msg:
+                        msg = policy.get("coverage_note")
             if not msg and is_corp_registry and details.get("license"):
                 snap_lbl = details.get("snapshot")
                 msg = f"Bulk corporate & beneficial-officer registry ({details.get('license')}{f', snapshot {snap_lbl}' if snap_lbl else ''})."
@@ -5330,7 +5370,7 @@ def _calculate_completeness_matrix(conn):
             entry_payload = {
                 "source_name": ds.get("source_name"),
                 "source_type": ds.get("source_type"),
-                "status": ds.get("refresh_status") or "unknown",
+                "status": effective_status,
                 "external_last_updated": ds.get("external_last_updated").isoformat() if ds.get("external_last_updated") else None,
                 "last_refreshed_at": ds.get("last_refreshed_at").isoformat() if ds.get("last_refreshed_at") else None,
                 "source_url": details.get("source_url") or details.get("url") or details.get("source_dataset") or details.get("sam_crosswalk_source") or prov.get("source_url"),
@@ -5601,9 +5641,11 @@ def _calculate_completeness_matrix(conn):
                 })
 
         # Return composite object (frontend must handle)
+        corporate_registry_summary = build_corporate_registry_summary(ds_by_name)
         return {
             "sources": sources,
-            "system_freshness": system_freshness
+            "system_freshness": system_freshness,
+            "corporate_registry_summary": corporate_registry_summary,
         }
 
 @app.get("/api/completeness")

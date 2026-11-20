@@ -557,6 +557,46 @@ def run_scheduled_jurisdiction_optimization():
         logger.error(f"✘ Scheduled Jurisdiction Optimization Battery crashed: {e}")
     logger.info("=" * 80)
 
+def run_weekly_public_corporate_registries_refresh():
+    """Weekly local runner refreshing every corporate registry that offers a free
+    official public API / bulk download (`CT`, `DC`, `PA`, `NY`, `CO`, `FL`) plus
+    the monthly 50-state IRS EO BMF 501(c) nonprofit feed.
+
+    Uses non-destructive upserts (`replace_all=False`) + upstream watermark checks
+    (`--only-if-changed`) so historical 2026-11-17 OpenCorporates entities &
+    officers are preserved while live public registries stay continuously fresh.
+    """
+    logger.info("=" * 80)
+    logger.info("Starting Weekly Direct Public Corporate Registries Refresh (CT, DC, PA, NY, CO, FL + IRS 501c)")
+    logger.info("=" * 80)
+    sweep_stale_locks()
+    try:
+        cmd = [
+            sys.executable,
+            "scripts/ingest_state_corporate_registries.py",
+            "--states", "ct", "dc", "pa", "ny", "co", "fl", "irs_nonprofits",
+            "--only-if-changed",
+            "--dc-since-days", "30",
+        ]
+        res = run_source_only(cmd, check=False, timeout=NETWORK_REBUILD_TIMEOUT)
+        if getattr(res, "returncode", 1) == 0:
+            logger.info("✓ Direct public state corporate registries refresh finished cleanly.")
+        else:
+            logger.warning("⚠ Direct public state corporate registries exited with code %s.", getattr(res, "returncode", "unknown"))
+
+        # Always refresh OC_US_* / OPENCORPORATES_BULK live-vs-frozen transparency rows
+        sync_res = run_source_only(
+            [sys.executable, "scripts/sync_opencorporates_scheduled.py", "--sync-status-only"],
+            check=False,
+            timeout=600,
+        )
+        if getattr(sync_res, "returncode", 1) == 0:
+            logger.info("✓ Corporate registry live-vs-frozen completeness status refreshed.")
+    except Exception as e:
+        logger.error("✘ Direct public state corporate registries refresh failed: %s", e)
+    logger.info("=" * 80)
+
+
 def run_weekly_statewide_and_opencorporates_update():
     """Weekly automated update path for ALL statewide OpenCorporates-linked jurisdictions
     (`vt`, `co`, `ny`, `fl`, `wi`, `nc`, `ar`, `ma`, `va`) + OpenCorporates SFTP snapshot poller.
@@ -851,6 +891,7 @@ def main():
     schedule.every().day.at("05:50").do(run_post_rebuild_representative_label_audit)
     schedule.every().saturday.at("01:30").do(run_weekly_statewide_and_opencorporates_update)
     schedule.every().sunday.at("00:00").do(run_weekly_nightly_updates)
+    schedule.every().sunday.at("02:00").do(run_weekly_public_corporate_registries_refresh)
     schedule.every(30).days.at("01:00").do(run_monthly_other_updates)
     schedule.every().sunday.at("03:00").do(run_weekly_full_scan)
     schedule.every().sunday.at("05:00").do(run_weekly_other_cities_full_scan)
@@ -868,6 +909,7 @@ def main():
     logger.info("  - Nightly 5-Jurisdiction Recursive Network-Linking & Performance Optimizer (best-available Gemini -> salmun@storrsmagic.org): 5:15 AM daily")
     logger.info("  - Nightly Post-Rebuild Representative-Label & Grounded External-Source Audit: 5:50 AM daily")
     logger.info("  - Weekly OpenCorporates SFTP poll & 9-Statewide GIS rotation (VT/CO/WI/NY/NC/AR/FL/MA/VA): 1:30 AM Saturday")
+    logger.info("  - Weekly Direct Public Corporate Registries refresh (CT/DC/PA/NY/CO/FL + IRS 501c, watermark-gated): 2:00 AM Sunday")
     logger.info("  - Rotating Jurisdiction Optimization Battery (Cycle 1 nightly -> Cycle 2+ weekly): 11:30 AM UTC daily [INDEPENDENT THREAD]")
     logger.info("  - Daily Server-Side Usage Analytics Email (salmunk@gmail.com): 8:00 AM daily [INDEPENDENT THREAD]")
     logger.info("  - Weekly update (Weekly/Nightly towns): 12:00 AM Sunday")

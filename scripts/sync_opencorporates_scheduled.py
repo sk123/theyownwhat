@@ -41,6 +41,11 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
+from api.corporate_registry_manifest import (
+    DEFAULT_OC_SNAPSHOT_DATE,
+    get_registry_policy,
+    refresh_status_for_mode,
+)
 from scripts.mirror_opencorporates_sftp import PersistentSFTPSession, load_env_file
 
 SNAPSHOT_DIR_RE = re.compile(r"\b(20\d{2}-\d{2}-\d{2})\b")
@@ -119,14 +124,27 @@ def sync_oc_completeness_status(db_url: str, snapshot_label: Optional[str] = Non
                     latest_ext_date = ext_dt
 
                 src_name = f"OC_{jur.upper()}"
+                policy = get_registry_policy(jur)
+                mode = policy["refresh_mode"]
+                status_tok = refresh_status_for_mode(mode)
+                is_frozen = mode == "snapshot_frozen"
                 details = {
                     "snapshot": snap,
                     "jurisdiction_code": jur,
+                    "state": policy["state"],
                     "companies_count": c_cnt,
                     "officers_count": o_cnt,
-                    "license": "ODbL v1.0 (OpenCorporates)",
-                    "url": f"https://opencorporates.com/registers/{jur}",
-                    "source_url": f"https://opencorporates.com/registers/{jur}",
+                    "refresh_mode": mode,
+                    "is_frozen_snapshot": is_frozen,
+                    "entities_live": bool(policy["entities_live"]),
+                    "officers_live": bool(policy["officers_live"]),
+                    "refresh_cadence": policy["cadence"],
+                    "live_registry_name": policy.get("live_registry_name"),
+                    "frozen_reason": policy.get("frozen_reason"),
+                    "message": policy.get("coverage_note"),
+                    "license": "ODbL v1.0 (OpenCorporates)" if is_frozen else f"{policy.get('live_registry_name') or 'Official State Registry'} + OpenCorporates ({snap} archive)",
+                    "url": policy.get("live_registry_url") or f"https://opencorporates.com/registers/{jur}",
+                    "source_url": policy.get("live_registry_url") or f"https://opencorporates.com/registers/{jur}",
                 }
                 cur.execute(
                     """
@@ -134,17 +152,32 @@ def sync_oc_completeness_status(db_url: str, snapshot_label: Optional[str] = Non
                         source_name, source_type, external_last_updated,
                         last_refreshed_at, refresh_status, details
                     )
-                    VALUES (%s, 'corporate_registry', %s, NOW(), 'success', %s)
+                    VALUES (%s, 'corporate_registry', %s, NOW(), %s, %s)
                     ON CONFLICT (source_name) DO UPDATE SET
                         source_type = EXCLUDED.source_type,
                         external_last_updated = COALESCE(EXCLUDED.external_last_updated, data_source_status.external_last_updated),
                         last_refreshed_at = NOW(),
-                        refresh_status = 'success',
+                        refresh_status = EXCLUDED.refresh_status,
                         details = EXCLUDED.details
                     """,
-                    (src_name, ext_dt, Json(details)),
+                    (src_name, ext_dt, status_tok, Json(details)),
                 )
 
+            live_full = sorted(
+                get_registry_policy(r["jurisdiction_code"])["state"]
+                for r in co_rows
+                if get_registry_policy(r["jurisdiction_code"])["refresh_mode"] == "live_full"
+            )
+            live_partial = sorted(
+                get_registry_policy(r["jurisdiction_code"])["state"]
+                for r in co_rows
+                if get_registry_policy(r["jurisdiction_code"])["refresh_mode"] == "live_partial"
+            )
+            frozen_states = sorted(
+                get_registry_policy(r["jurisdiction_code"])["state"]
+                for r in co_rows
+                if get_registry_policy(r["jurisdiction_code"])["refresh_mode"] == "snapshot_frozen"
+            )
             global_details = {
                 "snapshot": snap,
                 "registries_loaded": len(co_rows),
@@ -152,6 +185,9 @@ def sync_oc_completeness_status(db_url: str, snapshot_label: Optional[str] = Non
                 "total_officers": total_officers,
                 "registered_agent_hubs_suppressed": ra_cnt,
                 "cross_state_pierced_branches": cspb_cnt,
+                "live_full_states": live_full,
+                "live_partial_states": live_partial,
+                "snapshot_frozen_states": frozen_states,
                 "license": "ODbL v1.0 (OpenCorporates)",
             }
             cur.execute(
@@ -174,7 +210,8 @@ def sync_oc_completeness_status(db_url: str, snapshot_label: Optional[str] = Non
         conn.commit()
         print(
             f"✓ Recorded OpenCorporates status for {len(co_rows)} registries "
-            f"({total_companies:,} companies, {total_officers:,} officers, snapshot={snap})."
+            f"({total_companies:,} companies, {total_officers:,} officers, snapshot={snap}; "
+            f"live_full={len(live_full)}, live_partial={len(live_partial)}, snapshot_frozen={len(frozen_states)})."
         )
         return global_details
     finally:
@@ -211,13 +248,16 @@ def discover_remote_snapshots(env: Dict[str, str]) -> List[str]:
         out = sess.cmd("ls -1", timeout=30.0)
         found = sorted(set(SNAPSHOT_DIR_RE.findall(out)))
         return found
+    except Exception as exc:
+        print(f"⚠ OpenCorporates SFTP unreachable/expired ({type(exc).__name__}: {exc}); keeping local archive & direct state refreshers.")
+        return []
     finally:
         sess.close()
 
 
 def poll_and_ingest_if_newer(db_url: str, force_snapshot: Optional[str] = None) -> int:
     env = load_env_file(os.path.join(REPO_ROOT, ".env"))
-    last_snap = _get_last_ingested_snapshot(db_url) or _detect_local_snapshot()
+    last_snap = _get_last_ingested_snapshot(db_url) or _detect_local_snapshot() or DEFAULT_OC_SNAPSHOT_DATE
     if force_snapshot:
         target_snap = force_snapshot
     else:
@@ -238,7 +278,9 @@ def poll_and_ingest_if_newer(db_url: str, force_snapshot: Optional[str] = None) 
     child_env["THEYOWNWHAT_SOURCE_ONLY"] = "true"
 
     steps = [
-        ("Mirror & MD5-verify Wave-1 SFTP snapshot", [sys.executable, "scripts/mirror_opencorporates_sftp.py", "--snapshot", target_snap, "--only-wave1"]),
+        # Mirror ALL 61 jurisdictions while SFTP is active so nothing is lost before SFTP expiry
+        ("Mirror & MD5-verify full 61-jurisdiction SFTP snapshot", [sys.executable, "scripts/mirror_opencorporates_sftp.py", "--snapshot", target_snap]),
+        ("Verify MD5 & preserve 51-state archive artifacts", [sys.executable, "scripts/preserve_opencorporates_archive.py", "--snapshot", target_snap, "--workers", "4"]),
         ("Stream-ingest OpenCorporates bulk archives", [sys.executable, "scripts/ingest_opencorporates_bulk.py", "--snapshot", target_snap, "--bulk-reset"]),
         ("Rebuild live ownership networks across jurisdictions", [sys.executable, "scripts/rebuild_all_with_opencorporates.py"]),
     ]
