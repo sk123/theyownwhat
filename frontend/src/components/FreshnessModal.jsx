@@ -105,8 +105,21 @@ function getDisplayName(row) {
 
 function formatDateTime(dateStr) {
     if (!dateStr) return '-';
+    const raw = String(dateStr).trim();
+    // Parse bare ISO calendar dates (YYYY-MM-DD) in local calendar space so EST/PST browsers
+    // do not shift midnight UTC backward to the prior evening at 7:00 PM.
+    const dateOnlyMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (dateOnlyMatch) {
+        const [, y, m, d] = dateOnlyMatch;
+        const localDate = new Date(Number(y), Number(m) - 1, Number(d));
+        return localDate.toLocaleDateString([], {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+        });
+    }
     try {
-        return new Date(dateStr).toLocaleDateString([], {
+        return new Date(raw).toLocaleDateString([], {
             month: 'short',
             day: 'numeric',
             year: 'numeric',
@@ -114,14 +127,21 @@ function formatDateTime(dateStr) {
             minute: '2-digit',
         });
     } catch {
-        return String(dateStr);
+        return raw;
     }
 }
 
 function formatDatasetDate(dataset) {
-    return dataset.external_last_updated || dataset.last_refreshed_at
-        ? formatDateTime(dataset.external_last_updated || dataset.last_refreshed_at)
-        : '-';
+    const ext = dataset?.external_last_updated;
+    const ref = dataset?.last_refreshed_at;
+    const checked = dataset?.details?.last_checked_at;
+    const parts = [];
+    if (ext) parts.push(`Source: ${formatDateTime(ext)}`);
+    if (ref) parts.push(`Refreshed: ${formatDateTime(ref)}`);
+    if (checked && (!ref || new Date(checked).getTime() > new Date(ref).getTime() + 3600_000)) {
+        parts.push(`Checked: ${formatDateTime(checked)}`);
+    }
+    return parts.length ? parts.join(' · ') : '-';
 }
 
 function formatCount(value) {

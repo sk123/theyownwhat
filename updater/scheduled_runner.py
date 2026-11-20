@@ -169,6 +169,20 @@ def run_nightly_update():
     priority_towns = get_dynamic_priority_towns(limit=10)
     
     try:
+        # Run fast daily enforcement & eviction feeds FIRST (takes ~2 min) so they
+        # are NEVER starved when a heavy CT SOTS / Vision town batch runs long.
+        logger.info("Starting Hartford Code Enforcement ingestion...")
+        enforcement_cmd = [sys.executable, "updater/ingest_hartford_enforcement.py"]
+        run_source_only(enforcement_cmd, check=False, timeout=900)
+
+        if os.environ.get("CT_EVICTIONS_ENABLED", "true").lower() == "false":
+            logger.info("⏭ CT_EVICTIONS_ENABLED=false — skipping eviction refresh")
+        else:
+            logger.info("Starting nightly CT Judicial eviction data refresh...")
+            eviction_cmd = [sys.executable, "scripts/ingest_evictions.py"]
+            run_source_only(eviction_cmd, check=False, timeout=1800)
+            logger.info("✓ Eviction data refresh finished")
+
         # 0. Refresh System Data (Businesses, Principals) & Run Network Discovery
         # This step relinks every property and rebuilds the whole ownership graph.
         # It outgrew the 2-hour default timeout when the NY parcel set landed, so
@@ -186,30 +200,17 @@ def run_nightly_update():
                 getattr(result, "returncode", "unknown"),
             )
 
-        # Run update_data.py as a subprocess for better isolation
+        # Run update_data.py as a subprocess with a 60-minute nightly cap so the
+        # Vision priority batch cannot starve 3:00–5:00 AM scheduled pipelines.
         cmd = [
-            sys.executable, 
-            "updater/update_data.py", 
+            sys.executable,
+            "updater/update_data.py",
             "-m"
         ] + priority_towns
-        
+
         logger.info(f"Executing: {' '.join(cmd)}")
-        # We don't use check=True to allow the scheduler to continue even if one run fails
-        run_source_only(cmd, check=False)
-        
-        logger.info("Starting Hartford Code Enforcement ingestion...")
-        enforcement_cmd = [sys.executable, "updater/ingest_hartford_enforcement.py"]
-        run_source_only(enforcement_cmd, check=False)
-        
-        # 3. Refresh eviction data from CT Fair Housing / CT Judicial nightly feed
-        if os.environ.get("CT_EVICTIONS_ENABLED", "true").lower() == "false":
-            logger.info("⏭ CT_EVICTIONS_ENABLED=false — skipping eviction refresh")
-        else:
-            logger.info("Starting nightly CT Judicial eviction data refresh...")
-            eviction_cmd = [sys.executable, "scripts/ingest_evictions.py"]
-            run_source_only(eviction_cmd, check=False)
-            logger.info("✓ Eviction data refresh finished")
-        
+        run_source_only(cmd, check=False, timeout=3600)
+
         logger.info("✓ Nightly update process finished")
 
     except Exception as e:
@@ -411,23 +412,22 @@ def run_detroit_enrichment():
 
 def run_nightly_other_cities_update():
     """
-    Nightly source-only multi-city hook.
+    Nightly fast multi-city enforcement, rental-licensing & eviction update (~6-8 min).
+    Heavy full 8-city parcel re-downloads run weekly on Sunday 5:00 AM
+    (`run_weekly_other_cities_full_scan`) and NHPD runs weekly on Saturday 3:30 AM.
     """
     logger.info("=" * 80)
-    logger.info("Checking nightly multi-city source-only update hook")
+    logger.info("Starting nightly fast multi-city enforcement, licensing & eviction update")
     logger.info("=" * 80)
-    
+
     steps = [
         ("Stale running-status lock sweep", sweep_stale_locks),
-        ("Multi-city property updates", lambda: run_source_only([sys.executable, "updater/update_cities.py"], check=False)),
-        ("DC DLCP Basic Business Rental Licenses & untangling", lambda: run_source_only([sys.executable, "updater/enrich_dc_licenses.py"], check=False)),
-        ("Baltimore DHCD Rental Registrations & Licenses", lambda: run_source_only([sys.executable, "updater/enrich_baltimore_registrations.py"], check=False)),
-        ("Multi-city enforcement enrichment", run_city_enforcement_enrichment),
+        ("DC DLCP Basic Business Rental Licenses & untangling", lambda: run_source_only([sys.executable, "updater/enrich_dc_licenses.py"], check=False, timeout=900)),
+        ("Baltimore DHCD Rental Registrations & Licenses", lambda: run_source_only([sys.executable, "updater/enrich_baltimore_registrations.py"], check=False, timeout=900)),
+        ("Multi-city enforcement enrichment (DC/Balt/Boston/Mpls/Philly)", run_city_enforcement_enrichment),
         ("Detroit enforcement and compliance enrichment", run_detroit_enrichment),
         ("Official Maryland eviction event ingest", run_maryland_eviction_ingest),
-        ("Multi-city NHPD subsidy enrichment", lambda: run_source_only([sys.executable, "scripts/enrich_all_cities_nhpd.py"], check=False)),
-        ("Connecticut NHPD subsidy enrichment", lambda: run_source_only([sys.executable, "scripts/import_nhpd.py"], check=False)),
-        ("DC CAMA enrichment", lambda: run_source_only([sys.executable, "scripts/enrich_dc_cama.py"], check=False)),
+        ("DC CAMA enrichment", lambda: run_source_only([sys.executable, "scripts/enrich_dc_cama.py"], check=False, timeout=900)),
     ]
 
     for label, fn in steps:
@@ -867,9 +867,10 @@ def run_post_rebuild_representative_label_audit():
 
 def run_weekly_federal_subsidies_and_syracuse_refresh():
     """Weekly zero-GCP watermark-gated local refresher for HUD/USDA federal housing
-    subsidies, HUD REAC physical inspection scores, and Syracuse NY code/rental overlays."""
+    subsidies & REAC scores, Syracuse & Rochester NY overlays, Denver/Buffalo/FL DBPR
+    rental licensing, and weekly NHPD subsidy sync."""
     logger.info("=" * 80)
-    logger.info("Starting Weekly Local Federal Subsidies / REAC & Syracuse NY Refresh (Watermark-Gated)")
+    logger.info("Starting Weekly Local Federal Subsidies/REAC, NY Overlays & City Licensing Refresh")
     logger.info("=" * 80)
     try:
         cmd = [
@@ -878,27 +879,29 @@ def run_weekly_federal_subsidies_and_syracuse_refresh():
             "--layers",
             "federal_subsidies",
             "syracuse_ny",
+            "rochester_ny",
+            "city_licensing_and_enrichment",
             "--only-if-changed",
         ]
-        res = run_source_only(cmd, check=False, timeout=3600)
+        res = run_source_only(cmd, check=False, timeout=7200)
         if getattr(res, "returncode", 1) == 0:
-            logger.info("✓ Weekly federal subsidies/REAC & Syracuse NY refresh finished cleanly.")
+            logger.info("✓ Weekly federal subsidies/REAC, NY overlays & licensing refresh finished cleanly.")
         else:
             logger.warning(
-                "⚠ Weekly federal subsidies/REAC & Syracuse NY refresh exited with code %s.",
+                "⚠ Weekly federal subsidies/REAC & licensing refresh exited with code %s.",
                 getattr(res, "returncode", "unknown"),
             )
     except Exception as e:
-        logger.error("✘ Weekly federal subsidies/REAC & Syracuse NY refresh failed: %s", e)
+        logger.error("✘ Weekly federal subsidies/REAC & licensing refresh failed: %s", e)
     logger.info("=" * 80)
 
 
 def run_monthly_spot_county_parcels_and_geocodes_refresh():
-    """Monthly zero-GCP watermark-gated local refresher for the 9 Spot V4/V5 county
-    parcel rolls (OH Stark/Lake/Delaware/Summit, MN Washington/Scott/Carver, IL Kane/McHenry)
-    and WGS84 geocoding backfills (DC/Baltimore/MT/MN)."""
+    """Monthly zero-GCP watermark-gated local refresher for ALL 17 Spot V2/V3/V4/V5 county
+    parcel rolls (OH 8 counties, MN 8 counties, IL 3 collar counties, NY Rochester RPS),
+    Montana 56-county MSDI statewide parcels, and WGS84 geocoding backfills."""
     logger.info("=" * 80)
-    logger.info("Starting Monthly Local Spot County Parcels & WGS84 Geocode Refresh (Watermark-Gated)")
+    logger.info("Starting Monthly Local 17-County, Montana Statewide & WGS84 Geocode Refresh (Watermark-Gated)")
     logger.info("=" * 80)
     try:
         cmd = [
@@ -906,20 +909,21 @@ def run_monthly_spot_county_parcels_and_geocodes_refresh():
             "scripts/refresh_federal_and_spot_layers_local.py",
             "--layers",
             "county_parcels",
+            "mt_statewide",
             "geocode_backfill",
             "--only-if-changed",
             "--rebuild-changed",
         ]
         res = run_source_only(cmd, check=False, timeout=NETWORK_REBUILD_TIMEOUT)
         if getattr(res, "returncode", 1) == 0:
-            logger.info("✓ Monthly local Spot county parcels & geocode refresh finished cleanly.")
+            logger.info("✓ Monthly local county/MT parcels & geocode refresh finished cleanly.")
         else:
             logger.warning(
-                "⚠ Monthly local Spot county parcels & geocode refresh exited with code %s.",
+                "⚠ Monthly local county/MT parcels & geocode refresh exited with code %s.",
                 getattr(res, "returncode", "unknown"),
             )
     except Exception as e:
-        logger.error("✘ Monthly local Spot county parcels & geocode refresh failed: %s", e)
+        logger.error("✘ Monthly local county/MT parcels & geocode refresh failed: %s", e)
     logger.info("=" * 80)
 
 

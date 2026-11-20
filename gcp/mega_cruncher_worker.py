@@ -48,7 +48,8 @@ csv.field_size_limit(10_000_000)
 
 BUCKET = os.environ.get("GCS_BUCKET", "renter-help-staging-20261119")
 PREFIX = "spot_parcels_v2"
-WORK_DIR = "/tmp/spot_work"
+LOCAL_ONLY = os.environ.get("SPOT_LOCAL_ONLY", "").strip().lower() in ("1", "true", "yes")
+WORK_DIR = os.environ.get("SPOT_WORK_DIR", "/tmp/spot_work")
 os.makedirs(WORK_DIR, exist_ok=True)
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; TheyOwnWhatPublicRecordsSync/2.0)"}
@@ -146,6 +147,10 @@ def fmt_date(v: Any) -> str:
 
 
 def upload_to_gcs(local_path: str, remote_name: str) -> None:
+    if LOCAL_ONLY:
+        sz_mb = os.path.getsize(local_path) / (1024 * 1024)
+        log(f"✓ [LOCAL_ONLY] Kept {local_path} ({sz_mb:.2f} MB)")
+        return
     dest = f"gs://{BUCKET}/{PREFIX}/{remote_name}"
     subprocess.run(["gcloud", "storage", "cp", local_path, dest, "--quiet"], check=True)
     sz_mb = os.path.getsize(local_path) / (1024 * 1024)

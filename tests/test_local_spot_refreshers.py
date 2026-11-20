@@ -1,7 +1,10 @@
 import unittest
 from scripts.refresh_federal_and_spot_layers_local import (
+    ALL_LAYERS,
     COUNTY_PARCEL_PROBES,
     FEDERAL_SUBSIDY_PROBES,
+    MT_STATEWIDE_PROBES,
+    ROCHESTER_CODE_PROBES,
     SYRACUSE_PROBES,
     epoch_ms_to_iso_date,
     watermarks_changed,
@@ -53,7 +56,16 @@ class TestLocalSpotRefreshers(unittest.TestCase):
     def test_probe_registries_cover_expected_layers(self):
         self.assertEqual(set(FEDERAL_SUBSIDY_PROBES.keys()), {"HUD_LIHTC", "HUD_MF_ASSISTED", "HUD_INSURED_MF", "USDA_RURAL_515"})
         self.assertEqual(set(SYRACUSE_PROBES.keys()), {"SYRACUSE_CODE_VIOLATIONS", "SYRACUSE_RENTAL_REGISTRY"})
-        self.assertEqual(set(COUNTY_PARCEL_PROBES.keys()), {"oh_v4", "oh_summit", "mn_v4", "il_v4"})
+        self.assertEqual(set(ROCHESTER_CODE_PROBES.keys()), {"ROCHESTER_NBD_CODE"})
+        self.assertEqual(set(MT_STATEWIDE_PROBES.keys()), {"MT_MSDI_ORION"})
+        self.assertEqual(
+            set(COUNTY_PARCEL_PROBES.keys()),
+            {"oh_cuyahoga", "oh_v3", "oh_v4", "oh_summit", "mn_metro", "mn_v3", "mn_v4", "il_lake", "il_v4", "ny_rochester"},
+        )
+        self.assertEqual(
+            set(ALL_LAYERS),
+            {"federal_subsidies", "syracuse_ny", "rochester_ny", "city_licensing_and_enrichment", "county_parcels", "mt_statewide", "geocode_backfill"},
+        )
 
 
 if __name__ == "__main__":

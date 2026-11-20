@@ -72,16 +72,16 @@ UPSTREAM_JURISDICTION_PROBES: Dict[str, Dict[str, Any]] = {
         "probe_kind": "socrata",
         "probe_url": "https://datacatalog.cookcountyil.gov/api/views/3723-97qp.json",
         "source_url": "https://datacatalog.cookcountyil.gov/Property-Taxation/Assessor-Parcel-Addresses/3723-97qp",
-        "cadence": "Nightly Chicago Building Violations Delta + Cook/DuPage/Devnet CAMA",
-        "description": "Illinois Statewide Explorer: Full Cook County (Chicago + 130+ suburbs, 1.86M PINs + CCAO characteristics) + DuPage GIS + Chicago Dept. of Buildings Violations + 102-county Devnet/Beacon CAMA.",
+        "cadence": "Nightly Chicago Building Violations Delta + Monthly 5-County Collar GIS",
+        "description": "Illinois Explorer: 5-County Chicagoland (Cook 1.66M + DuPage 309K + Lake 258K + Kane 156K + McHenry 125K) + Chicago Dept. of Buildings Violations + 102-county Devnet/Beacon CAMA + HUD/USDA subsidies.",
     },
     "CA": {
         "table": "ca",
         "probe_kind": "socrata",
         "probe_url": "https://data.sfgov.org/api/views/g8m3-pdis.json",
         "source_url": "https://data.sfgov.org/Economy-and-Community/Registered-Business-Locations-San-Francisco/g8m3-pdis",
-        "cadence": "Nightly SF/LA Lessor, Eviction & Code Enforcement Delta + Annual Secured Rolls",
-        "description": "California 58-County Explorer: LA County & SF improved rolls joined with SF/LA registered lessor businesses, LAHD/SF eviction notices, LADBS/DBI code violations, NHPD, and 31.96M `us_ca` LLC member/officer records (with explicit Gov. Code § 7928.205 redaction badges).",
+        "cadence": "On-Demand LA & SF Partial Lessor Refresh (Unfeatured; 84.5% Redacted)",
+        "description": "Partial California coverage (LA & SF only — unfeatured): LA & SF improved rolls joined with SF/LA registered business-tax lessors, LAHD/SF evictions, LADBS/DBI violations, HUD/NHPD subsidies, and `us_ca` filings (84.5% deed owners redacted under CA Gov. Code § 7928.205).",
     },
     "VA": {
         "table": "va",
@@ -144,16 +144,16 @@ UPSTREAM_JURISDICTION_PROBES: Dict[str, Dict[str, Any]] = {
         "probe_kind": "arcgis",
         "probe_url": "https://gis.hennepin.us/arcgis/rest/services/HennepinData/LAND_PROPERTY/MapServer/1?f=json",
         "source_url": "https://gis.hennepin.us/",
-        "cadence": "Nightly Minneapolis Rental License Sync + Weekly 5-County CAMA Check",
-        "description": "Unified Minnesota Explorer: Hennepin, Ramsey, Dakota, Anoka & Olmsted (Rochester) County improved CAMA parcels fused with Minneapolis Active Rental Licenses, contacts, violations & MN SOS (`us_mn`).",
+        "cadence": "Nightly Minneapolis Violations/Licenses + Monthly 8-County Metro/Olmsted Watermark Sync",
+        "description": "Unified Minnesota Explorer: All 7 Twin Cities Metro counties (Hennepin, Ramsey, Dakota, Anoka, Washington, Scott, Carver) + Olmsted (Rochester) improved CAMA parcels (~1.09M) fused with Minneapolis Active Rental Licenses, code cases, HUD/USDA subsidies & MN SOS (`us_mn`).",
     },
     "OH": {
         "table": "oh",
         "probe_kind": "arcgis",
         "probe_url": "https://gis.cuyahogacounty.gov/server/rest/services/CCFO/Parcel_Fabric_Taxparcels/FeatureServer/0?f=json",
         "source_url": "https://myplace.cuyahogacounty.gov/",
-        "cadence": "Weekly 4-Metro County Auditor CAMA Check",
-        "description": "Ohio Explorer: Franklin (Columbus), Cuyahoga (Cleveland), Hamilton (Cincinnati CAGIS) & Lucas (Toledo) County Auditor improved CAMA parcels (1.34M parcels) + OH SOS (`us_oh`).",
+        "cadence": "Monthly 8-County Auditor CAMA Watermark Sync + Weekly HUD/USDA Subsidies",
+        "description": "Ohio Explorer: 8 Major Counties (Franklin/Columbus, Cuyahoga/Cleveland, Hamilton/Cincinnati, Summit/Akron, Lucas/Toledo, Stark/Canton, Lake & Delaware — ~1.87M improved CAMA parcels) + HUD/USDA subsidies + OH SOS (`us_oh`).",
     },
     "NJ": {
         "table": "nj",
@@ -289,11 +289,21 @@ def refresh_all_jurisdiction_telemetry(conn, *, run_deltas: bool = True) -> Dict
                 if ext_date and ext_date > dt.date.today() + dt.timedelta(days=2):
                     ext_date = None
 
-                # Preserve existing details fields while updating live verified counts & cadence
-                cur.execute("SELECT details, external_last_updated FROM data_source_status WHERE source_name = %s", (ds_key,))
+                # Epistemic honesty: a metadata-only probe MUST NOT spoof `last_refreshed_at`
+                # or overwrite `external_last_updated` with an un-ingested upstream date.
+                # Record `last_checked_at` and `upstream_published_at` inside `details` while
+                # preserving the real data-ingestion timestamps on existing rows.
+                cur.execute(
+                    "SELECT details, external_last_updated, last_refreshed_at FROM data_source_status WHERE source_name = %s",
+                    (ds_key,),
+                )
                 prev_row = cur.fetchone() or {}
                 prev_details = prev_row.get("details") if isinstance(prev_row.get("details"), dict) else {}
-                final_ext_date = ext_date or prev_row.get("external_last_updated")
+                loaded_ext_date = prev_row.get("external_last_updated")
+                checked_iso = dt.datetime.now(dt.timezone.utc).isoformat()
+                upstream_update_available = bool(
+                    ext_date and loaded_ext_date and ext_date > loaded_ext_date
+                )
 
                 merged_details = {
                     **prev_details,
@@ -304,6 +314,9 @@ def refresh_all_jurisdiction_telemetry(conn, *, run_deltas: bool = True) -> Dict
                     "source_url": spec["source_url"],
                     "refresh_cadence": spec["cadence"],
                     "refresh_mode": "lightweight_metadata_and_delta",
+                    "last_checked_at": checked_iso,
+                    "upstream_published_at": ext_date.isoformat() if ext_date else prev_details.get("upstream_published_at"),
+                    "upstream_update_available": upstream_update_available,
                     "message": spec["description"],
                 }
                 cur.execute(
@@ -313,17 +326,16 @@ def refresh_all_jurisdiction_telemetry(conn, *, run_deltas: bool = True) -> Dict
                     )
                     VALUES (%s, 'state_dataset', %s, NOW(), 'success', %s)
                     ON CONFLICT (source_name) DO UPDATE SET
-                        external_last_updated = COALESCE(EXCLUDED.external_last_updated, data_source_status.external_last_updated),
-                        last_refreshed_at = NOW(),
-                        refresh_status = 'success',
+                        external_last_updated = COALESCE(data_source_status.external_last_updated, EXCLUDED.external_last_updated),
+                        last_refreshed_at = COALESCE(data_source_status.last_refreshed_at, NOW()),
                         details = EXCLUDED.details;
                     """,
-                    (ds_key, final_ext_date, Json(merged_details)),
+                    (ds_key, loaded_ext_date or ext_date, Json(merged_details)),
                 )
                 updated_sources.append(ds_key)
                 log(
                     f"  ✓ [{ds_key}] {p_cnt:,} properties, {n_cnt:,} networks, "
-                    f"upstream={final_ext_date or 'verified-roll'} ({spec['cadence']})"
+                    f"loaded={loaded_ext_date or 'n/a'} upstream={ext_date or 'n/a'} update_avail={upstream_update_available}"
                 )
 
             cur.execute("DELETE FROM kv_cache WHERE key = 'completeness_matrix'")
