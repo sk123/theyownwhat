@@ -109,7 +109,7 @@ def _record_status(conn, source_name: str, source_type: str, details: Dict[str, 
                 external_last_updated = CURRENT_DATE,
                 last_refreshed_at = NOW(),
                 refresh_status = 'SUCCESS',
-                details = EXCLUDED.details;
+                details = COALESCE(data_source_status.details, '{}'::jsonb) || EXCLUDED.details;
             """,
             (source_name, source_type, json.dumps(details)),
         )

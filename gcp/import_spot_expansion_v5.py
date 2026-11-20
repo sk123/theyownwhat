@@ -235,7 +235,7 @@ def import_federal_subsidies(conn, gz_path: str) -> Dict[str, Any]:
     ct_matched = 0
     if by_state_addr.get("CT"):
         with conn.cursor() as cur:
-            cur.execute("SELECT id, location, town FROM properties WHERE location IS NOT NULL")
+            cur.execute("SELECT id, location, property_city FROM properties WHERE location IS NOT NULL")
             ct_inserts = []
             seen_ct = set()
             for pid, loc, town in cur.fetchall():
@@ -270,7 +270,7 @@ def import_federal_subsidies(conn, gz_path: str) -> Dict[str, Any]:
         conn.commit()
         log(f"  ✓ Added {ct_matched:,} newly matched federal subsidized CT properties into `property_subsidies`.")
 
-    # Cross-match into nationwide `*_properties` tables (where nhpd_subsidy column exists)
+    # Cross-match into nationwide `<jur>_bbl_stats` tables (joined by address against `<jur>_properties`)
     matched_by_table: Dict[str, int] = {"ct_properties": ct_matched}
     for st, targets in STATE_TO_PROPERTY_TABLES.items():
         amap = by_state_addr.get(st) or {}
@@ -278,21 +278,27 @@ def import_federal_subsidies(conn, gz_path: str) -> Dict[str, Any]:
         if not amap and not bmap:
             continue
         for tbl, jur_val in targets:
+            stats_tbl = tbl.replace("_properties", "_bbl_stats")
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT column_name FROM information_schema.columns WHERE table_name = %s",
                     (tbl,),
                 )
-                cols = {x[0] for x in cur.fetchall()}
-                if "nhpd_subsidy" not in cols or "address" not in cols:
+                pcols = {x[0] for x in cur.fetchall()}
+                cur.execute(
+                    "SELECT column_name FROM information_schema.columns WHERE table_name = %s",
+                    (stats_tbl,),
+                )
+                scols = {x[0] for x in cur.fetchall()}
+                if "address" not in pcols or "nhpd_subsidy" not in scols:
                     continue
-                zip_col = "zip_code" if "zip_code" in cols else "NULL"
-                bor_col = "borough" if "borough" in cols else "NULL"
-                where_j = f"WHERE jurisdiction = '{jur_val}'" if (jur_val and "jurisdiction" in cols) else ""
+                zip_col = "zip_code" if "zip_code" in pcols else "NULL"
+                bor_col = "borough" if "borough" in pcols else "NULL"
+                where_j = f"WHERE jurisdiction = '{jur_val}'" if (jur_val and "jurisdiction" in pcols) else ""
                 cur.execute(f"SELECT bbl, address, {zip_col}, {bor_col} FROM {tbl} {where_j}")
-                updates: List[Tuple[str, str, Any]] = []
+                updates_by_bbl: Dict[str, Tuple[str, Any]] = {}
                 for bbl, addr, zc, bor in cur.fetchall():
-                    if not addr:
+                    if not addr or not bbl or bbl in updates_by_bbl:
                         continue
                     an = normalize_link_address(addr)
                     hit = amap.get(an) if an else None
@@ -305,28 +311,64 @@ def import_federal_subsidies(conn, gz_path: str) -> Dict[str, Any]:
                             if (cand["zip"] and z5 and cand["zip"] == z5) or (cand["city"] and cand["city"] in bor_u):
                                 hit = cand
                     if hit:
-                        updates.append((bbl, hit["program"], hit["expiry"]))
+                        updates_by_bbl[bbl] = (hit["program"], hit["expiry"])
+                updates = list(updates_by_bbl.items())
                 if updates:
+                    has_jur_stats = bool(jur_val and "jurisdiction" in scols)
                     for i in range(0, len(updates), 5000):
-                        j_cond = f"AND p.jurisdiction = '{jur_val}'" if (jur_val and "jurisdiction" in cols) else ""
-                        execute_values(
-                            cur,
-                            f"""
-                            UPDATE {tbl} p
-                            SET nhpd_subsidy = TRUE,
-                                nhpd_program = COALESCE(NULLIF(p.nhpd_program, ''), v.prog),
-                                nhpd_expiration = COALESCE(p.nhpd_expiration, v.exp_dt)
-                            FROM (VALUES %s) AS v(bbl, prog, exp_dt)
-                            WHERE p.bbl = v.bbl {j_cond};
-                            """,
-                            updates[i : i + 5000],
-                            template="(%s, %s, %s::date)",
-                            page_size=2500,
-                        )
+                        chunk = updates[i : i + 5000]
+                        if has_jur_stats:
+                            execute_values(
+                                cur,
+                                f"""
+                                INSERT INTO {stats_tbl} (
+                                    jurisdiction, bbl, nhpd_subsidy, nhpd_program, nhpd_expiration, updated_at
+                                )
+                                VALUES %s
+                                ON CONFLICT (jurisdiction, bbl) DO UPDATE SET
+                                    nhpd_subsidy = TRUE,
+                                    nhpd_program = CASE
+                                        WHEN COALESCE({stats_tbl}.nhpd_program, '') = '' THEN EXCLUDED.nhpd_program
+                                        WHEN POSITION('REAC ' IN EXCLUDED.nhpd_program) > 0
+                                             AND POSITION('REAC ' IN {stats_tbl}.nhpd_program) = 0
+                                            THEN LEFT({stats_tbl}.nhpd_program || ' | ' || EXCLUDED.nhpd_program, 240)
+                                        ELSE {stats_tbl}.nhpd_program
+                                    END,
+                                    nhpd_expiration = COALESCE({stats_tbl}.nhpd_expiration, EXCLUDED.nhpd_expiration),
+                                    updated_at = NOW();
+                                """,
+                                [(jur_val, bbl, prog, exp) for bbl, (prog, exp) in chunk],
+                                template="(%s, %s, TRUE, %s, %s::date, NOW())",
+                                page_size=2500,
+                            )
+                        else:
+                            execute_values(
+                                cur,
+                                f"""
+                                INSERT INTO {stats_tbl} (
+                                    bbl, nhpd_subsidy, nhpd_program, nhpd_expiration, updated_at
+                                )
+                                VALUES %s
+                                ON CONFLICT (bbl) DO UPDATE SET
+                                    nhpd_subsidy = TRUE,
+                                    nhpd_program = CASE
+                                        WHEN COALESCE({stats_tbl}.nhpd_program, '') = '' THEN EXCLUDED.nhpd_program
+                                        WHEN POSITION('REAC ' IN EXCLUDED.nhpd_program) > 0
+                                             AND POSITION('REAC ' IN {stats_tbl}.nhpd_program) = 0
+                                            THEN LEFT({stats_tbl}.nhpd_program || ' | ' || EXCLUDED.nhpd_program, 240)
+                                        ELSE {stats_tbl}.nhpd_program
+                                    END,
+                                    nhpd_expiration = COALESCE({stats_tbl}.nhpd_expiration, EXCLUDED.nhpd_expiration),
+                                    updated_at = NOW();
+                                """,
+                                [(bbl, prog, exp) for bbl, (prog, exp) in chunk],
+                                template="(%s, TRUE, %s, %s::date, NOW())",
+                                page_size=2500,
+                            )
                     conn.commit()
-                matched_by_table[tbl] = len(updates)
+                matched_by_table[stats_tbl] = len(updates)
                 if updates:
-                    log(f"  ✓ Matched {len(updates):,} federal subsidized / REAC parcels in `{tbl}`.")
+                    log(f"  ✓ Matched {len(updates):,} federal subsidized / REAC parcels in `{stats_tbl}`.")
 
     total_matched = sum(matched_by_table.values())
     _record_status(
