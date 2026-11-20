@@ -1,7 +1,9 @@
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
+import html as html_lib
 import json
+import logging
 import os
 import smtplib
 import threading
@@ -20,74 +22,193 @@ if os.path.exists(env_path):
 else:
     load_dotenv()
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # ---------------------------------------------------------------------------
 # Email config (set in .env)
 # ---------------------------------------------------------------------------
-ALERT_EMAIL_TO   = os.environ.get("ALERT_EMAIL_TO",   "salmunk@gmail.com")
+REQUIRED_FEEDBACK_RECIPIENTS = (
+    "salmun@storrsmagic.org",
+    "salmunk@gmail.com",
+    "me@salmun.net",
+)
+ALERT_EMAIL_TO   = os.environ.get("ALERT_EMAIL_TO", ", ".join(REQUIRED_FEEDBACK_RECIPIENTS))
 ALERT_EMAIL_FROM = (os.environ.get("ALERT_EMAIL_FROM", "salmunk@gmail.com") or "").strip()
 ALERT_EMAIL_PASS = "".join((os.environ.get("ALERT_EMAIL_PASS", "") or "").split())   # Gmail App Password
 
 
-def _send_email_async(feedback_id: int, report_type: str, description: str, entities: list):
-    """Fire-and-forget email notification — runs in background thread."""
-    if not ALERT_EMAIL_PASS:
-        return  # silently skip if not configured
+def get_feedback_recipients(extra_recipients: Optional[List[str]] = None) -> List[str]:
+    """Return deduplicated feedback notification recipients, always including salmun@storrsmagic.org."""
+    raw_to = os.environ.get("ALERT_EMAIL_TO", ALERT_EMAIL_TO) or ""
+    candidates: List[str] = []
+    for addr in raw_to.split(","):
+        cleaned = addr.strip()
+        if cleaned:
+            candidates.append(cleaned)
+    candidates.extend(REQUIRED_FEEDBACK_RECIPIENTS)
+    if extra_recipients:
+        for addr in extra_recipients:
+            cleaned = (addr or "").strip()
+            if cleaned:
+                candidates.append(cleaned)
+
+    deduped: List[str] = []
+    seen = set()
+    for addr in candidates:
+        key = addr.lower()
+        if key not in seen:
+            seen.add(key)
+            deduped.append(addr)
+    return deduped
+
+
+def send_feedback_notification_email(
+    subject: str,
+    text_body: str,
+    *,
+    html_body: Optional[str] = None,
+    recipients: Optional[List[str]] = None,
+) -> bool:
+    """Send a feedback notification email via configured Gmail SMTP. Returns True if sent."""
+    if str(os.environ.get("DISABLE_FEEDBACK_EMAILS", "")).strip().lower() in ("1", "true", "yes"):
+        return False
+
+    smtp_host = (os.environ.get("SMTP_HOST", "smtp.gmail.com") or "smtp.gmail.com").strip()
+    smtp_from = (os.environ.get("ALERT_EMAIL_FROM", ALERT_EMAIL_FROM) or "").strip()
+    smtp_pass = "".join((os.environ.get("ALERT_EMAIL_PASS", ALERT_EMAIL_PASS) or "").split())
+    if not smtp_from or not smtp_pass:
+        logger.warning("Feedback email skipped: ALERT_EMAIL_FROM / ALERT_EMAIL_PASS not configured.")
+        return False
+
+    to_list = get_feedback_recipients(recipients)
+    if not to_list:
+        return False
 
     try:
-        raw_to = os.environ.get("ALERT_EMAIL_TO", "salmunk@gmail.com, me@salmun.net")
-        recipients = [addr.strip() for addr in raw_to.split(",") if addr.strip()]
-        if "me@salmun.net" not in recipients:
-            recipients.append("me@salmun.net")
-        if "salmunk@gmail.com" not in recipients:
-            recipients.append("salmunk@gmail.com")
-
-        subject = f"[They Own WHAT?] New feedback #{feedback_id}: {report_type}"
-
-        entity_lines = ""
-        if entities:
-            entity_lines = "\n\nRelated entities:\n" + "\n".join(
-                f"  • {e.get('name', e.get('label', e.get('title', '?')))} [{e.get('type', '?')}] (ID: {e.get('id', 'N/A')})"
-                for e in entities
-            )
-
-        body = f"""New feedback submitted on They Own WHAT??
-
-ID:          #{feedback_id}
-Type:        {report_type}
-Submitted:   {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}
-
-Description:
-{description}{entity_lines}
-
----
-View feedback: GET /api/feedback
-"""
-
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
-        msg["From"]    = ALERT_EMAIL_FROM
-        msg["To"]      = ", ".join(recipients)
-        msg.attach(MIMEText(body, "plain"))
+        msg["From"] = smtp_from
+        msg["To"] = ", ".join(to_list)
+        msg.attach(MIMEText(text_body, "plain", "utf-8"))
+        if html_body:
+            msg.attach(MIMEText(html_body, "html", "utf-8"))
 
         try:
-            with smtplib.SMTP("smtp.gmail.com", 587, timeout=15) as server:
+            with smtplib.SMTP(smtp_host, 587, timeout=15) as server:
                 server.ehlo()
                 server.starttls()
                 server.ehlo()
-                server.login(ALERT_EMAIL_FROM, ALERT_EMAIL_PASS)
-                server.sendmail(ALERT_EMAIL_FROM, recipients, msg.as_string())
+                server.login(smtp_from, smtp_pass)
+                server.sendmail(smtp_from, to_list, msg.as_string())
+        except smtplib.SMTPAuthenticationError:
+            raise
         except Exception:
-            with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=15) as server:
+            with smtplib.SMTP_SSL(smtp_host, 465, timeout=15) as server:
                 server.ehlo()
-                server.login(ALERT_EMAIL_FROM, ALERT_EMAIL_PASS)
-                server.sendmail(ALERT_EMAIL_FROM, recipients, msg.as_string())
-
-    except Exception as e:
+                server.login(smtp_from, smtp_pass)
+                server.sendmail(smtp_from, to_list, msg.as_string())
+        return True
+    except Exception as exc:
         # Never let email failure surface to the user
-        import logging
-        logging.getLogger(__name__).warning(f"Feedback email failed: {e}")
+        logger.warning("Feedback email failed (%s): %s", subject, exc)
+        return False
+
+
+def spawn_feedback_notification_email(
+    subject: str,
+    text_body: str,
+    *,
+    html_body: Optional[str] = None,
+    recipients: Optional[List[str]] = None,
+) -> None:
+    """Fire-and-forget background email dispatch so HTTP responses are never blocked."""
+    threading.Thread(
+        target=send_feedback_notification_email,
+        args=(subject, text_body),
+        kwargs={"html_body": html_body, "recipients": recipients},
+        daemon=True,
+    ).start()
+
+
+def format_general_feedback_email(
+    feedback_id: int,
+    report_type: str,
+    description: str,
+    entities: list,
+) -> tuple[str, str, str]:
+    """Build (subject, text_body, html_body) for general /api/feedback submissions."""
+    submitted_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    subject = f"[They Own WHAT?] New feedback #{feedback_id}: {report_type}"
+
+    entity_text_lines: List[str] = []
+    entity_html_items: List[str] = []
+    for e in (entities or []):
+        if not isinstance(e, dict):
+            val = str(e)
+            entity_text_lines.append(f"  - {val}")
+            entity_html_items.append(f"<li>{html_lib.escape(val)}</li>")
+            continue
+        name = e.get("name") or e.get("label") or e.get("title") or "?"
+        etype = e.get("type") or "?"
+        eid = e.get("id") or e.get("network_key") or e.get("bbl") or "N/A"
+        extras = []
+        for extra_k in ("jurisdiction", "state", "city", "address", "network_key", "bbl", "context"):
+            if e.get(extra_k) and str(e.get(extra_k)) != str(eid):
+                extras.append(f"{extra_k}={e.get(extra_k)}")
+        extra_str = f" ({', '.join(extras)})" if extras else ""
+        line = f"{name} [{etype}] (ID: {eid}){extra_str}"
+        entity_text_lines.append(f"  - {line}")
+        entity_html_items.append(f"<li><strong>{html_lib.escape(str(name))}</strong> [{html_lib.escape(str(etype))}] (ID: <code>{html_lib.escape(str(eid))}</code>){html_lib.escape(extra_str)}</li>")
+
+    entities_text_block = (
+        "\n\nRelated entities:\n" + "\n".join(entity_text_lines)
+        if entity_text_lines
+        else "\n\nRelated entities: (none attached)"
+    )
+
+    text_body = (
+        "New feedback submitted on They Own WHAT?\n\n"
+        f"ID:          #{feedback_id}\n"
+        f"Event:       General Feedback (/api/feedback)\n"
+        f"Type:        {report_type}\n"
+        f"Submitted:   {submitted_utc}\n\n"
+        f"Description:\n{description}{entities_text_block}\n\n"
+        "---\n"
+        "All feedback: https://theyownwhat.net/api/feedback\n"
+    )
+
+    entities_html = (
+        f"<ul>{''.join(entity_html_items)}</ul>"
+        if entity_html_items
+        else "<p style='color:#64748b'>(none attached)</p>"
+    )
+    html_body = f"""
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #0f172a; max-width: 680px;">
+      <h2 style="margin: 0 0 12px;">New Feedback #{int(feedback_id)}: {html_lib.escape(str(report_type))}</h2>
+      <table style="border-collapse: collapse; width: 100%; margin-bottom: 14px; font-size: 14px;">
+        <tr><td style="padding: 4px 10px 4px 0; color: #475569;"><strong>Event</strong></td><td>General Feedback (<code>/api/feedback</code>)</td></tr>
+        <tr><td style="padding: 4px 10px 4px 0; color: #475569;"><strong>Type</strong></td><td>{html_lib.escape(str(report_type))}</td></tr>
+        <tr><td style="padding: 4px 10px 4px 0; color: #475569;"><strong>Submitted</strong></td><td>{html_lib.escape(submitted_utc)}</td></tr>
+      </table>
+      <h3 style="margin: 12px 0 6px; font-size: 15px;">Description</h3>
+      <div style="white-space: pre-wrap; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px 12px; font-size: 14px;">{html_lib.escape(str(description or ''))}</div>
+      <h3 style="margin: 14px 0 6px; font-size: 15px;">Related Entities</h3>
+      {entities_html}
+      <p style="margin-top: 16px; font-size: 12px; color: #64748b;">
+        View recent submissions: <a href="https://theyownwhat.net/api/feedback">https://theyownwhat.net/api/feedback</a>
+      </p>
+    </div>
+    """
+    return subject, text_body, html_body
+
+
+def _send_email_async(feedback_id: int, report_type: str, description: str, entities: list):
+    """Fire-and-forget email notification for general feedback submissions."""
+    subject, text_body, html_body = format_general_feedback_email(
+        feedback_id, report_type, description, entities
+    )
+    send_feedback_notification_email(subject, text_body, html_body=html_body)
 
 
 # ---------------------------------------------------------------------------

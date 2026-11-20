@@ -35,7 +35,7 @@ services:
       - NYS_SOCRATA_APP_TOKEN=${NYS_SOCRATA_APP_TOKEN}
       - NHPD_USER=${NHPD_USER}
       - NHPD_PASS=${NHPD_PASS}
-      - ALERT_EMAIL_TO=${ALERT_EMAIL_TO:-salmunk@gmail.com}
+      - ALERT_EMAIL_TO=${ALERT_EMAIL_TO:-salmunk@gmail.com, me@salmun.net, salmun@storrsmagic.org}
       - ALERT_EMAIL_FROM=${ALERT_EMAIL_FROM:-salmunk@gmail.com}
       - ALERT_EMAIL_PASS=${ALERT_EMAIL_PASS}
       - NIGHTLY_OPTIMIZER_EMAIL_TO=${NIGHTLY_OPTIMIZER_EMAIL_TO:-salmun@storrsmagic.org}
@@ -90,7 +90,7 @@ services:
       - NYS_SOCRATA_APP_TOKEN=${NYS_SOCRATA_APP_TOKEN}
       - NHPD_USER=${NHPD_USER}
       - NHPD_PASS=${NHPD_PASS}
-      - ALERT_EMAIL_TO=${ALERT_EMAIL_TO:-salmunk@gmail.com}
+      - ALERT_EMAIL_TO=${ALERT_EMAIL_TO:-salmunk@gmail.com, me@salmun.net, salmun@storrsmagic.org}
       - ALERT_EMAIL_FROM=${ALERT_EMAIL_FROM:-salmunk@gmail.com}
       - ALERT_EMAIL_PASS=${ALERT_EMAIL_PASS}
       - NIGHTLY_OPTIMIZER_EMAIL_TO=${NIGHTLY_OPTIMIZER_EMAIL_TO:-salmun@storrsmagic.org}

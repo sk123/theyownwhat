@@ -29,6 +29,7 @@ import subprocess
 import sys
 import time
 from collections import defaultdict, deque
+from datetime import datetime, timezone
 from typing import Any, Deque, Dict, List, Optional, Tuple
 from urllib.parse import urlencode
 
@@ -43,6 +44,7 @@ from api.audit_review_routes import (
     _authorize_request,
     sign_review_token,
 )
+from api.feedback import spawn_feedback_notification_email
 from api.linking_rules import deactivate_learned_rule, ensure_linking_rules_tables
 
 logger = logging.getLogger("reviewer-feedback")
@@ -306,6 +308,152 @@ def _sanitize_bridge_context(ctx: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def format_review_report_notification(
+    *,
+    report_id: int,
+    report_kind: str,
+    jurisdiction: str,
+    network_name: str,
+    network_key: str,
+    network_id: str,
+    target_type: str,
+    target_value: str,
+    target_id: str,
+    related_target_type: str,
+    related_target_value: str,
+    related_target_id: str,
+    reason_code: str,
+    explanation: str,
+    evidence_url: str,
+    reviewer_label: str,
+    source_path: str,
+    bridge_context: Dict[str, Any],
+    deduplicated: bool = False,
+) -> Tuple[str, str, str]:
+    """Build (subject, text_body, html_body) for /review feedback events."""
+    submitted_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    jur_u = (jurisdiction or "ct").upper()
+    kind_label = "Missed Connection" if report_kind == "missed_connection" else "False Positive"
+    reason_label = REASON_LABELS.get(reason_code, reason_code)
+    event_heading = (
+        f"Additional note on open /review report #{int(report_id)}"
+        if deduplicated
+        else f"New /review {kind_label} report #{int(report_id)}"
+    )
+    subject = (
+        f"[They Own WHAT?] Note added to /review report #{int(report_id)} ({jur_u}): {target_value[:60]}"
+        if deduplicated
+        else f"[They Own WHAT?] New /review {kind_label} #{int(report_id)} ({jur_u}): {target_value[:60]}"
+    )
+
+    source_url = ""
+    if source_path:
+        clean_p = source_path if source_path.startswith("/") else f"/{source_path}"
+        source_url = f"https://theyownwhat.net{clean_p}"
+
+    detail_rows: List[Tuple[str, str]] = [
+        ("Report ID", f"#{int(report_id)}"),
+        ("Event", "Appended Note (deduplicated within 24h)" if deduplicated else "New Reviewer Report"),
+        ("Kind", f"{kind_label} ({report_kind})"),
+        ("Jurisdiction", jur_u),
+        ("Submitted", submitted_utc),
+        ("Reviewer", reviewer_label or "(anonymous)"),
+        ("Reason", f"{reason_label} [{reason_code}]"),
+        ("Network", network_name or "(none)"),
+        ("Network Key / ID", " / ".join(x for x in (network_key, network_id) if x) or "(none)"),
+        ("Target", f"[{target_type}] {target_value}" + (f" (ID: {target_id})" if target_id else "")),
+    ]
+    if related_target_value:
+        detail_rows.append((
+            "Related Target (Side B)",
+            f"[{related_target_type or 'entity'}] {related_target_value}"
+            + (f" (ID: {related_target_id})" if related_target_id else ""),
+        ))
+    if evidence_url:
+        detail_rows.append(("Evidence URL", evidence_url))
+    if source_url:
+        detail_rows.append(("Page URL", source_url))
+
+    text_lines = [event_heading, ""]
+    for label, val in detail_rows:
+        text_lines.append(f"{label:24s} {val}")
+    text_lines.append("")
+    text_lines.append("Explanation:")
+    text_lines.append(explanation or "(no explanation entered)")
+    if bridge_context:
+        text_lines.append("")
+        text_lines.append("Bridge / UI Context:")
+        text_lines.append(json.dumps(bridge_context, indent=2, sort_keys=True))
+    text_lines.append("")
+    text_lines.append("---")
+    text_lines.append("Status: queued as `pending` for tonight's public-record verification pass.")
+    text_body = "\n".join(text_lines)
+
+    tr_html = "".join(
+        f"<tr><td style='padding:4px 12px 4px 0;color:#475569;vertical-align:top;white-space:nowrap;'><strong>{html.escape(label)}</strong></td>"
+        f"<td style='padding:4px 0;color:#0f172a;'>"
+        + (
+            f"<a href='{html.escape(val)}'>{html.escape(val)}</a>"
+            if label in ("Evidence URL", "Page URL") and val.startswith(("http://", "https://"))
+            else html.escape(val)
+        )
+        + "</td></tr>"
+        for label, val in detail_rows
+    )
+    bridge_html = ""
+    if bridge_context:
+        bridge_html = (
+            "<h3 style='margin:14px 0 6px;font-size:15px;'>Bridge / UI Context</h3>"
+            f"<pre style='background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:10px 12px;font-size:12px;overflow-x:auto;'>"
+            f"{html.escape(json.dumps(bridge_context, indent=2, sort_keys=True))}</pre>"
+        )
+    html_body = f"""
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #0f172a; max-width: 720px;">
+      <h2 style="margin: 0 0 12px;">{html.escape(event_heading)} ({html.escape(jur_u)})</h2>
+      <table style="border-collapse: collapse; width: 100%; margin-bottom: 14px; font-size: 14px;">
+        {tr_html}
+      </table>
+      <h3 style="margin: 12px 0 6px; font-size: 15px;">Explanation</h3>
+      <div style="white-space: pre-wrap; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px 12px; font-size: 14px;">{html.escape(explanation or '(no explanation entered)')}</div>
+      {bridge_html}
+      <p style="margin-top: 16px; font-size: 12px; color: #64748b;">
+        Queued as <code>pending</code> in <code>network_error_reports</code> for tonight's public-record verification pass.
+      </p>
+    </div>
+    """
+    return subject, text_body, html_body
+
+
+def format_revert_notification(result: Dict[str, Any], *, reverted_by: str, reason: str) -> Tuple[str, str, str]:
+    """Build (subject, text_body, html_body) for reviewer report revert events."""
+    rid = result.get("report_id")
+    submitted_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    subject = f"[They Own WHAT?] Reverted /review report #{rid}"
+    deactivated = result.get("deactivated_rules") or []
+    jurs = result.get("rebuild_jurisdictions") or []
+    rebuild_status = result.get("rebuild_status") or ""
+    text_body = (
+        f"Reviewer report #{rid} was reverted.\n\n"
+        f"Reverted By:         {reverted_by or '(unknown)'}\n"
+        f"Timestamp:           {submitted_utc}\n"
+        f"Reason:              {reason or '(none provided)'}\n"
+        f"Deactivated Rules:   {json.dumps(deactivated)}\n"
+        f"Rebuild Jurisdictions: {', '.join(str(j).upper() for j in jurs) or '(none)'}\n"
+        f"Rebuild Status:      {rebuild_status}\n"
+    )
+    html_body = (
+        f"<div style='font-family:sans-serif;color:#0f172a;max-width:680px;'>"
+        f"<h2>Reverted /review Report #{html.escape(str(rid))}</h2>"
+        f"<p><strong>Reverted By:</strong> {html.escape(str(reverted_by or '(unknown)'))}<br>"
+        f"<strong>Timestamp:</strong> {html.escape(submitted_utc)}<br>"
+        f"<strong>Reason:</strong> {html.escape(str(reason or '(none provided)'))}<br>"
+        f"<strong>Deactivated Rules:</strong> <code>{html.escape(json.dumps(deactivated))}</code><br>"
+        f"<strong>Rebuild Jurisdictions:</strong> {html.escape(', '.join(str(j).upper() for j in jurs) or '(none)')}<br>"
+        f"<strong>Rebuild Status:</strong> {html.escape(str(rebuild_status))}</p></div>"
+    )
+    return subject, text_body, html_body
+
+
 @router.post("/api/review-reports")
 def submit_review_report(payload: ReviewReportCreate, request: Request):
     """Queue a trusted-reviewer report for nightly public-record verification.
@@ -400,6 +548,28 @@ def submit_review_report(payload: ReviewReportCreate, request: Request):
                         ),
                     )
                     conn.commit()
+                subj, txt_body, html_body = format_review_report_notification(
+                    report_id=int(existing["id"]),
+                    report_kind=r_kind,
+                    jurisdiction=jur,
+                    network_name=payload.network_name.strip(),
+                    network_key=payload.network_key.strip(),
+                    network_id=payload.network_id.strip(),
+                    target_type=t_type,
+                    target_value=target_val,
+                    target_id=payload.target_id.strip(),
+                    related_target_type=rel_type,
+                    related_target_value=rel_val,
+                    related_target_id=payload.related_target_id.strip(),
+                    reason_code=r_code,
+                    explanation=payload.explanation.strip(),
+                    evidence_url=ev_url,
+                    reviewer_label=payload.reviewer_label.strip(),
+                    source_path=payload.source_path.strip(),
+                    bridge_context=safe_ctx,
+                    deduplicated=True,
+                )
+                spawn_feedback_notification_email(subj, txt_body, html_body=html_body)
                 return {
                     "ok": True,
                     "report_id": int(existing["id"]),
@@ -448,6 +618,28 @@ def submit_review_report(payload: ReviewReportCreate, request: Request):
             )
             row = cur.fetchone()
         conn.commit()
+        subj, txt_body, html_body = format_review_report_notification(
+            report_id=int(row["id"]),
+            report_kind=r_kind,
+            jurisdiction=jur,
+            network_name=payload.network_name.strip(),
+            network_key=payload.network_key.strip(),
+            network_id=payload.network_id.strip(),
+            target_type=t_type,
+            target_value=target_val,
+            target_id=payload.target_id.strip(),
+            related_target_type=rel_type,
+            related_target_value=rel_val,
+            related_target_id=payload.related_target_id.strip(),
+            reason_code=r_code,
+            explanation=payload.explanation.strip(),
+            evidence_url=ev_url,
+            reviewer_label=payload.reviewer_label.strip(),
+            source_path=payload.source_path.strip(),
+            bridge_context=safe_ctx,
+            deduplicated=False,
+        )
+        spawn_feedback_notification_email(subj, txt_body, html_body=html_body)
         return {
             "ok": True,
             "report_id": int(row["id"]),
@@ -811,6 +1003,10 @@ def post_revert_report(body: RevertReportBody, request: Request):
             reason=body.reason,
             trigger_rebuild=not body.skip_rebuild,
         )
+        subj, txt_body, html_body = format_revert_notification(
+            result, reverted_by=reviewer, reason=body.reason
+        )
+        spawn_feedback_notification_email(subj, txt_body, html_body=html_body)
         return JSONResponse(content=result)
     finally:
         conn.close()

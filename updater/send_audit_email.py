@@ -31,7 +31,7 @@ ALERT_EMAIL_FROM = (os.environ.get("ALERT_EMAIL_FROM", "salmunk@gmail.com") or "
 ALERT_EMAIL_PASS = "".join((os.environ.get("ALERT_EMAIL_PASS", "") or "").split())
 
 # Default recipient list
-DEFAULT_RECIPIENTS = ["salmunk@gmail.com", "me@salmun.net"]
+DEFAULT_RECIPIENTS = ["salmunk@gmail.com", "me@salmun.net", "salmun@storrsmagic.org"]
 
 def send_audit_email(subject: str, body_text: str, body_html: str = None, recipients: list = None) -> bool:
     """Send audit/report email. Supports multiple recipients."""
