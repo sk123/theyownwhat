@@ -17,6 +17,8 @@ import LandlordMonitor from './components/LandlordMonitor';
 import CityExplorer from './components/CityExplorer';
 import DatasetLanding from './components/DatasetLanding';
 import AlgorithmicEstimateBanner from './components/AlgorithmicEstimateBanner';
+import { MobileBelowFoldCue, NotablePortfoliosSkeleton } from './components/NotablePortfoliosCue';
+import { stripReviewPrefix } from './context/ReviewerModeContext';
 import { getCtPropertyUnitCount, getJurisdictionConfig, isPropertyInActiveJurisdiction } from './utils/jurisdiction';
 const BurstDetector = React.lazy(() => import('./components/BurstDetector'));
 
@@ -157,12 +159,12 @@ const SEO_BY_DATASET = {
   },
   MINNEAPOLIS: {
     title: 'They Own WHAT?? | Minnesota & Twin Cities Property Owner Explorer',
-    description: 'Explore unified Minnesota property records across Hennepin & Ramsey Counties, Minneapolis active rental licenses, code cases, and corporate filings.',
+    description: 'Explore unified Minnesota property records across Hennepin, Ramsey, Dakota, Anoka & Olmsted (Rochester) Counties, Minneapolis active rental licenses, code cases, and corporate filings.',
     path: '/mn',
   },
   MN: {
     title: 'They Own WHAT?? | Minnesota Property Owner Explorer',
-    description: 'Explore unified Minnesota property records across Hennepin & Ramsey Counties, Minneapolis active rental licenses, code cases, and corporate filings.',
+    description: 'Explore unified Minnesota property records across Hennepin, Ramsey, Dakota, Anoka & Olmsted (Rochester) Counties, Minneapolis active rental licenses, code cases, and corporate filings.',
     path: '/mn',
   },
   NJ: {
@@ -197,7 +199,7 @@ const SEO_BY_DATASET = {
   },
   OH: {
     title: 'They Own WHAT?? | Ohio Property Owner Explorer',
-    description: 'Explore Ohio County Auditor improved CAMA property parcels (Greater Cleveland / Cuyahoga), recent transfers, corporate officer filings, and NHPD subsidies.',
+    description: 'Explore 1.34M Ohio County Auditor improved CAMA property parcels across Columbus (Franklin), Cleveland (Cuyahoga), Cincinnati (Hamilton) & Toledo (Lucas), recent transfers, corporate filings, and NHPD subsidies.',
     path: '/oh',
   },
   CO: {
@@ -233,7 +235,7 @@ const SEO_BY_DATASET = {
 };
 
 function datasetFromPath(pathname = window.location.pathname) {
-  const normalized = pathname.replace(/\/+$/, '') || '/';
+  const normalized = stripReviewPrefix(pathname).replace(/\/+$/, '') || '/';
   return PATH_DATASETS[normalized] || null;
 }
 
@@ -399,6 +401,8 @@ function App() {
 
   // Dashboard Scroll & State
   const dashboardScrollRef = useRef(null);
+  const ctHomeScrollRef = useRef(null);
+  const ctNotableSectionRef = useRef(null);
   const [isScrolledPastCards, setIsScrolledPastCards] = useState(false);
   const [isAtDashboardTop, setIsAtDashboardTop] = useState(true);
 
@@ -755,7 +759,9 @@ function App() {
   };
 
   const setDatasetPath = (state, replace = false) => {
-    const nextPath = DATASET_PATHS[state] || '/';
+    const basePath = DATASET_PATHS[state] || '/';
+    const inReviewPath = window.location.pathname.toLowerCase() === '/review' || window.location.pathname.toLowerCase().startsWith('/review/');
+    const nextPath = inReviewPath ? (basePath === '/' ? '/review' : `/review${basePath}`) : basePath;
     if (window.location.pathname === nextPath) return;
     const method = replace ? 'replaceState' : 'pushState';
     window.history[method]({ dataset: state }, '', nextPath);
@@ -819,8 +825,10 @@ function App() {
   const showDatasetPicker = ({ replace = false } = {}) => {
     resetNetworkView();
     const method = replace ? 'replaceState' : 'pushState';
-    if (window.location.pathname !== '/') {
-      window.history[method]({ dataset: null }, '', '/');
+    const inReviewPath = window.location.pathname.toLowerCase() === '/review' || window.location.pathname.toLowerCase().startsWith('/review/');
+    const homePath = inReviewPath ? '/review' : '/';
+    if (window.location.pathname !== homePath) {
+      window.history[method]({ dataset: null }, '', homePath);
     }
     setView('datasets');
   };
@@ -1220,7 +1228,7 @@ function App() {
           )}
 
           {view === 'home' && (
-            <div className="h-full overflow-y-auto w-full relative">
+            <div ref={ctHomeScrollRef} className="h-full overflow-y-auto w-full relative">
               <BackgroundGrid />
 
               <div className="mx-auto w-full max-w-[1720px] px-3 sm:px-5 pt-2.5 md:pt-3 pb-24 md:pb-14 relative z-10">
@@ -1273,26 +1281,38 @@ function App() {
                         onSelect={(id, type, name) => loadNetwork(id, type, name)}
                       />
                     ) : (
-                      <div>
-                        {loadingInsights ? (
-                          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            {[1, 2, 3].map(i => (
-                              <div key={i} className="h-48 bg-white rounded-2xl border border-slate-100 shadow-sm animate-pulse"></div>
-                            ))}
-                          </div>
-                        ) : !maintenanceMode ? (
-                          <Insights
-                            activeState={activeState}
-                            data={insights}
-                            onSelect={(id, type, name) => loadNetwork(id, type, name)}
-                            toolboxEnabled={toolboxEnabled}
-                          />
-                        ) : (
-                          <div className="p-12 text-center bg-white/50 rounded-3xl border border-dashed border-slate-200 backdrop-blur-sm">
-                            <p className="text-slate-400 font-medium">Top networks are temporarily hidden during system maintenance.</p>
-                          </div>
-                        )}
-                      </div>
+                      <>
+                        <div ref={ctNotableSectionRef} className="scroll-mt-4">
+                          {loadingInsights ? (
+                            <NotablePortfoliosSkeleton
+                              heading="Notable Connecticut Networks"
+                              jurisdictionName="Connecticut"
+                              columns={3}
+                              cardCount={6}
+                            />
+                          ) : !maintenanceMode ? (
+                            <Insights
+                              activeState={activeState}
+                              data={insights}
+                              onSelect={(id, type, name) => loadNetwork(id, type, name)}
+                              toolboxEnabled={toolboxEnabled}
+                            />
+                          ) : (
+                            <div className="p-12 text-center bg-white/50 rounded-3xl border border-dashed border-slate-200 backdrop-blur-sm">
+                              <p className="text-slate-400 font-medium">Top networks are temporarily hidden during system maintenance.</p>
+                            </div>
+                          )}
+                        </div>
+                        <MobileBelowFoldCue
+                          targetRef={ctNotableSectionRef}
+                          scrollRootRef={ctHomeScrollRef}
+                          loading={loadingInsights}
+                          count={Array.isArray(insights?.Statewide) ? insights.Statewide.length : (insights ? 50 : 0)}
+                          label="Notable Portfolios"
+                          jurisdictionName="Connecticut"
+                          enabled={!maintenanceMode && !searchResults}
+                        />
+                      </>
                     )}
                   </div>
                 </motion.div>
@@ -1424,6 +1444,8 @@ function App() {
                         <PropertyTable
                           properties={filteredProperties}
                           activeState={activeState}
+                          networkName={networkData.networkName}
+                          networkId={String(networkData.network_id || networkData.id || '')}
                           jurisdictionConfig={jurisdictionConfig}
                           includeNonLocalProperties={includeNonLocalProperties}
                           onIncludeNonLocalPropertiesChange={setIncludeNonLocalProperties}
@@ -1503,6 +1525,8 @@ function App() {
                       <PropertyTable
                         properties={filteredProperties}
                         activeState={activeState}
+                        networkName={networkData.networkName}
+                        networkId={String(networkData.network_id || networkData.id || '')}
                         jurisdictionConfig={jurisdictionConfig}
                         includeNonLocalProperties={includeNonLocalProperties}
                         onIncludeNonLocalPropertiesChange={setIncludeNonLocalProperties}

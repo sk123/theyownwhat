@@ -25,9 +25,12 @@ from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 from psycopg2.extras import RealDictCursor, execute_values
 
 from api.linking_rules import (
+    get_learned_ambiguous_homonyms,
+    get_learned_nominee_managers,
     get_learned_officer_role_suffixes,
     get_learned_ra_allowlist,
     get_learned_third_party_hubs,
+    get_learned_third_party_principals,
 )
 from api.shared_utils import (
     US_STATE_CODES,
@@ -43,6 +46,7 @@ from api.shared_utils import (
     looks_like_business_name,
     looks_like_person_owner,
     normalize_business_name,
+    normalize_mailing_address,
     normalize_mailing_address_coarse,
     normalize_owner_name,
     normalize_person_name,
@@ -64,11 +68,25 @@ GENERIC_HOMONYM_CORPORATE_STEMS = frozenset({
     "INVESTMENT",
     "REALTY",
     "REAL ESTATE",
+    "REAL ESTATE HOLDINGS",
+    "PROPERTY MANAGEMENT",
+    "ASSET MANAGEMENT",
     "VENTURES",
     "ENTERPRISES",
     "MANAGEMENT",
+    "MANAGER",
+    "MANAGING",
+    "MEMBER",
+    "MEMBERS",
+    "GENERAL PARTNER",
+    "LIMITED PARTNER",
+    "TRUSTEE",
+    "TRUSTEES",
+    "OWNER",
+    "OWNERS",
     "ASSOCIATES",
     "PARTNERS",
+    "PARTNERSHIP",
     "CAPITAL",
     "GROUP",
     "DEVELOPMENT",
@@ -410,6 +428,38 @@ def _build_match_result(cand: OCCandidate, tier: int, confidence: float, reason:
     )
 
 
+def _tier2_bare_name_conflicts_with_out_of_state_hq(
+    chosen: OCCandidate,
+    local_jur: str,
+    mail_jur: Optional[str],
+    parcel_addrs: Set[str],
+) -> bool:
+    """Block Tier 2 bare-name cross-state hijacks (e.g. a Woodbury, NY business
+    matching an unrelated domestic North Haven, CT LLC of the same name) while
+    preserving genuine local LLCs owned by out-of-state landlords whose SOTS
+    filing lists their out-of-state mailing/HQ address."""
+    if not mail_jur or mail_jur == local_jur:
+        return False
+    if chosen.jurisdiction_code != local_jur:
+        return False
+    if chosen.home_jurisdiction_code == mail_jur:
+        return False
+    mail_st = mail_jur.split("_", 1)[-1].upper()
+    cand_addrs = [
+        a.strip().upper()
+        for a in (chosen.registered_address_coarse, chosen.mailing_address_coarse)
+        if a and a.strip()
+    ]
+    if not cand_addrs:
+        return False
+    # If the candidate lists any address in the out-of-state mail state, it is plausibly
+    # the same out-of-state landlord's local SPE; if ALL candidate addresses are strictly
+    # in another state (e.g. domestic CT) with zero address overlap, reject bare-name Tier 2.
+    if any(re.search(rf"\b{re.escape(mail_st)}$", a) for a in cand_addrs):
+        return False
+    return True
+
+
 def score_oc_candidates(
     demangled: AssessorOwnerRecord,
     parcel_state: str,
@@ -518,7 +568,9 @@ def score_oc_candidates(
             # Prefer the local state registration record when both local branch and mail-state home appear
             local_pref = [c for c in active_direct if c.jurisdiction_code == local_jur]
             chosen = local_pref[0] if local_pref else active_direct[0]
-            return _build_match_result(chosen, 2, 0.92, "unique_active_scoped_jurisdiction_entity")
+            if not _tier2_bare_name_conflicts_with_out_of_state_hq(chosen, local_jur, mail_jur, parcel_addrs):
+                return _build_match_result(chosen, 2, 0.92, "unique_active_scoped_jurisdiction_entity")
+            return None
         if len(canon_active_direct) > 1:
             # Multiple distinct active homonyms in scoped state(s) without address tie-breaker -> Tier 5 quarantine
             return None
@@ -558,7 +610,8 @@ def score_oc_candidates(
                     for c in active_local_ls
                 }
                 if len(canon_local_ids) == 1 and active_local_ls:
-                    return _build_match_result(active_local_ls[0], 2, 0.89, "unique_active_legal_stem")
+                    if not _tier2_bare_name_conflicts_with_out_of_state_hq(active_local_ls[0], local_jur, mail_jur, parcel_addrs):
+                        return _build_match_result(active_local_ls[0], 2, 0.89, "unique_active_legal_stem")
 
         if owner_canon_biz and len(owner_canon_biz) >= 8 and len(owner_canon_biz.split()) >= 2:
             canon_addr_only = [
@@ -886,11 +939,30 @@ def load_oc_registered_agent_addresses(conn) -> Set[str]:
 
 
 _EXCLUDED_OC_COMPANY_TYPE_RE = re.compile(
-    r"\b(?:RELIGIOUS|CHURCH\s+CORP|SAVINGS\s+BANK|BANK\s+STOCK|BANK\s+NON[- ]STOCK|^BANK$|"
+    r"\b(?:NON[- ]?PROFIT|NON[- ]?STOCK|NOT[- ]FOR[- ]PROFIT|CHARIT(?:ABLE|Y)|"
+    r"PUBLIC\s+BENEFIT|MUTUAL\s+BENEFIT|ELEEMOSYNARY|FRATERNAL|BENEVOLENT|"
+    r"RELIGIOUS|CHURCH\s+CORP|SAVINGS\s+BANK|BANK\s+STOCK|BANK\s+NON[- ]STOCK|^BANK$|"
     r"BANK\s*-\s*(?:DOMESTIC|FOREIGN)|CREDIT\s+UNION|INSURANCE\s+(?:COMPANY|STOCK|NON[- ]STOCK)|"
-    r"^INSURANCE$|MUNICIPAL\s*-\s*(?:DOMESTIC|FOREIGN)|ELECTRIC\s+MEMBERSHIP\s+COOP|^SCHOOL$)\b",
+    r"^INSURANCE$|MUNICIPAL\s*-\s*(?:DOMESTIC|FOREIGN)|MUNICIPAL\s+CORP|GOVERNMENTAL|"
+    r"ELECTRIC\s+MEMBERSHIP\s+COOP|RURAL\s+COOPERATIVE|"
+    r"CO-?OP(?:ERATIVE)?(?:\s+(?:UTILITY|ASSOCIATION|CORPORATION|CORP|HOUSING))?|"
+    r"TELEPHONE\s+COOPERATIVE|MUTUAL\s+(?:WATER|DITCH|IRRIGATION|INSURANCE|HOUSING)|"
+    r"HOUSING\s+DEVELOPMENT\s+FUND|LAND\s+BANK|CONDOMINIUM|HOMEOWNERS|"
+    r"PROFESSIONAL\s+(?:SERVICE|CORPORATION|LLC|LIMITED\s+LIABILITY)|^SCHOOL$)\b",
     re.IGNORECASE,
 )
+# Non-beneficial volunteer, advisory, religious, clerical, or professional-agent officer
+# titles that must never be pulled into private landlord networks even if upstream SOS
+# data bucketed them under `beneficial_principal`.
+_NON_BENEFICIAL_OFFICER_POSITION_RE = re.compile(
+    r"\b(?:ADVISORY|HONORARY|CHAPLAIN|PASTOR|RABBI|MINISTER|DEACON|ELDER|CLERGY|"
+    r"VOLUNTEER|ASSISTANT\s+SECRETARY|ASST\.?\s+SEC(?:RETARY)?|CLERK|"
+    r"REGISTERED\s+AGENT|STATUTORY\s+AGENT|RESIDENT\s+AGENT|PROCESS\s+AGENT|"
+    r"INCORPORATOR|ORGANIZER|ATTORNEY|COUNSEL|C\.?P\.?A\.?|ACCOUNTANT|AUDITOR|"
+    r"ESCROW|NOTARY|FILER)\b",
+    re.IGNORECASE,
+)
+_HIGH_BOX_UNIT_TOKEN_RE = re.compile(r"^\d{4,6}[A-Z]?$")
 # Third-party IRC § 1031 exchange accommodators, EB-5 regional/lending centers, escrow/title
 # intermediaries, and statutory trusts that hold temporary/administrative roles across
 # hundreds of unrelated real-estate owners.
@@ -899,7 +971,9 @@ _INTERMEDIARY_EXCHANGE_LENDER_RE = re.compile(
     r"STEWART\s+HOLDINGS|IPX1031|LENDING\s+CENTER|REGIONAL\s+CENTER|ESCROW|"
     r"TITLE\s+(?:CO|COMPANY|INSURANCE|AGENCY|HOLDINGS)|TITLES\s+INC|STATUTORY\s+TRUST|"
     r"FOUNDATION\s+FOR\s+AFFORDABLE|RV\s+REGISTRATION|ACTION\s+SERVICES\s+LLC|"
-    r"FILING\s+SERVICES|LAW\s+OFFICES?|PLLC|LLP|CPA|CPAS|ACCOUNTING|ACCOUNTANTS|"
+    r"FILING\s+SERVICES|MANAGER\s+SERVICES|NOMINEE\s+MANAGER|REGISTERED\s+AGENT|"
+    r"CORPORATE\s+(?:GROUP|SERVICES|FILINGS?|SOLUTIONS)\s+(?:LLC|INC|CORP)|"
+    r"LAW\s+OFFICES?|PLLC|LLP|CPA|CPAS|ACCOUNTING|ACCOUNTANTS|"
     r"TAX\s+(?:INC|LLC|SERVICES|GROUP|PREP|NERD|ADVISOR|PARTNERS)|LNR\s+PARTNERS|SPECIAL\s+SERVIC|"
     r"AGENCY\s+AGENTS|FORVIS\s+MAZARS)\b|\b(?:P\.?C\.?|P\.?A\.?)\s*$",
     re.IGNORECASE,
@@ -938,15 +1012,24 @@ def resolve_oc_company_principals(
     direct_humans: Dict[Tuple[str, str], Set[str]] = {}
     direct_ct_pids: Dict[Tuple[str, str], Dict[str, str]] = {}
     direct_hq_addrs: Dict[Tuple[str, str], Set[str]] = {}
+    direct_hq_unit_pairs: Dict[Tuple[str, str], Set[Tuple[str, Tuple[str, ...]]]] = {}
+    hq_coarse_distinct_units: Dict[str, Set[Tuple[str, ...]]] = {}
+    hq_coarse_high_box_units: Dict[str, Set[str]] = {}
     direct_raw_hq_addrs: Dict[Tuple[str, str], Set[str]] = {}
     entity_labels: Dict[Tuple[str, str], str] = {}
 
     # Professional counsel/CPA markers & board-governance cap so nonprofit/utility/hospital/public
-    # boards of directors never star-bridge unrelated private LLCs.
-    counsel_re = re.compile(r"\b(?:ESQ|ESQUIRE|C\.?P\.?A\.?)\b", re.IGNORECASE)
-    MAX_CLOSELY_HELD_OFFICERS = 12
-    MAX_CUMULATIVE_ROLLUP_OFFICERS = 24
-    MAX_NONPROFIT_CLOSELY_HELD_OFFICERS = 2
+    # boards of directors and commercial formation attorneys (e.g. Florida `... P.A.` / `... PA`
+    # listed as MGR/AMBR across dozens of unrelated client LLCs) never star-bridge private LLCs.
+    counsel_re = re.compile(
+        r"\b(?:ESQ|ESQUIRE|C\.?P\.?A\.?|ATTORNEY|COUNSEL|LAW\s+OFFICES?|NOTARY|"
+        r"P\.A\.|P\.C\.|P\.L\.L\.C\.|L\.L\.P\.)\b|"
+        r"^(?:\S+\s+){2,}(?:PA|PC|PLLC|LLP)\s*$",
+        re.IGNORECASE,
+    )
+    MAX_CLOSELY_HELD_OFFICERS = 8
+    MAX_CUMULATIVE_ROLLUP_OFFICERS = 16
+    MAX_NONPROFIT_CLOSELY_HELD_OFFICERS = 0
 
     def _harvest_hq_addr(ckey: Tuple[str, str], raw_candidate: Optional[str], agent_coarse_set: Set[str]) -> Optional[str]:
         if not raw_candidate:
@@ -961,7 +1044,20 @@ def resolve_oc_company_principals(
             return None
         if is_excluded_third_party_address(raw_candidate, coarse, registrar_substrings):
             return None
+        utoks: Tuple[str, ...] = ()
+        if not coarse.startswith("PO BOX "):
+            fine = normalize_mailing_address(stripped)
+            if fine and "#" in fine:
+                fine_no_zip = re.sub(r"\s+\d{5}\b\s*$", "", fine).strip()
+                fine_no_zip = re.sub(r"\b(\d+)(?:ST|ND|RD|TH)\b", r"\1", fine_no_zip)
+                utoks = tuple(re.findall(r"#\s*([A-Z0-9][A-Z0-9-]*)", fine_no_zip))
+                if utoks:
+                    hq_coarse_distinct_units.setdefault(coarse, set()).add(utoks)
+                    for ut in utoks:
+                        if _HIGH_BOX_UNIT_TOKEN_RE.match(ut):
+                            hq_coarse_high_box_units.setdefault(coarse, set()).add(ut)
         direct_hq_addrs.setdefault(ckey, set()).add(coarse)
+        direct_hq_unit_pairs.setdefault(ckey, set()).add((coarse, utoks))
         direct_raw_hq_addrs.setdefault(ckey, set()).add(stripped)
         return coarse
 
@@ -1010,13 +1106,19 @@ def resolve_oc_company_principals(
                     if (
                         (cname and (is_excluded_third_party_entity(cname) or _INTERMEDIARY_EXCHANGE_LENDER_RE.search(cname)))
                         or (ctype and _EXCLUDED_OC_COMPANY_TYPE_RE.search(ctype))
+                        or bool(row.get("is_nonprofit"))
+                        or any(
+                            tok in ctype.upper()
+                            for tok in ("NONPROFIT", "NON-PROFIT", "NON-STOCK", "NONSTOCK", "CHARITABLE", "NOT-FOR-PROFIT", "COOPERATIVE", "CO-OP")
+                        )
+                        or any(
+                            tok in cname.upper()
+                            for tok in ("CO-OPERATIVE", "COOPERATIVE", "YACHT CLUB", "COUNTRY CLUB", "GOLF CLUB", "FAIR SOCIETY", "BOYS & GIRLS CLUB", "BOYS AND GIRLS CLUB")
+                        )
                     ):
                         excluded_company_keys.add(key)
-                        continue
-                    if row.get("is_nonprofit") or any(
-                        tok in ctype.upper() for tok in ("NONPROFIT", "NON-PROFIT", "CHARITABLE", "NOT-FOR-PROFIT")
-                    ):
                         all_nonprofit_keys.add(key)
+                        continue
 
                     raw_agent_nm = (row.get("agent_name") or "").strip()
                     if raw_agent_nm and not looks_like_business_name(raw_agent_nm):
@@ -1120,18 +1222,26 @@ def resolve_oc_company_principals(
                     """,
                     (c_jurs, c_nums),
                 )
+                learned_nominees = get_learned_nominee_managers()
+                learned_3p_principals = {
+                    canonicalize_person_name(n) for n in get_learned_third_party_principals()
+                }
+                learned_3p_principals.discard("")
                 for row in cur.fetchall():
                     ckey = (row["jurisdiction_code"], row["company_number"])
                     if ckey in excluded_company_keys:
                         continue
                     raw_nm = row.get("name") or ""
-                    if counsel_re.search(raw_nm):
+                    raw_pos = (row.get("position") or "").strip()
+                    if counsel_re.search(raw_nm) or (raw_pos and _NON_BENEFICIAL_OFFICER_POSITION_RE.search(raw_pos)):
                         continue
                     nm = clean_oc_officer_name(raw_nm)
                     if not nm or is_excluded_third_party_entity(nm):
                         continue
                     if row["role_class"] == "beneficial_principal" and not row.get("is_corporate_officer"):
                         if looks_like_person_owner(nm):
+                            if learned_3p_principals and canonicalize_person_name(nm) in learned_3p_principals:
+                                continue
                             # Suppress untitled Sunbiz/SOS officer rows that simply duplicate the filing's
                             # registered agent (e.g. `agent_name='BRIAN BUSSEY'` + `position=NULL`).
                             if not (row.get("position") or "").strip():
@@ -1140,8 +1250,22 @@ def resolve_oc_company_principals(
                                     continue
                             direct_humans.setdefault(ckey, set()).add(nm)
                         elif looks_like_business_name(nm) and row.get("name_norm"):
+                            norm_corp = normalize_business_name(nm)
+                            if learned_nominees and (
+                                nm.upper() in learned_nominees
+                                or row["name_norm"].upper() in learned_nominees
+                                or (norm_corp and norm_corp in learned_nominees)
+                            ):
+                                continue
                             corp_officer_norms.setdefault(ckey, set()).add(row["name_norm"])
                     elif row["role_class"] == "corporate_parent" and row.get("name_norm"):
+                        norm_corp = normalize_business_name(nm)
+                        if learned_nominees and (
+                            nm.upper() in learned_nominees
+                            or row["name_norm"].upper() in learned_nominees
+                            or (norm_corp and norm_corp in learned_nominees)
+                        ):
+                            continue
                         corp_officer_norms.setdefault(ckey, set()).add(row["name_norm"])
 
                 touched_human_keys: Set[Tuple[str, str]] = set(chunk)
@@ -1240,6 +1364,10 @@ def resolve_oc_company_principals(
                         bk = (row.get("bridge_key") or "").strip()
                         if not bk or is_excluded_third_party_entity(bk) or _INTERMEDIARY_EXCHANGE_LENDER_RE.search(bk):
                             continue
+                        if learned_nominees and (
+                            bk.upper() in learned_nominees or normalize_business_name(bk) in learned_nominees
+                        ):
+                            continue
                         sk = (row["jurisdiction_code"], row["src_company_number"])
                         dk = (row["jurisdiction_code"], row["dst_company_number"])
                         cp_by_bridge.setdefault(bk, []).append((sk, dk))
@@ -1256,17 +1384,19 @@ def resolve_oc_company_principals(
                                 parent_edges.setdefault(dk, set()).add(sk)
                                 next_frontier.add(sk)
 
-                # Enforce board-governance caps AFTER both `oc_officers` and `oc_cross_state_pierced_branches`
-                # so large corporate boards (>12 officers) and volunteer nonprofit boards (>2 officers) never
-                # star-bridge unrelated companies.
+                # Enforce board-governance caps AFTER `oc_officers`, `oc_cross_state_pierced_branches`,
+                # and `oc_ct_principal_links` so large corporate/LP boards (>12 officers) and volunteer
+                # nonprofit/cooperative boards (>2 officers) never star-bridge unrelated companies via
+                # either raw `direct_humans` OR BigQuery `direct_ct_pids`.
                 for ckey in touched_human_keys:
                     cap = (
                         MAX_NONPROFIT_CLOSELY_HELD_OFFICERS
                         if ckey in all_nonprofit_keys
                         else MAX_CLOSELY_HELD_OFFICERS
                     )
-                    if len(direct_humans.get(ckey, ())) > cap:
+                    if len(direct_humans.get(ckey, ())) > cap or len(direct_ct_pids.get(ckey, ())) > cap:
                         direct_humans.pop(ckey, None)
+                        direct_ct_pids.pop(ckey, None)
 
             # 4. Resolve unnumbered foreign-branch `(home_jurisdiction_code, name_norm)` links when unique
             if unnumbered_home_links:
@@ -1412,12 +1542,13 @@ def resolve_oc_company_principals(
                         cname = row.get("name") or ""
                         ctype = (row.get("company_type") or "").strip()
                         if (
-                            (cname and is_excluded_third_party_entity(cname))
+                            (cname and (is_excluded_third_party_entity(cname) or _INTERMEDIARY_EXCHANGE_LENDER_RE.search(cname)))
                             or (ctype and _EXCLUDED_OC_COMPANY_TYPE_RE.search(ctype))
-                            or row.get("is_nonprofit")
-                            or any(tok in ctype.upper() for tok in ("NONPROFIT", "NON-PROFIT", "CHARITABLE", "NOT-FOR-PROFIT"))
+                            or bool(row.get("is_nonprofit"))
+                            or any(tok in ctype.upper() for tok in ("NONPROFIT", "NON-PROFIT", "NON-STOCK", "NONSTOCK", "CHARITABLE", "NOT-FOR-PROFIT", "COOPERATIVE", "CO-OP", "RELIGIOUS"))
                         ):
                             excluded_company_keys.add(sk)
+                            all_nonprofit_keys.add(sk)
                             continue
                         if cname:
                             entity_labels[sk] = cname
@@ -1438,7 +1569,7 @@ def resolve_oc_company_principals(
                         continue
                     cur.execute(
                         """
-                        SELECT o.jurisdiction_code, o.company_number, o.name, o.is_corporate_officer
+                        SELECT o.jurisdiction_code, o.company_number, o.name, o.position, o.is_corporate_officer
                         FROM unnest(%s::text[], %s::text[]) AS k(j, n)
                         JOIN oc_officers o
                           ON o.jurisdiction_code = k.j AND o.company_number = k.n
@@ -1450,11 +1581,33 @@ def resolve_oc_company_principals(
                     for row in cur.fetchall():
                         sk = (row["jurisdiction_code"], row["company_number"])
                         raw_nm = row.get("name") or ""
+                        raw_pos = (row.get("position") or "").strip()
                         if row.get("is_corporate_officer") or counsel_re.search(raw_nm):
+                            continue
+                        if raw_pos and _NON_BENEFICIAL_OFFICER_POSITION_RE.search(raw_pos):
                             continue
                         nm = clean_oc_officer_name(raw_nm)
                         if nm and not is_excluded_third_party_entity(nm) and looks_like_person_owner(nm):
                             sib_officers.setdefault(sk, set()).add(nm)
+
+                # Separate multi-unit / CMRA HQs BEFORE checking `shared_hq` in Step 6
+                _mu_coarses_s6 = {
+                    c for c, units in hq_coarse_distinct_units.items()
+                    if len(units) >= 3 or len(hq_coarse_high_box_units.get(c, ())) >= 2
+                }
+                if _mu_coarses_s6:
+                    for ckey, pairs in list(direct_hq_unit_pairs.items()):
+                        rebuilt_hqs: Set[str] = set()
+                        for coarse_h, utoks in pairs:
+                            if coarse_h in _mu_coarses_s6:
+                                if utoks:
+                                    rebuilt_hqs.add(f"{coarse_h}||UNIT:{'-'.join(utoks)}")
+                            else:
+                                rebuilt_hqs.add(coarse_h)
+                        if rebuilt_hqs:
+                            direct_hq_addrs[ckey] = rebuilt_hqs
+                        else:
+                            direct_hq_addrs.pop(ckey, None)
 
                 # Attach closely-held (<= 6 officers) intermediate companies onto seed companies
                 # strictly WITHOUT passive-investor chaining across independent landlord empires:
@@ -1491,6 +1644,25 @@ def resolve_oc_company_principals(
                                 if sk_offs and sk not in direct_humans:
                                     direct_humans[sk] = set(sk_offs)
 
+    # Structural Multi-Unit / CMRA / Virtual-Mailbox HQ Separation (also covers runs without Step 6):
+    multi_unit_hq_coarses = {
+        c for c, units in hq_coarse_distinct_units.items()
+        if len(units) >= 3 or len(hq_coarse_high_box_units.get(c, ())) >= 2
+    }
+    if multi_unit_hq_coarses:
+        for ckey, pairs in list(direct_hq_unit_pairs.items()):
+            rebuilt_hqs = set()
+            for coarse_h, utoks in pairs:
+                if coarse_h in multi_unit_hq_coarses:
+                    if utoks:
+                        rebuilt_hqs.add(f"{coarse_h}||UNIT:{'-'.join(utoks)}")
+                else:
+                    rebuilt_hqs.add(coarse_h)
+            if rebuilt_hqs:
+                direct_hq_addrs[ckey] = rebuilt_hqs
+            else:
+                direct_hq_addrs.pop(ckey, None)
+
     # Roll up humans, holding entities, reached corporate nodes, and verified HQ addresses for each seed key
     resolved: Dict[Tuple[str, str], Dict[str, List[str]]] = {}
     for seed in seed_keys:
@@ -1502,23 +1674,28 @@ def resolve_oc_company_principals(
                 "reached_companies": [],
                 "hq_addresses": [],
                 "raw_hq_addresses": [],
+                "is_excluded_entity": True,
             }
             continue
         seen_nodes: Set[Tuple[str, str]] = {seed}
-        stack = [seed]
+        stack: List[Tuple[Tuple[str, str], int]] = [(seed, 0)]
         humans: Set[str] = set()
         ct_pids: Dict[str, str] = {}
         holdings: Set[str] = set()
-        hq_addrs: Set[str] = set()
-        raw_hq_addrs: Set[str] = set()
+        hq_addrs: Set[str] = set(direct_hq_addrs.get(seed, ()))
+        raw_hq_addrs: Set[str] = set(direct_raw_hq_addrs.get(seed, ()))
+        seed_had_direct_hq = bool(hq_addrs)
         while stack:
-            curr = stack.pop()
+            curr, depth = stack.pop()
             if curr in excluded_company_keys:
                 continue
             humans.update(direct_humans.get(curr, ()))
             ct_pids.update(direct_ct_pids.get(curr, {}))
-            hq_addrs.update(direct_hq_addrs.get(curr, ()))
-            raw_hq_addrs.update(direct_raw_hq_addrs.get(curr, ()))
+            # Only inherit parent/home HQ when `seed` has no direct HQ of its own (e.g. a foreign
+            # branch), NEVER rolling up unrelated 2-3 hop sibling/third-party PM addresses!
+            if not seed_had_direct_hq and depth <= 1:
+                hq_addrs.update(direct_hq_addrs.get(curr, ()))
+                raw_hq_addrs.update(direct_raw_hq_addrs.get(curr, ()))
             for parent_node in parent_edges.get(curr, ()):
                 if parent_node in seen_nodes or parent_node in excluded_company_keys:
                     continue
@@ -1530,8 +1707,8 @@ def resolve_oc_company_principals(
                 seen_nodes.add(parent_node)
                 if parent_node in entity_labels:
                     holdings.add(entity_labels[parent_node])
-                stack.append(parent_node)
-        if len(humans) > MAX_CUMULATIVE_ROLLUP_OFFICERS:
+                stack.append((parent_node, depth + 1))
+        if len(humans) > MAX_CUMULATIVE_ROLLUP_OFFICERS or len(ct_pids) > MAX_CUMULATIVE_ROLLUP_OFFICERS:
             humans = set()
             ct_pids = {}
         resolved[seed] = {
@@ -1562,7 +1739,11 @@ _COMMON_HOMONYM_SURNAMES = frozenset({
     "FLORES", "GREEN", "ADAMS", "NELSON", "BAKER", "HALL", "RIVERA", "CAMPBELL",
     "MITCHELL", "CARTER", "ROBERTS", "PATEL", "SHAH", "SINGH", "CHEN", "WANG",
     "KIM", "PARK", "TRAN", "PHAM", "LIN", "LIU", "YANG", "WU", "HUANG", "ZHANG",
-    "KATZ", "COHEN", "LEVY", "GOLDSTEIN", "FRIEDMAN", "SCHWARTZ", "MILLER", "MURPHY",
+    "LI", "ZHU", "ZHOU", "DONG", "ZHENG", "ZHAO", "XU", "SUN", "MA", "LU", "YE",
+    "GAO", "HE", "GUO", "LUO", "YU", "KHAN", "ALI", "AHMED", "MOHAMMED",
+    "DESAI", "MEHTA", "GUPTA", "KUMAR", "SHARMA", "MORALES", "CRUZ", "REYES",
+    "DIAZ", "GOMEZ", "ORTIZ", "GUTIERREZ", "CHAVEZ", "CASTILLO", "MENDOZA", "VARGAS", "ROMERO",
+    "KATZ", "COHEN", "LEVY", "GOLDSTEIN", "FRIEDMAN", "SCHWARTZ", "MURPHY",
     "KELLY", "SULLIVAN", "WALSH", "RYAN", "O'BRIEN", "OBRIEN", "MCCARTHY",
 })
 
@@ -1771,6 +1952,9 @@ def cluster_with_oc_and_series(
         return (hc, mid)
 
     by_oc_node: Dict[str, List[str]] = {}
+    node_seed_ckeys: Dict[str, Set[Tuple[str, str]]] = {}
+    node_family_fanout: Dict[str, Set[str]] = {}
+    node_hq_ckeys: Dict[str, Dict[str, Set[Tuple[str, str]]]] = {}
     by_oc_hq: Dict[str, List[str]] = {}
     hq_family_fanout: Dict[str, Set[str]] = {}
     hq_company_humans: Dict[str, Dict[Tuple[str, str], Set[str]]] = {}
@@ -1857,12 +2041,21 @@ def cluster_with_oc_and_series(
             ) or (p.get("owner_name_norm") or raw_nm)
             ckey = (oj, on)
             info = oc_resolved.get(ckey)
+            if info and info.get("is_excluded_entity"):
+                continue
             nodes = info.get("reached_companies") if info else None
             if nodes:
                 for node_id in nodes:
                     by_oc_node.setdefault(node_id, []).append(b)
+                    node_seed_ckeys.setdefault(node_id, set()).add(ckey)
+                    if fam_key:
+                        node_family_fanout.setdefault(node_id, set()).add(fam_key)
+                    if prop_coarse_mail:
+                        node_hq_ckeys.setdefault(node_id, {}).setdefault(prop_coarse_mail, set()).add(ckey)
             else:
-                by_oc_node.setdefault(f"{oj}/{on}", []).append(b)
+                direct_node = f"{oj}/{on}"
+                by_oc_node.setdefault(direct_node, []).append(b)
+                node_seed_ckeys.setdefault(direct_node, set()).add(ckey)
 
             if info:
                 ct_pids_map = info.get("ct_principal_ids") or {}
@@ -1934,8 +2127,20 @@ def cluster_with_oc_and_series(
 
     merges = 0
 
-    # 1. Shared OC entity / corporate parent / foreign branch (zero family quota)
-    for bbls in by_oc_node.values():
+    # 1. Shared OC entity / corporate parent / foreign branch (zero family quota,
+    #    with structural HQ-dispersion guard to quarantine commercial nominee-manager
+    #    factories like `VESTA PROPERTIES MANAGER LLC` / `JR MANAGER SERVICES LLC`
+    #    whose client LLCs mail tax bills to dozens of unrelated client HQs).
+    for node_id, bbls in by_oc_node.items():
+        seed_cks = node_seed_ckeys.get(node_id) or set()
+        node_fams = node_family_fanout.get(node_id) or set()
+        if len(seed_cks) >= 8 and len(node_fams) >= 8:
+            hq_map = node_hq_ckeys.get(node_id) or {}
+            if len(hq_map) >= 6:
+                hq_covered = {ck for s in hq_map.values() for ck in s}
+                top2_hq_cks = sum(sorted((len(s) for s in hq_map.values()), reverse=True)[:2])
+                if len(hq_covered) >= 6 and (top2_hq_cks / len(hq_covered)) < 0.30:
+                    continue
         roots = list({bbl_to_root[b] for b in bbls})
         for other in roots[1:]:
             if union_r(roots[0], other):
@@ -2028,6 +2233,14 @@ def cluster_with_oc_and_series(
 
     # Collect disambiguated same-person principal subclusters for Step 3 + Step 3c CT Depth-4 BFS
     disambiguated_principal_subclusters: List[Tuple[str, str, List[Tuple[str, str]], List[str]]] = []
+    learned_homonyms_canon = {
+        canonicalize_person_name(n) for n in get_learned_ambiguous_homonyms()
+    }
+    learned_homonyms_canon.discard("")
+    learned_3p_principals_canon = {
+        canonicalize_person_name(n) for n in get_learned_third_party_principals()
+    }
+    learned_3p_principals_canon.discard("")
 
     # Now merge entities within each accepted human's disambiguated same-person sub-clusters
     for h_key in accepted_humans:
@@ -2036,13 +2249,18 @@ def cluster_with_oc_and_series(
         if not ent_list:
             continue
         base_hc = h_key.split("||", 1)[0]
+        if base_hc in learned_3p_principals_canon:
+            continue
         ord_toks = base_hc.split()
         surname = oc_canon_primary_surname.get(base_hc, "")
         all_hqs_h = human_hqs_all.get(h_key) or set()
         is_uncommon_surname = bool(len(surname) >= 4 and surname not in _COMMON_HOMONYM_SURNAMES)
         globally_unambiguous = (
-            (len(all_hqs_h) <= 2 and (len(ent_list) <= 8 or is_uncommon_surname))
-            or (len(ord_toks) >= 3 and len(all_hqs_h) <= 3)
+            base_hc not in learned_homonyms_canon
+            and (
+                (len(all_hqs_h) <= 2 and (len(ent_list) <= 8 or is_uncommon_surname))
+                or (len(ord_toks) >= 3 and len(all_hqs_h) <= 3)
+            )
         )
 
         if globally_unambiguous:
@@ -2409,9 +2627,26 @@ def cluster_with_oc_and_series(
             if union_r(roots[0], other):
                 merges += 1
 
+    # Prune OC-verified non-landlord nonprofits, charities, CLTs, co-ops, religious orgs, and
+    # professional-service firms from private landlord networks (`*_networks`) while preserving
+    # genuine for-profit LLC/LP entities (in case of a cross-state homonym) and leaving all raw
+    # parcel rows intact in `*_properties`.
+    _for_profit_llc_lp_re = re.compile(
+        r"\b(?:L\.?L\.?C\.?|LIMITED\s+LIABILITY\s+COMPANY|L\.?P\.?|LIMITED\s+PARTNERSHIP|L\.?L\.?L\.?P\.?)\b",
+        re.IGNORECASE,
+    )
     merged_groups: Dict[str, List[dict]] = {}
     for r, props in root_to_props.items():
-        merged_groups.setdefault(find_r(r), []).extend(props)
+        kept_props = []
+        for pp in props:
+            oj_p, on_p = pp.get("oc_jurisdiction_code"), pp.get("oc_company_number")
+            if oj_p and on_p and (oc_resolved.get((oj_p, on_p)) or {}).get("is_excluded_entity"):
+                raw_o = pp.get("owner_name") or ""
+                if is_excluded_third_party_entity(raw_o) or not _for_profit_llc_lp_re.search(raw_o):
+                    continue
+            kept_props.append(pp)
+        if kept_props:
+            merged_groups.setdefault(find_r(r), []).extend(kept_props)
     return merged_groups, merges
 
 

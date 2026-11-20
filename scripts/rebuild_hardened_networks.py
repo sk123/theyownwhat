@@ -33,7 +33,7 @@ STATE_SOURCE_TAGS = {
     "il": ("IL", "IL_COOK_COLLAR_CAMA"),
     "ca": ("CA", "CA_ASSESSOR_ROLL_AND_BIZ_TAX"),
     "mn": ("MN", "MN_TWIN_CITIES_CAMA_AND_RENTAL_LICENSES"),
-    "oh": ("OH", "OH_CUYAHOGA_AUDITOR_CAMA"),
+    "oh": ("OH", "OH_COUNTY_AUDITOR_CAMA"),
     "mt": ("MT", "MT_MSDI_ORION_CADASTRAL"),
     "va": ("VA", "VA_STATEWIDE_PARCELS"),
     "nc": ("NC", "NC_ONEMAP_STATEWIDE_PARCELS"),
@@ -62,6 +62,7 @@ def main() -> int:
     parser.add_argument("--cities", nargs="*", default=DEFAULT_CITIES)
     parser.add_argument("--skip-ra-refresh", action="store_true")
     parser.add_argument("--skip-oc-relink", action="store_true", help="Reuse existing oc_company_number matches on {jur}_properties for 10x faster re-clustering.")
+    parser.add_argument("--skip-landing-cache", action="store_true", help="Skip refreshing landing_snapshot:v1 at the end of this run.")
     args = parser.parse_args()
 
     dsn = _db_url()
@@ -93,6 +94,13 @@ def main() -> int:
                 audit_jurisdiction_labels(conn, st_l, limit=120, with_web_audit=False)
             except Exception as aud_exc:
                 print(f"[HARDEN] ⚠ [{st_l.upper()}] representative label audit skipped: {aud_exc}", flush=True)
+            try:
+                from scripts.audit_network_bridges import audit_nationwide_jurisdiction
+                b_aud = audit_nationwide_jurisdiction(conn, st_l, top_n=15)
+                for bf in b_aud.get("findings") or ():
+                    print(f"[HARDEN]   [BRIDGE-AUDIT {bf['severity']}] {st_l.upper()} {bf['kind']} on {bf['primary_name']}: {bf['detail']}", flush=True)
+            except Exception as baud_exc:
+                print(f"[HARDEN] ⚠ [{st_l.upper()}] bridge audit skipped: {baud_exc}", flush=True)
         finally:
             conn.close()
         gc.collect()
@@ -113,14 +121,15 @@ def main() -> int:
             conn.close()
         gc.collect()
 
-    try:
-        os.environ.setdefault("DATABASE_URL", dsn)
-        from api.landing_cache import build_and_store_landing_snapshot
-        t0 = time.time()
-        build_and_store_landing_snapshot()
-        print(f"[HARDEN] ✓ Refreshed landing_snapshot:v1 & per-jurisdiction top-networks cache ({time.time() - t0:.1f}s)", flush=True)
-    except Exception as snap_exc:
-        print(f"[HARDEN] ⚠ Landing snapshot refresh skipped: {snap_exc}", flush=True)
+    if not args.skip_landing_cache:
+        try:
+            os.environ.setdefault("DATABASE_URL", dsn)
+            from api.landing_cache import build_and_store_landing_snapshot
+            t0 = time.time()
+            build_and_store_landing_snapshot()
+            print(f"[HARDEN] ✓ Refreshed landing_snapshot:v1 & per-jurisdiction top-networks cache ({time.time() - t0:.1f}s)", flush=True)
+        except Exception as snap_exc:
+            print(f"[HARDEN] ⚠ Landing snapshot refresh skipped: {snap_exc}", flush=True)
 
     return 0
 

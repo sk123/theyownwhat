@@ -11,6 +11,15 @@ import sys
 # Add the current directory to Python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+from linking_rules import (
+    get_learned_ambiguous_homonyms,
+    get_learned_email_allowlist,
+    get_learned_entity_allowlist,
+    get_learned_nominee_managers,
+    get_learned_third_party_emails,
+    get_learned_third_party_principals,
+    reload_learned_rules,
+)
 from shared_utils import (
     THIRD_PARTY_ENTITY_REGEX_BODY,
     _STREET_FOLLOWER_LOOKAHEAD,
@@ -42,9 +51,9 @@ logger = logging.getLogger(__name__)
 # --- Configuration ---
 DATABASE_URL = os.environ.get("DATABASE_URL")
 MAX_DEPTH = 4 # Standard depth for network discovery
-EMAIL_HUB_MIN_BUSINESSES = int(os.environ.get("EMAIL_HUB_MIN_BUSINESSES", "10"))
-EMAIL_HUB_MIN_DISPERSED_HQS = int(os.environ.get("EMAIL_HUB_MIN_DISPERSED_HQS", "6"))
-EMAIL_HUB_TOP2_HQ_MAX_SHARE = float(os.environ.get("EMAIL_HUB_TOP2_HQ_MAX_SHARE", "0.35"))
+EMAIL_HUB_MIN_BUSINESSES = int(os.environ.get("EMAIL_HUB_MIN_BUSINESSES", "6"))
+EMAIL_HUB_MIN_DISPERSED_HQS = int(os.environ.get("EMAIL_HUB_MIN_DISPERSED_HQS", "5"))
+EMAIL_HUB_TOP2_HQ_MAX_SHARE = float(os.environ.get("EMAIL_HUB_TOP2_HQ_MAX_SHARE", "0.45"))
 EMAIL_HUB_MIN_DISPERSED_SURNAMES = int(os.environ.get("EMAIL_HUB_MIN_DISPERSED_SURNAMES", "8"))
 EMAIL_HUB_TOP2_SURNAME_MAX_SHARE = float(os.environ.get("EMAIL_HUB_TOP2_SURNAME_MAX_SHARE", "0.30"))
 AMBIGUOUS_PRINCIPAL_MIN_BUSINESSES = int(os.environ.get("AMBIGUOUS_PRINCIPAL_MIN_BUSINESSES", "12"))
@@ -55,13 +64,25 @@ AMBIGUOUS_PRINCIPAL_TOP_EMAIL_SHARE = float(os.environ.get("AMBIGUOUS_PRINCIPAL_
 AMBIGUOUS_PRINCIPAL_MAIL_ADDRESS_SHARE = float(os.environ.get("AMBIGUOUS_PRINCIPAL_MAIL_ADDRESS_SHARE", "0.60"))
 MULTI_UNIT_BUILDING_MIN_DISTINCT_UNITS = int(os.environ.get("MULTI_UNIT_BUILDING_MIN_DISTINCT_UNITS", "3"))
 # Quota-free intermediary dispersion thresholds (no hard entity-count ceiling):
-# An unlisted address is quarantined ONLY when >=6 mutually disjoint principal/email
-# islands share it with no dominant operator (<35% share), OR when >=85% of >=30
-# registered businesses at that address own zero real estate (commercial RA / maildrop).
+# An unlisted address is quarantined when mutually disjoint principal islands share
+# it without a dominant operator, OR when an overwhelming majority of registered
+# businesses at that building own zero real estate across multiple distinct owners.
 DISPERSED_HUB_MIN_DISJOINT_ISLANDS = int(os.environ.get("DISPERSED_HUB_MIN_DISJOINT_ISLANDS", "6"))
-DISPERSED_HUB_MAX_DOMINANT_SHARE = float(os.environ.get("DISPERSED_HUB_MAX_DOMINANT_SHARE", "0.35"))
+DISPERSED_HUB_MAX_DOMINANT_SHARE = float(os.environ.get("DISPERSED_HUB_MAX_DOMINANT_SHARE", "0.40"))
 NON_OWNING_RA_MIN_TOTAL_BIZ = int(os.environ.get("NON_OWNING_RA_MIN_TOTAL_BIZ", "30"))
 NON_OWNING_RA_MAX_OWNING_RATIO = float(os.environ.get("NON_OWNING_RA_MAX_OWNING_RATIO", "0.15"))
+MAX_CT_SOTS_CLOSELY_HELD_PRINCIPALS = int(os.environ.get("MAX_CT_SOTS_CLOSELY_HELD_PRINCIPALS", "8"))
+MAX_CT_SOTS_NONPROFIT_PRINCIPALS = int(os.environ.get("MAX_CT_SOTS_NONPROFIT_PRINCIPALS", "0"))
+
+# Non-landlord / nonprofit / religious / co-op / professional-service corporate types
+# that must NEVER anchor or bridge private landlord networks (eliminates charity/civic/
+# synagogue/condo/law-firm board-member leaks across Phases 2A, 2A1b, 2A2, 2B, and 2C).
+_EXCLUDED_CT_BIZ_TYPE_RE = re.compile(
+    r"(?:NON[- ]?STOCK|NON[- ]?PROFIT|NOT[- ]FOR[- ]PROFIT|RELIGIOUS|CO-?OP(?:ERATIVE)?|"
+    r"CHARIT(?:ABLE|Y)|PROFESSIONAL\s+(?:SERVICE|CORPORATION|LLC|LIMITED\s+LIABILITY)|"
+    r"LAND\s+BANK|MUNICIPAL|BENEVOLENT|HOUSING\s+DEVELOPMENT\s+FUND|MENTAL\s+HEALTH)",
+    re.IGNORECASE,
+)
 
 
 def _is_dispersed_intermediary_business_hub(
@@ -71,18 +92,26 @@ def _is_dispersed_intermediary_business_hub(
     *,
     total_registered_at_coarse: int = 0,
 ) -> bool:
-    """Distinguish an unlisted commercial agent / CPA / attorney / virtual-mailbox hub
-    from a genuine large landlord HQ (even with 500+ single-purpose LLCs) using graph
-    cohesion vs. disjoint-principal dispersion and real-estate-owning footprint ratio,
-    without imposing any artificial entity-count quota."""
+    """Distinguish an unlisted commercial agent / CPA / attorney / property-manager /
+    multi-tenant commercial office hub from a genuine large landlord HQ (even with
+    500+ single-purpose LLCs) using graph cohesion vs. disjoint-principal dispersion
+    and real-estate-owning footprint ratio, without imposing any entity-count quota."""
     n_owning = len(uniq_biz_ids)
-    if n_owning < 8:
+    if n_owning < 2:
         return False
+
+    owning_ratio = (
+        (n_owning / total_registered_at_coarse)
+        if total_registered_at_coarse and total_registered_at_coarse > 0
+        else 1.0
+    )
 
     b_nodes = [node_to_int[("business", b)] for b in uniq_biz_ids if ("business", b) in node_to_int]
     connected_b = [bn for bn in b_nodes if graph.get(bn)]
 
-    if len(connected_b) >= 8:
+    n_islands = 0
+    top_share = 1.0
+    if len(connected_b) >= 2:
         par = {bn: bn for bn in connected_b}
 
         def _find(x):
@@ -107,15 +136,48 @@ def _is_dispersed_intermediary_business_hub(
             island_sizes[_find(bn)] += 1
         n_islands = len(island_sizes)
         top_share = max(island_sizes.values()) / len(connected_b)
-        if n_islands >= DISPERSED_HUB_MIN_DISJOINT_ISLANDS and top_share < DISPERSED_HUB_MAX_DOMINANT_SHARE:
-            return True
-        return False
 
-    # Anonymous / out-of-state entities lacking local officer links: check whether the
-    # address is overwhelmingly a non-real-estate corporate filing hub (>85% non-owning).
+    # Rule A: Multi-client property management / CPA / office hub (>=6 disjoint
+    # principal islands, no single operator >=50%, and <30% of registered businesses
+    # at that building actually own local real estate — e.g. 15 Hosley Ave, 25 Crescent St,
+    # 66 Anderson St, 211 New Britain Rd).
     if (
-        total_registered_at_coarse >= NON_OWNING_RA_MIN_TOTAL_BIZ
-        and (n_owning / total_registered_at_coarse) < NON_OWNING_RA_MAX_OWNING_RATIO
+        len(connected_b) >= DISPERSED_HUB_MIN_DISJOINT_ISLANDS
+        and n_islands >= DISPERSED_HUB_MIN_DISJOINT_ISLANDS
+        and top_share < 0.50
+        and owning_ratio < 0.30
+    ):
+        return True
+
+    # Rule B: Commercial multi-tenant office building / virtual-office hub where >=90%
+    # of >=20 registered businesses own zero real estate AND >=2 disjoint owners share it
+    # (e.g. 15 Maiden Ln 2%, 1008 Main St 5%, 50 Fitch St 9%, 2083 Main St 9%).
+    if (
+        total_registered_at_coarse >= 20
+        and owning_ratio < 0.10
+        and (n_islands >= 2 or len(connected_b) < 2)
+    ):
+        return True
+
+    # Rule C: Severe principal-island dispersion regardless of total registered count
+    # (catches multi-tenant office complexes like 315 Front St with 13 disjoint landlord
+    # islands & 35% top share while preserving cohesive HQs like PO Box 3616 at 72%).
+    if (
+        len(connected_b) >= DISPERSED_HUB_MIN_DISJOINT_ISLANDS
+        and n_islands >= DISPERSED_HUB_MIN_DISJOINT_ISLANDS
+        and (
+            (top_share < DISPERSED_HUB_MAX_DOMINANT_SHARE and owning_ratio < 0.40)
+            or (n_islands >= 10 and top_share < 0.45)
+        )
+    ):
+        return True
+
+    # Rule D: Anonymous / out-of-state entities lacking local officer links at a large
+    # non-real-estate corporate filing hub (>85% non-owning across >=30 businesses).
+    if (
+        len(connected_b) < 6
+        and total_registered_at_coarse >= NON_OWNING_RA_MIN_TOTAL_BIZ
+        and owning_ratio < NON_OWNING_RA_MAX_OWNING_RATIO
     ):
         return True
     return False
@@ -129,7 +191,12 @@ SKIP_NAMES = {
     'NOT AVAILABLE', '[UNKNOWN]', 'CURRENT COMPANY OWNER', 'CURRENT COMPANY-OWNER',
     'SV', 'SURVIVORSHIP', 'SURV', 'TITLE', 'LIVING', 'TRUST', 'ESTATE',
     'CORPORATION', 'INCORPORATED', 'ASSOCIATION', 'COMPANY',
-    'JT', 'TIC', 'TC', 'ET AL', 'LII', 'ETAL', 'REFERENCE ONLY'
+    'JT', 'TIC', 'TC', 'ET AL', 'LII', 'ETAL', 'REFERENCE ONLY',
+    'TRUST AGREEMENT DATED', 'DECLARATION OF TRUST', 'DECLARATION OF TRUST O',
+    'REVOCABLE LIVING TRUST', 'REVOCABLE TRUST', 'IRREVOCABLE TRUST',
+    'LIVING TRUST', 'LIVING TRUST DATED', 'FAMILY TRUST', 'FAMILY TRUST DATED',
+    'LAND TRUST', 'TRUSTEE COMPANY LAND TRUST', 'TRUSTEE COMPANY LAND TRUST LLC',
+    'TRUSTEE UNDER', 'AS TRUSTEE FOR',
 }
 
 # Generic single-token canonical business stems that collide with assessor
@@ -161,7 +228,7 @@ INSTITUTIONAL_PATTERN = re.compile(
     r'SENIOR HOUSING|ELDERLY HOUSING|INTERFAITH HOUSING|PUBLIC HOUSING|'
     r'HOUSING CORPORATION|HOUSING ASSOCIATES|HOUSING, INC|HOUSING INC|'
     r'CONGREGATE HOMES|RETIREMENT COMMUNITY|'
-    r'\b(?:HOSPITAL|HEALTHCARE|HEALTH\s+CENTER|CLINIC|NEW\s+SAMARITAN)\b|'
+    r'\b(?:HOSPITAL|HEALTHCARE|HEALTH\s+(?:CENTER|CORP|CORPORATION|SYSTEM)|CLINIC|NEW\s+SAMARITAN)\b|'
     r'\b(?:CATHOLIC|CEMETERY|NATURE\s+CONSERVANCY)\b|'
     r'\b(?:LODGING|HOSPITALITY|HOTEL|MOTEL)\b|\bINN\s+|\bSUITES\b|'
     r'WATER COMPANY|GAS SERVICES|POWER CORPORATION|POWER CORP|'
@@ -453,8 +520,13 @@ def build_graph(conn, skip_emails=False):
     graph = defaultdict(set) # Using set to avoid edges duplication during build
 
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        reload_learned_rules(conn)
         cur.execute("SELECT normalized_name FROM principal_ignore_list")
         ignore_names_raw = {row['normalized_name'] for row in cur}
+        ignore_names_raw |= set(get_learned_third_party_principals())
+        ignore_names_raw |= set(get_learned_ambiguous_homonyms())
+        learned_nominee_managers = set(get_learned_nominee_managers())
+        learned_entity_allowlist = set(get_learned_entity_allowlist())
         # The ignore list stores names first-last ('ZENON LANKOWSKY') while
         # unique_principals.name_normalized is last-first ('LANKOWSKY ZENON').
         # normalize_person_name preserves word order, so comparing normalized
@@ -485,9 +557,36 @@ def build_graph(conn, skip_emails=False):
         # --- LOAD PROPERTY-OWNING ENTITIES FIRST (needed for hub detection) ---
         logger.info("  - Loading Property-Owning Business List...")
         cur.execute("SELECT DISTINCT business_id FROM properties WHERE business_id IS NOT NULL")
-        owning_business_ids = {row['business_id'] for row in cur}
+        raw_owning_business_ids = {row['business_id'] for row in cur}
+        excluded_ct_biz_ids = set()
+        if raw_owning_business_ids:
+            raw_bid_list = sorted(raw_owning_business_ids)
+            for b_off in range(0, len(raw_bid_list), 10000):
+                b_slice = raw_bid_list[b_off : b_off + 10000]
+                cur.execute(
+                    "SELECT id, name, business_type FROM businesses WHERE id = ANY(%s)",
+                    (b_slice,),
+                )
+                for brow in cur:
+                    b_nm = brow.get("name") or ""
+                    b_tp = brow.get("business_type") or ""
+                    if WHITELIST_PATTERN.search(b_nm):
+                        continue
+                    b_up = " ".join(b_nm.upper().split())
+                    b_allow = bool(
+                        learned_entity_allowlist
+                        and (b_up in learned_entity_allowlist or normalize_business_name(b_up) in learned_entity_allowlist)
+                    )
+                    if b_allow:
+                        continue
+                    if (b_tp and _EXCLUDED_CT_BIZ_TYPE_RE.search(b_tp)) or is_excluded_third_party_entity(b_nm):
+                        excluded_ct_biz_ids.add(brow["id"])
+        owning_business_ids = raw_owning_business_ids - excluded_ct_biz_ids
         property_owning_business_ids = set(owning_business_ids)  # Snapshot before adding bridges
-        logger.info(f"    Found {len(owning_business_ids):,} businesses with properties.")
+        logger.info(
+            f"    Found {len(owning_business_ids):,} private property-owning businesses "
+            f"(excluded {len(excluded_ct_biz_ids):,} non-stock/nonprofit/religious/co-op/institutional/professional entities)."
+        )
 
         # Keep general matching constrained to businesses that directly own property.
         # Non-owning businesses are only used later for a narrow same-family
@@ -571,6 +670,7 @@ def build_graph(conn, skip_emails=False):
             if norm_addr:
                 st["mail_addresses"].add(norm_addr)
 
+        from api.oc_linker import _COMMON_HOMONYM_SURNAMES as _CT_HOMONYM_SURNAMES
         for pid_key, st in hp_stats.items():
             name = st["name_normalized"] or st["representative_name_c"]
             rep_name = st["representative_name_c"] or name
@@ -600,8 +700,29 @@ def build_graph(conn, skip_emails=False):
                 and mail_address_share >= AMBIGUOUS_PRINCIPAL_MAIL_ADDRESS_SHARE
             )
             low_property_owner_evidence = owning <= AMBIGUOUS_PRINCIPAL_MAX_OWNING_BUSINESSES
+            name_toks = set(normalize_person_name(rep_name).split()) | set(normalize_person_name(name).split())
+            is_common_homonym_surname = bool(name_toks & _CT_HOMONYM_SURNAMES)
 
             if low_property_owner_evidence and (diffuse_email_evidence or diffuse_address_evidence):
+                ambiguous_principal_ids.add(pid_key)
+            elif (
+                diffuse_email_evidence
+                and diffuse_address_evidence
+                and mail_addresses >= 10
+                and top_email_share < 0.25
+            ):
+                # Multi-person homonym collision (e.g. 'AMIT PATEL' across 50 businesses,
+                # 36 mailing addresses, 13 email domains) even when multiple homonyms own property.
+                ambiguous_principal_ids.add(pid_key)
+            elif (
+                is_common_homonym_surname
+                and mail_addresses >= 10
+                and domains >= 6
+                and mail_address_share >= 0.55
+                and top_email_share < 0.40
+            ):
+                # High-frequency surname homonym collision (e.g. 'JAMES CARTER' across 43 businesses,
+                # 29 addresses, 9 domains where one James Carter is a real partner alongside 20 unrelated others).
                 ambiguous_principal_ids.add(pid_key)
 
         if ambiguous_principal_ids:
@@ -610,19 +731,31 @@ def build_graph(conn, skip_emails=False):
                 f"{len(ambiguous_principal_ids):,}",
             )
 
-        # A. Principal-Business Links
-        logger.info("  - Loading Principal-Business Links (Filtered to Owners)...")
+        # A. Principal-Business Links (with board-governance parity cap so Non-Stock /
+        # nonprofit / school / yacht-club / HOA boards (>2) and large Fortune-500 / defense /
+        # multi-investor boards (>8) never star-bridge unrelated private landlords).
+        logger.info("  - Loading Principal-Business Links (Filtered to Owners + Board Governance Cap)...")
+
+        _NONSTOCK_CIVIC_TYPE_TOKENS = ("NON-STOCK", "NONSTOCK", "NONPROFIT", "NON-PROFIT", "COOP", "RELIGIOUS", "BENEFIT")
+        _NONSTOCK_CIVIC_NAME_RE = re.compile(
+            r"\b(?:ASSOCIATION|CO-?OPERATIVE|CO-?OP|YACHT\s+CLUB|COUNTRY\s+CLUB|GOLF\s+CLUB|"
+            r"SOCIETY|FOUNDATION|CHARITABLE|CHURCH|EPISCOPAL|SCHOOL|MINISTRIES|OWNERS\s+CORPORATION)\b",
+            re.IGNORECASE,
+        )
 
         count = 0
         property_active_principal_ids = set()
         biz_to_surnames = defaultdict(set)
+        pending_pbl_by_bid = defaultdict(list)
+        bid_meta = {}
         with conn.cursor(name="network_pbl_links", cursor_factory=RealDictCursor) as link_cur:
             link_cur.itersize = 50000
             link_cur.execute("""
                 SELECT pbl.business_id, pbl.principal_id,
                        up.name_normalized as p_name,
                        up.representative_name_c as p_rep_name,
-                       b.name as b_name
+                       b.name as b_name,
+                       b.business_type as b_type
                 FROM principal_business_links pbl
                 JOIN unique_principals up ON up.principal_id = pbl.principal_id
                 JOIN businesses b ON b.id = pbl.business_id
@@ -651,20 +784,50 @@ def build_graph(conn, skip_emails=False):
                 )
 
                 if not is_whitelisted:
+                    b_up = " ".join(str(row['b_name'] or "").upper().split())
+                    b_allow = bool(learned_entity_allowlist and (b_up in learned_entity_allowlist or normalize_business_name(b_up) in learned_entity_allowlist))
                     if INSTITUTIONAL_PATTERN.search(row['p_name'] or "") or INSTITUTIONAL_PATTERN.search(row['p_rep_name'] or ""):
                         continue
-                    if INSTITUTIONAL_PATTERN.search(row['b_name'] or ""):
+                    if not b_allow and INSTITUTIONAL_PATTERN.search(row['b_name'] or ""):
                         continue
+                    if (not b_allow and is_excluded_third_party_entity(row['b_name'])) or is_excluded_third_party_entity(row['p_name']) or is_excluded_third_party_entity(row['p_rep_name']):
+                        continue
+                    if learned_nominee_managers:
+                        p_up = " ".join(str(row['p_name'] or "").upper().split())
+                        pr_up = " ".join(str(row['p_rep_name'] or "").upper().split())
+                        if p_up in learned_nominee_managers or pr_up in learned_nominee_managers or normalize_business_name(p_up) in learned_nominee_managers:
+                            continue
 
-                u_node = ('business', bid)
-                v_node = ('principal', pid)
+                rep_norm = normalize_person_name(row['p_rep_name'] or row['p_name'] or "")
+                pending_pbl_by_bid[bid].append((pid, rep_norm))
+                if bid not in bid_meta:
+                    bid_meta[bid] = (row['b_name'] or "", row.get('b_type') or "")
 
-                u = get_id(u_node)
-                v = get_id(v_node)
+        suppressed_board_businesses = 0
+        suppressed_board_links = 0
+        for bid, plinks in pending_pbl_by_bid.items():
+            b_name, b_type = bid_meta.get(bid, ("", ""))
+            b_type_u = b_type.upper()
+            is_nonstock_or_civic = (
+                any(tok in b_type_u for tok in _NONSTOCK_CIVIC_TYPE_TOKENS)
+                or bool(_NONSTOCK_CIVIC_NAME_RE.search(b_name))
+            )
+            uniq_pids = {pid for pid, _ in plinks}
+            board_cap = (
+                MAX_CT_SOTS_NONPROFIT_PRINCIPALS
+                if is_nonstock_or_civic
+                else MAX_CT_SOTS_CLOSELY_HELD_PRINCIPALS
+            )
+            if len(uniq_pids) > board_cap:
+                suppressed_board_businesses += 1
+                suppressed_board_links += len(uniq_pids)
+                continue
 
+            u = get_id(('business', bid))
+            for pid, rep_norm in plinks:
+                v = get_id(('principal', pid))
                 graph[u].add(v)
                 graph[v].add(u)
-                rep_norm = normalize_person_name(row['p_rep_name'] or row['p_name'] or "")
                 rep_toks = rep_norm.split()
                 if rep_toks:
                     biz_to_surnames[bid].add(rep_toks[-1])
@@ -674,8 +837,13 @@ def build_graph(conn, skip_emails=False):
                 except (TypeError, ValueError):
                     pass
                 count += 1
-                if count % 100000 == 0:
-                    logger.debug(f"    Loaded {count:,} links...")
+        del pending_pbl_by_bid, bid_meta
+        if suppressed_board_businesses:
+            logger.info(
+                "  - Suppressed %s large corporate / Non-Stock board hub(s) (%s principal links) to prevent unrelated landlord star-bridging.",
+                f"{suppressed_board_businesses:,}",
+                f"{suppressed_board_links:,}",
+            )
 
         # A1b. OpenCorporates Multi-Hop Foreign & Holding-Company Principal Bridges
         # Pierces Delaware / NY / MA / NJ / FL / WY parent & foreign-registered LLCs
@@ -742,11 +910,12 @@ def build_graph(conn, skip_emails=False):
                 owning_list = sorted(owning_business_ids)
                 ct_biz_records = {}
                 lookup_norms = set()
+                oc_hq_candidates = []
                 for b_idx in range(0, len(owning_list), 5000):
                     b_chunk = owning_list[b_idx : b_idx + 5000]
                     cur.execute(
                         """
-                        SELECT id, name, mail_address, mail_city, mail_state, mail_zip,
+                        SELECT id, name, business_type, mail_address, mail_city, mail_state, mail_zip,
                                business_address, business_city, business_state, business_zip
                         FROM businesses
                         WHERE id = ANY(%s)
@@ -756,16 +925,31 @@ def build_graph(conn, skip_emails=False):
                     for brow in cur.fetchall():
                         bid_k = brow["id"]
                         bname = brow.get("name") or ""
+                        btype_u = (brow.get("business_type") or "").upper()
                         if not bname or (INSTITUTIONAL_PATTERN.search(bname) and not WHITELIST_PATTERN.search(bname)):
+                            continue
+                        if any(tok in btype_u for tok in _NONSTOCK_CIVIC_TYPE_TOKENS):
                             continue
                         m_addr = compose_address(brow.get("mail_address"), brow.get("mail_city"), brow.get("mail_state"), brow.get("mail_zip"))
                         b_addr = compose_address(brow.get("business_address"), brow.get("business_city"), brow.get("business_state"), brow.get("business_zip"))
-                        rec = demangle_assessor_owner(bname, mailing_address=(m_addr or b_addr))
+                        b_st = (brow.get("business_state") or "").strip().upper()
+                        m_st = (brow.get("mail_state") or "").strip().upper()
+                        # Non-CT DOS records stored in the shared `businesses` table (e.g. NY numeric IDs)
+                        # must be scored in their actual home state, NEVER blindly as CT entities.
+                        if not str(bid_k).startswith("001") and len(b_st) == 2 and b_st.isalpha() and b_st != "CT":
+                            eff_state = b_st
+                        else:
+                            eff_state = "CT"
+                        rec = demangle_assessor_owner(
+                            bname,
+                            mailing_address=(m_addr or b_addr),
+                            explicit_mailing_state=(m_st if len(m_st) == 2 else (b_st if len(b_st) == 2 else None)),
+                        )
                         if not rec.is_business or not rec.owner_norm:
                             continue
                         m_coarse = normalize_mailing_address_coarse(m_addr) if m_addr else ""
                         b_coarse = normalize_mailing_address_coarse(b_addr) if b_addr else ""
-                        ct_biz_records[bid_k] = (rec, m_coarse or b_coarse, b_coarse if (m_coarse and b_coarse) else "")
+                        ct_biz_records[bid_k] = (rec, m_coarse or b_coarse, b_coarse if (m_coarse and b_coarse) else "", eff_state)
                         lookup_norms.add(rec.owner_norm)
 
                 oc_cands_by_norm = defaultdict(list)
@@ -801,10 +985,10 @@ def build_graph(conn, skip_emails=False):
                         )
 
                 matched_oc_by_bid = {}
-                for bid_k, (rec, prim_c, ext_c) in ct_biz_records.items():
+                for bid_k, (rec, prim_c, ext_c, eff_state) in ct_biz_records.items():
                     m_res = score_oc_candidates(
                         rec,
-                        parcel_state="CT",
+                        parcel_state=eff_state,
                         parcel_mailing_coarse=prim_c or None,
                         candidates=oc_cands_by_norm.get(rec.owner_norm, ()),
                         extra_parcel_coarse_addrs=(ext_c,) if ext_c else (),
@@ -819,42 +1003,62 @@ def build_graph(conn, skip_emails=False):
 
                 for bid_k, okey in matched_oc_by_bid.items():
                     oinfo = resolved_oc.get(okey) or {}
-                    for h_nm in oinfo.get("humans") or ():
-                        if attorney_organizer_re.search(h_nm) or is_ignored_principal(h_nm):
-                            continue
-                        if INSTITUTIONAL_PATTERN.search(h_nm) and not WHITELIST_PATTERN.search(h_nm):
-                            continue
-                        ck = canonicalize_person_name(h_nm)
-                        pid_match = canon_to_pid.get(ck)
-                        if pid_match is not None:
-                            u = get_id(("business", bid_k))
-                            v = get_id(("principal", pid_match))
-                            graph[u].add(v)
-                            graph[v].add(u)
-                            try:
-                                pid_i = int(pid_match)
-                                property_active_principal_ids.add(pid_i)
-                                oc_prin_pairs.add((bid_k, pid_i))
-                            except (TypeError, ValueError):
-                                pass
+                    rec, prim_c, ext_c, _eff_st = ct_biz_records[bid_k]
+                    biz_addr_blob = f"{prim_c} {ext_c}".upper()
+                    humans_list = oinfo.get("humans") or ()
+                    ct_pids_map = oinfo.get("ct_principal_ids") or {}
+                    # Board-governance parity: never import >8 rolled-up OC principals onto a single LLC
+                    if len(humans_list) <= MAX_CT_SOTS_CLOSELY_HELD_PRINCIPALS:
+                        for h_nm in humans_list:
+                            if attorney_organizer_re.search(h_nm) or is_ignored_principal(h_nm):
+                                continue
+                            if INSTITUTIONAL_PATTERN.search(h_nm) and not WHITELIST_PATTERN.search(h_nm):
+                                continue
+                            # Respect BigQuery CT-Treatment homonym quarantine (`:HISO:` / `:PHQ:...@hq`)
+                            ct_pid = ct_pids_map.get(h_nm) or ""
+                            if ":HISO:" in ct_pid:
+                                continue
+                            if ":PHQ:" in ct_pid and "@" in ct_pid:
+                                hq_tag = ct_pid.split("@", 1)[1].split("|", 1)[0].strip().upper()
+                                hq_tokens = [t for t in hq_tag.split() if len(t) >= 2]
+                                if hq_tokens and not all(t in biz_addr_blob for t in hq_tokens[:2]):
+                                    continue
+                            ck = canonicalize_person_name(h_nm)
+                            pid_match = canon_to_pid.get(ck)
+                            if pid_match is not None and pid_match not in ambiguous_principal_ids and pid_match not in hub_principals:
+                                u = get_id(("business", bid_k))
+                                v = get_id(("principal", pid_match))
+                                graph[u].add(v)
+                                graph[v].add(u)
+                                try:
+                                    pid_i = int(pid_match)
+                                    property_active_principal_ids.add(pid_i)
+                                    oc_prin_pairs.add((bid_k, pid_i))
+                                except (TypeError, ValueError):
+                                    pass
 
                     for hold_nm in oinfo.get("holding_entities") or ():
                         if INSTITUTIONAL_PATTERN.search(hold_nm) or is_excluded_third_party_entity(hold_nm):
+                            continue
+                        if _NONSTOCK_CIVIC_NAME_RE.search(hold_nm):
                             continue
                         h_norm = normalize_business_name(hold_nm)
                         if h_norm and len(h_norm) >= 6 and h_norm not in SKIP_NAMES:
                             holdco_to_bids[h_norm].append(bid_k)
 
+                    # Defer OC direct HQ addresses into the unified Phase 2C address-hub vetting pass
+                    # so commercial office buildings, property managers, and multi-unit hubs are
+                    # filtered by the exact same structural cohesion & owning-ratio guards.
                     for hq_addr in oinfo.get("hq_addresses") or ():
                         if hq_addr and not hq_addr.startswith("PO BOX "):
-                            holdco_to_bids[f"hq:{hq_addr}"].append(bid_k)
+                            oc_hq_candidates.append((bid_k, hq_addr))
 
                 holdco_edges = 0
                 for h_norm, h_bids in holdco_to_bids.items():
                     uniq_bids = sorted(set(h_bids))
                     if len(uniq_bids) < 2:
                         continue
-                    if h_norm.startswith("hq:") and _is_dispersed_intermediary_business_hub(uniq_bids, graph, node_to_int):
+                    if _is_dispersed_intermediary_business_hub(uniq_bids, graph, node_to_int):
                         continue
                     h_hub = get_id(("address", f"oc_holdco:{h_norm}"))
                     for b_k in uniq_bids:
@@ -914,6 +1118,7 @@ def build_graph(conn, skip_emails=False):
             # unique_principals.name_normalized is stored in LAST FIRST order.
             return parts[0]
 
+        from api.oc_linker import _COMMON_HOMONYM_SURNAMES as _OC_HIGH_FREQ_SURNAMES
         bridge_groups = defaultdict(lambda: defaultdict(list))
         with conn.cursor(name="network_same_family_bridges", cursor_factory=RealDictCursor) as bridge_cur:
             bridge_cur.itersize = 50000
@@ -921,7 +1126,8 @@ def build_graph(conn, skip_emails=False):
                 SELECT pbl.business_id, pbl.principal_id,
                        up.name_normalized as p_name,
                        up.representative_name_c as p_rep_name,
-                       b.name as b_name
+                       b.name as b_name,
+                       b.business_type as b_type
                 FROM principal_business_links pbl
                 JOIN unique_principals up ON up.principal_id = pbl.principal_id
                 JOIN businesses b ON b.id = pbl.business_id
@@ -943,6 +1149,9 @@ def build_graph(conn, skip_emails=False):
                     continue
 
                 b_name = row['b_name'] or ""
+                b_type = row.get('b_type') or ""
+                if b_type and _EXCLUDED_CT_BIZ_TYPE_RE.search(b_type):
+                    continue
                 is_whitelisted = (
                     WHITELIST_PATTERN.search(row['p_name'] or "")
                     or WHITELIST_PATTERN.search(row['p_rep_name'] or "")
@@ -951,11 +1160,11 @@ def build_graph(conn, skip_emails=False):
                 if not is_whitelisted:
                     if INSTITUTIONAL_PATTERN.search(row['p_name'] or "") or INSTITUTIONAL_PATTERN.search(row['p_rep_name'] or ""):
                         continue
-                    if INSTITUTIONAL_PATTERN.search(b_name):
+                    if INSTITUTIONAL_PATTERN.search(b_name) or is_excluded_third_party_entity(b_name):
                         continue
 
                 surname = bridge_surname_key(row['p_name'])
-                if not surname:
+                if not surname or surname in _OC_HIGH_FREQ_SURNAMES:
                     continue
                 bridge_groups[row['business_id']][surname].append(pid)
 
@@ -988,6 +1197,11 @@ def build_graph(conn, skip_emails=False):
             max_bridge_group,
         )
 
+        # Snapshot the clean principal-only graph BEFORE adding Phase 2B email star-edges
+        # and Phase 2C shared-address nodes, so intermediary hub dispersion checks always
+        # measure true independent-principal islands without email/address feedback loops.
+        principal_only_graph = {k: set(v) for k, v in graph.items()}
+
         # B. Shared Emails (Filtered)
         if skip_emails:
             logger.info("  - SKIPPING Shared Emails (Diagnostic Mode).")
@@ -1005,30 +1219,48 @@ def build_graph(conn, skip_emails=False):
             'northwestregisteredagent.com', 'cogencyglobal.com', 'registeredagentsinc.com',
             'corporatedocfiling.com', 'corpcreations.com', 'unitedagentgroup.com',
             'primecorporateservices.com', 'starwood.com', 'rohuer.com', 'cncinfo.com',
-            'ct.gov' # Institutional bypass
+            'ipx1031.com', 'ct.gov' # Institutional & 1031 exchange bypass
         }
         for d in BLACKLIST_DOMAINS:
             email_rules[d] = 'registrar'
+        for d in get_learned_third_party_emails():
+            if d:
+                email_rules[d.lower().lstrip('@')] = 'registrar'
+        for d in get_learned_email_allowlist():
+            if d:
+                email_rules[d.lower().lstrip('@')] = 'custom'
 
         logger.info(f"  - Loaded {len(email_rules)} email rules.")
 
         # User Specific Whitelist for Custom Domains
         # (Removed: Loaded from DB)
 
+        _INTERMEDIARY_EMAIL_KEY_RE = re.compile(
+            r"(?:^|[._-])(?:cpa|cpas|acct|acctg|accounting|accountant|bookkeeping|taxprep|taxservice|"
+            r"law|lawyer|lawfirm|lawoffice|attorney|esq|esquire|paralegal|annualreports?|corpfilings?|"
+            r"businessfilings?|registeredagent|1031)(?:$|[._\-\d@])|"
+            r"(?:cpa|cpas|esq|law|attorney|legal|tax)@|"
+            r"(?:cpa|cpas|law|lawfirm|lawoffice|attorneys?|accounting|taxservice|1031)\.(?:com|net|org|us|biz)$",
+            re.IGNORECASE,
+        )
         email_map = defaultdict(list)
         email_biz_hqs = defaultdict(Counter)
         with conn.cursor(name="network_email_businesses", cursor_factory=RealDictCursor) as email_cur:
             email_cur.itersize = 50000
             email_cur.execute("""
-                SELECT id, name, business_email_address,
+                SELECT id, name, business_type, business_email_address,
                        mail_address, mail_city, mail_state, mail_zip,
                        business_address, business_city, business_state, business_zip
                 FROM businesses
                 WHERE business_email_address IS NOT NULL
             """)
             for row in email_cur:
-                # --- FILTER: Must be an owning business ---
+                # --- FILTER: Must be an owning private business ---
                 if row['id'] not in owning_business_ids:
+                    continue
+                if row.get('business_type') and _EXCLUDED_CT_BIZ_TYPE_RE.search(row['business_type']):
+                    continue
+                if is_excluded_third_party_entity(row.get('name')) and not WHITELIST_PATTERN.search(row.get('name') or ""):
                     continue
 
                 # --- FILTER: Exclude Institutional Entities from Email Linking ---
@@ -1040,7 +1272,7 @@ def build_graph(conn, skip_emails=False):
                         continue
 
                 key = get_email_match_key(row['business_email_address'], email_rules)
-                if key:
+                if key and not _INTERMEDIARY_EMAIL_KEY_RE.search(key):
                     email_map[key].append(row['id']) # Store string ID directly
                     m_addr = compose_address(row.get('mail_address'), row.get('mail_city'), row.get('mail_state'), row.get('mail_zip'))
                     b_addr = compose_address(row.get('business_address'), row.get('business_city'), row.get('business_state'), row.get('business_zip'))
@@ -1064,10 +1296,17 @@ def build_graph(conn, skip_emails=False):
                     total_sur = sum(surnames.values())
                     top2_sur_share = (sum(c for _, c in surnames.most_common(2)) / total_sur) if total_sur else 1.0
                     if (
-                        len(hq_counts) >= EMAIL_HUB_MIN_DISPERSED_HQS
-                        and top2_hq_share < EMAIL_HUB_TOP2_HQ_MAX_SHARE
-                        and len(surnames) >= EMAIL_HUB_MIN_DISPERSED_SURNAMES
-                        and top2_sur_share < EMAIL_HUB_TOP2_SURNAME_MAX_SHARE
+                        (
+                            len(hq_counts) >= EMAIL_HUB_MIN_DISPERSED_HQS
+                            and top2_hq_share < EMAIL_HUB_TOP2_HQ_MAX_SHARE
+                            and len(surnames) >= EMAIL_HUB_MIN_DISPERSED_SURNAMES
+                            and top2_sur_share < EMAIL_HUB_TOP2_SURNAME_MAX_SHARE
+                        )
+                        or _is_dispersed_intermediary_business_hub(
+                            sorted(set(biz_ids)),
+                            principal_only_graph,
+                            node_to_int,
+                        )
                     ):
                         skipped_email_keys += 1
                         logger.info(
@@ -1114,7 +1353,11 @@ def build_graph(conn, skip_emails=False):
             )
 
         LAW_CARE_OF_RE = re.compile(
-            r'\bC\s*/?\s*O\b.*\b(?:LAW\b|ESQ\b|ATTORNEYS?\b|C\.?P\.?A\.?\b)|GREENE\s+LAW',
+            r'\bC\s*/?\s*O\b.*\b(?:LAW\b|ESQ\b|ATTORNEYS?\b|C\.?P\.?A\.?\b|'
+            r'PROPERTY\s+(?:GROUP|MANAGEMENT|MGMT)\b|REALTY\s*(?:&|AND)\s*(?:MANAGEMENT|MGMT)\b|'
+            r'(?:CONDO(?:MINIUM)?|ASSOCIATION|COMMUNITY|ASSET)\s+(?:MANAGEMENT|MGMT)\b|'
+            r'MANAGEMENT\s+(?:CO|CORP|GROUP|SERVICES)\b)|'
+            r'GREENE\s+LAW|PLAZA\s+REALTY\s*(?:&|AND)\s*(?:MANAGEMENT|MGMT)|THE\s+PROPERTY\s+GROUP\s+OF\s+CT',
             re.IGNORECASE,
         )
         LAW_OFFICE_ADDR_RE = re.compile(
@@ -1134,12 +1377,15 @@ def build_graph(conn, skip_emails=False):
             # address must be composed before normalizing — otherwise every
             # '70 West Main Street' in the state collapses to one key.
             addr_cur.execute("""
-                SELECT id, name, mail_address, mail_city, mail_state, mail_zip,
+                SELECT id, name, business_type, mail_address, mail_city, mail_state, mail_zip,
                        business_address, business_city, business_state, business_zip
                 FROM businesses
             """)
             for row in addr_cur:
                 b_name = row.get('name') or ''
+                b_type = row.get('business_type') or ''
+                if b_type and _EXCLUDED_CT_BIZ_TYPE_RE.search(b_type):
+                    continue
                 raw_combined = f"{row['mail_address'] or ''} {row['business_address'] or ''}"
                 if LAW_CARE_OF_RE.search(raw_combined):
                     care_mail = compose_address(row['mail_address'], row['mail_city'],
@@ -1170,7 +1416,9 @@ def build_graph(conn, skip_emails=False):
                 if INSTITUTIONAL_PATTERN.search(b_name) and not WHITELIST_PATTERN.search(b_name):
                     continue
 
-                # Count non-owning businesses per coarse building address for RA footprint ratio
+                # Count non-owning businesses AND distinct suite/unit tokens per coarse building
+                # address so commercial office parks/towers (`85 Felt Rd`, `129 Church St`, `33 Dixwell Ave`)
+                # with >=3 suites across registered tenants are ALWAYS separated at suite level.
                 if row['id'] not in property_owning_business_ids:
                     if row['mail_address'] or row['business_address']:
                         no_mail = compose_address(row['mail_address'], row['mail_city'], row['mail_state'], row['mail_zip'])
@@ -1178,6 +1426,12 @@ def build_graph(conn, skip_emails=False):
                         no_norm = first_normalized_mailing_address(no_mail, no_biz, coarse=True)
                         if no_norm:
                             all_biz_count_by_coarse[no_norm] += 1
+                            no_fine = first_normalized_mailing_address(no_mail, no_biz, coarse=False)
+                            if no_fine and '#' in no_fine:
+                                no_fine_no_zip = re.sub(r'\s+\d{5}\b\s*$', '', no_fine).strip()
+                                no_utoks = tuple(re.findall(r'#\s*([A-Z0-9][A-Z0-9-]*)', no_fine_no_zip))
+                                if no_utoks:
+                                    coarse_distinct_units[no_norm].add(no_utoks)
                     continue
                 raw_comp_mail = compose_address(row['mail_address'], row['mail_city'],
                                                 row['mail_state'], row['mail_zip'])
@@ -1237,6 +1491,18 @@ def build_graph(conn, skip_emails=False):
                 addr_map[norm].append(bid)
                 addr_key_to_coarse[norm] = norm
 
+        # Also route deferred OpenCorporates direct HQ addresses through the exact same
+        # unified law/PM/multi-unit/dispersed-hub vetting pass.
+        for oc_bid, oc_hq in (locals().get("oc_hq_candidates") or ()):
+            if not oc_hq or oc_hq in JUNK_ADDRS or len(oc_hq) <= 4:
+                continue
+            if oc_hq in law_office_coarse_addrs or oc_hq in multi_unit_buildings:
+                continue
+            if is_ignored_shared_address(oc_hq) or is_excluded_third_party_address(oc_hq, oc_hq, registrar_substrings):
+                continue
+            addr_map[oc_hq].append(oc_bid)
+            addr_key_to_coarse.setdefault(oc_hq, oc_hq)
+
         if law_office_coarse_addrs:
             logger.info(
                 "  - Excluded %s law-office care-of service address(es) from shared-address bridging.",
@@ -1259,7 +1525,7 @@ def build_graph(conn, skip_emails=False):
             coarse_ref = addr_key_to_coarse.get(addr, addr)
             if _is_dispersed_intermediary_business_hub(
                 uniq_biz,
-                graph,
+                principal_only_graph,
                 node_to_int,
                 total_registered_at_coarse=all_biz_count_by_coarse.get(coarse_ref, 0),
             ):
@@ -1277,6 +1543,7 @@ def build_graph(conn, skip_emails=False):
                 addr_membership_edge_count += 1
             addr_pair_equivalent_count += len(uniq_biz) * (len(uniq_biz) - 1) // 2
 
+        del principal_only_graph
         if skipped_registrar_addresses:
             logger.info(
                 "  - Excluded %s known registered-agent address(es) via address_match_rules.",

@@ -386,7 +386,7 @@ export default function MultiPropertyMapModal({ properties, onClose }) {
                                 <div className="space-y-1 bg-white p-1.5 rounded-lg border border-slate-200">
                                     {[
                                         { id: 'standard', label: 'Standard Theme (Blue)' },
-                                        { id: 'owner', label: 'Owner Shell LLCs' },
+                                        { id: 'owner', label: 'Owner Entities / LLCs' },
                                         { id: 'valuation', label: 'Valuation Range' },
                                         { id: 'evictions', label: 'Eviction Filings' },
                                         { id: 'network', label: 'Direct vs Neighbors' }

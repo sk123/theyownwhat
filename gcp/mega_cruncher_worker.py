@@ -4,7 +4,7 @@ gcp/mega_cruncher_worker.py
 ===========================
 High-throughput 10 Gbps Google Compute Engine Spot worker that crunches
 multi-million-parcel open government APIs in parallel and uploads clean,
-improved-building-only `.csv.gz` spines to GCS (`gs://theyownwhat-oc-staging-20261117/spot_parcels_v2/`):
+improved-building-only `.csv.gz` spines to GCS (`gs://renter-help-staging-20261119/spot_parcels_v2/`):
 
   1. `il` — Full Cook County (1.86M PINs: `3723-97qp` + `pabr-t5kh` + `uzyt-m557`
             + `x54s-btds` yr_built/cards, excluding Class 1-00 Vacant Land)
@@ -46,7 +46,7 @@ import requests
 
 csv.field_size_limit(10_000_000)
 
-BUCKET = os.environ.get("GCS_BUCKET", "theyownwhat-oc-staging-20261117")
+BUCKET = os.environ.get("GCS_BUCKET", "renter-help-staging-20261119")
 PREFIX = "spot_parcels_v2"
 WORK_DIR = "/tmp/spot_work"
 os.makedirs(WORK_DIR, exist_ok=True)
@@ -651,27 +651,38 @@ def crunch_california() -> None:
         sf_biz = f_sfbiz.result()
         la_biz = f_labiz.result()
 
-    # Index SF businesses by normalized (address, zip) prioritizing NAICS 531* (Real Estate / Lessors)
+    # Index SF businesses by both unit-preserving fine address and building-level base address
+    sf_owner_by_exact: Dict[str, Tuple[str, str, str, int]] = {}
     sf_owner_by_addr: Dict[str, Tuple[str, str, str, int]] = {}
     for b in sf_biz:
-        an = norm_addr(s_txt(b.get("full_business_address")))
+        raw_ba = s_txt(b.get("full_business_address"))
+        an = norm_addr(raw_ba)
+        exact_k = re.sub(r"[^A-Z0-9]+", " ", raw_ba.upper()).strip()
         own = s_txt(b.get("ownership_name"))
         if not an or not own:
             continue
         naics = s_txt(b.get("self_reported_naics_code"))
         prio = 2 if (naics.startswith("53") or any(k in own.upper() for k in ("PROPERTIES", "REALTY", "HOLDINGS", "APARTMENTS", "INVESTMENTS", "TRUST", "LP", "LLC"))) else 1
+        mail = ", ".join(p for p in (
+            s_txt(b.get("mailing_address_1")), s_txt(b.get("mail_city")),
+            s_txt(b.get("mail_state")), clean_zip(b.get("mail_zipcode")),
+        ) if p)
+        rec = (own, mail, s_txt(b.get("mail_state")), prio)
         prev = sf_owner_by_addr.get(an)
         if prev is None or prio > prev[3]:
-            mail = ", ".join(p for p in (
-                s_txt(b.get("mailing_address_1")), s_txt(b.get("mail_city")),
-                s_txt(b.get("mail_state")), clean_zip(b.get("mail_zipcode")),
-            ) if p)
-            sf_owner_by_addr[an] = (own, mail, s_txt(b.get("mail_state")), prio)
+            sf_owner_by_addr[an] = rec
+        if exact_k:
+            prev_e = sf_owner_by_exact.get(exact_k)
+            if prev_e is None or prio > prev_e[3]:
+                sf_owner_by_exact[exact_k] = rec
     del sf_biz
 
+    la_owner_by_exact: Dict[Tuple[str, str], Tuple[str, str]] = {}
     la_owner_by_addr: Dict[Tuple[str, str], Tuple[str, str]] = {}
     for b in la_biz:
-        an = norm_addr(s_txt(b.get("street_address")))
+        raw_sa = s_txt(b.get("street_address"))
+        an = norm_addr(raw_sa)
+        exact_k = re.sub(r"[^A-Z0-9]+", " ", raw_sa.upper()).strip()
         z5 = clean_zip(b.get("zip_code"))
         own = re.sub(r"\s*/C$", "", s_txt(b.get("business_name"))).strip()
         if not an or not own:
@@ -682,6 +693,9 @@ def crunch_california() -> None:
         mail = ", ".join(p for p in (m_st, m_ct, "CA" if (m_st or m_ct) else "", m_zp) if p)
         la_owner_by_addr[(an, z5)] = (own, mail)
         la_owner_by_addr.setdefault((an, ""), (own, mail))
+        if exact_k:
+            la_owner_by_exact[(exact_k, z5)] = (own, mail)
+            la_owner_by_exact.setdefault((exact_k, ""), (own, mail))
     log(f"  [CA] Indexed {len(sf_owner_by_addr):,} SF business locations & {len(la_owner_by_addr):,} LA real-estate/lessor businesses.")
     del la_biz
 
@@ -697,7 +711,9 @@ def crunch_california() -> None:
     for r in sf_roll:
         pnum = s_txt(r.get("parcel_number"))
         raw_loc = s_txt(r.get("property_location"))
-        if not pnum or not raw_loc:
+        pcls = s_txt(r.get("property_class_code")).upper()
+        if not pnum or not raw_loc or pcls == "TS":
+            # Exclude Timeshare (TS) fractional intervals so parking/hotel operators aren't fanned out as 800-building landlords
             continue
         # SF property_location format: '0000 0123 MAIN                ST0000' -> parse cleanly
         loc_clean = re.sub(r"^0000\s+", "", raw_loc)
@@ -707,7 +723,13 @@ def crunch_california() -> None:
         if not loc_clean or loc_clean.startswith("0 "):
             continue
         an = norm_addr(loc_clean)
-        biz_hit = sf_owner_by_addr.get(an)
+        exact_loc = re.sub(r"[^A-Z0-9]+", " ", loc_clean.upper()).strip()
+        # For individual condo APNs (class Z*), require an exact unit-level match rather than
+        # fanning out a street-only business license across every condo unit in the tower.
+        if pcls.startswith("Z"):
+            biz_hit = sf_owner_by_exact.get(exact_loc)
+        else:
+            biz_hit = sf_owner_by_exact.get(exact_loc) or sf_owner_by_addr.get(an)
         # Under CA Gov. Code § 7928.205, if no public business/lessor registration matches,
         # record explicit statutory status rather than inventing an owner!
         if biz_hit:
@@ -751,8 +773,19 @@ def crunch_california() -> None:
             return None
         z5 = clean_zip(a.get("SitusZIP"))
         an = norm_addr(addr)
+        exact_k = re.sub(r"[^A-Z0-9]+", " ", addr.upper()).strip()
         units = s_int(a.get("Units1")) or 0
-        biz_hit = la_owner_by_addr.get((an, z5)) or la_owner_by_addr.get((an, ""))
+        is_condo_unit_ain = bool(re.search(r"\b(?:UNIT|APT|PH|STE|SUITE|#)\s*[A-Z0-9-]+$", addr, re.IGNORECASE))
+        # Individual condo AINs (with UNIT/APT/PH suffix) must only match an exact unit-level business
+        # registration — never fan out a single street-level business license onto 300 condo units!
+        if is_condo_unit_ain:
+            biz_hit = la_owner_by_exact.get((exact_k, z5)) or la_owner_by_exact.get((exact_k, ""))
+        else:
+            biz_hit = (
+                la_owner_by_exact.get((exact_k, z5))
+                or la_owner_by_addr.get((an, z5))
+                or la_owner_by_addr.get((an, ""))
+            )
         # Keep all multifamily (2+ units) AND any parcel matched to a registered lessor business!
         if not biz_hit and units < 2:
             return None

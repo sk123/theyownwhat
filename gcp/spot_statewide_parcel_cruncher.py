@@ -6,7 +6,7 @@ Provisions an ephemeral, hardware-TTL Google Compute Engine Spot VM
 (`e2-standard-8`, `--provisioning-model=SPOT`, `--max-run-duration=2h`,
 `--instance-termination-action=DELETE`) on GCP project `theyownwhat` to crunch
 statewide property parcel FeatureServers over Google's 10 Gbps backbone, upload
-compressed `.csv.gz` parcel spines to `gs://theyownwhat-oc-staging-20261117/spot_parcels/`,
+compressed `.csv.gz` parcel spines to `gs://renter-help-staging-20261119/spot_parcels/`,
 immediately delete the Spot VM upon completion, and import the new statewide
 partition (`ar` — Arkansas 2.15M statewide parcels across all 75 counties, wired
 to OpenCorporates `us_ar`) into local PostgreSQL `us_properties` / `us_networks`.
@@ -39,10 +39,11 @@ from api.populate_cities import normalize_link_address, normalize_owner_name, so
 from api.shared_utils import normalize_mailing_address_coarse, strip_benign_care_of_prefix  # noqa: E402
 
 GCLOUD_IMAGE = "gcr.io/google.com/cloudsdktool/google-cloud-cli:alpine"
-DEFAULT_PROJECT = "theyownwhat"
-DEFAULT_ZONE = "us-east1-b"
-DEFAULT_BUCKET = "theyownwhat-oc-staging-20261117"
-VM_NAME = "theyownwhat-spot-parcel-cruncher"
+DEFAULT_GCLOUD_CONFIG = os.environ.get("GCLOUD_CONFIG", "storrsmagic")
+DEFAULT_PROJECT = os.environ.get("GCP_PROJECT", "renter-help")
+DEFAULT_ZONE = "us-central1-a"
+DEFAULT_BUCKET = os.environ.get("GCS_BUCKET", "renter-help-staging-20261119")
+VM_NAME = "renter-help-spot-parcel-cruncher"
 
 # Self-contained Python worker executed inside the ephemeral Spot VM
 SPOT_STARTUP_SCRIPT = r"""#!/bin/bash
@@ -169,6 +170,8 @@ def _gcloud(cmd_str: str, project: str, mount_data: bool = True, timeout: int = 
             "--rm",
             *vols,
             "-e",
+            f"CLOUDSDK_ACTIVE_CONFIG_NAME={DEFAULT_GCLOUD_CONFIG}",
+            "-e",
             f"CLOUDSDK_CORE_PROJECT={project}",
             GCLOUD_IMAGE,
             "bash",
@@ -232,6 +235,8 @@ def run_spot_vm_and_download(project: str, zone: str, bucket: str) -> str:
                     "--rm",
                     "-v",
                     f"{os.path.expanduser('~/.config/gcloud')}:/root/.config/gcloud",
+                    "-e",
+                    f"CLOUDSDK_ACTIVE_CONFIG_NAME={DEFAULT_GCLOUD_CONFIG}",
                     "-e",
                     f"CLOUDSDK_CORE_PROJECT={project}",
                     GCLOUD_IMAGE,

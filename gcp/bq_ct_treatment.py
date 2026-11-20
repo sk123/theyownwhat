@@ -37,9 +37,10 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 EXPORT_DIR = os.path.join(REPO_ROOT, "data", "opencorporates", "bq_ct_exports")
 GCLOUD_IMAGE = "gcr.io/google.com/cloudsdktool/google-cloud-cli:alpine"
 
-DEFAULT_PROJECT = "theyownwhat"
-DEFAULT_BUCKET = "theyownwhat-oc-staging-20261117"
-DEFAULT_DATASET = "opencorporates_20261117"
+DEFAULT_GCLOUD_CONFIG = os.environ.get("GCLOUD_CONFIG", "storrsmagic")
+DEFAULT_PROJECT = os.environ.get("GCP_PROJECT", "renter-help")
+DEFAULT_BUCKET = os.environ.get("GCS_BUCKET", "renter-help-staging-20261119")
+DEFAULT_DATASET = os.environ.get("BQ_DATASET", "opencorporates_20261117")
 
 
 @dataclass(frozen=True)
@@ -276,6 +277,7 @@ def run_bq_sql(
     sql: str,
     *,
     project: str,
+    gcloud_config: str = DEFAULT_GCLOUD_CONFIG,
     dry_run: bool = False,
     json_output: bool = False,
     timeout: int = 1800,
@@ -301,6 +303,8 @@ def run_bq_sql(
             "docker", "run", "--rm",
             "-v", f"{os.path.expanduser('~/.config/gcloud')}:/root/.config/gcloud",
             "-v", f"{os.path.join(REPO_ROOT, 'data')}:/data",
+            "-e", f"CLOUDSDK_ACTIVE_CONFIG_NAME={gcloud_config}",
+            "-e", f"CLOUDSDK_CORE_PROJECT={project}",
             GCLOUD_IMAGE,
             "bash", "-c",
             f"bq {' '.join(bq_flags)} < /data/{rel_sql}",

@@ -6,6 +6,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { formatDisplayName } from '../utils/formatName';
 import { getCtPropertyUnitCount } from '../utils/jurisdiction';
+import { ReviewerFlagButton, ReviewerMissedLinkButton } from '../context/ReviewerModeContext';
 
 const reportMarkdownComponents = {
     h1: ({ node, ...props }) => (
@@ -618,6 +619,33 @@ export default function NetworkProfileCard({
 
                     {/* Right action buttons */}
                     <div className="flex items-center gap-1.5 ml-auto flex-wrap">
+                        <ReviewerMissedLinkButton
+                            jurisdiction="ct"
+                            networkId={String(networkData?.network_id || networkData?.id || '')}
+                            networkName={managerName}
+                            targetType="network"
+                            targetValue={managerName}
+                            compact={false}
+                            label="Report Missed Link"
+                            bridgeContext={{
+                                key_principals: humanPrincipals.slice(0, 10).map(p => p.name),
+                                linked_entities: activeBusinesses.slice(0, 10).map(b => b.name),
+                            }}
+                        />
+                        <ReviewerFlagButton
+                            jurisdiction="ct"
+                            networkId={String(networkData?.network_id || networkData?.id || '')}
+                            networkName={managerName}
+                            targetType="network_merge"
+                            targetValue={managerName}
+                            defaultReasonCode="other"
+                            compact={false}
+                            label="Report Linkage Error"
+                            bridgeContext={{
+                                key_principals: humanPrincipals.slice(0, 10).map(p => p.name),
+                                linked_entities: activeBusinesses.slice(0, 10).map(b => b.name),
+                            }}
+                        />
                         {onOpenFeedback && (
                             <button
                                 onClick={() => onOpenFeedback({
@@ -980,16 +1008,26 @@ export default function NetworkProfileCard({
                                         </div>
                                         <div className="flex flex-wrap gap-1">
                                             {displayedPeople.map(p => (
-                                                <button
-                                                    key={p}
-                                                    onClick={() => {
-                                                        if (onSelectEntity) onSelectEntity(p, 'principal', p, 'CT');
-                                                    }}
-                                                    className="text-[9.5px] font-semibold px-2 py-0.5 rounded-full bg-white text-violet-800 border border-violet-200 hover:bg-violet-100 hover:border-violet-300 transition-all cursor-pointer shadow-2xs"
-                                                    title={`Click to filter network by principal ${p}`}
-                                                >
-                                                    {formatDisplayName(p)}
-                                                </button>
+                                                <span key={p} className="inline-flex items-center gap-1 rounded-full bg-white border border-violet-200 pl-2 pr-1 py-0.5 shadow-2xs">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                            if (onSelectEntity) onSelectEntity(p, 'principal', p, 'CT');
+                                                        }}
+                                                        className="text-[9.5px] font-semibold text-violet-800 hover:text-violet-950 transition-all cursor-pointer"
+                                                        title={`Click to filter network by principal ${p}`}
+                                                    >
+                                                        {formatDisplayName(p)}
+                                                    </button>
+                                                    <ReviewerFlagButton
+                                                        jurisdiction="ct"
+                                                        networkId={String(networkData?.network_id || networkData?.id || '')}
+                                                        networkName={managerName}
+                                                        targetType="principal"
+                                                        targetValue={p}
+                                                        bridgeContext={{ shared_addresses: allAddresses.slice(0, 8) }}
+                                                    />
+                                                </span>
                                             ))}
                                         </div>
                                     </div>
@@ -1010,16 +1048,26 @@ export default function NetworkProfileCard({
                                         </div>
                                         <div className="flex flex-wrap gap-1">
                                             {displayedCorps.map(c => (
-                                                <button
-                                                    key={c}
-                                                    onClick={() => {
-                                                        if (onSelectEntity) onSelectEntity(c, 'business', c, 'CT');
-                                                    }}
-                                                    className="text-[9.5px] font-semibold px-2 py-0.5 rounded-full bg-white text-indigo-800 border border-indigo-200 hover:bg-indigo-100 hover:border-indigo-300 transition-all cursor-pointer shadow-2xs"
-                                                    title={`Click to filter network by corporation ${c}`}
-                                                >
-                                                    {formatDisplayName(c)}
-                                                </button>
+                                                <span key={c} className="inline-flex items-center gap-1 rounded-full bg-white border border-indigo-200 pl-2 pr-1 py-0.5 shadow-2xs">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                            if (onSelectEntity) onSelectEntity(c, 'business', c, 'CT');
+                                                        }}
+                                                        className="text-[9.5px] font-semibold text-indigo-800 hover:text-indigo-950 transition-all cursor-pointer"
+                                                        title={`Click to filter network by corporation ${c}`}
+                                                    >
+                                                        {formatDisplayName(c)}
+                                                    </button>
+                                                    <ReviewerFlagButton
+                                                        jurisdiction="ct"
+                                                        networkId={String(networkData?.network_id || networkData?.id || '')}
+                                                        networkName={managerName}
+                                                        targetType="entity"
+                                                        targetValue={c}
+                                                        bridgeContext={{ shared_addresses: allAddresses.slice(0, 8) }}
+                                                    />
+                                                </span>
                                             ))}
                                         </div>
                                     </div>
@@ -1040,16 +1088,27 @@ export default function NetworkProfileCard({
                                         </div>
                                         <div className="flex flex-wrap gap-1">
                                             {displayedAddresses.map(a => (
-                                                <button
-                                                    key={a}
-                                                    onClick={() => {
-                                                        if (onFilterSearch) onFilterSearch(a);
-                                                    }}
-                                                    className="text-[9.5px] font-semibold px-2 py-0.5 rounded-lg bg-white text-emerald-800 border border-emerald-200 hover:bg-emerald-100 hover:border-emerald-300 transition-all cursor-pointer shadow-2xs truncate max-w-full text-left"
-                                                    title={`Click to filter properties by address ${a}`}
-                                                >
-                                                    {a}
-                                                </button>
+                                                <span key={a} className="inline-flex items-center gap-1 max-w-full rounded-lg bg-white border border-emerald-200 pl-2 pr-1 py-0.5 shadow-2xs">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                            if (onFilterSearch) onFilterSearch(a);
+                                                        }}
+                                                        className="text-[9.5px] font-semibold text-emerald-800 hover:text-emerald-950 transition-all cursor-pointer truncate max-w-full text-left"
+                                                        title={`Click to filter properties by address ${a}`}
+                                                    >
+                                                        {a}
+                                                    </button>
+                                                    <ReviewerFlagButton
+                                                        jurisdiction="ct"
+                                                        networkId={String(networkData?.network_id || networkData?.id || '')}
+                                                        networkName={managerName}
+                                                        targetType="address"
+                                                        targetValue={a}
+                                                        defaultReasonCode="shared_office_or_maildrop"
+                                                        bridgeContext={{ address: a }}
+                                                    />
+                                                </span>
                                             ))}
                                         </div>
                                     </div>

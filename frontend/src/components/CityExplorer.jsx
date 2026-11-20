@@ -9,6 +9,8 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import { formatDisplayName } from '../utils/formatName';
 import AlgorithmicEstimateBanner from './AlgorithmicEstimateBanner';
+import { ReviewerFlagButton, ReviewerMissedLinkButton } from '../context/ReviewerModeContext';
+import { MobileBelowFoldCue, NativeLoadingSpinner, NotablePortfoliosSkeleton } from './NotablePortfoliosCue';
 
 const validParcelCoords = (p) => {
   const lat = Number(p?.latitude);
@@ -202,17 +204,17 @@ const CITY_LIMITATIONS = {
     sponsor: false,
   },
   ny: {
-    gap: 'Unifies all 5 NYC boroughs (PLUTO, HPD registrations & contacts, Class C/Open code violations, Housing Litigations, Marshal Evictions & Rent Stabilization) with 33 NYS GIS counties, Buffalo & Syracuse rental/code registries, SDG ImageMate CAMA portals, and NY DOS / OpenCorporates filings. 24 non-NYC counties opt out of NYS ITS bulk GIS redistribution and are queued on county assessment rolls.',
+    gap: 'Unifies all 5 NYC boroughs (PLUTO, HPD registrations & contacts, Class C/Open code violations, Housing Litigations, Marshal Evictions & Rent Stabilization) with 33 NYS GIS counties, City of Rochester (Monroe County) RPS parcels & NBD code enforcement, Buffalo & Syracuse rental/code registries, SDG ImageMate CAMA portals, and NY DOS / OpenCorporates filings. Remaining non-redistribution counties are queued on county assessment rolls.',
     needed: 'county assessment rolls for non-redistribution counties and NY LLC beneficial-owner member rosters',
-    cost: 'NYC Open Data, NYS GIS, NY DOS, Buffalo & Syracuse Open Data: $0; corporate registry graph via OpenCorporates (ODbL v1.0).',
+    cost: 'NYC Open Data, NYS GIS, NY DOS, Rochester, Buffalo & Syracuse Open Data: $0; corporate registry graph via OpenCorporates (ODbL v1.0).',
     sourceUrl: 'https://gis.ny.gov/parcels',
     ocRegisterUrl: 'https://opencorporates.com/registers/us_ny',
     sponsor: false,
   },
   il: {
-    gap: 'Unifies City of Chicago and all 130+ Cook County suburbs (1.67M improved PINs with mortgage-servicer swap & CCAO residential characteristics), DuPage County GIS (310K improved PINs), Chicago Dept. of Buildings violations, and bulk IL SOS / OpenCorporates officer, LLC manager, and foreign-branch filings. Downstate counties are queued on Devnet wEdge / Beacon CAMA portals, and Illinois land trust beneficiaries (765 ILCS 405) are confidential.',
+    gap: 'Unifies City of Chicago and all 130+ Cook County suburbs (1.66M improved PINs with mortgage-servicer swap & CCAO residential characteristics), DuPage County GIS (309K improved PINs), Lake County GIS (258K addressed parcels), Chicago Dept. of Buildings violations, and bulk IL SOS / OpenCorporates officer, LLC manager, and foreign-branch filings. Downstate counties are queued on Devnet wEdge / Beacon CAMA portals, and Illinois land trust beneficiaries (765 ILCS 405) are confidential.',
     needed: 'downstate county Devnet/Beacon CAMA rolls, Illinois land trust schedules, and Circuit Court eviction dockets',
-    cost: 'Cook County, DuPage County, and City of Chicago Open Data: $0; corporate registry graph via OpenCorporates (ODbL v1.0).',
+    cost: 'Cook County, DuPage County, Lake County, and City of Chicago Open Data: $0; corporate registry graph via OpenCorporates (ODbL v1.0).',
     sourceUrl: 'https://apps.ilsos.gov/businessentitysearch/',
     ocRegisterUrl: 'https://opencorporates.com/registers/us_il',
     sponsor: false,
@@ -226,9 +228,9 @@ const CITY_LIMITATIONS = {
     sponsor: false,
   },
   mn: {
-    gap: 'Unifies Hennepin County (414K improved CAMA parcels) and Ramsey County / St. Paul (158K improved CAMA parcels) with Minneapolis active rental licenses, owner contacts, Regulatory Services code cases, and bulk Minnesota corporate/LLC officer & foreign-branch filings.',
-    needed: 'Greater Minnesota outstate county CAMA rolls and District Court eviction dockets',
-    cost: 'Hennepin County, Ramsey County, and Minneapolis Open Data: $0; corporate registry graph via OpenCorporates (ODbL v1.0).',
+    gap: 'Unifies 4 core Twin Cities metro counties — Hennepin (413K), Ramsey / St. Paul (157K), Dakota (148K), and Anoka (124K) — plus Olmsted County / Rochester (60K) improved CAMA parcels with Minneapolis active rental licenses, owner contacts, Regulatory Services code cases, and bulk Minnesota corporate/LLC officer & foreign-branch filings.',
+    needed: 'remaining Greater Minnesota outstate county CAMA rolls and District Court eviction dockets',
+    cost: 'Hennepin, Ramsey, Dakota, Anoka, Olmsted, Metropolitan Council, and Minneapolis Open Data: $0; corporate registry graph via OpenCorporates (ODbL v1.0).',
     sourceUrl: 'https://mblsportal.sos.mn.gov/Business/Search',
     ocRegisterUrl: 'https://opencorporates.com/registers/us_mn',
     sponsor: false,
@@ -242,9 +244,9 @@ const CITY_LIMITATIONS = {
     sponsor: false,
   },
   oh: {
-    gap: 'Cuyahoga County (Greater Cleveland) Fiscal Officer improved CAMA parcels (with recorded transfer dates & prices) and bulk Ohio corporate/LLC & cross-state foreign-branch filings are joined. Additional Ohio county auditors are queued per-county.',
-    needed: 'remaining 87 Ohio County Auditor CAMA rolls, domestic OH LLC member disclosures, and Municipal Court eviction dockets',
-    cost: 'Cuyahoga County Open Data: $0; corporate registry graph via OpenCorporates (ODbL v1.0).',
+    gap: 'Unifies Ohio’s 4 largest county auditor CAMA rolls — Franklin County / Columbus (444K), Cuyahoga County / Cleveland (443K), Hamilton County / Cincinnati (278K), and Lucas County / Toledo (175K) — with recorded sales and bulk Ohio corporate/LLC & cross-state foreign-branch filings. Remaining Ohio counties are queued per-county.',
+    needed: 'remaining 84 Ohio County Auditor CAMA rolls, domestic OH LLC member disclosures, and Municipal Court eviction dockets',
+    cost: 'Franklin, Cuyahoga, Hamilton (CAGIS), and Lucas County Auditor Open Data: $0; corporate registry graph via OpenCorporates (ODbL v1.0).',
     sourceUrl: 'https://businesssearch.ohiosos.gov/',
     ocRegisterUrl: 'https://opencorporates.com/registers/us_oh',
     sponsor: false,
@@ -1083,7 +1085,7 @@ const CITY_CONFIG = {
   ny: {
     name: 'New York',
     title: 'New York Owner Networks',
-    subTitle: 'Unified 62-county NYC PLUTO/HPD/Marshal Evictions + NYS ORPTS + Buffalo & Syracuse enforcement',
+    subTitle: 'Unified 62-county NYC PLUTO/HPD/Marshal Evictions + NYS ORPTS + Rochester, Buffalo & Syracuse enforcement',
     beta: true,
     idLabel: 'BBL / SWIS-SBL',
     idDesc: 'NYC Borough-Block-Lot or NYS Municipal SWIS-SBL identifier',
@@ -1099,8 +1101,8 @@ const CITY_CONFIG = {
     reliableUnits: true,
     recordLabel: 'properties',
     boroughLabel: 'Borough / Municipality (County)',
-    dataSourceDesc: 'Data sourced from unified NYC DOF PLUTO, HPD Multiple Dwelling Registrations & Contacts, HPD Housing Maintenance Code Violations (Class A/B/C), Housing Litigations & Marshal Evictions (all 5 boroughs), NYS GIS ORPTS Public Tax Parcels, Buffalo & Syracuse rental/code registries, SDG ImageMate CAMA portals, NY DOS / OpenCorporates filings, and NHPD.',
-    coverageNote: 'Unifies Manhattan, Brooklyn, Queens, Bronx, and Staten Island directly with Westchester, Long Island, Hudson Valley, Buffalo, Syracuse, Albany, and participating NYS counties so cross-county portfolios surface in one network.',
+    dataSourceDesc: 'Data sourced from unified NYC DOF PLUTO, HPD Multiple Dwelling Registrations & Contacts, HPD Housing Maintenance Code Violations (Class A/B/C), Housing Litigations & Marshal Evictions (all 5 boroughs), NYS GIS ORPTS Public Tax Parcels, City of Rochester (Monroe County) RPS parcels & NBD code enforcement, Buffalo & Syracuse rental/code registries, SDG ImageMate CAMA portals, NY DOS / OpenCorporates filings, and NHPD.',
+    coverageNote: 'Unifies Manhattan, Brooklyn, Queens, Bronx, and Staten Island directly with Westchester, Long Island, Hudson Valley, Rochester, Buffalo, Syracuse, Albany, and participating NYS counties so cross-county portfolios surface in one network.',
     quickSearches: ['Chestnut Holdings', 'Alma Realty', 'Zara Realty', 'Sky Harbor Property', 'Whitman Village'],
     defaultSearchQuery: 'holdings',
     evictionNote: 'NYC Marshal evictions, NYC HPD Housing Litigations, and Buffalo Housing Court cases are joined onto matched properties.',
@@ -1484,8 +1486,8 @@ const CITY_CONFIG = {
     reliableUnits: false,
     recordLabel: 'parcels',
     boroughLabel: 'Municipality / Community (County)',
-    dataSourceDesc: 'Data sourced from Cook County Assessor Open Data (1.67M improved PINs across Chicago & 130+ suburbs with CCAO residential characteristics & mortgage-servicer swap), DuPage County GIS (310K improved PINs), Chicago Dept. of Buildings Violations (22u3-xenr), IL SOS / OpenCorporates corporate & LLC manager filings, and NHPD.',
-    coverageNote: 'Unifies City of Chicago neighborhoods with Evanston, Oak Park, Cicero, Skokie, Schaumburg, all Cook suburbs, and DuPage County in one Chicagoland/statewide graph.',
+    dataSourceDesc: 'Data sourced from Cook County Assessor Open Data (1.66M improved PINs across Chicago & 130+ suburbs with CCAO residential characteristics & mortgage-servicer swap), DuPage County GIS (309K improved PINs), Lake County GIS (258K addressed parcels), Chicago Dept. of Buildings Violations (22u3-xenr), IL SOS / OpenCorporates corporate & LLC manager filings, and NHPD.',
+    coverageNote: 'Unifies City of Chicago neighborhoods with Evanston, Oak Park, Cicero, Skokie, Schaumburg, all Cook suburbs, DuPage County, and Lake County in one Chicagoland/statewide graph.',
     quickSearches: ['Cagan Management', 'Pangea', 'BJB Partners', 'Invitation Homes', 'TLC Management'],
     defaultSearchQuery: 'properties',
     evictionNote: 'Chicago Dept. of Buildings code violations and NHPD subsidies are joined onto matched parcels.',
@@ -1574,7 +1576,7 @@ const CITY_CONFIG = {
   mn: {
     name: 'Minnesota',
     title: 'Minnesota Owner Networks',
-    subTitle: 'Hennepin & Ramsey CAMA rolls unified with Minneapolis Active Rental Licenses & MN SOS',
+    subTitle: 'Hennepin, Ramsey, Dakota, Anoka & Olmsted (Rochester) CAMA rolls + Minneapolis Rental Licenses & MN SOS',
     beta: true,
     idLabel: 'County PID',
     idDesc: 'Minnesota County Parcel Identification Number',
@@ -1590,8 +1592,8 @@ const CITY_CONFIG = {
     reliableUnits: true,
     recordLabel: 'parcels',
     boroughLabel: 'Municipality (County)',
-    dataSourceDesc: 'Data sourced from Hennepin County & Ramsey County (St. Paul) improved CAMA tax parcels unified with Minneapolis Active Rental Licenses, owner contacts, Regulatory Services code cases, MN SOS / OpenCorporates filings, and NHPD.',
-    coverageNote: 'Connects owners across Minneapolis, Saint Paul, Bloomington, Brooklyn Park, Edina, and all Hennepin & Ramsey County municipalities.',
+    dataSourceDesc: 'Data sourced from Hennepin, Ramsey (St. Paul), Dakota, Anoka (Met Council), and Olmsted (Rochester) County improved CAMA tax parcels unified with Minneapolis Active Rental Licenses, owner contacts, Regulatory Services code cases, MN SOS / OpenCorporates filings, and NHPD.',
+    coverageNote: 'Connects owners across Minneapolis, Saint Paul, Bloomington, Burnsville, Eagan, Coon Rapids, Blaine, Rochester, and all Hennepin, Ramsey, Dakota, Anoka & Olmsted County municipalities.',
     quickSearches: ['HavenBrook', 'Invitation Homes', 'Kleinman Realty', 'Mint Properties', 'Steven Scott'],
     defaultSearchQuery: 'properties',
     evictionNote: 'Minneapolis Regulatory Services code cases and NHPD federal subsidies are joined where matched.',
@@ -1664,11 +1666,11 @@ const CITY_CONFIG = {
   oh: {
     name: 'Ohio',
     title: 'Ohio Owner Networks',
-    subTitle: 'Cuyahoga County (Greater Cleveland) Fiscal Officer CAMA, transfer sales & OH SOS',
+    subTitle: 'Columbus (Franklin), Cleveland (Cuyahoga), Cincinnati (Hamilton) & Toledo (Lucas) Auditor CAMA + OH SOS',
     beta: true,
     idLabel: 'Auditor Parcel PPN',
     idDesc: 'Ohio County Auditor / Fiscal Officer Permanent Parcel Number',
-    agencyLabel: 'County Fiscal Officer',
+    agencyLabel: 'County Auditor / Fiscal Officer',
     hasViolationClasses: false,
     registrationBadge: 'Tax Parcel',
     filingLabel: 'filing',
@@ -1680,15 +1682,15 @@ const CITY_CONFIG = {
     reliableUnits: false,
     recordLabel: 'parcels',
     boroughLabel: 'Municipality (County)',
-    dataSourceDesc: 'Data sourced from Cuyahoga County (Greater Cleveland) Fiscal Officer improved CAMA tax parcels (`certified_tax_building > 0`, including transfer dates & prices), linked to OH SOS / OpenCorporates filings and NHPD.',
-    coverageNote: 'Covers Cleveland, Lakewood, Parma, Cleveland Heights, Euclid, Shaker Heights, East Cleveland, and all Cuyahoga County municipalities.',
-    quickSearches: ['K&D', 'Millennia', 'Holton Wise', ' VineBrook', 'Progress Residential'],
+    dataSourceDesc: 'Data sourced from Franklin County (Columbus), Cuyahoga County (Cleveland), Hamilton County CAGIS (Cincinnati), and Lucas County (Toledo) Auditor improved CAMA tax parcels (1.34M parcels with recorded transfer dates & prices), linked to OH SOS / OpenCorporates filings and NHPD.',
+    coverageNote: 'Unifies Columbus, Cleveland, Cincinnati, Toledo, Lakewood, Parma, Dublin, Westerville, Norwood, and all Franklin, Cuyahoga, Hamilton & Lucas County municipalities in one Ohio graph.',
+    quickSearches: ['K&D', 'Millennia', 'Holton Wise', 'VineBrook', 'Progress Residential'],
     defaultSearchQuery: 'properties',
     evictionNote: 'NHPD federal subsidies and recorded transfer sales are joined onto matched Ohio parcels.',
     officialRecords: [
       {
-        label: 'Cuyahoga MyPlace Property Search',
-        desc: 'Official Cuyahoga County Fiscal Officer MyPlace parcel lookup',
+        label: 'County Auditor Parcel Lookup',
+        desc: 'Official Franklin, Cuyahoga, Hamilton, or Lucas County Auditor parcel record',
         getUrl: (p) => p.cama_site_link || 'https://myplace.cuyahogacounty.gov/',
         getIframeUrl: null,
       },
@@ -3542,8 +3544,13 @@ function computePeopleEntitiesModel(contacts = [], memberNames = [], connectionS
   };
 }
 
-function PeopleEntitiesSection({ contacts = [], memberNames = [], connectionSignals = null, model = null, onContact, onSearch, config, mobilePanelTabs = null }) {
+function PeopleEntitiesSection({ contacts = [], memberNames = [], connectionSignals = null, model = null, onContact, onSearch, config, mobilePanelTabs = null, networkContext = null }) {
   const [tab, setTab] = useState('people');
+  const revJur = networkContext?.jurisdiction || config?.key || 'ny';
+  const revNetId = String(networkContext?.networkId || '');
+  const revNetKey = String(networkContext?.networkKey || '');
+  const revNetName = String(networkContext?.networkName || '');
+  const revSharedAddrs = Array.isArray(networkContext?.sharedAddresses) ? networkContext.sharedAddresses : [];
   const resolved = useMemo(
     () => model || computePeopleEntitiesModel(contacts, memberNames, connectionSignals),
     [model, contacts, memberNames, connectionSignals]
@@ -3589,13 +3596,29 @@ function PeopleEntitiesSection({ contacts = [], memberNames = [], connectionSign
             </div>
             <div className="space-y-1">
               {personEntityCount.map(({ name, contact, count }) => (
-                <button key={name} onClick={() => onContact(contact)}
-                  className="w-full flex items-center justify-between text-left hover:bg-amber-100 rounded-lg px-1.5 py-1 transition-colors group">
-                  <span className="text-[11px] font-semibold text-slate-800">{formatDisplayName(name)}</span>
-                  <span className="text-[9px] font-bold text-amber-600 shrink-0 ml-2">
-                    {count} {count === 1 ? 'entity' : 'entities'}
-                  </span>
-                </button>
+                <div key={name} className="flex items-center gap-1.5 hover:bg-amber-100 rounded-lg px-1.5 py-1 transition-colors group">
+                  <button type="button" onClick={() => onContact(contact)}
+                    className="flex-1 min-w-0 flex items-center justify-between text-left cursor-pointer">
+                    <span className="text-[11px] font-semibold text-slate-800 truncate">{formatDisplayName(name)}</span>
+                    <span className="text-[9px] font-bold text-amber-600 shrink-0 ml-2">
+                      {count} {count === 1 ? 'entity' : 'entities'}
+                    </span>
+                  </button>
+                  <ReviewerFlagButton
+                    jurisdiction={revJur}
+                    networkId={revNetId}
+                    networkKey={revNetKey}
+                    networkName={revNetName}
+                    targetType="principal"
+                    targetValue={name}
+                    bridgeContext={{
+                      shared_addresses: revSharedAddrs,
+                      role: contact?.contact_type || '',
+                      address: contact?.address || '',
+                      corporations: (contact?.corporations || []).slice(0, 10),
+                    }}
+                  />
+                </div>
               ))}
             </div>
           </div>
@@ -3609,7 +3632,19 @@ function PeopleEntitiesSection({ contacts = [], memberNames = [], connectionSign
             </div>
             {[...sharedAddrs.entries()].slice(0, 3).map(([addr, corps]) => (
               <div key={addr} className="mb-1.5 last:mb-0">
-                <div className="text-[10px] font-semibold text-slate-600">{addr}</div>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-[10px] font-semibold text-slate-600 min-w-0 truncate">{addr}</div>
+                  <ReviewerFlagButton
+                    jurisdiction={revJur}
+                    networkId={revNetId}
+                    networkKey={revNetKey}
+                    networkName={revNetName}
+                    targetType="address"
+                    targetValue={addr}
+                    defaultReasonCode="shared_office_or_maildrop"
+                    bridgeContext={{ address: addr, linked_entities: corps.slice(0, 10) }}
+                  />
+                </div>
                 <div className="flex flex-wrap gap-1 mt-0.5">
                   {corps.slice(0, 4).map(c => (
                     <span key={c} className="text-[9px] px-1.5 py-0.5 bg-blue-100 text-blue-800 rounded-full truncate max-w-[180px]" title={c}>{c}</span>
@@ -3658,47 +3693,76 @@ function PeopleEntitiesSection({ contacts = [], memberNames = [], connectionSign
               const displayName = c.full_name || c.corporation;
               const corps = (c.corporations || []).filter(x => !isJunk(x));
               return (
-                <button key={`p-${i}`} onClick={() => onContact(c)}
-                  className="w-full flex items-start gap-3 px-4 py-3 hover:bg-violet-50 transition-colors text-left group">
-                  <div className="p-1.5 rounded-lg mt-0.5 shrink-0 bg-blue-50">
-                    <Users size={12} className="text-blue-500"/>
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="font-semibold text-slate-800 text-sm">{formatDisplayName(displayName)}</div>
-                    <div className="flex flex-wrap items-center gap-1 mt-1">
-                      <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${role.cls}`}>{role.l}</span>
-                      {corps.slice(0,5).map(corp => (
-                        <span key={corp} className="text-[9px] font-medium px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600 truncate max-w-[160px]" title={corp}>
-                          {formatDisplayName(corp)}
-                        </span>
-                      ))}
-                      {corps.length > 5 && (
-                        <span className="text-[9px] text-slate-400">+{corps.length - 5} more</span>
+                <div key={`p-${i}`} className="flex items-start gap-2 px-4 py-3 hover:bg-violet-50 transition-colors group">
+                  <button type="button" onClick={() => onContact(c)}
+                    className="flex-1 min-w-0 flex items-start gap-3 text-left cursor-pointer">
+                    <div className="p-1.5 rounded-lg mt-0.5 shrink-0 bg-blue-50">
+                      <Users size={12} className="text-blue-500"/>
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="font-semibold text-slate-800 text-sm">{formatDisplayName(displayName)}</div>
+                      <div className="flex flex-wrap items-center gap-1 mt-1">
+                        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${role.cls}`}>{role.l}</span>
+                        {corps.slice(0,5).map(corp => (
+                          <span key={corp} className="text-[9px] font-medium px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600 truncate max-w-[160px]" title={corp}>
+                            {formatDisplayName(corp)}
+                          </span>
+                        ))}
+                        {corps.length > 5 && (
+                          <span className="text-[9px] text-slate-400">+{corps.length - 5} more</span>
+                        )}
+                      </div>
+                      {c.address && (
+                        <div className="flex items-center gap-1 mt-1">
+                          <MapPin size={9} className="text-slate-300 shrink-0"/>
+                          <span className="text-[10px] text-slate-400 truncate">{c.address}{c.zip ? `, ${c.zip}` : ''}</span>
+                        </div>
                       )}
                     </div>
-                    {c.address && (
-                      <div className="flex items-center gap-1 mt-1">
-                        <MapPin size={9} className="text-slate-300 shrink-0"/>
-                        <span className="text-[10px] text-slate-400 truncate">{c.address}{c.zip ? `, ${c.zip}` : ''}</span>
-                      </div>
-                    )}
+                  </button>
+                  <div className="flex items-center gap-1.5 shrink-0 mt-1">
+                    <ReviewerFlagButton
+                      jurisdiction={revJur}
+                      networkId={revNetId}
+                      networkKey={revNetKey}
+                      networkName={revNetName}
+                      targetType="principal"
+                      targetValue={displayName}
+                      bridgeContext={{
+                        role: c.contact_type || '',
+                        address: c.address || '',
+                        corporations: corps.slice(0, 10),
+                        shared_addresses: revSharedAddrs,
+                      }}
+                    />
+                    <ChevronRight size={13} className="text-slate-300 group-hover:text-violet-400 shrink-0"/>
                   </div>
-                  <ChevronRight size={13} className="text-slate-300 group-hover:text-violet-400 shrink-0 mt-1"/>
-                </button>
+                </div>
               );
             })}
 
             {nameOnlyPeople.map(({ name }, i) => (
-              <button key={`np-${i}`} onClick={() => onSearch(name)}
-                className="w-full flex items-start gap-3 px-4 py-2.5 hover:bg-slate-50 transition-colors text-left group">
-                <div className="p-1.5 rounded-lg mt-0.5 shrink-0 bg-slate-100">
-                  <Users size={12} className="text-slate-400"/>
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="font-medium text-slate-600 text-sm truncate">{formatDisplayName(name)}</div>
-                  <div className="text-[9px] text-slate-400 mt-0.5">Source-listed human candidate</div>
-                </div>
-              </button>
+              <div key={`np-${i}`} className="flex items-center gap-2 px-4 py-2.5 hover:bg-slate-50 transition-colors group">
+                <button type="button" onClick={() => onSearch(name)}
+                  className="flex-1 min-w-0 flex items-start gap-3 text-left cursor-pointer">
+                  <div className="p-1.5 rounded-lg mt-0.5 shrink-0 bg-slate-100">
+                    <Users size={12} className="text-slate-400"/>
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="font-medium text-slate-600 text-sm truncate">{formatDisplayName(name)}</div>
+                    <div className="text-[9px] text-slate-400 mt-0.5">Source-listed human candidate</div>
+                  </div>
+                </button>
+                <ReviewerFlagButton
+                  jurisdiction={revJur}
+                  networkId={revNetId}
+                  networkKey={revNetKey}
+                  networkName={revNetName}
+                  targetType="principal"
+                  targetValue={name}
+                  bridgeContext={{ shared_addresses: revSharedAddrs }}
+                />
+              </div>
             ))}
           </>
         )}
@@ -3714,54 +3778,82 @@ function PeopleEntitiesSection({ contacts = [], memberNames = [], connectionSign
               const addrKey = addr?.trim().toUpperCase();
               const isSharedAddr = addrKey && sharedAddrs.has(addrKey);
               return (
-                <button key={`e-${i}`} onClick={() => onContact(c)}
-                  className="w-full flex items-start gap-3 px-4 py-3 hover:bg-indigo-50 transition-colors text-left group">
-                  <div className="p-1.5 rounded-lg mt-0.5 shrink-0 bg-indigo-50">
-                    <Building2 size={12} className="text-indigo-500"/>
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="font-semibold text-slate-800 text-sm">{formatDisplayName(corp)}</div>
-                    <div className="flex flex-wrap items-center gap-1 mt-1">
-                      {c.contact_type && <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${role.cls}`}>{role.l}</span>}
-                      {officers.slice(0, 3).map(officer => (
-                        <span key={officer} className="text-[9px] font-medium px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700 truncate max-w-[130px]" title={officer}>
-                          {formatDisplayName(officer)}
-                        </span>
-                      ))}
-                      {officers.length > 3 && (
-                        <span className="text-[9px] text-slate-400">+{officers.length - 3} more</span>
-                      )}
+                <div key={`e-${i}`} className="flex items-start gap-2 px-4 py-3 hover:bg-indigo-50 transition-colors group">
+                  <button type="button" onClick={() => onContact(c)}
+                    className="flex-1 min-w-0 flex items-start gap-3 text-left cursor-pointer">
+                    <div className="p-1.5 rounded-lg mt-0.5 shrink-0 bg-indigo-50">
+                      <Building2 size={12} className="text-indigo-500"/>
                     </div>
-                    {addr && (
-                      <div className="flex items-center gap-1 mt-1">
-                        <MapPin size={9} className={`shrink-0 ${isSharedAddr ? 'text-blue-400' : 'text-slate-300'}`}/>
-                        <span className={`text-[10px] truncate ${isSharedAddr ? 'text-blue-600 font-medium' : 'text-slate-400'}`}>
-                          {addr}
-                        </span>
-                        {isSharedAddr && (
-                          <span className="text-[8px] font-bold px-1 py-0.5 bg-blue-100 text-blue-700 rounded-full shrink-0 ml-0.5">
-                            shared
+                    <div className="min-w-0 flex-1">
+                      <div className="font-semibold text-slate-800 text-sm">{formatDisplayName(corp)}</div>
+                      <div className="flex flex-wrap items-center gap-1 mt-1">
+                        {c.contact_type && <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${role.cls}`}>{role.l}</span>}
+                        {officers.slice(0, 3).map(officer => (
+                          <span key={officer} className="text-[9px] font-medium px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700 truncate max-w-[130px]" title={officer}>
+                            {formatDisplayName(officer)}
                           </span>
+                        ))}
+                        {officers.length > 3 && (
+                          <span className="text-[9px] text-slate-400">+{officers.length - 3} more</span>
                         )}
                       </div>
-                    )}
+                      {addr && (
+                        <div className="flex items-center gap-1 mt-1">
+                          <MapPin size={9} className={`shrink-0 ${isSharedAddr ? 'text-blue-400' : 'text-slate-300'}`}/>
+                          <span className={`text-[10px] truncate ${isSharedAddr ? 'text-blue-600 font-medium' : 'text-slate-400'}`}>
+                            {addr}
+                          </span>
+                          {isSharedAddr && (
+                            <span className="text-[8px] font-bold px-1 py-0.5 bg-blue-100 text-blue-700 rounded-full shrink-0 ml-0.5">
+                              shared
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </button>
+                  <div className="flex items-center gap-1.5 shrink-0 mt-1">
+                    <ReviewerFlagButton
+                      jurisdiction={revJur}
+                      networkId={revNetId}
+                      networkKey={revNetKey}
+                      networkName={revNetName}
+                      targetType="entity"
+                      targetValue={corp}
+                      bridgeContext={{
+                        address: addr || '',
+                        officers: officers.slice(0, 10),
+                        shared_addresses: revSharedAddrs,
+                      }}
+                    />
+                    <ChevronRight size={13} className="text-slate-300 group-hover:text-indigo-400 shrink-0"/>
                   </div>
-                  <ChevronRight size={13} className="text-slate-300 group-hover:text-indigo-400 shrink-0 mt-1"/>
-                </button>
+                </div>
               );
             })}
 
             {nameOnlyEntities.map(({ name }, i) => (
-              <button key={`ne-${i}`} onClick={() => onSearch(name)}
-                className="w-full flex items-start gap-3 px-4 py-2.5 hover:bg-slate-50 transition-colors text-left group">
-                <div className="p-1.5 rounded-lg mt-0.5 shrink-0 bg-slate-100">
-                  <Building2 size={12} className="text-slate-400"/>
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="font-medium text-slate-600 text-sm truncate">{formatDisplayName(name)}</div>
-                  <div className="text-[9px] text-slate-400 mt-0.5">Associated entity</div>
-                </div>
-              </button>
+              <div key={`ne-${i}`} className="flex items-center gap-2 px-4 py-2.5 hover:bg-slate-50 transition-colors group">
+                <button type="button" onClick={() => onSearch(name)}
+                  className="flex-1 min-w-0 flex items-start gap-3 text-left cursor-pointer">
+                  <div className="p-1.5 rounded-lg mt-0.5 shrink-0 bg-slate-100">
+                    <Building2 size={12} className="text-slate-400"/>
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="font-medium text-slate-600 text-sm truncate">{formatDisplayName(name)}</div>
+                    <div className="text-[9px] text-slate-400 mt-0.5">Associated entity</div>
+                  </div>
+                </button>
+                <ReviewerFlagButton
+                  jurisdiction={revJur}
+                  networkId={revNetId}
+                  networkKey={revNetKey}
+                  networkName={revNetName}
+                  targetType="entity"
+                  targetValue={name}
+                  bridgeContext={{ shared_addresses: revSharedAddrs }}
+                />
+              </div>
             ))}
           </>
         )}
@@ -4406,9 +4498,27 @@ function NetworkDetail({ networkKey, onBack, onSearchTrigger, onMapSelected, onO
           </button>
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
-              <h2 className="text-base md:text-lg font-black text-slate-900 tracking-tight break-words [text-wrap:balance]">
-                {formatDisplayName(data.operator_name || data.representative_human_name || data.primary_human_name || data.display_name)}
-              </h2>
+              {(() => {
+                const detailHeadline = formatDisplayName(data.operator_name || data.representative_human_name || data.primary_human_name || data.display_name);
+                const detailIsEntity = Boolean(data.operator_name) || (!data.representative_human_name && !data.primary_human_name);
+                const totalBiz = Number(data.business_count || 0);
+                const otherBiz = detailIsEntity ? Math.max(0, totalBiz - 1) : totalBiz;
+                const entitySuffix = otherBiz > 0
+                  ? (detailIsEntity
+                    ? `(& ${fmt(otherBiz)} other ${otherBiz === 1 ? 'entity' : 'entities'})`
+                    : `(${fmt(otherBiz)} ${otherBiz === 1 ? 'entity' : 'entities'})`)
+                  : '';
+                return (
+                  <h2 className="text-base md:text-lg font-black text-slate-900 tracking-tight break-words [text-wrap:balance]">
+                    {detailHeadline}
+                    {entitySuffix && (
+                      <span className="ml-1.5 text-xs md:text-sm font-semibold text-slate-500 whitespace-nowrap tabular-nums">
+                        {entitySuffix}
+                      </span>
+                    )}
+                  </h2>
+                );
+              })()}
               <span className={`shrink-0 text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${
                 data.operator_source === 'verified_external_source'
                   ? 'bg-emerald-100 text-emerald-800'
@@ -4419,18 +4529,46 @@ function NetworkDetail({ networkKey, onBack, onSearchTrigger, onMapSelected, onO
                       : 'bg-amber-100 text-amber-800'
               }`}>
                 {data.operator_source === 'verified_external_source'
-                  ? 'Verified public source'
+                  ? 'Publicly cited operator'
                   : data.operator_name
                     ? 'Source-backed operator'
                     : data.primary_human_name
                       ? 'Source-listed person'
                       : 'Principal unresolved'}
               </span>
-              {Number(data.business_count) > 1 && (
-                <span className="shrink-0 text-[9px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 tabular-nums">
-                  {fmt(data.business_count)} linked entities
-                </span>
-              )}
+              <div className="ml-auto flex items-center gap-1.5 flex-wrap">
+                <ReviewerMissedLinkButton
+                  jurisdiction={config?.key || 'ny'}
+                  networkId={String(data.id || '')}
+                  networkKey={networkKey}
+                  networkName={data.operator_name || data.representative_human_name || data.primary_human_name || data.display_name || ''}
+                  targetType="network"
+                  targetValue={data.operator_name || data.representative_human_name || data.primary_human_name || data.display_name || networkKey}
+                  compact={false}
+                  label="Report Missed Link"
+                  bridgeContext={{
+                    hq_address: data.primary_hq_address || '',
+                    key_officers: (data.key_officers || []).slice(0, 10),
+                    operating_entities: (data.operating_entities || []).slice(0, 10),
+                  }}
+                />
+                <ReviewerFlagButton
+                  jurisdiction={config?.key || 'ny'}
+                  networkId={String(data.id || '')}
+                  networkKey={networkKey}
+                  networkName={data.operator_name || data.representative_human_name || data.primary_human_name || data.display_name || ''}
+                  targetType="network_merge"
+                  targetValue={data.operator_name || data.representative_human_name || data.primary_human_name || data.display_name || networkKey}
+                  defaultReasonCode="other"
+                  compact={false}
+                  label="Report Linkage Error"
+                  bridgeContext={{
+                    hq_address: data.primary_hq_address || '',
+                    key_officers: (data.key_officers || []).slice(0, 10),
+                    operating_entities: (data.operating_entities || []).slice(0, 10),
+                  }}
+                />
+              </div>
             </div>
             <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-600">
               {(data.key_officers?.length > 0 || data.primary_human_name) && (
@@ -4445,9 +4583,19 @@ function NetworkDetail({ networkKey, onBack, onSearchTrigger, onMapSelected, onO
                 </span>
               )}
               {data.primary_hq_address && (
-                <span className="inline-flex items-center gap-1 min-w-0">
+                <span className="inline-flex items-center gap-1.5 min-w-0">
                   <MapPin size={12} aria-hidden="true" className="text-slate-400 shrink-0" />
                   <span className="truncate">{formatDisplayName(data.primary_hq_address)}</span>
+                  <ReviewerFlagButton
+                    jurisdiction={config?.key || 'ny'}
+                    networkId={String(data.id || '')}
+                    networkKey={networkKey}
+                    networkName={data.operator_name || data.display_name || ''}
+                    targetType="address"
+                    targetValue={data.primary_hq_address}
+                    defaultReasonCode="shared_office_or_maildrop"
+                    bridgeContext={{ address: data.primary_hq_address }}
+                  />
                 </span>
               )}
             </div>
@@ -4771,7 +4919,7 @@ function NetworkDetail({ networkKey, onBack, onSearchTrigger, onMapSelected, onO
                 </button>
               )}
               <div className="text-[9.5px] text-slate-400 mt-4 pt-2 border-t border-slate-100 italic leading-normal font-medium">
-                {config.codeRecordNote ? `${config.codeRecordNote} ` : ''}{config.evictionNote}
+                {config.codeRecordNote ? `${config.codeRecordNote} ` : ''}{config.evictionNote ? `${config.evictionNote} ` : ''}Counts reflect public filings matched to linked parcels or entities, not adjudicated findings against every listed individual.
               </div>
             </div>
 
@@ -4787,7 +4935,7 @@ function NetworkDetail({ networkKey, onBack, onSearchTrigger, onMapSelected, onO
                   </div>
                   
                   <p className="text-[10.5px] text-slate-500 mb-3 font-medium leading-relaxed">
-                    Linked due to sharing one or more of the following names:
+                    Grouped via shared public-filing signals (addresses, corporate officers, or registrations). Listed individuals may be corporate officers, managers, or co-filers rather than beneficial owners:
                   </p>
                 </div>
 
@@ -4795,7 +4943,7 @@ function NetworkDetail({ networkKey, onBack, onSearchTrigger, onMapSelected, onO
                   {allPeople.length > 0 && (
                     <div>
                       <div className="text-[9px] font-bold uppercase tracking-wider text-violet-500 mb-1 flex items-center justify-between">
-                        <span>Shared People ({allPeople.length})</span>
+                        <span>Source-Listed People ({allPeople.length})</span>
                         {hasMorePeople && (
                           <button
                             type="button"
@@ -4959,6 +5107,16 @@ function NetworkDetail({ networkKey, onBack, onSearchTrigger, onMapSelected, onO
                     onContact={c => setSelContact(c)}
                     onSearch={onSearchTrigger || (() => {})}
                     config={config}
+                    networkContext={{
+                      jurisdiction: config?.key || 'ny',
+                      networkId: String(data?.id || ''),
+                      networkKey,
+                      networkName: data?.operator_name || data?.representative_human_name || data?.primary_human_name || data?.display_name || '',
+                      sharedAddresses: [
+                        ...(data?.primary_hq_address ? [data.primary_hq_address] : []),
+                        ...[...(peopleEntitiesModel?.sharedAddrs?.keys?.() || [])].slice(0, 6),
+                      ],
+                    }}
                   />
                 </div>
               )}
@@ -5060,7 +5218,24 @@ function NetworkDetail({ networkKey, onBack, onSearchTrigger, onMapSelected, onO
                             onClick={() => isMulti ? toggleGroupExpand(p._groupKey) : setSelBuilding(p)}
                           >
                             <th scope="row" className="text-left px-3 sm:px-4 py-2.5 font-medium text-slate-700 max-w-[175px] sm:max-w-[230px]">
-                              <div className="truncate" title={addrLabel}>{addrLabel}</div>
+                              <div className="flex items-center justify-between gap-1.5">
+                                <div className="truncate" title={addrLabel}>{addrLabel}</div>
+                                <ReviewerFlagButton
+                                  jurisdiction={config?.key || 'ny'}
+                                  networkId={String(data?.id || '')}
+                                  networkKey={networkKey}
+                                  networkName={data?.operator_name || data?.display_name || ''}
+                                  targetType="property"
+                                  targetValue={addrLabel}
+                                  targetId={String(p.bbl || '')}
+                                  bridgeContext={{
+                                    owner_name: p.owner_name || '',
+                                    mailing_address: p.mailing_address || '',
+                                    bbl: p.bbl || '',
+                                    borough: p.borough || '',
+                                  }}
+                                />
+                              </div>
                               {!groupByAddress && p.bbl && (
                                 <div className="text-[10px] font-semibold text-violet-700 mt-0.5">
                                   {config.idLabel}: {p.bbl}
@@ -5230,6 +5405,7 @@ export default function CityExplorer({ city = "nyc", onBack, onMapSelected, onOp
   const [loadingTop, setLoadingTop]   = useState(true);
   const [crossSearch, setCrossSearch] = useState(initialQuery || null);
   const explorerScrollRef             = useRef(null);
+  const notableSectionRef             = useRef(null);
   const [isAtNetworkTop, setIsAtNetworkTop] = useState(true);
   const [isScrolledPastCityCards, setIsScrolledPastCityCards] = useState(false);
   const [activeNetworkTab, setActiveNetworkTab] = useState('buildings');
@@ -5337,9 +5513,15 @@ export default function CityExplorer({ city = "nyc", onBack, onMapSelected, onOp
     fetch(`${apiBase}/networks?limit=12&min_buildings=1&sort_by=${topSort}`)
       .then(r => r.ok ? r.json() : Promise.reject(new Error(`Top networks failed: ${r.status}`)))
       .catch(() => fetch(`${apiBase}/search?q=${config.defaultSearchQuery}&limit=12`).then(r => r.json()))
-      .then(data => setTopNetworks((Array.isArray(data) ? data : []).filter(r => r.type?.endsWith('_network') && ((r.building_count || 0) >= 1 || (r.property_count || 0) >= 1))))
+      .then(data => {
+        if (!cancelled) {
+          setTopNetworks((Array.isArray(data) ? data : []).filter(r => r.type?.endsWith('_network') && ((r.building_count || 0) >= 1 || (r.property_count || 0) >= 1)));
+        }
+      })
       .catch(console.error)
-      .finally(() => setLoadingTop(false));
+      .finally(() => {
+        if (!cancelled) setLoadingTop(false);
+      });
     return () => {
       cancelled = true;
       clearInterval(statsTimer);
@@ -5543,7 +5725,24 @@ export default function CityExplorer({ city = "nyc", onBack, onMapSelected, onOp
 
               {/* Quick searches */}
               <div className="mb-4">
-                <div className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-3">Try searching for…</div>
+                <div className="flex items-center justify-between gap-2 mb-3">
+                  <div className="text-xs font-bold text-slate-400 uppercase tracking-wide">Try searching for…</div>
+                  {loadingTop ? (
+                    <span className="inline-flex md:hidden items-center gap-1.5 rounded-full bg-indigo-50 border border-indigo-200 px-2.5 py-0.5 text-[10.5px] font-bold text-indigo-700 shrink-0">
+                      <NativeLoadingSpinner size="sm" label={`Loading notable portfolios for ${config.name}`} />
+                      <span>Loading portfolios…</span>
+                    </span>
+                  ) : topNetworks.length > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => notableSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                      className="inline-flex md:hidden items-center gap-1 rounded-full bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-2.5 py-0.5 text-[10.5px] font-extrabold text-indigo-700 shrink-0 cursor-pointer transition-colors"
+                    >
+                      <ArrowDown size={11} aria-hidden="true" />
+                      <span>{topNetworks.length} portfolios below</span>
+                    </button>
+                  ) : null}
+                </div>
                 <div className="flex flex-wrap gap-2">
                   {config.quickSearches.map(term => (
                     <button
@@ -5561,18 +5760,26 @@ export default function CityExplorer({ city = "nyc", onBack, onMapSelected, onOp
                 </div>
               </div>
 
-              {/* Notable portfolios */}
-              {!loadingTop && topNetworks.length > 0 && (
-                <section aria-labelledby="notable-portfolios-heading">
-                  <div className="flex flex-wrap items-baseline justify-between gap-2 mb-3">
-                    <h2 id="notable-portfolios-heading" className="text-xs font-bold text-slate-500 uppercase tracking-wide">
-                      {cityKey === 'nyc' ? 'NYC HPD Code Watchlist' : 'Notable Ownership Networks'}
-                    </h2>
-                    <span className="text-[11px] text-slate-400">
-                      Labels &amp; business details derived from public corporate and property filings
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Notable portfolios (immediate loading indicator + skeleton cards, zero blank jump) */}
+              <div ref={notableSectionRef} className="scroll-mt-4">
+                {loadingTop ? (
+                  <NotablePortfoliosSkeleton
+                    heading={cityKey === 'nyc' ? 'NYC HPD Code Watchlist' : 'Notable Ownership Networks'}
+                    jurisdictionName={config.name}
+                    columns={2}
+                    cardCount={4}
+                  />
+                ) : topNetworks.length > 0 ? (
+                  <section aria-labelledby="notable-portfolios-heading">
+                    <div className="flex flex-wrap items-baseline justify-between gap-2 mb-3">
+                      <h2 id="notable-portfolios-heading" className="text-xs font-bold text-slate-500 uppercase tracking-wide">
+                        {cityKey === 'nyc' ? 'NYC HPD Code Watchlist' : 'Notable Ownership Networks'}
+                      </h2>
+                      <span className="text-[11px] text-slate-400">
+                        Labels &amp; business details derived from public corporate and property filings
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     {topNetworks.map((n, cardIdx) => {
                       const headline = formatDisplayName(
                         n.operator_name || n.representative_human_name || n.primary_human_name || n.display_name
@@ -5624,21 +5831,27 @@ export default function CityExplorer({ city = "nyc", onBack, onMapSelected, onOp
 
                       const badgeLabel =
                         n.operator_source === 'verified_external_source'
-                          ? 'Verified operator'
+                          ? 'Cited operator'
                           : hasOperator
                             ? 'Operating entity'
                             : (n.representative_human_name || n.primary_human_name)
                               ? 'Source-listed person'
                               : 'Principal unresolved';
 
+                      const headlineIsEntity = hasOperator || (!n.representative_human_name && !n.primary_human_name);
+                      const totalEntityCount = Number(n.business_count || 0);
+                      const inlineEntityCount = headlineIsEntity ? Math.max(0, totalEntityCount - 1) : totalEntityCount;
+                      const inlineEntityLabel = inlineEntityCount > 0
+                        ? (headlineIsEntity
+                          ? `(& ${fmt(inlineEntityCount)} other ${inlineEntityCount === 1 ? 'entity' : 'entities'})`
+                          : `(${fmt(inlineEntityCount)} ${inlineEntityCount === 1 ? 'entity' : 'entities'})`)
+                        : '';
+
                       const recordNoun = config.recordLabel === 'parcels' ? 'Parcels' : 'Buildings';
                       const kpiTiles = [
                         { label: recordNoun, value: fmt(n.building_count), tone: 'default' },
                         ...(config.reliableUnits && Number(n.unit_count) > 0
                           ? [{ label: 'Units', value: fmt(n.unit_count), tone: 'emerald' }]
-                          : []),
-                        ...(Number(n.business_count) > 0
-                          ? [{ label: 'Entities', value: fmt(n.business_count), tone: 'default' }]
                           : []),
                         ...(totalOfficers > 0
                           ? [{ label: 'Officers', value: fmt(totalOfficers), tone: 'default' }]
@@ -5658,7 +5871,11 @@ export default function CityExplorer({ city = "nyc", onBack, onMapSelected, onOp
                       ].slice(0, 6);
 
                       const kpiGridCols =
-                        kpiTiles.length >= 3 ? 'grid-cols-2 sm:grid-cols-3' : 'grid-cols-2';
+                        kpiTiles.length === 4
+                          ? 'grid-cols-2'
+                          : kpiTiles.length >= 3
+                            ? 'grid-cols-2 sm:grid-cols-3'
+                            : 'grid-cols-2';
 
                       return (
                         <article
@@ -5676,10 +5893,39 @@ export default function CityExplorer({ city = "nyc", onBack, onMapSelected, onOp
                                   {badgeLabel}
                                 </span>
                               </div>
-                              <span className="shrink-0 inline-flex items-center gap-1 rounded-lg border border-blue-200/80 bg-blue-50/70 px-2.5 py-1 text-[11px] font-black text-blue-700 tabular-nums">
-                                <Building2 size={12} aria-hidden="true" className="text-blue-500" />
-                                <span>{fmt(n.building_count)}</span>
-                              </span>
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                <ReviewerMissedLinkButton
+                                  jurisdiction={cityKey}
+                                  networkId={String(n.id || '')}
+                                  networkKey={n.network_key || ''}
+                                  networkName={headline}
+                                  targetType="network"
+                                  targetValue={headline}
+                                  bridgeContext={{
+                                    hq_address: n.primary_hq_address || '',
+                                    key_officers: displayedOfficers,
+                                    linked_entities: affiliatedList,
+                                  }}
+                                />
+                                <ReviewerFlagButton
+                                  jurisdiction={cityKey}
+                                  networkId={String(n.id || '')}
+                                  networkKey={n.network_key || ''}
+                                  networkName={headline}
+                                  targetType="network_merge"
+                                  targetValue={headline}
+                                  defaultReasonCode="other"
+                                  bridgeContext={{
+                                    hq_address: n.primary_hq_address || '',
+                                    key_officers: displayedOfficers,
+                                    linked_entities: affiliatedList,
+                                  }}
+                                />
+                                <span className="shrink-0 inline-flex items-center gap-1 rounded-lg border border-blue-200/80 bg-blue-50/70 px-2.5 py-1 text-[11px] font-black text-blue-700 tabular-nums">
+                                  <Building2 size={12} aria-hidden="true" className="text-blue-500" />
+                                  <span>{fmt(n.building_count)}</span>
+                                </span>
+                              </div>
                             </div>
 
                             <h3 className="min-w-0 text-base sm:text-[17px] font-black text-slate-900 leading-snug tracking-tight group-hover:text-blue-700 transition-colors">
@@ -5688,7 +5934,14 @@ export default function CityExplorer({ city = "nyc", onBack, onMapSelected, onOp
                                 onClick={() => setSelectedNetwork(n.network_key)}
                                 className="card-primary-btn text-left w-full focus-visible:outline-none after:content-[''] after:absolute after:inset-0 cursor-pointer"
                               >
-                                <span className="line-clamp-2 break-words">{headline}</span>
+                                <span className="line-clamp-2 break-words">
+                                  {headline}
+                                  {inlineEntityLabel && (
+                                    <span className="ml-1.5 text-[12.5px] font-semibold text-slate-500 whitespace-nowrap tabular-nums">
+                                      {inlineEntityLabel}
+                                    </span>
+                                  )}
+                                </span>
                               </button>
                             </h3>
 
@@ -5757,15 +6010,24 @@ export default function CityExplorer({ city = "nyc", onBack, onMapSelected, onOp
                                 <div>
                                   <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">
                                     <Users size={11} aria-hidden="true" />
-                                    <span>Key Principals</span>
+                                    <span>Source-Listed Officers</span>
                                   </div>
                                   <div className="flex flex-wrap gap-1.5">
                                     {displayedOfficers.map((nm) => (
                                       <span
                                         key={nm}
-                                        className="inline-flex items-center rounded-lg border border-violet-200/80 bg-violet-50/80 px-2 py-0.5 text-[11px] font-semibold text-violet-800 max-w-full truncate"
+                                        className="relative z-[2] inline-flex items-center gap-1 rounded-lg border border-violet-200/80 bg-violet-50/80 px-2 py-0.5 text-[11px] font-semibold text-violet-800 max-w-full"
                                       >
-                                        {formatDisplayName(nm)}
+                                        <span className="truncate">{formatDisplayName(nm)}</span>
+                                        <ReviewerFlagButton
+                                          jurisdiction={cityKey}
+                                          networkId={String(n.id || '')}
+                                          networkKey={n.network_key || ''}
+                                          networkName={headline}
+                                          targetType="principal"
+                                          targetValue={nm}
+                                          bridgeContext={{ hq_address: n.primary_hq_address || '' }}
+                                        />
                                       </span>
                                     ))}
                                     {extraOfficers > 0 && (
@@ -5787,10 +6049,19 @@ export default function CityExplorer({ city = "nyc", onBack, onMapSelected, onOp
                                     {affiliatedList.map((ent) => (
                                       <span
                                         key={ent}
-                                        className="inline-flex items-center rounded-lg border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-700 max-w-[230px] truncate"
+                                        className="relative z-[2] inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-700 max-w-[260px]"
                                         title={ent}
                                       >
-                                        {ent}
+                                        <span className="truncate">{ent}</span>
+                                        <ReviewerFlagButton
+                                          jurisdiction={cityKey}
+                                          networkId={String(n.id || '')}
+                                          networkKey={n.network_key || ''}
+                                          networkName={headline}
+                                          targetType="entity"
+                                          targetValue={ent}
+                                          bridgeContext={{ hq_address: n.primary_hq_address || '' }}
+                                        />
                                       </span>
                                     ))}
                                     {extraEntities > 0 && (
@@ -5823,7 +6094,18 @@ export default function CityExplorer({ city = "nyc", onBack, onMapSelected, onOp
                     })}
                   </div>
                 </section>
-              )}
+                ) : null}
+              </div>
+
+              <MobileBelowFoldCue
+                targetRef={notableSectionRef}
+                scrollRootRef={explorerScrollRef}
+                loading={loadingTop}
+                count={topNetworks.length}
+                label={cityKey === 'nyc' ? 'Watchlist Portfolios' : 'Notable Portfolios'}
+                jurisdictionName={config.name}
+                enabled={!selectedNetwork}
+              />
             </motion.div>
           )}
         </AnimatePresence>

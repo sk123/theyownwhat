@@ -3,6 +3,7 @@ import { ArrowUpDown, Map, List, Grid3X3, X, Check, Building2, MapPin, ChevronRi
 import { motion, AnimatePresence } from 'framer-motion';
 import { getAddressBadgeInfo, getCtPropertyUnitCount, getJurisdictionConfig, getPropertyState } from '../utils/jurisdiction';
 import { getPropertySubsidyRecords, hasPropertySubsidy } from '../utils/subsidies';
+import { ReviewerFlagButton } from '../context/ReviewerModeContext';
 
 // Helper Components
 function SortHeader({ label, sortKey, currentSort, onSort }) {
@@ -62,6 +63,8 @@ export default function PropertyTable({
     highlightedEntityId,
     onAiDigest,
     activeState = 'CT',
+    networkName = '',
+    networkId = '',
     jurisdictionConfig,
     includeNonLocalProperties = false,
     onIncludeNonLocalPropertiesChange,
@@ -733,9 +736,24 @@ export default function PropertyTable({
                                                     </span>
                                                 )}
 
-                                                <span className={`${p.management_info?.name ? 'text-xs text-gray-500' : 'text-sm font-medium text-gray-900'} truncate`}>
-                                                    {p.address}
-                                                </span>
+                                                <div className="flex items-center gap-1.5">
+                                                    <span className={`${p.management_info?.name ? 'text-xs text-gray-500' : 'text-sm font-medium text-gray-900'} truncate`}>
+                                                        {p.address}
+                                                    </span>
+                                                    <ReviewerFlagButton
+                                                        jurisdiction={String(activeState || 'CT').toLowerCase()}
+                                                        networkId={String(networkId || '')}
+                                                        networkName={networkName}
+                                                        targetType="property"
+                                                        targetValue={`${p.address || ''}${p.city ? `, ${p.city}` : ''}`.trim()}
+                                                        targetId={String(p.id || '')}
+                                                        bridgeContext={{
+                                                            owner: p.owner || '',
+                                                            mailing_address: p.mailing_address || p.details?.mailing_address || '',
+                                                            city: p.city || p.property_city || '',
+                                                        }}
+                                                    />
+                                                </div>
 
                                                 <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                                                     {renderJurisdictionBadge(p)}
@@ -1279,10 +1297,25 @@ export default function PropertyTable({
                                                             <span className="truncate">{p.management_info.name}</span>
                                                         </div>
                                                     )}
-                                                    <h4 className="text-base font-bold text-slate-800 leading-tight">
-                                                        {p.address}
-                                                        {!p.isComplex && p.derivedUnit && <span className="text-slate-400 font-medium ml-1">#{p.derivedUnit}</span>}
-                                                    </h4>
+                                                    <div className="flex items-start justify-between gap-2">
+                                                        <h4 className="text-base font-bold text-slate-800 leading-tight">
+                                                            {p.address}
+                                                            {!p.isComplex && p.derivedUnit && <span className="text-slate-400 font-medium ml-1">#{p.derivedUnit}</span>}
+                                                        </h4>
+                                                        <ReviewerFlagButton
+                                                            jurisdiction={String(activeState || 'CT').toLowerCase()}
+                                                            networkId={String(networkId || '')}
+                                                            networkName={networkName}
+                                                            targetType="property"
+                                                            targetValue={`${p.address || ''}${p.city ? `, ${p.city}` : ''}`.trim()}
+                                                            targetId={String(p.id || '')}
+                                                            bridgeContext={{
+                                                                owner: p.owner || '',
+                                                                mailing_address: p.mailing_address || p.details?.mailing_address || '',
+                                                                city: p.city || p.property_city || '',
+                                                            }}
+                                                        />
+                                                    </div>
 
                                                     <div className="flex items-center gap-1.5 mt-1 text-xs text-slate-500 font-medium">
                                                         <span>{p.city}</span>

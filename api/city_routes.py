@@ -611,9 +611,9 @@ def city_stats(city: str, force_refresh: bool = False):
         "minneapolis": "Minneapolis Active Rental Licenses + MapIT GIS",
         "nj": "New Jersey DCA BHI Active Building Records",
         "ma": "MassGIS Level 3 Property Tax Parcels + 112 Municipal CAMA Scrapers (All 351 Municipalities)",
-        "fl": "Florida Unified 67-County Parcels (FDOR + Miami-Dade PA + Hillsborough HCPA) + Sunbiz + DBPR Ch. 509",
-        "ny": "New York Unified 62-County Explorer (NYC PLUTO/HPD/Marshal Evictions + NYS ORPTS + Buffalo/Syracuse + SDG ImageMate)",
-        "il": "Illinois Statewide Explorer (Cook County 1.67M PINs + DuPage GIS + Chicago DOB Violations + Devnet/Beacon CAMA)",
+        "fl": "Florida Unified 67-County Parcels (FDOR + Miami-Dade PA + Hillsborough HCPA) + Sunbiz + DBPR Ch. 509 + Miami-Dade/Orlando/Gainesville Code",
+        "ny": "New York Unified 62-County Explorer (NYC PLUTO/HPD/Marshal Evictions + NYS ORPTS + Rochester/Buffalo/Syracuse + SDG ImageMate)",
+        "il": "Illinois Chicagoland Explorer (Cook 1.66M + DuPage 309K + Lake 258K PINs + Chicago DOB Violations + Devnet/Beacon CAMA)",
         "ca": "California 58-County Explorer (LA & SF Rolls + Registered Lessor Businesses + Evictions/Violations + CA SOS)",
         "co": "Colorado OIT Public Parcels + CO SOS + Denver Active Rental Licenses",
         "vt": "Vermont VCGI Standardized Parcels + Statewide Grand List",
@@ -622,8 +622,8 @@ def city_stats(city: str, force_refresh: bool = False):
         "ar": "Arkansas GIS Office Statewide Parcels (All 75 Counties) + AR SOS",
         "va": "Virginia VGIN Local Schema Parcels + HRGeo + County CAMA + VA SCC",
         "mt": "Montana MSDI / DOR ORION Cadastral Parcels (All 56 Counties) + MT SOS",
-        "mn": "Minnesota Unified Explorer (Hennepin & Ramsey CAMA + Minneapolis Active Rental Licenses) + MN SOS",
-        "oh": "Ohio County Auditor CAMA Parcels (Cuyahoga / Greater Cleveland) + OH SOS",
+        "mn": "Minnesota Unified Explorer (Hennepin, Ramsey, Dakota, Anoka & Olmsted/Rochester CAMA + Minneapolis Rental Licenses) + MN SOS",
+        "oh": "Ohio County Auditor CAMA Parcels (Columbus/Franklin, Cleveland/Cuyahoga, Cincinnati/Hamilton & Toledo/Lucas) + OH SOS",
     }
 
     result = {
@@ -1058,10 +1058,12 @@ def city_search(
     )
     direct_net_rows.sort(
         key=lambda r: (
-            0 if (
-                (cached_search_profiles.get(r["network_key"]) or {}).get("operator_name")
-                and _py_matches_all((cached_search_profiles.get(r["network_key"]) or {}).get("operator_name") or "")
-            ) else (1 if _py_matches_all(r.get("display_name") or "") and not r.get("matched_member_names") else 2),
+            3 if int(r.get("building_count") or 0) <= 1 else (
+                0 if (
+                    (cached_search_profiles.get(r["network_key"]) or {}).get("operator_name")
+                    and _py_matches_all((cached_search_profiles.get(r["network_key"]) or {}).get("operator_name") or "")
+                ) else (1 if _py_matches_all(r.get("display_name") or "") and not r.get("matched_member_names") else 2)
+            ),
             -(int(r.get("building_count") or 0)),
             r.get("display_name") or "",
         )

@@ -27,16 +27,18 @@ SNAPSHOT_DIR = os.path.join(REPO_ROOT, "data", "opencorporates", "2026-11-17")
 EXPORT_DIR = os.path.join(REPO_ROOT, "data", "opencorporates", "bq_exports")
 GCLOUD_IMAGE = "gcr.io/google.com/cloudsdktool/google-cloud-cli:alpine"
 
-DEFAULT_PROJECT = "theyownwhat"
-DEFAULT_BUCKET = "theyownwhat-oc-staging-20261117"
-DEFAULT_DATASET = "opencorporates_20261117"
-TTL_DAYS = 21  # Auto-expires Dec 8, 2026 (4 days before Dec 12 credit expiry)
+DEFAULT_GCLOUD_CONFIG = os.environ.get("GCLOUD_CONFIG", "storrsmagic")
+DEFAULT_PROJECT = os.environ.get("GCP_PROJECT", "renter-help")
+DEFAULT_BUCKET = os.environ.get("GCS_BUCKET", "renter-help-staging-20261119")
+DEFAULT_DATASET = os.environ.get("BQ_DATASET", "opencorporates_20261117")
+TTL_DAYS = 14  # Auto-expires staging objects & tables automatically
 
 
 def run_gcloud_container(
     shell_cmd: str,
     *,
     project: str,
+    gcloud_config: str = DEFAULT_GCLOUD_CONFIG,
     mount_data: bool = True,
     timeout: int = 3600,
 ) -> str:
@@ -48,6 +50,8 @@ def run_gcloud_container(
         "run",
         "--rm",
         *vols,
+        "-e",
+        f"CLOUDSDK_ACTIVE_CONFIG_NAME={gcloud_config}",
         "-e",
         f"CLOUDSDK_CORE_PROJECT={project}",
         GCLOUD_IMAGE,

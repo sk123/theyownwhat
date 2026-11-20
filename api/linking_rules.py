@@ -33,7 +33,14 @@ DEFAULT_RULES_JSON_PATH = os.path.join(
 
 VALID_RULE_TYPES = frozenset({
     "ra_allowlist",
+    "email_allowlist",
+    "entity_allowlist",
     "third_party_hub_block",
+    "third_party_email_block",
+    "third_party_principal_block",
+    "ambiguous_homonym_block",
+    "non_landlord_entity_block",
+    "nominee_manager_block",
     "placeholder_owner",
     "benign_care_of_token",
     "biz_abbrev",
@@ -45,7 +52,14 @@ _LOCK = threading.RLock()
 _CACHE_LOADED = False
 _RULES_CACHE: Dict[str, Any] = {
     "ra_allowlist": frozenset(),
+    "email_allowlist": frozenset(),
+    "entity_allowlist": frozenset(),
     "third_party_hub_block": frozenset(),
+    "third_party_email_block": frozenset(),
+    "third_party_principal_block": frozenset(),
+    "ambiguous_homonym_block": frozenset(),
+    "non_landlord_entity_block": frozenset(),
+    "nominee_manager_block": frozenset(),
     "placeholder_owner": frozenset(),
     "benign_care_of_token": frozenset(),
     "biz_abbrev": {},
@@ -53,6 +67,15 @@ _RULES_CACHE: Dict[str, Any] = {
     "officer_role_suffix": frozenset(),
 }
 _CACHE_VERSION = 0
+_RELOAD_CALLBACKS: List[Any] = []
+
+
+def register_reload_callback(fn) -> None:
+    """Register a callback invoked after `reload_learned_rules()` updates `_RULES_CACHE`
+    (e.g., to clear `@lru_cache` in `api.shared_utils`)."""
+    with _LOCK:
+        if fn not in _RELOAD_CALLBACKS:
+            _RELOAD_CALLBACKS.append(fn)
 
 
 def _empty_file_doc() -> Dict[str, Any]:
@@ -136,7 +159,14 @@ def _normalize_rule_entry(
 
 def _compile_rules_list(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
     ra_allow = set()
+    email_allow = set()
+    entity_allow = set()
     hub_block = set()
+    email_block = set()
+    principal_block = set()
+    homonym_block = set()
+    non_landlord_block = set()
+    nominee_block = set()
     placeholders = set()
     benign_co = set()
     biz_abbrev: Dict[str, str] = {}
@@ -153,8 +183,22 @@ def _compile_rules_list(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
             continue
         if rt == "ra_allowlist":
             ra_allow.add(rk)
+        elif rt == "email_allowlist":
+            email_allow.add(rk.lower().lstrip("@"))
+        elif rt == "entity_allowlist":
+            entity_allow.add(rk)
         elif rt == "third_party_hub_block":
             hub_block.add(rk)
+        elif rt == "third_party_email_block":
+            email_block.add(rk.lower().lstrip("@") if rk.startswith("@") else rk.lower())
+        elif rt == "third_party_principal_block":
+            principal_block.add(rk)
+        elif rt == "ambiguous_homonym_block":
+            homonym_block.add(rk)
+        elif rt == "non_landlord_entity_block":
+            non_landlord_block.add(rk)
+        elif rt == "nominee_manager_block":
+            nominee_block.add(rk)
         elif rt == "placeholder_owner":
             placeholders.add(rk)
         elif rt == "benign_care_of_token":
@@ -172,7 +216,14 @@ def _compile_rules_list(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
 
     return {
         "ra_allowlist": frozenset(ra_allow),
+        "email_allowlist": frozenset(email_allow),
+        "entity_allowlist": frozenset(entity_allow),
         "third_party_hub_block": frozenset(hub_block),
+        "third_party_email_block": frozenset(email_block),
+        "third_party_principal_block": frozenset(principal_block),
+        "ambiguous_homonym_block": frozenset(homonym_block),
+        "non_landlord_entity_block": frozenset(non_landlord_block),
+        "nominee_manager_block": frozenset(nominee_block),
         "placeholder_owner": frozenset(placeholders),
         "benign_care_of_token": frozenset(benign_co),
         "biz_abbrev": biz_abbrev,
@@ -262,7 +313,14 @@ def reload_learned_rules(conn=None, json_path: str = DEFAULT_RULES_JSON_PATH) ->
         _RULES_CACHE = compiled
         _CACHE_LOADED = True
         _CACHE_VERSION += 1
-        return dict(_RULES_CACHE)
+        callbacks = list(_RELOAD_CALLBACKS)
+        snapshot = dict(_RULES_CACHE)
+    for cb in callbacks:
+        try:
+            cb()
+        except Exception:
+            pass
+    return snapshot
 
 
 def _ensure_loaded() -> None:
@@ -284,9 +342,44 @@ def get_learned_ra_allowlist() -> FrozenSet[str]:
     return _RULES_CACHE["ra_allowlist"]
 
 
+def get_learned_email_allowlist() -> FrozenSet[str]:
+    _ensure_loaded()
+    return _RULES_CACHE["email_allowlist"]
+
+
+def get_learned_entity_allowlist() -> FrozenSet[str]:
+    _ensure_loaded()
+    return _RULES_CACHE["entity_allowlist"]
+
+
 def get_learned_third_party_hubs() -> FrozenSet[str]:
     _ensure_loaded()
     return _RULES_CACHE["third_party_hub_block"]
+
+
+def get_learned_third_party_emails() -> FrozenSet[str]:
+    _ensure_loaded()
+    return _RULES_CACHE["third_party_email_block"]
+
+
+def get_learned_third_party_principals() -> FrozenSet[str]:
+    _ensure_loaded()
+    return _RULES_CACHE["third_party_principal_block"]
+
+
+def get_learned_ambiguous_homonyms() -> FrozenSet[str]:
+    _ensure_loaded()
+    return _RULES_CACHE["ambiguous_homonym_block"]
+
+
+def get_learned_non_landlord_entities() -> FrozenSet[str]:
+    _ensure_loaded()
+    return _RULES_CACHE["non_landlord_entity_block"]
+
+
+def get_learned_nominee_managers() -> FrozenSet[str]:
+    _ensure_loaded()
+    return _RULES_CACHE["nominee_manager_block"]
 
 
 def get_learned_placeholder_owners() -> FrozenSet[str]:
@@ -350,7 +443,7 @@ def upsert_learned_rule(
                 """,
                 (rt, rk, rv, sc, str(discovered_in or ""), json.dumps(ev)),
             )
-            # Keep address_match_rules in sync for registrar/3rd-party hubs
+            # Keep address_match_rules / email_match_rules in sync for CT builder
             if rt == "third_party_hub_block":
                 try:
                     cur.execute(
@@ -363,6 +456,45 @@ def upsert_learned_rule(
                         )
                         """,
                         (rk, rk),
+                    )
+                except Exception:
+                    conn.rollback()
+            elif rt == "third_party_email_block":
+                domain_or_email = rk.lower().lstrip("@")
+                try:
+                    cur.execute(
+                        """
+                        INSERT INTO email_match_rules (domain, match_type)
+                        SELECT %s, 'registrar'
+                        WHERE NOT EXISTS (
+                            SELECT 1 FROM email_match_rules
+                            WHERE LOWER(TRIM(domain)) = %s AND match_type = 'registrar'
+                        )
+                        """,
+                        (domain_or_email, domain_or_email),
+                    )
+                except Exception:
+                    conn.rollback()
+            elif rt == "email_allowlist":
+                domain_or_email = rk.lower().lstrip("@")
+                try:
+                    cur.execute(
+                        """
+                        DELETE FROM email_match_rules
+                        WHERE LOWER(TRIM(domain)) = %s AND match_type = 'registrar'
+                        """,
+                        (domain_or_email,),
+                    )
+                    cur.execute(
+                        """
+                        INSERT INTO email_match_rules (domain, match_type)
+                        SELECT %s, 'custom'
+                        WHERE NOT EXISTS (
+                            SELECT 1 FROM email_match_rules
+                            WHERE LOWER(TRIM(domain)) = %s AND match_type = 'custom'
+                        )
+                        """,
+                        (domain_or_email, domain_or_email),
                     )
                 except Exception:
                     conn.rollback()
@@ -425,6 +557,24 @@ def deactivate_learned_rule(
                         WHERE UPPER(TRIM(substring)) = %s AND match_type = 'registrar'
                         """,
                         (rk,),
+                    )
+                elif rt == "third_party_email_block":
+                    domain_or_email = rk.lower().lstrip("@")
+                    cur.execute(
+                        """
+                        DELETE FROM email_match_rules
+                        WHERE LOWER(TRIM(domain)) = %s AND match_type = 'registrar'
+                        """,
+                        (domain_or_email,),
+                    )
+                elif rt == "email_allowlist":
+                    domain_or_email = rk.lower().lstrip("@")
+                    cur.execute(
+                        """
+                        DELETE FROM email_match_rules
+                        WHERE LOWER(TRIM(domain)) = %s AND match_type = 'custom'
+                        """,
+                        (domain_or_email,),
                     )
             conn.commit()
         except Exception:

@@ -272,9 +272,8 @@ class TestDataPipelineGuards(unittest.TestCase):
 
         with open(os.path.join(root, "frontend", "src", "components", "DatasetLanding.jsx"), "r", encoding="utf-8") as f:
             landing_src = f.read()
-        self.assertIn("statsStatusByDataset", landing_src)
-        self.assertIn("Public source records ready", landing_src)
-        self.assertIn('<progress', landing_src)
+        self.assertIn("DEFAULT_LIVE_DATASET_KEYS", landing_src)
+        self.assertIn("zero fabricated counts", landing_src)
 
     def test_ui_source_only_and_agency_attribution_guards(self):
         import os

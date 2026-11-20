@@ -499,6 +499,9 @@ app.include_router(city_router)
 from api.audit_review_routes import router as audit_review_router
 app.include_router(audit_review_router)
 
+from api.reviewer_feedback_routes import router as reviewer_feedback_router
+app.include_router(reviewer_feedback_router)
+
 import api.db as db_module
 from api.db import init_db_pool, get_db_connection
 
@@ -8227,23 +8230,24 @@ def _draft_ai_report_text(context: Dict[str, Any], length: Optional[str] = 'comp
         "1. Source hierarchy: Treat theyownwhat local records as source-loaded property/eviction/code-enforcement facts. Treat external search clippings as usable only when they are directly about the target entity named below or a linked human principal explicitly labeled in the clipping metadata.\n"
         "2. No fabrication: Do not invent facts, dates, case outcomes, accusations, locations, ownership links, code violations, legal claims, or reputational conclusions. If evidence is unavailable, say so.\n"
         "3. Legal/news discipline: Discuss case-law, lawsuits, court records, or news only if they appear in the vetted external clippings. Attribute whether the source matched the header entity or a linked principal. If no case-law or news results are provided, explicitly state that no exact-match result was confirmed in this run.\n"
-        "4. Eviction discipline: Clearly distinguish plaintiff-name matched eviction filings from parcel-matched eviction filings; do not treat either as a judgment or tenant outcome unless the status field says so.\n"
-        "5. Code-enforcement discipline: Treat code records as municipal records with status labels. Do not infer habitability conditions beyond the record names/statuses supplied.\n"
-        "6. Analysis quality: Go beyond restating counts. Identify concentration, portfolio composition, geographic spread, mailing-state/offsite signals, largest assets, attorney patterns, enforcement concentrations, source gaps, and leads a reporter or legal-aid team could verify next.\n"
-        "7. Inline links: Put citations inline in the sentence where the claim appears, using markdown links around source titles, dataset names, or short claim phrases. Do not dump links only in a bibliography. Use only URLs present in the vetted external clippings or source_coverage packet.\n"
-        "8. Local source links: Local data can be described as source-loaded theyownwhat data, but when a source_coverage row includes source_url, link the dataset name inline the first time you discuss that source or refresh date.\n"
-        "9. Format: Use clean professional Markdown with section headers, compact tables for metrics/source coverage, short evidence bullets, and readable paragraphs. Avoid giant unbroken text blocks.\n\n"
+        "4. Eviction discipline: Clearly distinguish plaintiff-name matched eviction filings from parcel-matched eviction filings; do not treat either as a judgment, fault, or tenant outcome unless the status field says so, and do not attribute parcel/entity filings as personal wrongdoing by every listed individual.\n"
+        "5. Code-enforcement discipline: Treat code records as municipal records with status labels. Do not infer habitability conditions or personal culpability beyond the record names/statuses supplied.\n"
+        "6. Algorithmic-link & non-defamation discipline: Explicitly frame network groupings as algorithmic research leads built from public filings — NOT legally proven beneficial ownership, alter-ego liability, or guaranteed control. Note that listed individuals are publicly recorded corporate officers, managers, members, or registered contacts (who may be co-investors, officers, or former filers rather than sole owners), and advise verifying critical findings against primary deeds, Secretary of State filings, and court dockets before relying on them in legal filings or demand letters.\n"
+        "7. Analysis quality: Go beyond restating counts. Identify concentration, portfolio composition, geographic spread, mailing-state/offsite signals, largest assets, attorney patterns, enforcement concentrations, source gaps, and leads a reporter or legal-aid team could verify next.\n"
+        "8. Inline links: Put citations inline in the sentence where the claim appears, using markdown links around source titles, dataset names, or short claim phrases. Do not dump links only in a bibliography. Use only URLs present in the vetted external clippings or source_coverage packet.\n"
+        "9. Local source links: Local data can be described as source-loaded theyownwhat data, but when a source_coverage row includes source_url, link the dataset name inline the first time you discuss that source or refresh date.\n"
+        "10. Format: Use clean professional Markdown with section headers, compact tables for metrics/source coverage, short evidence bullets, and readable paragraphs. Avoid giant unbroken text blocks.\n\n"
         f"--- LOCAL PORTFOLIO DATABASE CONTEXT ---\n"
         f"Target Entity: {entity} ({entity_type})\n"
         f"Network Level Investigation: {context.get('is_network_level', False)}\n"
-        f"Total Properties Owned: {context.get('property_count', 0)}\n"
+        f"Total Properties Linked: {context.get('property_count', 0)}\n"
         f"Total Portfolio Value: Assessed at ${context.get('total_assessed_value', 0.0):,.2f} / Appraised at ${context.get('total_appraised_value', 0.0):,.2f}\n"
         f"Top Cities: {cities_str}\n"
         f"Eviction Volume: {context.get('eviction_count', 0)} total filings ({context.get('active_evictions', 0)} active, {context.get('closed_evictions', 0)} closed)\n"
         f"Parcel-Matched Evictions: {context.get('property_matched_eviction_count', 0)} total ({context.get('property_matched_active_evictions', 0)} active)\n"
         f"Parcel-Matched Code Enforcement Records: {context.get('code_enforcement_count', 0)} total ({context.get('open_code_enforcement_count', 0)} not marked closed)\n"
-        f"Network Business LLC Shells: {len(network_businesses)} linked; sample: {_report_name_sample(network_businesses, 20)}\n"
-        f"Network Principals / Key Actors: {len(network_principals)} linked; sample: {_report_name_sample(network_principals, 20)}\n\n"
+        f"Linked Network Entities / LLCs: {len(network_businesses)} linked; sample: {_report_name_sample(network_businesses, 20)}\n"
+        f"Source-Listed Officers & Principals: {len(network_principals)} linked; sample: {_report_name_sample(network_principals, 20)}\n\n"
         f"--- THEYOWNWHAT INVESTIGATIVE DATA PACKET ---\n"
         f"{investigative_packet}\n\n"
         f"--- EXTERNAL NEWS & WEB SEARCH CLIPPINGS ---\n"

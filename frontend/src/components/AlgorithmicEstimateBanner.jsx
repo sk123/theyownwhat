@@ -8,7 +8,7 @@ export default function AlgorithmicEstimateBanner({ className = '' }) {
     >
       <Info size={13} className="shrink-0 mt-0.5 sm:mt-0 text-amber-600" aria-hidden="true" />
       <span>
-        <strong className="font-bold">Algorithmic estimate:</strong> Network associations are algorithmic estimates built from public records; ongoing daily data ingestion and linkage refinements can shift counts slightly.
+        <strong className="font-bold">Algorithmic estimate — verify primary records:</strong> Network groupings are automated research leads built from public filings; listed people may be corporate officers, managers, or co-filers rather than beneficial owners. Verify links, counts, and enforcement records against primary municipal, registry, and court sources before relying on them in legal filings or advocacy.
       </span>
     </div>
   );

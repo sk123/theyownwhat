@@ -38,6 +38,7 @@ if REPO_ROOT not in sys.path:
 from gcp.bq_ct_treatment import (
     DEFAULT_BUCKET,
     DEFAULT_DATASET,
+    DEFAULT_GCLOUD_CONFIG,
     DEFAULT_PROJECT,
     EXPORT_DIR,
     GCLOUD_IMAGE,
@@ -178,11 +179,12 @@ def collect_local_seed_cnums(conn, oc_jur: str) -> List[str]:
     return sorted(seeds)
 
 
-def _docker_bq_gcloud(shell_cmd: str, *, project: str, timeout: int = 900) -> str:
+def _docker_bq_gcloud(shell_cmd: str, *, project: str, gcloud_config: str = DEFAULT_GCLOUD_CONFIG, timeout: int = 900) -> str:
     cmd = [
         "docker", "run", "--rm",
         "-v", f"{os.path.expanduser('~/.config/gcloud')}:/root/.config/gcloud",
         "-v", f"{os.path.join(REPO_ROOT, 'data')}:/data",
+        "-e", f"CLOUDSDK_ACTIVE_CONFIG_NAME={gcloud_config}",
         "-e", f"CLOUDSDK_CORE_PROJECT={project}",
         GCLOUD_IMAGE,
         "bash", "-c", shell_cmd,

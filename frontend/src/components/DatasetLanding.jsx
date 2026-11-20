@@ -54,12 +54,12 @@ const DATASETS = [
   { key: 'FL', title: 'Florida', scope: 'Statewide' },
   { key: 'IL', title: 'Illinois', scope: 'Chicagoland' },
   { key: 'MA', title: 'Massachusetts', scope: 'Statewide' },
-  { key: 'MN', title: 'Minnesota', scope: 'Twin Cities' },
+  { key: 'MN', title: 'Minnesota', scope: 'Twin Cities & SE' },
   { key: 'MT', title: 'Montana', scope: 'Statewide' },
   { key: 'NJ', title: 'New Jersey', scope: 'Multi-family' },
   { key: 'NY', title: 'New York', scope: 'NYC & State' },
   { key: 'NC', title: 'North Carolina', scope: 'Statewide' },
-  { key: 'OH', title: 'Ohio', scope: 'Cuyahoga' },
+  { key: 'OH', title: 'Ohio', scope: 'Major Metros' },
   { key: 'PHILADELPHIA', title: 'Philadelphia', scope: 'City' },
   { key: 'VT', title: 'Vermont', scope: 'Statewide' },
   { key: 'VA', title: 'Virginia', scope: 'Statewide' },
@@ -604,7 +604,7 @@ export default function DatasetLanding({
                     <Briefcase className="w-3.5 h-3.5" aria-hidden="true" />
                   </div>
                   <div className="min-w-0">
-                    <dt className="text-xs font-bold text-slate-800">Shell LLC or management company</dt>
+                    <dt className="text-xs font-bold text-slate-800">Owner LLC or management company</dt>
                     <dd className="text-xs text-slate-500 leading-snug">
                       Trace single-purpose entities through shared mailing addresses and public corporate registries.
                     </dd>

@@ -7,9 +7,15 @@ from api.linking_rules import (
     get_learned_address_aliases,
     get_learned_benign_care_of_tokens,
     get_learned_biz_abbrevs,
+    get_learned_email_allowlist,
+    get_learned_entity_allowlist,
+    get_learned_non_landlord_entities,
+    get_learned_officer_role_suffixes,
     get_learned_ra_allowlist,
+    get_learned_third_party_emails,
     get_learned_third_party_hubs,
     get_rules_version,
+    register_reload_callback,
 )
 
 _TRAILING_COMMA_THE_RE = re.compile(r",\s*THE\s*$")
@@ -224,6 +230,13 @@ def normalize_person_name(name: str) -> str:
     normalized = _PERSON_FIDUCIARY_ROLE_RE.sub(' ', normalized)
     normalized = re.sub(r"\s+\bTR$", "", normalized)
     normalized = re.sub(r"\s+", ' ', normalized).strip()
+
+    learned_role_suffixes = get_learned_officer_role_suffixes()
+    if learned_role_suffixes:
+        toks = normalized.split()
+        while len(toks) >= 3 and toks[-1] in learned_role_suffixes:
+            toks.pop()
+        normalized = " ".join(toks)
 
     # Remove standalone initials after suffix cleanup, and collapse adjacent
     # repeated tokens from SOS data-entry typos (e.g. 'ALEXANDRA SAMIA SOLIA SOLIA').
@@ -494,7 +507,8 @@ DIRECTIONAL_MAP = {
 # Secondary-unit designators. 'FL' is included but is only consumed when an
 # actual unit token follows it, so a trailing state 'FL' is never eaten.
 UNIT_MARKER_PATTERN = (
-    r'SUITE|STE|UNIT|APARTMENT|APT|ROOM|RM|FLOOR|FLR|FL|BLDG|BUILDING|DEPT|DEPARTMENT|OFC|OFFICE'
+    r'SUITE|STE|UNIT|APARTMENT|APT|ROOM|RM|FLOOR|FLR|FL|BLDG|BUILDING|DEPT|DEPARTMENT|OFC|OFFICE|'
+    r'TRAILER|TRLR|LOT|SPACE|SPC|PAD'
 )
 
 
@@ -608,6 +622,13 @@ def _split_state_and_zip(norm: str):
     return norm.strip(), state, zipcode
 
 
+_DIRECTIONAL_FULL_WORDS = frozenset(DIRECTIONAL_MAP.values())
+_NUMBERED_THOROUGHFARE_WORDS = frozenset({'HIGHWAY', 'ROUTE', 'TURNPIKE', 'PARKWAY', 'PIKE', 'MOUNT'})
+_NUMBERED_ROAD_PREFIXES = frozenset({
+    'COUNTY', 'STATE', 'TOWNSHIP', 'TWP', 'FARM', 'RANCH', 'US', 'PARISH', 'SECONDARY', 'FOREST',
+})
+
+
 def _expand_address_tokens(body: str) -> str:
     """Expand directional and street-type abbreviations token by token."""
     tokens = body.split()
@@ -615,12 +636,31 @@ def _expand_address_tokens(body: str) -> str:
         return ''
 
     out = []
+    n_toks = len(tokens)
     for idx, token in enumerate(tokens):
         # Never expand the leading house number position.
         if token in DIRECTIONAL_MAP and idx > 0:
-            out.append(DIRECTIONAL_MAP[token])
+            # Preserve single-letter Avenue names (`10530 S AVENUE E`, `100 AVENUE N`, `100 AVENUE S`)
+            # when the letter immediately follows `AVENUE`/`AVE` with no street name before `AVENUE`.
+            prev_is_ave = out and out[-1] == 'AVENUE' and (idx == 2 or (idx == 3 and out[1] in _DIRECTIONAL_FULL_WORDS))
+            if prev_is_ave and len(token) == 1:
+                out.append(token)
+            else:
+                out.append(DIRECTIONAL_MAP[token])
             continue
         if token in STREET_SUFFIX_MAP and idx > 0:
+            # Leading `ST` immediately after house number (or pre-directional) followed by another
+            # street suffix later in the address is `SAINT` (e.g. `100 ST CHARLES AVE`), not `STREET`.
+            if (
+                token == 'ST'
+                and (idx == 1 or (idx == 2 and out and out[-1] in _DIRECTIONAL_FULL_WORDS))
+                and any(
+                    (t in STREET_SUFFIX_MAP or t in STREET_SUFFIX_WORDS)
+                    for t in tokens[idx + 1 : min(n_toks, idx + 5)]
+                )
+            ):
+                out.append('SAINT')
+                continue
             out.append(STREET_SUFFIX_MAP[token])
             continue
         out.append(token)
@@ -646,7 +686,12 @@ def normalize_mailing_address(address: str) -> str:
     norm = re.sub(r"\s+", " ", norm)      # Collapse spaces
 
     # 2. Drop country noise and normalize zip+4 before the tail is parsed
-    norm = re.sub(r'\b(?:UNITED STATES OF AMERICA|UNITED STATES|USA|US)\b', ' ', norm)
+    #    Keep `US` when part of a numbered highway/route (`100 US HIGHWAY 2`, `100 US RT 7`).
+    norm = re.sub(
+        r'\b(?:UNITED STATES OF AMERICA|UNITED STATES|USA)\b|\bUS\b(?!\s+(?:HIGHWAY|HWY|ROUTE|RT|RTE|\d))',
+        ' ',
+        norm,
+    )
     norm = re.sub(r'\b(\d{5})-\d{4}\b', r'\1', norm)
     norm = re.sub(r"\s+", " ", norm).strip()
 
@@ -728,13 +773,21 @@ def normalize_mailing_address_coarse(address: str) -> str:
 
     # 4. Strip a stray unit number left behind by CSV field splits, e.g.
     #    '399 WHALLEY AVENUE 103 NEW HAVEN' -> '399 WHALLEY AVENUE NEW HAVEN'.
-    #    Only fires when the number directly follows a street-type word, so
-    #    numbered streets ('1650 EAST 15 STREET') keep their ordinal.
+    #    Only fires when the number directly follows a non-highway street-type word,
+    #    so numbered streets ('1650 EAST 15 STREET'), highways ('100 US HIGHWAY 93'),
+    #    and county/state roads ('100 COUNTY ROAD 42') never lose their route number.
     if not is_po_box:
-        suffixes = '|'.join(sorted(STREET_SUFFIX_WORDS))
+        suffixes = '|'.join(sorted(STREET_SUFFIX_WORDS - _NUMBERED_THOROUGHFARE_WORDS))
+        def _strip_stray_unit(m: re.Match) -> str:
+            suf = m.group(1)
+            if suf == 'ROAD':
+                prefix_toks = norm[: m.start()].strip().split()
+                if prefix_toks and prefix_toks[-1] in _NUMBERED_ROAD_PREFIXES:
+                    return m.group(0)
+            return suf
         norm = re.sub(
             rf'\b({suffixes})\b(?:\s+(?:{UNIT_MARKER_PATTERN})\b)?(?:\s+\d{{1,5}}[A-Z]?\b)?',
-            r'\1',
+            _strip_stray_unit,
             norm,
         )
 
@@ -752,19 +805,22 @@ def normalize_mailing_address_coarse(address: str) -> str:
     return norm
 
 
-_POSTAL_STREET_ANCHOR_WORDS = STREET_SUFFIX_WORDS | {
-    'MALL', 'BROADWAY', 'COMMONS', 'CONCOURSE', 'TURNPIKE', 'HIGHWAY', 'PARKWAY',
+_POSTAL_STREET_ANCHOR_WORDS = (STREET_SUFFIX_WORDS - {'MOUNT'}) | {
+    'MALL', 'BROADWAY', 'COMMONS', 'CONCOURSE', 'TURNPIKE', 'HIGHWAY', 'PARKWAY', 'ROUTE',
 }
-_POSTAL_STREET_PREFIX_RE = re.compile(
-    rf'^(\d+[A-Z0-9-]*\s+(?:[A-Z0-9]+\s+){{0,4}}?(?:{"|".join(sorted(_POSTAL_STREET_ANCHOR_WORDS, key=len, reverse=True))}))\b'
-)
+_HOUSE_NUMBER_TOKEN_RE = re.compile(r'^\d+[A-Z0-9-]*$')
+_ROUTE_ID_TOKEN_RE = re.compile(r'^(?:\d+[A-Z]?|[A-Z]{1,2})$')
 
 
 def extract_postal_street_zip_key(address: str) -> str:
     """Return a city-typo & postal-neighborhood-invariant `(coarse_street_or_pobox||zip5)` key
     when a valid 5-digit ZIP code is present (e.g. `'39 BRIGHTON AVE, ALLSTON, MA 02134'` and
     `'39 BRIGHTON AV, BOSTON, MA 02134-2013'` -> `'39 BRIGHTON AVENUE||02134'`; `'PO BOX 31236
-    SALT LAKE CTY 84131'` -> `'PO BOX 31236||84131'`). Returns `''` when no 5-digit ZIP exists."""
+    SALT LAKE CTY 84131'` -> `'PO BOX 31236||84131'`). Preserves lettered avenues (`AVENUE A`
+    vs `AVENUE B`, `10530 S AVENUE E` vs `F`), numbered highways/county roads (`US HIGHWAY 2`
+    vs `93`, `COUNTY ROAD 12` vs `42`), double-suffix streets (`COURT STREET` vs `COURT SQUARE`),
+    and post-directional quadrants (`K STREET NORTHWEST` vs `K STREET NORTHEAST`).
+    Returns `''` when no 5-digit ZIP exists or the street cannot be cleanly anchored."""
     fine = normalize_mailing_address(address)
     if not fine:
         return ""
@@ -773,6 +829,10 @@ def extract_postal_street_zip_key(address: str) -> str:
         return ""
     zip5 = m_zip.group(1)
     body = fine[: m_zip.start()].strip()
+    # Peel trailing 2-letter USPS state code so state tokens are never misread as route letters.
+    body_toks_raw = body.split()
+    if len(body_toks_raw) >= 2 and body_toks_raw[-1] in US_STATE_CODES:
+        body = " ".join(body_toks_raw[:-1])
     body = re.sub(r'\s*#\s*[A-Z0-9][A-Z0-9-]*', ' ', body).replace('#', ' ')
     body = re.sub(r'\b(\d+)(?:ST|ND|RD|TH)\b', r'\1', body)
     body = re.sub(r'\s+', ' ', body).strip()
@@ -781,9 +841,53 @@ def extract_postal_street_zip_key(address: str) -> str:
     if m_po:
         key = f"{m_po.group(1)}||{zip5}"
     else:
-        m_st = _POSTAL_STREET_PREFIX_RE.match(body)
-        if m_st:
-            key = f"{m_st.group(1)}||{zip5}"
+        tokens = body.split()
+        if len(tokens) >= 3 and _HOUSE_NUMBER_TOKEN_RE.match(tokens[0]):
+            anchor_idx = -1
+            for i in range(1, min(len(tokens), 7)):
+                if tokens[i] in _POSTAL_STREET_ANCHOR_WORDS:
+                    anchor_idx = i
+                    break
+            if anchor_idx >= 1:
+                # Double-suffix street names (`100 COURT SQUARE`, `100 COURT STREET`, `100 CIRCLE DRIVE`):
+                # when the first anchor sits directly at idx 1 (or idx 2 after a pre-directional) and is
+                # immediately followed by another anchor word, advance to the true trailing suffix.
+                if (
+                    (anchor_idx == 1 or (anchor_idx == 2 and tokens[1] in _DIRECTIONAL_FULL_WORDS))
+                    and anchor_idx + 1 < len(tokens)
+                    and tokens[anchor_idx + 1] in _POSTAL_STREET_ANCHOR_WORDS
+                ):
+                    anchor_idx += 1
+
+                end_idx = anchor_idx
+                anchor_tok = tokens[anchor_idx]
+
+                # Lettered/named Avenues (`100 AVENUE A`, `10530 SOUTH AVENUE F`, `1234 AVENUE U`)
+                if anchor_tok == 'AVENUE' and (
+                    anchor_idx == 1 or (anchor_idx == 2 and tokens[1] in _DIRECTIONAL_FULL_WORDS)
+                ):
+                    if anchor_idx + 1 < len(tokens):
+                        nxt = tokens[anchor_idx + 1]
+                        if nxt == 'OF':
+                            return ""
+                        if len(nxt) == 1 or nxt in _DIRECTIONAL_FULL_WORDS or nxt.isdigit():
+                            end_idx = anchor_idx + 1
+                # Numbered / lettered highways, routes, and county/state/township roads
+                elif anchor_tok in {'HIGHWAY', 'ROUTE', 'TURNPIKE', 'PARKWAY', 'PIKE'} or (
+                    anchor_tok == 'ROAD' and anchor_idx >= 2 and tokens[anchor_idx - 1] in _NUMBERED_ROAD_PREFIXES
+                ):
+                    if anchor_idx + 1 < len(tokens) and _ROUTE_ID_TOKEN_RE.match(tokens[anchor_idx + 1]):
+                        end_idx = anchor_idx + 1
+
+                # Preserve post-directional quadrants (`1200 K STREET NORTHWEST`, `100 PARK AVENUE SOUTH`,
+                # `100 1ST AVENUE NORTH`, `100 US HIGHWAY 93 NORTH`) so opposite quadrants never collide.
+                if end_idx + 1 < len(tokens) and tokens[end_idx + 1] in _DIRECTIONAL_FULL_WORDS:
+                    end_idx += 1
+
+                street_toks = tokens[: end_idx + 1]
+                # Reject degenerate 2-token bare suffixes like `100 AVENUE` or `100 STREET` (no street name).
+                if not (len(street_toks) == 2 and street_toks[1] in _POSTAL_STREET_ANCHOR_WORDS and street_toks[1] != 'BROADWAY'):
+                    key = f"{' '.join(street_toks)}||{zip5}"
     if key:
         aliases = get_learned_address_aliases()
         if aliases and key in aliases:
@@ -977,7 +1081,16 @@ def get_email_match_key(email: str, email_rules: dict) -> str | None:
     except ValueError:
         return None
 
-    # Check rules
+    # Check exact full-email block first (so a third-party CPA/attorney gmail
+    # can be blocked without blocking gmail.com as a whole), then domain rules.
+    if email_rules.get(email) == 'registrar':
+        return None
+    learned_emails = get_learned_third_party_emails()
+    if learned_emails and (email in learned_emails or domain in learned_emails):
+        return None
+    learned_allow_emails = get_learned_email_allowlist()
+    if learned_allow_emails and (email in learned_allow_emails or domain in learned_allow_emails):
+        return email if email in learned_allow_emails else domain
     rule = email_rules.get(domain)
     if rule == 'registrar': return None
     if rule == 'custom': return domain
@@ -1007,8 +1120,11 @@ def get_email_match_key(email: str, email_rules: dict) -> str | None:
 # '1120 COLLEGE AVE HDFC', '3024 CHURCH AVENUE LLC') from matching institutional
 # keywords like CHURCH, COLLEGE, UNIVERSITY, or TEMPLE.
 _STREET_FOLLOWER_LOOKAHEAD = (
-    r"(?!\s+(?:AVE|AVENUE|ST\b(?!\s+[A-Z]{3})|STREET|RD|ROAD|PL|PLACE|BLVD|BOULEVARD|"
-    r"DR|DRIVE|LN|LANE|WAY|CT|COURT|TER|TERRACE|PKWY|PARKWAY)\b)"
+    r"(?!\s+(?:AVE|AVENUE|STREET|RD|ROAD|PL|PLACE|BLVD|BOULEVARD|"
+    r"DR|DRIVE|LN|LANE|WAY|CT|COURT|TER|TERRACE|PKWY|PARKWAY|"
+    r"ST(?:[.,]?\s+(?:LLC|LP|LLP|INC|CORP|LTD|CO|REALTY|PROPERTIES|PROPERTY|HOLDINGS|HOLDING|"
+    r"PARTNERS|ASSOCIATES|APARTMENTS|GROUP|TRUST|DEVELOPMENT|MANAGEMENT|INVESTMENTS|"
+    r"ENTERPRISES|EQUITY|VENTURES|HOMES|PLAZA|CENTER|BUILDING|TOWER|CONDO|UNIT|\d)|\.?$))\b)"
 )
 
 THIRD_PARTY_ENTITY_REGEX_BODY = (
@@ -1074,7 +1190,11 @@ THIRD_PARTY_ENTITY_REGEX_BODY = (
     r"CHAMPION\s+MORTGAGE|FINANCE\s+OF\s+AMERICA\s+REVERSE|"
     r"CORELOGIC|LERETA|SAFEGUARD\s+PROPERTIES|GUARDIAN\s+ASSET\s+MANAGEMENT|"
     r"REO\s+MANAGEMENT\s+SOLUTIONS|ALTISOURCE|CYPREXX|H\s*&\s*R\s+BLOCK|"
-    r"PROPARK\s+AMERICA|SP\s+PLUS\s+CORPORATION|LAZ\s+PARKING|IMPARK|ACE\s+PARKING|CENTRAL\s+PARKING|"
+    r"NEW\s+DIRECTION\s+(?:IRA|TRUST)|EQUITY\s+TRUST\s+CO(?:MPANY)?|ENTRUST\s+GROUP|"
+    r"PENSCO\s+TRUST|MILLENNIUM\s+TRUST|FORGE\s+TRUST|STRATA\s+TRUST|ADVANTA\s+IRA|"
+    r"KINGDOM\s+TRUST|MADISON\s+TRUST|PROVIDENT\s+TRUST\s+GROUP|"
+    r"PARKWAY\s+B(?:A?N)?K(?:\s+(?:&|AND)\s+TRUST|\s+FACILITIES)?|CHICAGO\s+TITLE\s+LAND\s+TRUST|"
+    r"PROPARK\s+AMERICA|SP\s+PLUS\s+CORPORATION|LAZ\s+PARKING|IMPARK|IMPERIAL\s+PARKING|ACE\s+PARKING|CENTRAL\s+PARKING|"
     r"COM\s*ED|COMMONWEALTH\s+EDISON|HOME\s+DEPOT\s+U\.?S\.?A\.?|LOWES\s+HOME\s+CENTERS?|"
     r"WAL-?MART\s+(?:STORES|REAL\s+ESTATE)|AMERICAN\s+TOWER\s+(?:CORP|ASSET|INVESTMENT)|"
     r"CROWN\s+CASTLE|SBA\s+COMMUNICATIONS)\b|"
@@ -1092,6 +1212,8 @@ THIRD_PARTY_ENTITY_REGEX_BODY = (
     r"^(?:C\s*/?\s*O\s+)?C\.?\s*T\.?\s+CORPORATION\b|"
     # 5. Government, Housing Authorities/Commissions, Land Banks, Transit, Utilities, Universities, Hospitals & Religious
     r"\b(?:UNITED\s+STATES\s+OF\s+AMERICA|U\.?\s*S\.?\s+GOVERNMENT|US\s+GOVERNMENT|"
+    r"USA\s+IN\s+TRUST|U\.?\s*S\.?\s*A\.?\s+IN\s+TRUST|UNITED\s+STATES(?:\s+OF\s+AMERICA)?\s+IN\s+TRUST|"
+    r"INDIAN\s+RESERVATION|CONFEDERATED\s+[A-Z&\s]{1,40}TRIBES?|TRIBAL\s+(?:COUNCIL|HOUSING|LAND|NATION)|"
     r"SECRETARY\s+OF\s+HOUSING|DEPT\s+OF\s+HOUSING\s+AND\s+URBAN|DEPARTMENT\s+OF\s+HOUSING\s+AND\s+URBAN|"
     r"SECRETARY\s+OF\s+VETERANS|DEPT\s+OF\s+VETERANS\s+AFFAIRS|"
     r"DISTRICT\s+OF\s+COLUMBIA|NYC\s+HPD|NYCHA|NEW\s+YORK\s+CITY\s+HOUSING|"
@@ -1099,7 +1221,7 @@ THIRD_PARTY_ENTITY_REGEX_BODY = (
     r"DAMP/?TIL|DAMPTIL|NEIGHBORHOOD\s+RESTORE|NEIGHBORHOOD\s+RENEWAL|"
     r"RESTORING\s+COMMUNITIES|RESTORING\s+URBAN\s+NEIGHBORHOODS|PRESERVING\s+CITY\s+NEIGHBORHOODS|"
     r"CONNECTICUT\s+STATE|NEW\s+YORK\s+STATE|"
-    r"HOUSING\s+AUTH(?:ORITY)?|CHICAGO\s+HSING\s+AUTH(?:ORTI|ORITY)?|HOUSING\s+COMMISSION|PUBLIC\s+HOUSING\s+(?:AUTH|ADMIN|COMM|AGENCY|CORP)|MINNEAPOLIS\s+PUBLIC\s+HOUSING|MPHA|PHADC|NRHA|RRHA|PRHA|ARHA|CRHA|"
+    r"(?:HOUSING|HSG\.?|HSING)\s+AUTH(?:ORITY|ORTI)?|HOUSING\s+COMMISSION|PUBLIC\s+HOUSING\s+(?:AUTH|ADMIN|COMM|AGENCY|CORP)|MINNEAPOLIS\s+PUBLIC\s+HOUSING|MPHA|PHADC|NRHA|RRHA|PRHA|ARHA|CRHA|"
     r"LAND\s+BANK|REDEVELOPM?E?NT\s+AUTH(?:ORITY|OR)?|REDVLPMNT\s+AUTH(?:ORITY|OR)?|REDEVLPMNT\s+AUTH(?:ORITY|OR)?|REDEVELOPMENT\s+COMMISSION|VIRGINIA\s+BEACH\s+COMMUNITY\s+ETC|"
     r"HIGHWAY\s+COMM(?:ISSION)?|STATE\s+HWY\s+COMM(?:ISSION)?|(?:STATE|ARKANSAS\s+STATE)\s+HIGHWAY|STATE\s+HIGHWAY\s+ADMIN(?:ISTRATION)?|VDOT|FORESTRY\s+COMM(?:ISSION)?|GAME\s+(?:AND|&)\s+FISH|CORPS\s+OF\s+ENGINEERS|"
     r"BOARD\s+OF\s+(?:COUNTY\s+)?SUPERVISORS|BD\s+(?:OF\s+)?CO(?:UNTY)?\s+SUPERVISORS|SANITARY\s+DIST(?:RICT)?|"
@@ -1114,9 +1236,12 @@ THIRD_PARTY_ENTITY_REGEX_BODY = (
     r"(?:US|U\.?\s*S\.?)\s+(?:GENERAL\s+SERV(?:ICES)?\s+ADM(?:IN(?:ISTRATION)?)?|NATIONAL\s+FOREST|FOREST\s+SERVICE|FISH\s+(?:AND|&)\s+WILDLIFE)|"
     r"U\.?\s*S\.?\s*A\.?\s*-\s*(?:FOREST\s+SERVICE|BLM|CORPS\b)|BUREAU\s+OF\s+LAND\s+MANAGEMENT|NATIONAL\s+FOREST|"
     r"SUBURBAN\s+IMPROVEMENT\s+DIST(?:RICT)?|JAMES\s+CITY\s+COUNTY|SERVICE\s+AUTHORITY|"
+    r"FOREST\s+PRESERVE(?:\s+DIST(?:RICT)?)?|BOARD\s+OF\s+EDUCATION|BD\.?\s+OF\s+ED(?:UCATION|\.)?|"
+    r"(?:BOARD|BD\.?)\s+OF\s+SCHOOL\s+TRUSTEES?|SCHOOL\s+DIST(?:RICT)?|SCH\s+DIST|COMM\s+CONS\s+S\.?D\.?|"
+    r"STATE\s+BANK\s+OF\s+[A-Z]+|CHGO\s+(?:TR|TRST|TITLE)|CHICAGO\s+(?:TR(?:UST)?\s+CO(?:MPANY)?|LAND\s+TRUST)|EQUITY\s+TRUST\s+(?:CO(?:MPANY)?|CUSTODIAN)|BEVERLY\s+(?:B\s*&\s*T|BK\s*&\s*TRST)|"
     r"WMATA|WASHINGTON\s+METROPOLITAN\s+AREA\s+TRANSIT|SEPTA|MBTA|NJ\s+TRANSIT|NEW\s+JERSEY\s+TRANSIT|"
     r"MASS(?:ACHUSETTS)?\s+BAY\s+TRANS(?:P(?:ORTATION)?)?\s+AUTH(?:ORITY)?|TRANSIT\s+ADMIN(?:ISTRATION)?|MDOT|RTA\s*/\s*METRA|"
-    r"AMTRAK|NATIONAL\s+RAILROAD|RAILROAD\s+PASSENGER|RAILROAD\s+MUSEUM|CSX\s+TRANSPORTATION|NORFOLK\s+SOUTHERN|CONRAIL|METRO[- ]NORTH|CENTRAL\s+LINES\s+LLC|BOSTON\s*(?:&|AND)\s*MAINE\s+CORP|PAN\s+AM\s+(?:SOUTHERN|RAILWAYS)|"
+    r"AMTRAK|NATIONAL\s+RAILROAD|RAILROAD\s+PASSENGER|RAILROAD\s+MUSEUM|CSX\s+TRANSPORTATION|NORFOLK\s+SOUTHERN|CONRAIL|CONSOLIDATED\s+RAIL|METRO[- ]NORTH|CENTRAL\s+LINES\s+LLC|BOSTON\s*(?:&|AND)\s*MAINE\s+CORP|PAN\s+AM\s+(?:SOUTHERN|RAILWAYS)|"
     r"TRANSIT\s+AUTHOR(?:ITY)?|TRANSPORTATION\s+AUTH(?:ORITY)?|TRANSIT\s+AGENCY|PORT\s+AUTHORITY|TURNPIKE\s+AUTH(?:ORITY|OR)?|HIGHWAY\s+AUTHORITY|CONVENTION\s+CENTER\s+AUTH(?:ORITY)?|"
     r"INTERNATIONAL\s+BRIDGE\s+CO|RAILROAD\s+COMPANY|RAILWAY\s+COMPANY|"
     r"POTOMAC\s+ELECTRIC\s+POWER|PEPCO|BALTIMORE\s+GAS|BALTO\.?\s+GAS|GREEN\s+MOUNTAIN\s+POWER|"
@@ -1125,20 +1250,45 @@ THIRD_PARTY_ENTITY_REGEX_BODY = (
     r"NATIONAL\s+GRID|NIAGARA\s+MOHAWK|DTE\s+ENERGY|DTE\s+ELECTRIC|DETROIT\s+EDISON|"
     r"CONSUMERS\s+ENERGY|COMMONWEALTH\s+EDISON|XCEL\s+ENERGY|NORTHERN\s+STATES\s+POWER|"
     r"FLORIDA\s+POWER|PECO\s+ENERGY|PUBLIC\s+SERVICE\s+ELECTRIC|PSE&G|"
+    r"VERIZON|AIRTOUCH\s+CELLULAR|FRONTIER\s+COMMUNICATIONS|SOUTHERN\s+NEW\s+ENGLAND\s+TELEPHONE|COMCAST|CHARTER\s+COMMUNICATIONS|COX\s+COMMUNICATIONS|CENTURYLINK|AT\s*&\s*T|"
+    r"WASTE\s+MANAGEMENT|STEWART'?S\s+SHOPS|7\s*-?\s*ELEVEN|SHEETZ|THRIFTY\s+OIL|VACATION\s+RESORTS?|TIMESHARE|SECU\*RE|"
+    r"FUNERAL\s+(?:HOME|SERVICES?|&\s*CREMATION)|CREMATION\s+SERVICES?|"
     r"WASHINGTON\s+GAS\s+LIGHT|AQUARION|WATER\s+AUTHORITY|SEWER\s+AUTHORITY|WATER\s+(?:AND|&|\+)\s+SEWER\s+COMM(?:ISSION)?|CONSERVATION\s+COMM(?:ISSION)?|"
     r"ELECTRIC\s+COMPANY|POWER\s+COMPANY|POWER\s+CORP(?:ORATION)?|LIGHT\s+AND\s+POWER|GAS\s+(?:AND|&)\s+ELECTRIC|"
-    r"MARATHON\s+PETROLEUM|SUNOCO|GLOBAL\s+MONTELLO|ALLIANCE\s+ENERGY|"
-    r"WEYERHAEUSER|DELTIC\s+TIMBER|POTLATCH\s+(?:CORP|FOREST|TIMBER)|GREEN\s+BAY\s+PACKAGING|"
-    r"(?:LESTER|TATE)\s+LUMBER|ROANOKE\s+TIMBERLANDS|TAMARACK\s+TIMBERCO|FOREST\s+INVEST(?:MENT)?\s+REIT|TIMBER\s+OPPORTUNIT(?:Y|IES)|CF\s+HIGHLANDS|"
+    r"MARATHON\s+PETROLEUM|SUNOCO|GLOBAL\s+MONTELLO|ALLIANCE\s+ENERGY|KWIK\s+TRIP|"
+    r"WEYERHAEUSER|DELTIC\s+TIMBER|POTLATCH(?:DELTIC)?\s+(?:CORP|FOREST|TIMBER|LAND)?|GREEN\s+BAY\s+PACKAGING|"
+    r"(?:LESTER|TATE|CALION)\s+LUMBER|LUMBER\s+CO(?:MPANY)?|TIMBERLANDS\s+(?:LLC|LP|INC|CO|COMPANY)|TIMBER\s+(?:CO|COMPANY|LLC|LP)|"
+    r"ROANOKE\s+TIMBERLANDS|TAMARACK\s+TIMBERCO|FOREST\s+INVEST(?:MENT)?\s+REIT|TIMBER\s+OPPORTUNIT(?:Y|IES)|CF\s+HIGHLANDS|"
     r"CNX\s+GAS|PENN\s+VIRGINIA\s+OPERATING|BLUE\s+ROCK\s+RESOURCES|DOMINION\s+ENERGY|VIRGINIA\s+ELECTRIC\s+(?:AND|&)\s+POWER|APPALACHIAN\s+POWER|ENTERGY|TELEPHONE\s+OPERATING\s+CO|"
     r"COLONIAL\s+WILLIAMSBURG\s+FOUNDATION|ATLANTIC\s+SHORES\s+COOPERATIVE|"
+    r"COUNTRY\s+DAY\s+SCHOOL|RECTORY\s+SCHOOL|DAY\s+SCHOOL|SCHOOL,?\s+(?:CORP|CORPORATION|INC|INCORPORATED)|"
+    r"(?:YACHT|COUNTRY|GOLF|BEACH|TENNIS|SOCIAL|ATHLETIC|BOAT|LIONS|ELKS|MASONIC)\s+CLUB|"
+    r"BOYS\s*(?:&|AND)\s*GIRLS\s+CLUB|FISH\s+(?:AND|&)\s+GAME\s+CLUB|"
+    r"RED\s+CROSS|UNITED\s+WAY|GOODWILL\s+INDUSTRIES|LEGAL\s+AID|RELIEF\s+SERVICES|"
+    r"NATURAL\s+AREAS?\s+FUND|NEIGHBORSPACE|PROJECT\s+FOR\s+PRIDE\s+IN\s+LIVING|"
+    r"COMMUNITY\s+LAND\s+TRUST|HOUSING\s+TRUST|MUTUAL\s+HOUSING|HOUSING\s+FOUNDATION|"
+    r"HOUSING\s+DEVELOPMENT\s+FUND(?:\s+CORP(?:ORATION)?|\s+CO(?:MPANY)?)?|"
+    r"(?:COMMUNITY|TENANTS)\s+DEV(?:ELOPMENT)?\s+CORP(?:ORATION)?|"
+    r"(?:AGRICULTURAL\s+)?FAIR\s+(?:SOCIETY|INC)|(?:HISTORICAL|HUMANE|AGRICULTURAL|MEDICAL|BAR)\s+SOCIETY|"
+    r"CO-?OP(?!\s*,?\s*(?:LLC|L\.?L\.?C\.?)\b)|CO-?OPERATIVE\s+(?:HOUSING|CORP|CORPORATION|INC|INCORPORATED|ASSN|ASSOCIATION)|OWNERS\s+CORPORATION|"
+    r"HOUSING\s+COALITION|HOUSING\s+OPPORTUNITIES|HABITAT\s+FOR\s+HUMANITY|"
+    r"(?:BUSINESS|OFFICE|INDUSTRIAL|PROFESSIONAL|SHOPPING|COMMERCIAL|GATEWAY|MEDICAL)\s+(?:CENTER|PARK)\s+[A-Z0-9\s-]{0,16}ASS(?:OC|OCIATION|N)|"
+    r"LAW\s+(?:GROUP|FIRM|OFFICES?)|"
+    r"ESTATES\s+ASS(?:OC|OCIATION|N)|COUNCIL\s+OF\s+UNIT\s+OWNERS|CONDOMINIUM\s+BUILDING|SEE\s+INDIVIDUAL\s+UNIT\s+RECORDS|"
+    r"CONDOMINIUMS?,?\s+(?:INC(?:ORPORATED)?|CORP(?:ORATION)?|ASSN|ASSOCIATION|COUNCIL|OF\b)|"
+    r"1031\s+EXCHANGES?|SAFE\s+HARBOR\s+EXCHANGES?|EXCHANGE\s+ACCOMMODATOR|ASSET\s+PRESERVATION|IPX1031|"
+    r"RED\s+STONE\s+EQUITY|NATIONAL\s+EQUITY\s+FUND|BOSTON\s+CAPITAL\s+(?:TAX|CORPORATE|INVESTORS)|"
+    r"BOSTON\s+FINANCIAL|ENTERPRISE\s+COMMUNITY\s+(?:INVESTMENT|PARTNERS)|HUDSON\s+HOUSING\s+CAPITAL|"
+    r"R4\s+CAPITAL|CINNAIRE|THE\s+COMMUNITY\s+BUILDERS|GLENDOWER\s+(?:GROUP|MCCONAUGHY|FARNAM)|"
+    r"TAX\s+CREDIT\s+(?:FUND|PARTNERS|INVESTORS|EQUITY|MANAGER|CAPITAL)|"
     r"P\.?O\.?A\.?|BVPOA|FFBCCI|H\.?O\.?A\.?|(?:(?:PROPERTY|HOME|UNIT|RESORT|VILLAGE|CONDO(?:MINIUM)?|TOWNHOUSE|TOWNHOME|LOT)\s+)?OWNERS?\s+ASS(?:OC|OCIATION|N)|HOME\s*OWNERS?\s+ASS(?:OC|OCIATION|N)|PARKS\s*(?:&|AND)\s*REC(?:REATION)?\s+ASS(?:OC|OCIATION|N)|COMMUNITY\s+CLUB|"
     r"CONDO(?:MINIU?N?M)?\s+(?:OWNERS?\s+)?ASS(?:OC|OCIATION|N)|CONDO(?:MINIU?N?M)\s+TRUST|COMMUNITY\s+(?:CONDO(?:MINIUM)?\s+)?ASS(?:OC|OCIATION|N)|LEISURE\s+VIL(?:LAGE)?\s+[A-Z]?\s*ASS(?:OC|OCIATION|N)|THE\s+VILLAGES\s+ASS(?:OC|OCIATION|N)|"
     r"INSTITUTE\s+OF\s+TECHNOLOGY|POLYTECHNIC\s+INSTITUTE|"
     r"SEMINARY|GENERAL\s+HOSPITAL|HOSPITAL\s+CORP|"
     r"HEALTH\s+SYSTEMS?|MEDICAL\s+CENTER|MEDICAL\s+SYSTEM|JOHNS\s+HOPKINS|"
-    r"ARCHDIOCESE|DIOCESE|ARCHBISHOP|CATHOLIC\s+BISHOP|ROMAN\s+CATH(?:OLIC)?|ARCH\s+OF\s+BOS|CARMELITE\s+CONVENT|CATHEDRAL|SYNAGOGUE|SALVATION\s+ARMY|ARMY\s+SALVATION)\b|"
-    rf"\b(?:UNIVERSITY|COLLEGE|CHURCH|TEMPLE|HOSPITAL){_STREET_FOLLOWER_LOOKAHEAD}\b|"
+    r"ARCHDIOCESE|DIOCESE|ARCHBISHOP|CATHOLIC\s+BISHOP|ROMAN\s+CATH(?:OLIC)?|ARCH\s+OF\s+BOS|CARMELITE\s+CONVENT|CATHEDRAL|SYNAGOGUE|CONGREGATION|SALVATION\s+ARMY|ARMY\s+SALVATION)\b|"
+    r"\b(?:A\s+)?CONDOMINIUM(?:\s+(?:INC(?:ORPORATED)?|CORP(?:ORATION)?|TRUST|COUNCIL|ASSOC[A-Z]*|NO\.?\s*\d+|PHASE\s*\d+|SECTION\s*\d+|MASTER|COMMON))?\s*$|\bCONDO\s*$|"
+    rf"\b(?:UNIVERSITY|UNIV|COLLEGE|CHURCH|TEMPLE|HOSPITAL){_STREET_FOLLOWER_LOOKAHEAD}\b|"
     r"\bUNIV\s+OF\s+[A-Z]|"
     r"^(?:RAILROAD|MASSACHUSETTS\s+BAY|U\.?\s*S\.?\s*A?\.?|US\s+US|HUD|CEMETERY\s*\.?)$|\bCOA$|"
     r"\b[A-Z][A-Z\s.-]{1,28},\s*(?:TOWN|CITY|COUNTY|COMMONWEALTH|STATE|BOROUGH|VILLAGE)\s+O(?:F)?\b|"
@@ -1159,15 +1309,35 @@ THIRD_PARTY_INSTITUTIONAL_SQL_PATTERN = "(?n)" + THIRD_PARTY_ENTITY_REGEX_BODY.r
 def is_excluded_third_party_entity(name: str | None) -> bool:
     """Return True if `name` is a non-landlord 3rd party (bank, mortgage/RMBS trustee,
     loan servicer, tax processor, commercial registered agent, utility, transit/railroad,
-    government/housing authority, university, hospital, or religious institution) that
-    must never anchor or bridge landlord networks.
+    government/housing authority, university, hospital, religious institution, or a
+    source-verified `non_landlord_entity_block` learned rule) that must never anchor
+    or bridge landlord networks.
     """
     if not name:
         return False
     cleaned = " ".join(str(name).upper().strip().split())
     if not cleaned:
         return False
-    return bool(THIRD_PARTY_ENTITY_RE.search(cleaned))
+    allowlisted = get_learned_entity_allowlist()
+    if allowlisted:
+        if cleaned in allowlisted:
+            return False
+        norm_b = normalize_business_name(cleaned)
+        if norm_b and norm_b in allowlisted:
+            return False
+    if THIRD_PARTY_ENTITY_RE.search(cleaned):
+        return True
+    learned = get_learned_non_landlord_entities()
+    if learned:
+        if cleaned in learned:
+            return True
+        norm_b = normalize_business_name(cleaned)
+        if norm_b and norm_b in learned:
+            return True
+    return False
+
+
+register_reload_callback(is_excluded_third_party_entity.cache_clear)
 
 
 # Curated street-address stems of major national mortgage servicers, tax-escrow
@@ -1194,6 +1364,11 @@ KNOWN_THIRD_PARTY_HUB_SUBSTRINGS = frozenset({
     "4600 SOUTH ULSTER STREET", "4600 S ULSTER ST",
     # Property-tax & escrow processors
     "1 CORELOGIC WAY",
+    "1000 GAMMA DRIVE", "1000 GAMMA DR",
+    "6850 MILLER ROAD", "6850 MILLER RD",
+    "14806 DETROIT AVENUE", "14806 DETROIT AVE",
+    "10 SOUTH LA SALLE STREET", "10 S LA SALLE STREET", "10 S LA SALLE ST",
+    "10 SOUTH LASALLE STREET", "10 S LASALLE STREET", "10 S LASALLE ST",
     "3001 HACKBERRY ROAD", "3001 HACKBERRY RD",
     "4 FIRST AMERICAN WAY",
     "1123 SOUTH PARKVIEW DRIVE", "1123 S PARKVIEW DR",
@@ -1216,6 +1391,7 @@ KNOWN_THIRD_PARTY_HUB_SUBSTRINGS = frozenset({
     "7901 4TH STREET NORTH", "7901 4TH ST N",
     "1967 WEHRLE DRIVE", "1967 WEHRLE DR",
     "80 STATE STREET", "80 STATE ST",
+    "80 STATE STREET", "80 STATE ST",
     "90 STATE STREET", "90 STATE ST",
     "418 BROADWAY",
     "28 LIBERTY STREET", "28 LIBERTY ST",
@@ -1235,6 +1411,7 @@ KNOWN_THIRD_PARTY_HUB_SUBSTRINGS = frozenset({
     "11098 BISCAYNE BOULEVARD", "11098 BISCAYNE BLVD",
     # Known UPS Store / PMB / lender / IRA custodian / 3rd-party management hubs uncovered in live city audits
     "1 EQUITY WAY",
+    "1070 WEST CENTURY DRIVE", "1070 W CENTURY DR",
     "7901 FISH POND ROAD", "7901 FISH POND RD",
     "1524 BROOKHOLLOW DRIVE", "1524 BROOKHOLLOW DR",
     "7900 EAST UNION AVENUE", "7900 E UNION AVE",
@@ -1248,7 +1425,7 @@ KNOWN_THIRD_PARTY_HUB_SUBSTRINGS = frozenset({
     "PO BOX 80615",
     "PO BOX 35370",
     "PO BOX 1159 DEERFIELD", "200 WILMOT ROAD", "200 WILMOT RD", "104 WILMOT ROAD", "104 WILMOT RD",
-    "1 CVS DRIVE", "1 CVS DR",
+    "1 CVS DRIVE", "1 CVS DR", "ONE CVS DRIVE", "ONE CVS DR",
     "1 DAVE THOMAS BOULEVARD", "1 DAVE THOMAS BLVD",
     "PO BOX 2198 MEMPHIS",
     "PO BOX 2710 ROANOKE", "5008 AIRPORT ROAD", "5008 AIRPORT RD",
@@ -1263,9 +1440,18 @@ KNOWN_THIRD_PARTY_HUB_SUBSTRINGS = frozenset({
     "2202 NORTH WEST SHORE", "2202 N WEST SHORE",
     "1 HORMEL PLACE", "1 HORMEL PL",
     "5010 CELL TOWER",
+    # City-qualified verified CMRA / virtual-mailbox / registered-agent / law-firm towers
+    "1716 CAPITOL AVENUE CHEYENNE", "1716 CAPITOL AVE CHEYENNE",
+    "1602 FRANKFORD AVENUE PHILADELPHIA", "1602 FRANKFORD AVE PHILADELPHIA",
+    "3948 3RD STREET SOUTH JACKSONVILLE", "3948 3 STREET SOUTH JACKSONVILLE", "3948 3RD ST S JACKSONVILLE", "3948 THIRD STREET SOUTH JACKSONVILLE",
+    "1001 SOUTH MAIN STREET KALISPELL", "1001 S MAIN ST KALISPELL",
+    "1001 FANNIN STREET HOUSTON", "1001 FANNIN ST HOUSTON",
+    "800 CAPITOL STREET HOUSTON", "800 CAPITOL ST HOUSTON",
+    "1 INDEPENDENT DRIVE JACKSONVILLE", "1 INDEPENDENT DR JACKSONVILLE",
 })
 
 _PMB_MAILBOX_RE = re.compile(r"\bPMB\s*#?\s*[A-Z0-9]+\b", re.IGNORECASE)
+_BARE_CITYLESS_POBOX_RE = re.compile(r"^\s*PO\s+BOX\s+[A-Z0-9-]+(?:\s+[A-Z]{2})?\s*$", re.IGNORECASE)
 _UNCLOSED_TRUNCATED_UNIT_RE = re.compile(
     r"\(\s*(?:UNIT|APT|APARTMENT|STE|SUITE)\b(?![^)]*\))",
     re.IGNORECASE,
@@ -1296,6 +1482,10 @@ _THIRD_PARTY_CARE_OF_AGENT_RE = re.compile(
 )
 _HAS_STREET_OR_POBOX_RE = re.compile(
     r"(?:^\s*\d+[A-Z0-9-]*\s+[A-Z0-9]|\bP\.?\s*O\.?\s*BOX\s+[A-Z0-9]+|\b\d+\s+P\.?\s*O\.?\s*BOX\b|\bR(?:URAL\s+)?R(?:OUTE)?\s*\d+|\bH(?:IGH)?W(?:A)?Y\s+\d+|\bONE\s+[A-Z]+\s+(?:PLAZA|CENTER|WAY|PLACE|SQUARE|DRIVE|BOULEVARD|STREET|AVENUE)\b)",
+    re.IGNORECASE,
+)
+_STREETLESS_FLOOR_OR_UNIT_LEAD_RE = re.compile(
+    r"^\s*(?:0*\d{1,3}(?:ST|ND|RD|TH)?\s+)?(?:FL|FLR|FLOOR|STE|SUITE|APT|APARTMENT|UNIT|RM|ROOM|BLDG|BUILDING|TRLR|TRAILER|LOT|SPACE|SPC)\b",
     re.IGNORECASE,
 )
 
@@ -1381,6 +1571,10 @@ def is_excluded_third_party_address(
 
     combined_rules = frozenset(registrar_substrings or ()) | KNOWN_THIRD_PARTY_HUB_SUBSTRINGS
     check_target = norm_text or normalize_mailing_address_coarse(effective_raw) or effective_raw.upper()
+    if _STREETLESS_FLOOR_OR_UNIT_LEAD_RE.match(effective_raw) or _STREETLESS_FLOOR_OR_UNIT_LEAD_RE.match(check_target):
+        return True
+    if _BARE_CITYLESS_POBOX_RE.match(check_target):
+        return True
     if not _HAS_STREET_OR_POBOX_RE.search(check_target):
         return True
     if is_registrar_address(check_target, combined_rules):

@@ -635,14 +635,37 @@ def run_daily_landing_cache_refresh():
         logger.error("✘ Daily landing snapshot cache refresh crashed: %s", e)
     logger.info("=" * 80)
 
+def run_nightly_reviewer_report_evaluation():
+    """Nightly evidence-based evaluation of trusted-reviewer error reports, generalized
+    system-wide linking rule updates, and audit-gated network rebuilds (runs BEFORE the
+    08:00 UTC daily digest so the email includes full actions + 1-click revert links)."""
+    logger.info("=" * 80)
+    logger.info("Starting Nightly Trusted-Reviewer Report Evaluation & Generalized Rule Pass")
+    logger.info("=" * 80)
+    try:
+        cmd = [sys.executable, "updater/evaluate_reviewer_reports.py"]
+        res = run_source_only(cmd, check=False, timeout=NETWORK_REBUILD_TIMEOUT)
+        if getattr(res, "returncode", 1) == 0:
+            logger.info("✓ Nightly reviewer report evaluation finished cleanly.")
+        else:
+            logger.warning(
+                "⚠ Nightly reviewer report evaluation exited with code %s.",
+                getattr(res, "returncode", "unknown"),
+            )
+    except Exception as e:
+        logger.error("✘ Nightly reviewer report evaluation crashed: %s", e)
+    logger.info("=" * 80)
+
+
 def _daily_report_thread():
-    """Independent daemon thread for daily usage report & daily landing cache warmup.
+    """Independent daemon thread for daily usage report, reviewer report evaluation & daily landing cache warmup.
     Runs on its own schedule.Scheduler() instance so it is never blocked by long-running
     nightly syncs that monopolize the main schedule loop for hours."""
     daily_schedule = schedule.Scheduler()
     daily_schedule.every().day.at("06:15").do(run_daily_landing_cache_refresh)
+    daily_schedule.every().day.at("06:45").do(run_nightly_reviewer_report_evaluation)
     daily_schedule.every().day.at("08:00").do(run_daily_usage_report)
-    logger.info("[Daily Report & Cache Thread] Started — landing cache at 06:15 UTC, usage report at 08:00 UTC daily")
+    logger.info("[Daily Report & Cache Thread] Started — landing cache 06:15 UTC, reviewer report eval 06:45 UTC, daily digest 08:00 UTC")
     while True:
         daily_schedule.run_pending()
         time.sleep(30)

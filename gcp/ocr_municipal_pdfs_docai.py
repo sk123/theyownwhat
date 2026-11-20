@@ -26,7 +26,8 @@ import sys
 from typing import Any, Dict, List
 
 GCLOUD_IMAGE = "gcr.io/google.com/cloudsdktool/google-cloud-cli:alpine"
-DEFAULT_PROJECT = "theyownwhat"
+DEFAULT_GCLOUD_CONFIG = os.environ.get("GCLOUD_CONFIG", "storrsmagic")
+DEFAULT_PROJECT = os.environ.get("GCP_PROJECT", "renter-help")
 DEFAULT_LOCATION = "us"
 
 
@@ -37,6 +38,8 @@ def _gcloud_token(project: str) -> str:
         "--rm",
         "-v",
         f"{os.path.expanduser('~/.config/gcloud')}:/root/.config/gcloud",
+        "-e",
+        f"CLOUDSDK_ACTIVE_CONFIG_NAME={DEFAULT_GCLOUD_CONFIG}",
         "-e",
         f"CLOUDSDK_CORE_PROJECT={project}",
         GCLOUD_IMAGE,
@@ -59,6 +62,8 @@ def ensure_docai_processor(project: str, location: str = DEFAULT_LOCATION, displ
             "--rm",
             "-v",
             f"{os.path.expanduser('~/.config/gcloud')}:/root/.config/gcloud",
+            "-e",
+            f"CLOUDSDK_ACTIVE_CONFIG_NAME={DEFAULT_GCLOUD_CONFIG}",
             "-e",
             f"CLOUDSDK_CORE_PROJECT={project}",
             GCLOUD_IMAGE,

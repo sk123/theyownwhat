@@ -316,7 +316,7 @@ export default function UpgradeModal({
                 </p>
                 <ul className="mt-2 list-disc pl-5 space-y-1.5 text-slate-600">
                   <li>
-                    <strong className="text-slate-800">Corporate spine (OpenCorporates + State SOS):</strong> Bulk 61-jurisdiction company, officer, DBA, and foreign-branch filings (ODbL v1.0) join directly onto local deed owners, piercing Delaware and out-of-state shells back to in-state officers and corporate parents.
+                    <strong className="text-slate-800">Corporate spine (OpenCorporates + State SOS):</strong> Bulk 61-jurisdiction company, officer, DBA, and foreign-branch filings (ODbL v1.0) join directly onto local deed owners, tracing Delaware and out-of-state LLCs back to publicly listed in-state officers and corporate parents.
                   </li>
                   <li>
                     <strong className="text-slate-800">Parcels, CAMA &amp; rental registries:</strong> Statewide GIS rolls (MassGIS, NYS ORPTS, FDOR, VGIN, NC OneMap, etc.) and municipal CAMA/rental licensing feeds (NYC HPD, DC DLCP, Baltimore DHCD, Philadelphia L&amp;I, Detroit BSEED, Minneapolis, Denver, FL DBPR, NJ BHI) supply both owner contacts and unit/building characteristics.
@@ -379,7 +379,7 @@ export default function UpgradeModal({
           <CircleAlert className="h-4 w-4 text-amber-700 shrink-0 mt-0.5" aria-hidden="true" />
           <div className="text-xs text-amber-950 leading-relaxed space-y-1.5">
             <div>
-              <span className="font-bold">What we never do:</span> The platform runs in strict source-only mode. It never fabricates fallback counts, never treats third-party managing agents as beneficial owners, and never guesses hidden LLC members where state registries keep them confidential. Always verify critical legal findings against linked primary municipal, court, and registry records.
+              <span className="font-bold">What we never do:</span> The platform runs in strict source-only mode. It never fabricates fallback counts, never treats third-party managing agents as beneficial owners, never bridges nonprofit or charity volunteer boards into private landlord networks, and never guesses hidden LLC members where state registries keep them confidential. Always verify critical legal findings against linked primary municipal, court, and registry records.
             </div>
             <div className="pt-1 border-t border-amber-200/70 text-xs text-amber-900">
               Corporate registry, officer, alternative-name, and foreign-branch records incorporate bulk public-benefit data{' '}

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Layers, ChevronDown, ChevronRight, User, Users, Building, ArrowRight, MapPin, Info } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { getAddressBadgeInfo, getEntityAddressState } from '../utils/jurisdiction';
+import { ReviewerFlagButton } from '../context/ReviewerModeContext';
 
 export default function NetworkView({ networkData, onSelectEntity, selectedEntityId, onViewDetails, mobileSection = 'all', autoHeight = false, activeState = 'CT' }) {
     const [activeTab, setActiveTab] = useState('human');
@@ -190,6 +191,18 @@ export default function NetworkView({ networkData, onSelectEntity, selectedEntit
                                                 </div>
                                             </div>
                                             <div className="flex items-center gap-1">
+                                                <ReviewerFlagButton
+                                                    jurisdiction={String(activeState || 'CT').toLowerCase()}
+                                                    networkId={String(networkData?.network_id || networkData?.id || '')}
+                                                    networkName={networkData?.networkName || ''}
+                                                    targetType={activeTab === 'human' ? 'principal' : 'entity'}
+                                                    targetValue={p.name}
+                                                    targetId={String(p.id || '')}
+                                                    bridgeContext={{
+                                                        address: p.details?.address || p.address || '',
+                                                        linked_business_count: count,
+                                                    }}
+                                                />
                                                 <button
                                                     onClick={(e) => {
                                                         e.stopPropagation();
@@ -248,16 +261,30 @@ export default function NetworkView({ networkData, onSelectEntity, selectedEntit
                                                 )}
                                             </div>
                                         </div>
-                                        <button
-                                            onClick={(e) => {
-                                                e.stopPropagation();
-                                                onViewDetails && onViewDetails(b, 'business');
-                                            }}
-                                            className="p-1 hover:bg-gray-100 rounded text-gray-400 hover:text-blue-600 transition-colors flex-shrink-0"
-                                            title="View Details"
-                                        >
-                                            <Info className="w-3.5 h-3.5" />
-                                        </button>
+                                        <div className="flex items-center gap-1 shrink-0">
+                                            <ReviewerFlagButton
+                                                jurisdiction={String(activeState || 'CT').toLowerCase()}
+                                                networkId={String(networkData?.network_id || networkData?.id || '')}
+                                                networkName={networkData?.networkName || ''}
+                                                targetType="entity"
+                                                targetValue={b.name}
+                                                targetId={String(b.id || '')}
+                                                bridgeContext={{
+                                                    address: b.details?.business_address || b.details?.mail_address || '',
+                                                    email: b.details?.business_email_address || '',
+                                                }}
+                                            />
+                                            <button
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    onViewDetails && onViewDetails(b, 'business');
+                                                }}
+                                                className="p-1 hover:bg-gray-100 rounded text-gray-400 hover:text-blue-600 transition-colors flex-shrink-0"
+                                                title="View Details"
+                                            >
+                                                <Info className="w-3.5 h-3.5" />
+                                            </button>
+                                        </div>
                                     </div>
                                 </div>
                             ))}
@@ -291,7 +318,21 @@ export default function NetworkView({ networkData, onSelectEntity, selectedEntit
                                                                 : 'bg-gray-50 border-gray-100'
                                                                 }`}
                                                         >
-                                                            <div className="font-bold text-sm text-gray-700">{b.name}</div>
+                                                            <div className="flex items-start justify-between gap-2">
+                                                                <div className="font-bold text-sm text-gray-700">{b.name}</div>
+                                                                <ReviewerFlagButton
+                                                                    jurisdiction={String(activeState || 'CT').toLowerCase()}
+                                                                    networkId={String(networkData?.network_id || networkData?.id || '')}
+                                                                    networkName={networkData?.networkName || ''}
+                                                                    targetType="entity"
+                                                                    targetValue={b.name}
+                                                                    targetId={String(b.id || '')}
+                                                                    bridgeContext={{
+                                                                        address: b.details?.business_address || b.details?.mail_address || '',
+                                                                        status: b.status || 'INACTIVE',
+                                                                    }}
+                                                                />
+                                                            </div>
                                                             <div className="flex gap-2 mt-1 flex-wrap">
                                                                 <span className="text-[10px] font-bold bg-gray-200 text-gray-600 px-2 py-0.5 rounded-full">
                                                                     {b.status}

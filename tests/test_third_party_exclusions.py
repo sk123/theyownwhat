@@ -138,7 +138,7 @@ class ThirdPartyExclusionTests(unittest.TestCase):
             "Aaron Landini",
             "BURGESS HOPE",
             "SPELIOTIS ISMENE",
-            "WEST BANK COMMUNITY DEV CORP",
+            "WEST BANK REALTY LLC",
             "RIVERBANK REALTY LLC",
             "RED BANK APARTMENTS LLC",
             "1628 CHURCH ST, LLC",
@@ -359,12 +359,15 @@ class ThirdPartyExclusionTests(unittest.TestCase):
             normalize_business_name("GREENBRIAR REALTY CORPORATION, THE"),
         )
 
-        # 2. Crestwood Village Co-Op 1, 2, 3, IV unify into 1 network while unrelated Crestwood Holdings stays separate
+        # 2. Resident-owned housing co-ops (`CRESTWOOD VIG CO-OP`) are excluded as non-landlord cooperatives,
+        #    while genuine private Roman/numbered series (`CRESTWOOD MANOR IV LLC`, `1`, `2`, `3`) unify into
+        #    1 network and unrelated `CRESTWOOD HOLDINGS LLC` stays separate.
+        self.assertTrue(is_excluded_third_party_entity("CRESTWOOD VIG CO-OP IV INC"))
         nj_props = [
-            {"bbl": "nj-1", "owner_name": "CRESTWOOD VIG CO-OP IV INC", "county": "OCEAN", "mailing_address": "15E MOCCASIN DR, WHITING, NJ, 08759"},
-            {"bbl": "nj-2", "owner_name": "CRESTWOOD VIG CO-OP INC 1", "county": "OCEAN", "mailing_address": "92 FAIRWAY LN, WHITING, NJ, 08759"},
-            {"bbl": "nj-3", "owner_name": "CRESTWOOD VIG CO-OP 2", "county": "OCEAN", "mailing_address": "470 ROUTE 530, WHITING, NJ, 08759"},
-            {"bbl": "nj-4", "owner_name": "CRESTWOOD VIG CO-OP 3", "county": "OCEAN", "mailing_address": "250 SCHOOLHOUSE RD, WHITING, NJ, 08759"},
+            {"bbl": "nj-1", "owner_name": "CRESTWOOD MANOR IV LLC", "county": "OCEAN", "mailing_address": "15E MOCCASIN DR, WHITING, NJ, 08759"},
+            {"bbl": "nj-2", "owner_name": "CRESTWOOD MANOR LLC 1", "county": "OCEAN", "mailing_address": "92 FAIRWAY LN, WHITING, NJ, 08759"},
+            {"bbl": "nj-3", "owner_name": "CRESTWOOD MANOR 2 LLC", "county": "OCEAN", "mailing_address": "470 ROUTE 530, WHITING, NJ, 08759"},
+            {"bbl": "nj-4", "owner_name": "CRESTWOOD MANOR 3 LLC", "county": "OCEAN", "mailing_address": "250 SCHOOLHOUSE RD, WHITING, NJ, 08759"},
             {"bbl": "nj-5", "owner_name": "CRESTWOOD HOLDINGS LLC", "county": "MIDDLESEX", "mailing_address": "112 HILLSIDE AVE, SOUTH PLAINFIELD, NJ, 07080"},
             # Cross-county generic landscape homonyms must NOT merge across Bergen vs Middlesex
             {"bbl": "nj-6", "owner_name": "NORTH VILLAGE 1 LLC", "county": "BERGEN", "mailing_address": "100 CANAL POINTE BLVD, PRINCETON, NJ, 08540"},
@@ -808,6 +811,109 @@ class ThirdPartyExclusionTests(unittest.TestCase):
         self.assertIn(expected_a, clusters)
         self.assertIn(expected_b, clusters)
         self.assertEqual(len(clusters), 2)
+
+    def test_legal_aid_nonprofit_clt_hdfc_condo_coop_and_cmra_exclusions(self):
+        # Universal non-landlord exclusions uncovered in 25-jurisdiction legal-aid audit
+        for non_landlord in (
+            "ROLLING MEADOWS COOP",
+            "BELT'S LANDING, A CONDOMINIUM, INCORPORATED",
+            "A Country Place Condominium",
+            "THE REED CONDO",
+            "SOCIETY HILL AT BERNARDS 1 CONDO",
+            "Winfield Mutual Housing Corportation",
+            "CONSOLIDATED RAIL CORPORATION ATTN: TAX DEPARTMENT",
+            "WASTE MANAGEMENT OF MASSACHUSETTS, INC.",
+            "AIRTOUCH CELLULAR INC.",
+            "MHANY 2015 HOUSING DEVELOPMENT FUND",
+            "ZEVRONE REALTY HOUSING DEVELOPMENT FUND",
+            "CHAMPLAIN HOUSING TRUST",
+            "WINDHAM & WINDSOR HOUSING TRUST INC",
+            "HOUSING FOUNDATION INC",
+            "TENANTS DEVELOPMENT CORPORATION",
+            "WEST BANK COMMUNITY DEV CORP",
+            "BOSTON NATURAL AREAS FUND",
+            "NEIGHBORSPACE",
+            "CHRISTIAN RELIEF SERVICES OF VIRGINIA INC",
+            "ULBRICH BOYS & GIRLS CLUB, INC.",
+            "WILLINGTON FISH AND GAME CLUB INC., THE",
+            "CONGREGATION BH, INC.",
+            "STEWART'S SHOPS CORP",
+            "7-ELEVEN INC",
+            "WYNDHAM VACATION RESORTS INC",
+            "SECU*RE INC",
+            "ANDERSON STEVENSON WILKE FUNERAL & CREMATION SERVICES INC",
+            "Condominium Building - See Individual Unit Records for Additional Information",
+            "COUNCIL OF UNIT OWNERS OF THE 1209 NORTH CHARLES CONDOMINIUM, INC",
+        ):
+            with self.subTest(non_landlord=non_landlord):
+                self.assertTrue(is_excluded_third_party_entity(non_landlord))
+
+        # Genuine private landlords that share substrings must NEVER be excluded
+        for private_landlord in (
+            "1628 CHURCH ST, LLC",
+            "WABASH CONDOMINIUM LLC",
+            "BUSHNELL CONDOS, LLC",
+            "CJ COOP, LLC",
+            "GOODWILL PARTNERS LLC",
+            "SFR 2 DE LLC",
+            "WINNCOMPANIES",
+            "NEW HAVEN REALTY TRUST",
+        ):
+            with self.subTest(private_landlord=private_landlord):
+                self.assertFalse(is_excluded_third_party_entity(private_landlord))
+
+        # Leading-zero streetless floor, bare cityless PO Boxes, and city-scoped CMRA/RA hubs
+        for bad_addr in (
+            "03RD FL, PHILADELPHIA PA, 19143",
+            "003RD FLOOR, BOSTON MA, 02108",
+            "PO BOX 333",
+            "PO BOX 520, MT",
+            "1602 FRANKFORD AVE #3757, PHILADELPHIA PA, 19125",
+            "1001 S MAIN ST STE 7116, KALISPELL, MT 59901",
+            "3948 3RD ST S #219, JACKSONVILLE BEACH, FL 32250",
+            "1716 CAPITOL AVE STE 100, CHEYENNE, WY 82001",
+        ):
+            with self.subTest(bad_addr=bad_addr):
+                self.assertTrue(is_excluded_third_party_address(bad_addr))
+
+        for good_addr in (
+            "PO BOX 333, BILLINGS, MT 59103",
+            "1001 S MAIN ST, HARTFORD, CT 06103",
+            "25 S 19TH ST 2ND FL, PHILADELPHIA PA, 19103",
+        ):
+            with self.subTest(good_addr=good_addr):
+                self.assertFalse(is_excluded_third_party_address(good_addr))
+
+    def test_structural_four_digit_cmra_mailbox_separation_in_clustering(self):
+        from api.populate_cities import run_union_find_clustering
+
+        # Two unrelated LLCs sharing a street address with distinct 4-to-5-digit mailbox numbers
+        # must NEVER collapse onto the base street address (structural CMRA/virtual-office guard).
+        properties = [
+            {
+                "bbl": "CMRA-1",
+                "owner_name": "ALPHA HOLDINGS LLC",
+                "mailing_address": "999 MARKET ST #3757, ANYTOWN, PA 19125",
+                "units_res": 4,
+                "borough": "ANYTOWN",
+            },
+            {
+                "bbl": "CMRA-2",
+                "owner_name": "OMEGA PROPERTIES LLC",
+                "mailing_address": "999 MARKET ST UNIT #15204, ANYTOWN, PA 19125",
+                "units_res": 6,
+                "borough": "ANYTOWN",
+            },
+            {
+                "bbl": "CMRA-3",
+                "owner_name": "GAMMA REALTY LLC",
+                "mailing_address": "999 MARKET ST, ANYTOWN, PA 19125",
+                "units_res": 3,
+                "borough": "ANYTOWN",
+            },
+        ]
+        groups = run_union_find_clustering(properties, "philadelphia")
+        self.assertEqual(len(groups), 3)
 
 
 if __name__ == "__main__":

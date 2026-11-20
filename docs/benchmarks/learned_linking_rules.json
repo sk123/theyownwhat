@@ -1,0 +1,727 @@
+{
+  "version": 1,
+  "updated_at": "2026-11-20T05:25:50Z",
+  "rules": [
+    {
+      "rule_type": "address_alias",
+      "rule_key": "110 NORTH CARPENTER STREET||60607",
+      "rule_value": "110 CARPENTER STREET||60607",
+      "scope": "il",
+      "discovered_in": "il",
+      "evidence": {
+        "jur": "il",
+        "shared_families": [
+          "MCDONALDS"
+        ],
+        "net_a": {
+          "network_key": "network_il_il-dupage-0305206001",
+          "display_name": "MCDONALDS CORPORATION",
+          "buildings": 166
+        },
+        "net_b": {
+          "network_key": "network_il_il-cook-13064150490000",
+          "display_name": "PHILIP FUENTES",
+          "buildings": 75
+        }
+      },
+      "active": false,
+      "updated_at": "2026-11-19T06:13:35Z"
+    },
+    {
+      "rule_type": "non_landlord_entity_block",
+      "rule_key": "ARMISTEAD HOMES CORP",
+      "rule_value": "",
+      "scope": "global",
+      "discovered_in": "baltimore",
+      "evidence": {
+        "source": "legal_aid_audit",
+        "reason": "Resident-owned mutual housing cooperative (Armistead Gardens, Baltimore MD; MD SDAT lacks nonprofit flag in OC)"
+      },
+      "active": true,
+      "updated_at": "2026-11-20T05:23:10Z"
+    },
+    {
+      "rule_type": "non_landlord_entity_block",
+      "rule_key": "ARMISTEAD HOMES CORPORATION",
+      "rule_value": "",
+      "scope": "global",
+      "discovered_in": "baltimore",
+      "evidence": {
+        "source": "legal_aid_audit",
+        "reason": "Resident-owned mutual housing cooperative (Armistead Gardens, Baltimore MD; MD SDAT lacks nonprofit flag in OC)"
+      },
+      "active": true,
+      "updated_at": "2026-11-20T05:23:10Z"
+    },
+    {
+      "rule_type": "non_landlord_entity_block",
+      "rule_key": "BALTIMORE AFFORDABLE HOUSING DEVELOPMENT INC",
+      "rule_value": "",
+      "scope": "global",
+      "discovered_in": "baltimore",
+      "evidence": {
+        "source": "legal_aid_audit",
+        "reason": "Housing Authority of Baltimore City (HABC) RAD instrumentality at 417 E Fayette St Room 401"
+      },
+      "active": true,
+      "updated_at": "2026-11-20T05:23:10Z"
+    },
+    {
+      "rule_type": "non_landlord_entity_block",
+      "rule_key": "BALTIMORE AFFORDABLE HOUSING DEVELOPMENT INCORPORATED",
+      "rule_value": "",
+      "scope": "global",
+      "discovered_in": "baltimore",
+      "evidence": {
+        "source": "legal_aid_audit",
+        "reason": "HABC RAD public housing instrumentality at 417 E Fayette St Room 401"
+      },
+      "active": true,
+      "updated_at": "2026-11-20T05:25:38Z"
+    },
+    {
+      "rule_type": "non_landlord_entity_block",
+      "rule_key": "BALTIMORE AFFORDABLE HOUSING DEVELOPMENTINC",
+      "rule_value": "",
+      "scope": "global",
+      "discovered_in": "baltimore",
+      "evidence": {
+        "source": "legal_aid_audit",
+        "reason": "HABC RAD public housing instrumentality (no-space comma typo variant)"
+      },
+      "active": true,
+      "updated_at": "2026-11-20T05:25:50Z"
+    },
+    {
+      "rule_type": "non_landlord_entity_block",
+      "rule_key": "BALTIMORE AFFORDABLE HOUSING HOUSING DEVELOPMENT INCORPORATED",
+      "rule_value": "",
+      "scope": "global",
+      "discovered_in": "baltimore",
+      "evidence": {
+        "source": "legal_aid_audit",
+        "reason": "HABC RAD public housing instrumentality at 417 E Fayette St Room 401"
+      },
+      "active": true,
+      "updated_at": "2026-11-20T05:25:38Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "10275 WEST HIGGINS ROAD ROSEMONT IL",
+      "rule_value": "MICHAEL BRENNAN",
+      "scope": "global",
+      "discovered_in": "il",
+      "evidence": {
+        "jur": "il",
+        "parcels": 26,
+        "officer_concentration": 0.65,
+        "family_concentration": 0.25,
+        "top_officer": "MICHAEL BRENNAN"
+      },
+      "active": false,
+      "updated_at": "2026-11-19T05:54:20Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "1044 NORTHERN BOULEVARD ROSLYN NY",
+      "rule_value": "ALLAN ARKER",
+      "scope": "global",
+      "discovered_in": "ny",
+      "evidence": {
+        "jur": "ny",
+        "parcels": 133,
+        "officer_concentration": 0.588,
+        "family_concentration": 0.056,
+        "top_officer": "ALLAN ARKER"
+      },
+      "active": false,
+      "updated_at": "2026-11-19T05:22:45Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "1201 NORTH 800 EAST OREM UT",
+      "rule_value": "KROHN MANAGEMENT LLC",
+      "scope": "global",
+      "discovered_in": "fl",
+      "evidence": {
+        "jur": "fl",
+        "parcels": 24,
+        "officer_concentration": 0.636,
+        "family_concentration": 0.75,
+        "top_officer": "KROHN MANAGEMENT LLC"
+      },
+      "active": false,
+      "updated_at": "2026-11-19T05:51:40Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "12901 SOUTHWEST 132 AVENUE MIAMI FL",
+      "rule_value": "DEVITA MANAGEMENT LLC",
+      "scope": "global",
+      "discovered_in": "fl",
+      "evidence": {
+        "jur": "fl",
+        "parcels": 19,
+        "officer_concentration": 0.617,
+        "family_concentration": 0.056,
+        "top_officer": "DEVITA MANAGEMENT LLC"
+      },
+      "active": false,
+      "updated_at": "2026-11-19T05:51:40Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "13820 SOUTHWEST 92 AVENUE MIAMI FL",
+      "rule_value": "CHARLES NESS",
+      "scope": "global",
+      "discovered_in": "fl",
+      "evidence": {
+        "jur": "fl",
+        "parcels": 26,
+        "officer_concentration": 0.933,
+        "family_concentration": 0.1,
+        "top_officer": "CHARLES NESS"
+      },
+      "active": false,
+      "updated_at": "2026-11-19T05:51:41Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "14340 BISCAYNE BOULEVARD NORTH MIAMI BEACH FL",
+      "rule_value": "FRANCIS JACOB",
+      "scope": "global",
+      "discovered_in": "fl",
+      "evidence": {
+        "jur": "fl",
+        "parcels": 20,
+        "officer_concentration": 0.822,
+        "family_concentration": 0.056,
+        "top_officer": "FRANCIS JACOB"
+      },
+      "active": false,
+      "updated_at": "2026-11-19T05:51:41Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "1545 SOUTH CICERO AVENUE CICERO IL",
+      "rule_value": "MARSHA SERLIN",
+      "scope": "global",
+      "discovered_in": "il",
+      "evidence": {
+        "jur": "il",
+        "parcels": 43,
+        "officer_concentration": 0.818,
+        "family_concentration": 0.333,
+        "top_officer": "MARSHA SERLIN"
+      },
+      "active": false,
+      "updated_at": "2026-11-19T06:13:35Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "158 TIHONET ROAD WAREHAM MA",
+      "rule_value": "ADM MANAGEMENT CORPORATION",
+      "scope": "global",
+      "discovered_in": "ma",
+      "evidence": {
+        "jur": "ma",
+        "parcels": 18,
+        "officer_concentration": 0.66,
+        "family_concentration": 0.333,
+        "top_officer": "ADM MANAGEMENT CORPORATION"
+      },
+      "active": false,
+      "updated_at": "2026-11-19T05:17:16Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "1775 HANCOCK STREET SAN DIEGO CA",
+      "rule_value": "DEEPAK ISRANI",
+      "scope": "global",
+      "discovered_in": "fl",
+      "evidence": {
+        "jur": "fl",
+        "parcels": 80,
+        "officer_concentration": 0.596,
+        "family_concentration": 0.1,
+        "top_officer": "DEEPAK ISRANI"
+      },
+      "active": false,
+      "updated_at": "2026-11-19T05:51:41Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "20 NORTH MAIN STREET SOUTH YARMOUTH MA",
+      "rule_value": "DEWITT DAVENPORT",
+      "scope": "global",
+      "discovered_in": "ma",
+      "evidence": {
+        "jur": "ma",
+        "parcels": 84,
+        "officer_concentration": 0.579,
+        "family_concentration": 0.091,
+        "top_officer": "DEWITT DAVENPORT"
+      },
+      "active": false,
+      "updated_at": "2026-11-19T05:17:16Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "220 JUANA AVENUE SAN LEANDRO CA",
+      "rule_value": "LEO KREMER",
+      "scope": "global",
+      "discovered_in": "il",
+      "evidence": {
+        "jur": "il",
+        "parcels": 39,
+        "officer_concentration": 0.667,
+        "family_concentration": 0.4,
+        "top_officer": "LEO KREMER"
+      },
+      "active": false,
+      "updated_at": "2026-11-19T06:13:35Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "27 NORTH GREEN STREET CHICAGO IL",
+      "rule_value": "SAVAS ER",
+      "scope": "global",
+      "discovered_in": "il",
+      "evidence": {
+        "jur": "il",
+        "parcels": 35,
+        "officer_concentration": 0.767,
+        "family_concentration": 0.042,
+        "top_officer": "SAVAS ER"
+      },
+      "active": false,
+      "updated_at": "2026-11-19T06:13:35Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "2766 NORTHWEST 62 STREET MIAMI FL",
+      "rule_value": "RAYMOND GONZALEZ",
+      "scope": "global",
+      "discovered_in": "fl",
+      "evidence": {
+        "jur": "fl",
+        "parcels": 20,
+        "officer_concentration": 0.678,
+        "family_concentration": 0.083,
+        "top_officer": "RAYMOND GONZALEZ"
+      },
+      "active": false,
+      "updated_at": "2026-11-19T05:51:41Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "3315 NORTH OAK TRAFFICWAY KANSAS CITY MO",
+      "rule_value": "NPD MANAGEMENT LLC",
+      "scope": "global",
+      "discovered_in": "il",
+      "evidence": {
+        "jur": "il",
+        "parcels": 18,
+        "officer_concentration": 0.556,
+        "family_concentration": 0.4,
+        "top_officer": "NPD MANAGEMENT LLC"
+      },
+      "active": false,
+      "updated_at": "2026-11-19T06:13:35Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "3450 OAKTON STREET SKOKIE IL",
+      "rule_value": "CHAIM RAJCHENBACH",
+      "scope": "global",
+      "discovered_in": "il",
+      "evidence": {
+        "jur": "il",
+        "parcels": 27,
+        "officer_concentration": 0.608,
+        "family_concentration": 0.062,
+        "top_officer": "CHAIM RAJCHENBACH"
+      },
+      "active": false,
+      "updated_at": "2026-11-19T06:13:35Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "4 BRIGHTON ROAD CLIFTON NJ",
+      "rule_value": "DAVID HECHING",
+      "scope": "global",
+      "discovered_in": "fl",
+      "evidence": {
+        "jur": "fl",
+        "parcels": 40,
+        "officer_concentration": 0.63,
+        "family_concentration": 0.333,
+        "top_officer": "DAVID HECHING"
+      },
+      "active": false,
+      "updated_at": "2026-11-19T05:51:41Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "41 CHICAGO AVENUE OAK PARK IL",
+      "rule_value": "ROBERT PLANEK",
+      "scope": "global",
+      "discovered_in": "il",
+      "evidence": {
+        "jur": "il",
+        "parcels": 83,
+        "officer_concentration": 0.879,
+        "family_concentration": 0.075,
+        "top_officer": "ROBERT PLANEK"
+      },
+      "active": false,
+      "updated_at": "2026-11-19T06:13:35Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "4201 LAKE COOK ROAD NORTHBROOK IL",
+      "rule_value": "MICHAEL NORTMAN",
+      "scope": "global",
+      "discovered_in": "il",
+      "evidence": {
+        "jur": "il",
+        "parcels": 22,
+        "officer_concentration": 0.724,
+        "family_concentration": 0.125,
+        "top_officer": "MICHAEL NORTMAN"
+      },
+      "active": false,
+      "updated_at": "2026-11-19T06:13:35Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "422 WASHINGTON STREET QUINCY MA",
+      "rule_value": "DAVID KILNAPP",
+      "scope": "global",
+      "discovered_in": "ma",
+      "evidence": {
+        "jur": "ma",
+        "parcels": 11,
+        "officer_concentration": 0.577,
+        "family_concentration": 0.167,
+        "top_officer": "DAVID KILNAPP"
+      },
+      "active": false,
+      "updated_at": "2026-11-19T05:17:16Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "4401 NORTHSIDE PARKWAY NORTHWEST ATLANTA GA",
+      "rule_value": "JOHN ISAKSON",
+      "scope": "global",
+      "discovered_in": "fl",
+      "evidence": {
+        "jur": "fl",
+        "parcels": 29,
+        "officer_concentration": 0.553,
+        "family_concentration": 0.8,
+        "top_officer": "JOHN ISAKSON"
+      },
+      "active": false,
+      "updated_at": "2026-11-19T05:51:41Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "500 TURNPIKE STREET CANTON MA",
+      "rule_value": "NIR DRORY",
+      "scope": "global",
+      "discovered_in": "ma",
+      "evidence": {
+        "jur": "ma",
+        "parcels": 8,
+        "officer_concentration": 0.816,
+        "family_concentration": 0.143,
+        "top_officer": "NIR DRORY"
+      },
+      "active": false,
+      "updated_at": "2026-11-19T05:17:16Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "549 EMPIRE BOULEVARD BROOKLYN NY",
+      "rule_value": "DOVIE SPERLIN",
+      "scope": "global",
+      "discovered_in": "ny",
+      "evidence": {
+        "jur": "ny",
+        "parcels": 29,
+        "officer_concentration": 0.8,
+        "family_concentration": 0.05,
+        "top_officer": "DOVIE SPERLIN"
+      },
+      "active": false,
+      "updated_at": "2026-11-19T05:22:45Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "5773 NORTH LINCOLN AVENUE CHICAGO IL",
+      "rule_value": "RON ABRAMS",
+      "scope": "global",
+      "discovered_in": "il",
+      "evidence": {
+        "jur": "il",
+        "parcels": 97,
+        "officer_concentration": 0.858,
+        "family_concentration": 0.025,
+        "top_officer": "RON ABRAMS"
+      },
+      "active": false,
+      "updated_at": "2026-11-19T06:13:35Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "600 GALLERIA PARKWAY SOUTHEAST ATLANTA GA",
+      "rule_value": "JEFFREY MONDAY",
+      "scope": "global",
+      "discovered_in": "fl",
+      "evidence": {
+        "jur": "fl",
+        "parcels": 27,
+        "officer_concentration": 0.75,
+        "family_concentration": 0.9,
+        "top_officer": "JEFFREY MONDAY"
+      },
+      "active": false,
+      "updated_at": "2026-11-19T05:51:41Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "6547 NORTH AVONDALE CHICAGO IL",
+      "rule_value": "EDWARD ZEMAN",
+      "scope": "global",
+      "discovered_in": "il",
+      "evidence": {
+        "jur": "il",
+        "parcels": 21,
+        "officer_concentration": 0.826,
+        "family_concentration": 0.167,
+        "top_officer": "EDWARD ZEMAN"
+      },
+      "active": false,
+      "updated_at": "2026-11-19T06:13:35Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "670 NORTH COMMERCIAL STREET MANCHESTER NH",
+      "rule_value": "SHANE BRADY",
+      "scope": "global",
+      "discovered_in": "ma",
+      "evidence": {
+        "jur": "ma",
+        "parcels": 14,
+        "officer_concentration": 0.8,
+        "family_concentration": 0.5,
+        "top_officer": "SHANE BRADY"
+      },
+      "active": false,
+      "updated_at": "2026-11-19T05:17:16Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "6715 SOUTH HIGHWAY A1A MELBOURNE BEACH FL",
+      "rule_value": "JENNIFER SOSA",
+      "scope": "global",
+      "discovered_in": "fl",
+      "evidence": {
+        "jur": "fl",
+        "parcels": 18,
+        "officer_concentration": 0.931,
+        "family_concentration": 0.059,
+        "top_officer": "JENNIFER SOSA"
+      },
+      "active": false,
+      "updated_at": "2026-11-19T05:51:41Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "696 NORTHEAST 125 STREET NORTH MIAMI FL",
+      "rule_value": "YORAM IZHAK",
+      "scope": "global",
+      "discovered_in": "fl",
+      "evidence": {
+        "jur": "fl",
+        "parcels": 24,
+        "officer_concentration": 0.667,
+        "family_concentration": 0.059,
+        "top_officer": "YORAM IZHAK"
+      },
+      "active": false,
+      "updated_at": "2026-11-19T05:51:41Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "844 SOUTHWEST 1 STREET MIAMI FL",
+      "rule_value": "COINCO INVESTMENT COMPANY INCORPORATED",
+      "scope": "global",
+      "discovered_in": "fl",
+      "evidence": {
+        "jur": "fl",
+        "parcels": 27,
+        "officer_concentration": 0.598,
+        "family_concentration": 0.111,
+        "top_officer": "COINCO INVESTMENT COMPANY INCORPORATED"
+      },
+      "active": false,
+      "updated_at": "2026-11-19T05:51:41Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "85-40 211 STREET QUEENS VILLAGE NY",
+      "rule_value": "SHARON HAKMON",
+      "scope": "global",
+      "discovered_in": "ny",
+      "evidence": {
+        "jur": "ny",
+        "parcels": 26,
+        "officer_concentration": 1.0,
+        "family_concentration": 0.091,
+        "top_officer": "SHARON HAKMON"
+      },
+      "active": false,
+      "updated_at": "2026-11-19T05:22:45Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "8847 SOUTH HARLEM AVENUE BRIDGEVIEW IL",
+      "rule_value": "EVA JAKUBOWSKI",
+      "scope": "global",
+      "discovered_in": "il",
+      "evidence": {
+        "jur": "il",
+        "parcels": 19,
+        "officer_concentration": 0.818,
+        "family_concentration": 0.25,
+        "top_officer": "EVA JAKUBOWSKI"
+      },
+      "active": false,
+      "updated_at": "2026-11-19T06:13:35Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "92 RIVER ROAD SUMMIT NJ",
+      "rule_value": "MARK ROSEN",
+      "scope": "global",
+      "discovered_in": "il",
+      "evidence": {
+        "jur": "il",
+        "parcels": 44,
+        "officer_concentration": 0.98,
+        "family_concentration": 0.5,
+        "top_officer": "MARK ROSEN"
+      },
+      "active": false,
+      "updated_at": "2026-11-19T06:13:35Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "9252 KILBOURN AVENUE SKOKIE IL",
+      "rule_value": "SHAWN KOHLI",
+      "scope": "global",
+      "discovered_in": "il",
+      "evidence": {
+        "jur": "il",
+        "parcels": 18,
+        "officer_concentration": 0.882,
+        "family_concentration": 0.286,
+        "top_officer": "SHAWN KOHLI"
+      },
+      "active": false,
+      "updated_at": "2026-11-19T06:13:35Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "935 MAIN STREET SHREWSBURY MA",
+      "rule_value": "STEVEN VENINCASA",
+      "scope": "global",
+      "discovered_in": "ma",
+      "evidence": {
+        "jur": "ma",
+        "parcels": 19,
+        "officer_concentration": 0.65,
+        "family_concentration": 0.053,
+        "top_officer": "STEVEN VENINCASA"
+      },
+      "active": false,
+      "updated_at": "2026-11-19T05:17:16Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "9440 ENTERPRISE DRIVE MOKENA IL",
+      "rule_value": "MICHAEL ROSE",
+      "scope": "global",
+      "discovered_in": "il",
+      "evidence": {
+        "jur": "il",
+        "parcels": 39,
+        "officer_concentration": 0.783,
+        "family_concentration": 0.08,
+        "top_officer": "MICHAEL ROSE"
+      },
+      "active": false,
+      "updated_at": "2026-11-19T06:13:35Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "9615 SOUTHWEST 118 STREET MIAMI FL",
+      "rule_value": "HILDA ENRIQUEZ",
+      "scope": "global",
+      "discovered_in": "fl",
+      "evidence": {
+        "jur": "fl",
+        "parcels": 17,
+        "officer_concentration": 0.753,
+        "family_concentration": 0.059,
+        "top_officer": "HILDA ENRIQUEZ"
+      },
+      "active": false,
+      "updated_at": "2026-11-19T05:51:41Z"
+    },
+    {
+      "rule_type": "third_party_hub_block",
+      "rule_key": "2875 NORTHEAST 191 STREET AVENTURA",
+      "rule_value": "BLOCK_HUB",
+      "scope": "global",
+      "discovered_in": "fl",
+      "evidence": {
+        "jur": "fl",
+        "distinct_owner_families": 16,
+        "disjoint_external_oc_hqs": 10
+      },
+      "active": false,
+      "updated_at": "2026-11-19T05:51:41Z"
+    },
+    {
+      "rule_type": "third_party_hub_block",
+      "rule_key": "3595 SHERIDAN STREET HOLLYWOOD",
+      "rule_value": "BLOCK_HUB",
+      "scope": "global",
+      "discovered_in": "fl",
+      "evidence": {
+        "jur": "fl",
+        "distinct_owner_families": 63,
+        "disjoint_external_oc_hqs": 14
+      },
+      "active": false,
+      "updated_at": "2026-11-19T05:51:41Z"
+    },
+    {
+      "rule_type": "third_party_hub_block",
+      "rule_key": "6900 PHILIPS HIGHWAY JACKSONVILLE",
+      "rule_value": "BLOCK_HUB",
+      "scope": "global",
+      "discovered_in": "fl",
+      "evidence": {
+        "jur": "fl",
+        "distinct_owner_families": 27,
+        "disjoint_external_oc_hqs": 10
+      },
+      "active": false,
+      "updated_at": "2026-11-19T05:51:41Z"
+    }
+  ]
+}

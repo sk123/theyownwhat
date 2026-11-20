@@ -396,7 +396,7 @@ const LandlordMonitor = ({ onSelectEntity, initialCity }) => {
                                 </span>
                             ) : ['HARTFORD', 'BRIDGEPORT', 'NEW HAVEN', 'STAMFORD', 'WATERBURY', 'MERIDEN'].includes(selectedCity) || selectedCity.includes(', CT') || (cityStats && !['NYC', 'DC', 'BALTIMORE', 'BOSTON', 'DETROIT'].includes(selectedCity)) ? (
                                 <span>
-                                    Connecticut eviction statistics reflect court-filed eviction cases (sourced from the CT State Judicial Branch records), not completed evictions. Code enforcement records (available for Hartford only) reflect building code complaints registered with the City of Hartford Open Data portal.
+                                    Connecticut eviction statistics reflect court-filed eviction cases (sourced from the CT State Judicial Branch records), not completed evictions or adjudicated findings of fault against every listed individual. Code enforcement records (available for Hartford only) reflect building code complaints registered with the City of Hartford Open Data portal.
                                 </span>
                             ) : (
                                 <span>

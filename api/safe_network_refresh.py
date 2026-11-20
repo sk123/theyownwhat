@@ -125,6 +125,26 @@ def validate_shadow_data(conn):
             "✅ Gurevitch validation passed: %s",
             [dict(row) for row in gurevitch_rows],
         )
+
+        # Meticulous Top-25 structural audit: reject shadow swaps if ANY top CT network
+        # suffers a principal-count explosion (>85 principals or >40 principals with >0.95
+        # principal-to-business ratio, e.g. corporate/Non-Stock board or PM star-bridges).
+        try:
+            from scripts.audit_network_bridges import audit_ct_networks
+            bridge_audit = audit_ct_networks(conn, shadow=True, top_n=25, max_principals=85)
+            for f in bridge_audit.get("findings") or ():
+                log_fn = logger.error if f["severity"] == "ERROR" else logger.warning
+                log_fn("  [BRIDGE-AUDIT %s] %s on %s: %s", f["severity"], f["kind"], f["primary_name"], f["detail"])
+            if not bridge_audit.get("ok"):
+                logger.error(
+                    "❌ Meticulous shadow bridge/principal audit FAILED with %s error(s); aborting swap.",
+                    bridge_audit.get("error_count"),
+                )
+                return False
+            logger.info("✅ Meticulous Top-25 shadow bridge & principal audit PASSED (0 errors).")
+        except Exception as audit_exc:
+            logger.warning("⚠ Meticulous shadow bridge audit skipped: %s", audit_exc)
+
         logger.info(f"✅ Validation passed: Live={live_count}, Shadow={shadow_count}")
         return True
 

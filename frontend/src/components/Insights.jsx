@@ -17,6 +17,7 @@ import {
     Users
 } from 'lucide-react';
 import { formatDisplayName } from '../utils/formatName';
+import { ReviewerFlagButton, ReviewerMissedLinkButton } from '../context/ReviewerModeContext';
 
 const METRICS = [
     { key: 'properties', label: 'Properties', icon: Landmark, source: 'cached', valueKey: 'property_count', tone: 'blue' },
@@ -616,10 +617,26 @@ function NetworkInsightCard({ row, rank, metric, networkMetric, networkMetricsLo
         ? (metric.key === 'code_violations' ? 'Hartford code records' : 'CT Judicial eviction feed')
         : 'Municipal assessment cache';
 
+    const headlineIsEntity = selectedType === 'business' || ENTITY_PRINCIPAL_RE.test(name);
+    const totalBizCount = Number(businessCount || 0);
+    const inlineEntityCount = headlineIsEntity ? Math.max(0, totalBizCount - 1) : totalBizCount;
+    const inlineEntityLabel = inlineEntityCount > 0
+        ? (headlineIsEntity
+            ? `(& ${fmt(inlineEntityCount)} other ${inlineEntityCount === 1 ? 'entity' : 'entities'})`
+            : `(${fmt(inlineEntityCount)} ${inlineEntityCount === 1 ? 'entity' : 'entities'})`)
+        : '';
+
     return (
-        <button
+        <article
             onClick={() => onSelect(selectedId, selectedType, name)}
-            className="group flex h-full min-h-[285px] flex-col rounded-xl border border-slate-200 bg-white p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-lg hover:shadow-blue-500/10"
+            onKeyDown={(e) => {
+                if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) {
+                    e.preventDefault();
+                    onSelect(selectedId, selectedType, name);
+                }
+            }}
+            tabIndex={0}
+            className="group cursor-pointer flex h-full min-h-[285px] flex-col rounded-xl border border-slate-200 bg-white p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-lg hover:shadow-blue-500/10"
         >
             <div className="flex items-start justify-between gap-3">
                 <div className="flex items-center gap-2">
@@ -631,18 +648,47 @@ function NetworkInsightCard({ row, rank, metric, networkMetric, networkMetricsLo
                         <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{sourceLabel}</div>
                     </div>
                 </div>
-                <div className={`shrink-0 rounded-lg border px-2.5 py-1.5 text-right ${toneClasses[metric.tone] || toneClasses.blue}`}>
-                    <div className="flex items-center justify-end gap-1 text-[9px] font-black uppercase tracking-wider opacity-80">
-                        <MetricIcon size={11} />
-                        {metric.label}
+                <div className="flex items-start gap-1.5 shrink-0">
+                    <ReviewerMissedLinkButton
+                        jurisdiction="ct"
+                        networkId={String(row.network_id || '')}
+                        networkName={name}
+                        targetType="network"
+                        targetValue={name}
+                        bridgeContext={{
+                            key_principals: visiblePrincipals,
+                            linked_entities: visibleBusinesses,
+                        }}
+                    />
+                    <ReviewerFlagButton
+                        jurisdiction="ct"
+                        networkId={String(row.network_id || '')}
+                        networkName={name}
+                        targetType="network_merge"
+                        targetValue={name}
+                        bridgeContext={{
+                            key_principals: visiblePrincipals,
+                            linked_entities: visibleBusinesses,
+                        }}
+                    />
+                    <div className={`shrink-0 rounded-lg border px-2.5 py-1.5 text-right ${toneClasses[metric.tone] || toneClasses.blue}`}>
+                        <div className="flex items-center justify-end gap-1 text-[9px] font-black uppercase tracking-wider opacity-80">
+                            <MetricIcon size={11} />
+                            {metric.label}
+                        </div>
+                        <div className="text-lg font-black leading-none">{fmt(metricValue)}</div>
                     </div>
-                    <div className="text-lg font-black leading-none">{fmt(metricValue)}</div>
                 </div>
             </div>
 
             <div className="mt-4 min-w-0">
                 <h4 className="line-clamp-2 text-lg font-black leading-tight text-slate-950 group-hover:text-blue-700">
                     {formatDisplayName(name)}
+                    {inlineEntityLabel && (
+                        <span className="ml-1.5 text-xs font-semibold text-slate-500 whitespace-nowrap tabular-nums">
+                            {inlineEntityLabel}
+                        </span>
+                    )}
                 </h4>
                 <p className="mt-1 min-h-[18px] truncate text-xs font-semibold tracking-wide text-slate-400">
                     {row.attorney_surge_name
@@ -655,7 +701,6 @@ function NetworkInsightCard({ row, rank, metric, networkMetric, networkMetricsLo
                 <MetricTile label="Properties" value={fmt(propertyCount)} />
                 <MetricTile label="Units" value={fmt(row.unit_count)} />
                 <MetricTile label="Assessed" value={assessed ? formatMoney(assessed) : '-'} />
-                <MetricTile label="Businesses" value={fmt(businessCount)} />
                 <MetricTile label="People" value={fmt(principalCount)} />
                 <MetricTile
                     label={metric.key === 'code_violations' ? 'Code' : 'Evictions'}
@@ -673,10 +718,26 @@ function NetworkInsightCard({ row, rank, metric, networkMetric, networkMetricsLo
 
             <div className="mt-4 flex-1 space-y-3 border-t border-slate-100 pt-3">
                 {visiblePrincipals.length > 0 && (
-                    <ChipGroup icon={Users} label="Key principals" values={visiblePrincipals} tone="violet" />
+                    <ChipGroup
+                        icon={Users}
+                        label="Source-listed principals"
+                        values={visiblePrincipals}
+                        tone="violet"
+                        targetType="principal"
+                        networkId={String(row.network_id || '')}
+                        networkName={name}
+                    />
                 )}
                 {visibleBusinesses.length > 0 && (
-                    <ChipGroup icon={Briefcase} label="Linked entities" values={visibleBusinesses} tone="slate" />
+                    <ChipGroup
+                        icon={Briefcase}
+                        label="Linked entities"
+                        values={visibleBusinesses}
+                        tone="slate"
+                        targetType="entity"
+                        networkId={String(row.network_id || '')}
+                        networkName={name}
+                    />
                 )}
                 {(evictionCount > 0 || codeCount > 0 || row.attorney_surge_filings > 0 || (hartfordCodeCount > 0 && metric.source === 'cached')) && (
                     <div className="flex flex-wrap gap-1.5">
@@ -715,7 +776,7 @@ function NetworkInsightCard({ row, rank, metric, networkMetric, networkMetricsLo
                     <ArrowUpDown size={13} className="rotate-90" />
                 </div>
             </div>
-        </button>
+        </article>
     );
 }
 
@@ -728,7 +789,7 @@ function MetricTile({ label, value, accent = 'text-slate-950' }) {
     );
 }
 
-function ChipGroup({ icon: Icon, label, values, tone }) {
+function ChipGroup({ icon: Icon, label, values, tone, targetType = 'entity', networkId = '', networkName = '' }) {
     const toneClass = tone === 'violet'
         ? 'bg-violet-50 text-violet-700 border-violet-100'
         : 'bg-slate-50 text-slate-700 border-slate-100';
@@ -741,8 +802,15 @@ function ChipGroup({ icon: Icon, label, values, tone }) {
             </div>
             <div className="flex flex-wrap gap-1.5">
                 {values.map(value => (
-                    <span key={value} className={`max-w-full truncate rounded border px-2 py-1 text-[10px] font-bold ${toneClass}`}>
-                        {formatDisplayName(value)}
+                    <span key={value} className={`inline-flex items-center gap-1 max-w-full rounded border px-2 py-1 text-[10px] font-bold ${toneClass}`}>
+                        <span className="truncate">{formatDisplayName(value)}</span>
+                        <ReviewerFlagButton
+                            jurisdiction="ct"
+                            networkId={networkId}
+                            networkName={networkName}
+                            targetType={targetType}
+                            targetValue={value}
+                        />
                     </span>
                 ))}
             </div>

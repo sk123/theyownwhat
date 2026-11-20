@@ -361,9 +361,9 @@ class TestOCMultiHopResolutionIntegration(unittest.TestCase):
                         ('us_ma', 'TEST-NP-BOARD', 'ROXBURY HOPE CHARITY INC', 'ROXBURY HOPE CHARITY INCORPORATED',
                          TRUE, TRUE, '550 DUDLEY ST, ROXBURY, MA, 02119', '550 DUDLEY ST, ROXBURY, MA, 02119', NULL, NULL),
                         ('us_ma', 'TEST-CORP-HOME', 'ACME MEDTECH CORP', 'ACME MEDTECH CORPORATION',
-                         TRUE, FALSE, '269 MILL RD, CHELMSFORD, MA, 01824', '269 MILL RD, CHELMSFORD, MA, 01824', NULL, NULL),
+                         TRUE, FALSE, '26999 SYNTHETIC MILL RD, CHELMSFORD, MA, 01824', '26999 SYNTHETIC MILL RD, CHELMSFORD, MA, 01824', NULL, NULL),
                         ('us_pa', 'TEST-PA-FOREIGN', 'ACME MEDTECH CORP', 'ACME MEDTECH CORPORATION',
-                         TRUE, FALSE, '5235 N FRONT ST, HARRISBURG, PA, 17110', '269 MILL RD, CHELMSFORD, MA, 01824', 'us_ma', 'TEST-CORP-HOME')
+                         TRUE, FALSE, '5235 N FRONT ST, HARRISBURG, PA, 17110', '26999 SYNTHETIC MILL RD, CHELMSFORD, MA, 01824', 'us_ma', 'TEST-CORP-HOME')
                     """
                 )
                 cur.execute(
@@ -385,11 +385,50 @@ class TestOCMultiHopResolutionIntegration(unittest.TestCase):
             )
             np_info = resolved[("us_ma", "TEST-NP-BOARD")]
             self.assertEqual(np_info["humans"], [])
-            self.assertIn("550 DUDLEY STREET ROXBURY MA", np_info["hq_addresses"])
+            self.assertEqual(np_info["hq_addresses"], [])
+            self.assertTrue(np_info.get("is_excluded_entity"))
 
             corp_info = resolved[("us_ma", "TEST-CORP-HOME")]
-            self.assertIn("269 MILL ROAD CHELMSFORD MA", corp_info["hq_addresses"])
+            self.assertIn("26999 SYNTHETIC MILL ROAD CHELMSFORD MA", corp_info["hq_addresses"])
             self.assertNotIn("5235 NORTH FRONT STREET HARRISBURG PA", corp_info["hq_addresses"])
+
+            # 3) Rural Cooperative Utilities & Large >12-partner LPs must NOT export `ct_principal_ids`
+            #    or `humans` into transitive clustering.
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO oc_companies (
+                        jurisdiction_code, company_number, name, name_norm, company_type, is_active, is_nonprofit
+                    ) VALUES
+                        ('us_mt', 'TEST-COOP-UTIL', 'TEST RURAL ELECTRIC CO-OP INC', 'TEST RURAL ELECTRIC CO OP INCORPORATED',
+                         'Domestic Rural Cooperative Utility', TRUE, FALSE),
+                        ('us_mt', 'TEST-BIG-LP', 'TEST SIXTY PARTNER LP', 'TEST SIXTY PARTNER LIMITED PARTNERSHIP',
+                         'Domestic Limited Partnership', TRUE, FALSE)
+                    """
+                )
+                for idx in range(15):
+                    cur.execute(
+                        """
+                        INSERT INTO oc_ct_principal_links (
+                            jurisdiction_code, company_number, canonical_principal_id, canonical_name,
+                            pair_key, mid_init, is_homonymous_guarded, corroboration_mode, position,
+                            addr_coarse, statewide_company_count, name_variants
+                        ) VALUES (
+                            'us_mt', 'TEST-BIG-LP', %s, %s, %s, '_', FALSE, 'statewide_unambiguous_name',
+                            'partner', '', 2, ARRAY[%s]
+                        )
+                        """,
+                        (f"us_mt:P:PARTNER{idx}|TEST:_", f"TEST PARTNER{idx}", f"PARTNER{idx}|TEST", f"TEST PARTNER{idx}"),
+                    )
+            resolved2 = resolve_oc_company_principals(
+                conn,
+                [("us_mt", "TEST-COOP-UTIL"), ("us_mt", "TEST-BIG-LP")],
+                max_hops=2,
+            )
+            self.assertEqual(resolved2[("us_mt", "TEST-COOP-UTIL")]["humans"], [])
+            self.assertEqual(resolved2[("us_mt", "TEST-COOP-UTIL")]["ct_principal_ids"], {})
+            self.assertEqual(resolved2[("us_mt", "TEST-BIG-LP")]["humans"], [])
+            self.assertEqual(resolved2[("us_mt", "TEST-BIG-LP")]["ct_principal_ids"], {})
         finally:
             conn.rollback()
             conn.close()
@@ -407,6 +446,7 @@ class TestAssessorPlaceholderAndInstitutionalHygiene(unittest.TestCase):
             "EXEMPT STATUS PENDING",
             "CONDO MASTER RECORD",
             "CONDO MAIN",
+            "CONDO COMPLEX",
             "RESIDENT",
             "STREET",
         ):
@@ -514,6 +554,382 @@ class TestAssessorPlaceholderAndInstitutionalHygiene(unittest.TestCase):
         self.assertEqual(by_bbl_group["B2"], 1)
         self.assertEqual(by_bbl_group["B3"], 2)
         self.assertEqual(by_bbl_group["B4"], 2)
+
+    def test_condo_trailer_tax_escrow_tribal_and_streetless_floor_hygiene(self):
+        from api.shared_utils import (
+            is_excluded_third_party_address,
+            is_excluded_third_party_entity,
+            normalize_mailing_address,
+        )
+        from api.populate_cities import (
+            is_public_entity,
+            is_public_or_generic_address,
+            run_union_find_clustering,
+        )
+
+        # 1. Streetless floor/suite stubs & ServiceLink 1000 Gamma Dr rejected everywhere
+        for bad_addr in (
+            "03RD FL, PHILADELPHIA PA, 19143",
+            "2ND FLOOR, NEWARK NJ 07102",
+            "STE 400, CHICAGO IL 60601",
+            "1000 GAMMA DR 3RD FLOOR, PITTSBURGH, PA, 15238",
+        ):
+            self.assertTrue(is_excluded_third_party_address(bad_addr), bad_addr)
+            self.assertTrue(is_public_or_generic_address(bad_addr, raw_address=bad_addr), bad_addr)
+
+        # 2. Trailer-park / lot unit markers normalize to '#<num>' so multi-unit guard separates residents
+        self.assertIn("#105", normalize_mailing_address("2224 US HIGHWAY 87 E TRLR 105, BILLINGS, MT 59101"))
+        self.assertIn("#42", normalize_mailing_address("500 OAK RD LOT 42, BOISE, ID 83702"))
+
+        # 3. Sovereign tribal/federal trust land & bare street-address condo placeholders excluded
+        for non_landlord in (
+            "USA IN TRUST",
+            "CONFEDERATED SALISH & KOOTENAI TRIBES",
+            "ASSINIBOINE & SIOUX TRIBES OF THE FORT PECK INDIAN RESERVATION",
+            "211 NORTH HARBOR DRIVE",
+            "NEW DIRECTION IRA INC",
+            "PARKWAY BK FACILITIES",
+            "IMPERIAL PARKING (US) LLC",
+            "LAKE COUNTY FOREST PRESERVE DISTRICT",
+            "BD OF ED BARRNGTON COM UNIT SCH DIST 220",
+            "STATE BANK OF THE LAKES",
+            "CHGO TR BEV-2925",
+            "CHICAGO LAND TRUST CO N A TTEE SBL 4670",
+            "Rochester Hsg Authority",
+            "MILFORD BUSINESS CENTER I ASSOCIATION, INC.",
+            "NOROTON YACHT CLUB INCORPORATED",
+            "RECTORY SCHOOL, INCORPORATED, THE",
+            "FAIRFIELD COUNTRY DAY SCHOOL CORPORATION, THE",
+            "BETHLEHEM FAIR SOCIETY, INCORPORATED, THE",
+            "THIRD STONE RIDGE COOPERATIVE CORPORATION",
+            "HARBORSIDE OWNERS CORPORATION",
+            "NATIONAL SAFE HARBOR EXCHANGES, INC.",
+            "Red Stone Equity Manager, LLC",
+            "GLENDOWER MCCONAUGHY TERRACE 9% LLC",
+            "THE COMMUNITY BUILDERS, INC.",
+        ):
+            self.assertTrue(is_public_entity(non_landlord), non_landlord)
+        self.assertTrue(is_excluded_third_party_entity("USA IN TRUST"))
+        self.assertTrue(is_excluded_third_party_address("1070 W CENTURY DR #101 LOUISVILLE CO 80027"))
+        self.assertTrue(is_excluded_third_party_address("ONE CVS DR, WOONSOCKET, RI 02895"))
+        self.assertTrue(is_excluded_third_party_address("6850 MILLER RD, BRECKSVILLE, OH 44141"))
+        self.assertTrue(is_excluded_third_party_address("14806 DETROIT AVE, LAKEWOOD, OH 44107"))
+        self.assertTrue(is_excluded_third_party_address("10 S LA SALLE ST, CHICAGO, IL 60603"))
+        self.assertTrue(is_excluded_third_party_address("80 STATE STREET, ALBANY, NY 12207"))
+        self.assertFalse(is_public_entity("211 NORTH HARBOR DRIVE LLC"))
+
+        # 3b. Cross-state Tier 2 bare-name safety guard: Woodbury, NY business MUST NOT
+        #     bare-name match an unrelated domestic North Haven, CT LLC of the same name,
+        #     while a Monsey, NY landlord's CT LLC whose SOTS address IS Monsey, NY still matches.
+        from api.oc_linker import OCCandidate, demangle_assessor_owner, score_oc_candidates
+
+        ny_rec = demangle_assessor_owner(
+            "KINGS HIGHWAY HOLDINGS, LLC",
+            mailing_address="7600 JERICHO TURNPIKE, WOODBURY, NY, 11797",
+            explicit_mailing_state="NY",
+        )
+        ct_homonym = OCCandidate(
+            jurisdiction_code="us_ct",
+            company_number="3278909",
+            name="Kings HIghway Holdings, LLC",
+            name_norm="KINGS HIGHWAY HOLDINGS",
+            is_active=True,
+            registered_address_coarse="66 KINGS HIGHWAY NORTH HAVEN CT",
+            mailing_address_coarse="66 KINGS HIGHWAY NORTH HAVEN CT",
+            agent_address_coarse="",
+        )
+        self.assertIsNone(
+            score_oc_candidates(
+                ny_rec,
+                parcel_state="CT",
+                parcel_mailing_coarse="7600 JERICHO TURNPIKE WOODBURY NY",
+                candidates=[ct_homonym],
+            )
+        )
+        ny_landlord_rec = demangle_assessor_owner(
+            "BG13 PROPERTIES, LLC",
+            mailing_address="8 CARTER LN, MONSEY, NY, 10952",
+            explicit_mailing_state="NY",
+        )
+        ct_same_owner = OCCandidate(
+            jurisdiction_code="us_ct",
+            company_number="1111155",
+            name="BG13 PROPERTIES, LLC",
+            name_norm="BG13 PROPERTIES",
+            is_active=True,
+            registered_address_coarse="8 CARTER LANE MONSEY NY",
+            mailing_address_coarse="PO BOX 936 MONSEY NY",
+            agent_address_coarse="",
+        )
+        self.assertIsNotNone(
+            score_oc_candidates(
+                ny_landlord_rec,
+                parcel_state="CT",
+                parcel_mailing_coarse="8 CARTER LANE MONSEY NY",
+                candidates=[ct_same_owner],
+            )
+        )
+
+        # 3c. CT dispersed intermediary hub detector: catches PM / commercial office hubs
+        #     (15 Hosley Ave: 42/197 owning, 8 islands, 36% top1; 50 Fitch St: 15/169 owning, 6 islands;
+        #     15 Maiden Ln: 8/330 owning) while preserving genuine landlord HQs (623 Ellsworth: 29/43, 100%;
+        #     8 Carter Ln: 16/94, 4 islands, 53%; 20 Virginia Dr: 9/79, 1 island, 100%).
+        import os as _os, sys as _sys
+        _api_dir = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "api")
+        if _api_dir not in _sys.path:
+            _sys.path.insert(0, _api_dir)
+        from api.network_builder import _is_dispersed_intermediary_business_hub
+
+        def _make_hub_graph(island_sizes):
+            g, n2i, bids = {}, {}, []
+            idx = 1
+            for isl_i, sz in enumerate(island_sizes):
+                p_node = idx
+                idx += 1
+                g[p_node] = set()
+                for j in range(sz):
+                    bid = f"B_{isl_i}_{j}"
+                    bids.append(bid)
+                    b_node = idx
+                    idx += 1
+                    n2i[("business", bid)] = b_node
+                    g[b_node] = {p_node}
+                    g[p_node].add(b_node)
+            return bids, g, n2i
+
+        # 15 Hosley Ave (PM hub: 42 owning / 197 registered, 8 islands, top1=36%) -> TRUE
+        b1, g1, n1 = _make_hub_graph([15, 6, 5, 4, 4, 3, 3, 2])
+        self.assertTrue(_is_dispersed_intermediary_business_hub(b1, g1, n1, total_registered_at_coarse=197))
+        # 50 Fitch St (office building: 15 owning / 169 registered, 6 islands) -> TRUE
+        b2, g2, n2 = _make_hub_graph([10, 1, 1, 1, 1, 1])
+        self.assertTrue(_is_dispersed_intermediary_business_hub(b2, g2, n2, total_registered_at_coarse=169))
+        # 2083 Main St (office building: 2 owning / 23 registered, 2 islands) -> TRUE
+        b3, g3, n3 = _make_hub_graph([1, 1])
+        self.assertTrue(_is_dispersed_intermediary_business_hub(b3, g3, n3, total_registered_at_coarse=23))
+        # 623 Ellsworth Ave (real landlord HQ: 29 owning / 43 registered, 1 island) -> FALSE
+        b4, g4, n4 = _make_hub_graph([29])
+        self.assertFalse(_is_dispersed_intermediary_business_hub(b4, g4, n4, total_registered_at_coarse=43))
+        # 8 Carter Ln (out-of-state landlord HQ: 16 owning / 94 registered, 4 islands, 53% top1) -> FALSE
+        b5, g5, n5 = _make_hub_graph([9, 3, 2, 2])
+        self.assertFalse(_is_dispersed_intermediary_business_hub(b5, g5, n5, total_registered_at_coarse=94))
+        # 20 Virginia Dr (single-operator office: 9 owning / 79 registered, 1 island, 100%) -> FALSE
+        b6, g6, n6 = _make_hub_graph([9])
+        self.assertFalse(_is_dispersed_intermediary_business_hub(b6, g6, n6, total_registered_at_coarse=79))
+
+        # 4. Diverse-individual-homeowner mail-hub entropy guard:
+        #    10 unrelated individual surnames at one address MUST NOT merge,
+        #    while 4 same-surname family members at one address STILL merge cleanly!
+        unrelated = [
+            {
+                "bbl": f"U{i}",
+                "address": f"{100 + i} OAK ST",
+                "borough": "CLEVELAND (CUYAHOGA)",
+                "zip_code": "44107",
+                "owner_name": nm,
+                "mailing_address": "555 SHARED CONDO TOWERS AVE, LAKEWOOD, OH 44107",
+            }
+            for i, nm in enumerate([
+                "ACKER, KATHERINE", "ADAM, JILL", "AHMED, MARGARET", "ALJASSABI, AHMAD",
+                "ALLEN, JULIA", "ALSTON, RETONYA", "AMPONSAH, KOFI", "ARMSTRONG, NICHOLAS",
+                "AVERRE, KATHLEEN", "BABCOCK, GARRETT",
+            ])
+        ]
+        family = [
+            {
+                "bbl": f"F{i}",
+                "address": f"{200 + i} ELM ST",
+                "borough": "CLEVELAND (CUYAHOGA)",
+                "zip_code": "44107",
+                "owner_name": nm,
+                "mailing_address": "88 FAMILY HQ BLVD, LAKEWOOD, OH 44107",
+            }
+            for i, nm in enumerate([
+                "GUREVITCH, MENACHEM", "GUREVITCH, DOV", "GUREVITCH, SHLOMO", "GUREVITCH, MIRIAM",
+            ])
+        ]
+        groups = run_union_find_clustering(unrelated + family, "oh")
+        # 10 unrelated owners stay 10 separate networks + 1 unified family network = 11 groups!
+        self.assertEqual(len(groups), 11)
+        fam_sizes = [len(g) for g in groups.values() if any(p["bbl"].startswith("F") for p in g)]
+        self.assertEqual(fam_sizes, [4])
+
+    def test_universal_address_onsite_trust_and_nominee_manager_edge_cases(self):
+        from api.shared_utils import (
+            extract_postal_street_zip_key,
+            is_excluded_third_party_entity,
+            normalize_mailing_address_coarse,
+        )
+        from api.populate_cities import is_generic_owner_name, run_union_find_clustering
+        from api.oc_linker import _INTERMEDIARY_EXCHANGE_LENDER_RE, cluster_with_oc_and_series
+
+        # 1. Universal address-normalization & ZIP-key collision fixes:
+        #    lettered avenues, numbered highways/county roads, ST->SAINT, MOUNT, double suffixes, quadrants
+        distinct_pairs = [
+            ("10530 S AVENUE E, CHICAGO, IL 60617", "10530 S AVENUE F, CHICAGO, IL 60617"),
+            ("100 AVENUE A, NEW YORK, NY 10009", "100 AVENUE B, NEW YORK, NY 10009"),
+            ("100 US HIGHWAY 2, KALISPELL, MT 59901", "100 US HIGHWAY 93, KALISPELL, MT 59901"),
+            ("100 COUNTY ROAD 12, DULUTH, MN 55803", "100 COUNTY ROAD 42, DULUTH, MN 55803"),
+            ("100 MOUNT VERNON ST, BOSTON, MA 02108", "100 MOUNT PLEASANT ST, BOSTON, MA 02108"),
+            ("100 ST CHARLES AVE, NEW ORLEANS, LA 70130", "100 ST JOSEPH ST, NEW ORLEANS, LA 70130"),
+            ("100 COURT STREET, BOSTON, MA 02108", "100 COURT SQUARE, BOSTON, MA 02108"),
+            ("1200 K ST NW, WASHINGTON, DC 20005", "1200 K ST NE, WASHINGTON, DC 20005"),
+            ("100 PARK AVE S, NEW YORK, NY 10003", "100 PARK AVE N, NEW YORK, NY 10003"),
+        ]
+        for a, b in distinct_pairs:
+            self.assertNotEqual(normalize_mailing_address_coarse(a), normalize_mailing_address_coarse(b), (a, b))
+            za, zb = extract_postal_street_zip_key(a), extract_postal_street_zip_key(b)
+            self.assertTrue(za != zb or za == "", (a, b, za, zb))
+        # Neighborhood/abbreviation unification still works on valid same-building addresses
+        self.assertEqual(
+            extract_postal_street_zip_key("39 BRIGHTON AVE, ALLSTON, MA 02134"),
+            extract_postal_street_zip_key("39 BRIGHTON AV, BOSTON, MA 02134-2013"),
+        )
+
+        # 2. Both-onsite 2-4 unit condo/duplex neighbors NEVER merge across distinct owners,
+        #    while a landlord living/officing onsite at 100 MAIN ST still merges with their offsite rental.
+        onsite_test_props = [
+            {
+                "bbl": "C1", "address": "4709 CHURCH ST B", "borough": "SKOKIE", "zip_code": "60076",
+                "owner_name": "CICILYN WALFORD", "mailing_address": "4709 CHURCH ST B, SKOKIE, IL 60076",
+            },
+            {
+                "bbl": "C2", "address": "4709 CHURCH ST # D", "borough": "SKOKIE", "zip_code": "60076",
+                "owner_name": "COMMERCIAL ACQUISITIONS LLC", "mailing_address": "4709 CHURCH ST # D, SKOKIE, IL 60076",
+            },
+            {
+                "bbl": "L1", "address": "100 MAIN ST", "borough": "SKOKIE", "zip_code": "60076",
+                "owner_name": "100 MAIN LLC", "mailing_address": "100 MAIN ST, SKOKIE, IL 60076",
+            },
+            {
+                "bbl": "L2", "address": "200 ELM ST", "borough": "SKOKIE", "zip_code": "60076",
+                "owner_name": "200 ELM LLC", "mailing_address": "100 MAIN ST, SKOKIE, IL 60076",
+            },
+        ]
+        ogroups = run_union_find_clustering(onsite_test_props, "il")
+        by_b = {p["bbl"]: root for root, grp in ogroups.items() for p in grp}
+        self.assertNotEqual(by_b["C1"], by_b["C2"])
+        self.assertEqual(by_b["L1"], by_b["L2"])
+
+        # 3. Truncated generic trust placeholders & newly widened universal non-landlord patterns
+        for placeholder in ("TRUST AGREEMENT DATED", "DECLARATION OF TRUST O", "TRUSTEE COMPANY LAND TRUST LLC"):
+            self.assertTrue(is_generic_owner_name(placeholder), placeholder)
+        self.assertFalse(is_generic_owner_name("SMITH FAMILY REVOCABLE LIVING TRUST"))
+        for non_landlord in (
+            "CRESTWOOD VIG CO-OP IV INC", "ROLLING MEADOWS COOP", "EQUITY TRUST CUSTODIAN",
+            "CHICAGO TRUST COMPANY", "VERIZON NEW ENGLAND INC", "Virginia Commonwealth Univ Academic Division",
+            "UNITED COMMUNITY HOUSING COALITION", "POTLATCHDELTIC TIMBER LLC", "KWIK TRIP INC",
+        ):
+            self.assertTrue(is_excluded_third_party_entity(non_landlord), non_landlord)
+        self.assertFalse(is_excluded_third_party_entity("100 UNIV ST PROPERTIES LLC"))
+        self.assertTrue(_INTERMEDIARY_EXCHANGE_LENDER_RE.search("JR MANAGER SERVICES LLC"))
+        self.assertTrue(_INTERMEDIARY_EXCHANGE_LENDER_RE.search("FLORIDA CORPORATE GROUP LLC"))
+
+        # 4. Structural nominee-manager dispersion guard in `cluster_with_oc_and_series`:
+        #    A corporate manager atop 10 unrelated client LLCs with 10 distinct HQs MUST NOT merge them,
+        #    while a real landlord GP atop 10 SPVs sharing 1 executive HQ STILL merges all 10!
+        client_props = [
+            {
+                "bbl": f"CL{i}", "owner_name": f"CLIENT{i} HOLDINGS LLC",
+                "owner_name_norm": f"CLIENT{i} HOLDINGS LLC",
+                "mailing_address": f"{100 + i} UNIQUE CLIENT BLVD, MIAMI, FL 33131",
+                "_coarse_mail": f"{100 + i} UNIQUE CLIENT BOULEVARD MIAMI FL",
+                "oc_jurisdiction_code": "us_fl", "oc_company_number": f"CL{i}",
+            }
+            for i in range(10)
+        ]
+        gp_props = [
+            {
+                "bbl": f"GP{i}", "owner_name": f"PORTFOLIO{i} ASSET LLC",
+                "owner_name_norm": f"PORTFOLIO{i} ASSET LLC",
+                "mailing_address": "500 SINGLE LANDLORD HQ AVE, MIAMI, FL 33131",
+                "_coarse_mail": "500 SINGLE LANDLORD HQ AVENUE MIAMI FL",
+                "oc_jurisdiction_code": "us_fl", "oc_company_number": f"GP{i}",
+            }
+            for i in range(10)
+        ]
+        all_p = client_props + gp_props
+        init_g = {p["bbl"]: [p] for p in all_p}
+        oc_res = {}
+        for i in range(10):
+            oc_res[("us_fl", f"CL{i}")] = {
+                "humans": [], "holding_entities": ["VESTA NOMINEE MANAGER LLC"],
+                "reached_companies": [f"us_fl/CL{i}", "us_fl/NOMINEE_FACTORY"],
+                "hq_addresses": [], "raw_hq_addresses": [],
+            }
+            oc_res[("us_fl", f"GP{i}")] = {
+                "humans": [], "holding_entities": ["REAL LANDLORD GP LLC"],
+                "reached_companies": [f"us_fl/GP{i}", "us_fl/REAL_GP"],
+                "hq_addresses": [], "raw_hq_addresses": [],
+            }
+        out_g, _ = cluster_with_oc_and_series(all_p, init_g, oc_res)
+        cl_roots = {root for root, grp in out_g.items() for p in grp if p["bbl"].startswith("CL")}
+        gp_roots = {root for root, grp in out_g.items() for p in grp if p["bbl"].startswith("GP")}
+        self.assertEqual(len(cl_roots), 10)  # 10 unrelated clients stayed strictly separate!
+        self.assertEqual(len(gp_roots), 1)   # 10 real landlord SPVs unified into 1 portfolio!
+
+    def test_mother_teresa_nonprofit_firewall_non_beneficial_roles_and_generic_manager(self):
+        from api.oc_linker import (
+            _EXCLUDED_OC_COMPANY_TYPE_RE,
+            _NON_BENEFICIAL_OFFICER_POSITION_RE,
+            cluster_with_oc_and_series,
+            is_generic_homonym_stem,
+        )
+        from api.network_builder import _EXCLUDED_CT_BIZ_TYPE_RE
+
+        # Generic bare corporate names must never Tier-2 match across unrelated entities
+        for generic_nm in ("MANAGER LLC", "MANAGING LLC", "OWNER LLC", "TRUSTEE LLC", "GENERAL PARTNER LP"):
+            self.assertTrue(is_generic_homonym_stem(generic_nm), generic_nm)
+        self.assertFalse(is_generic_homonym_stem("WINNCOMPANIES LLC"))
+
+        # Nonprofit / Non-Stock / Charitable / Religious / Co-op / Professional Service types excluded
+        for non_profit_ct in (
+            "Non-Profit Corporation - Domestic",
+            "Nonprofit Corporation",
+            "Non-Stock",
+            "DOMESTIC NOT-FOR-PROFIT CORPORATION",
+            "DOMESTIC NOT-FOR-PROFIT CORPORATION (HOUSING DEVELOPMENT FUND COMPANY) (ARTICLE XI)",
+            "DOMESTIC PROFESSIONAL SERVICE CORPORATION",
+            "DOMESTIC PROFESSIONAL SERVICE LIMITED LIABILITY COMPANY",
+            "Public Benefit Corporation",
+            "Mutual Benefit Nonprofit Corporation",
+            "Charitable Corporation",
+            "Religious",
+        ):
+            self.assertTrue(bool(_EXCLUDED_OC_COMPANY_TYPE_RE.search(non_profit_ct)), non_profit_ct)
+        for ct_excluded in (
+            "Non-Stock",
+            "DOMESTIC NOT-FOR-PROFIT CORPORATION",
+            "DOMESTIC NOT-FOR-PROFIT CORPORATION (COMMUNITY MENTAL HEALTH SERVICES AND MENTAL RETARDATION SERVICES COMPANIES)",
+            "DOMESTIC PROFESSIONAL SERVICE CORPORATION",
+            "DOMESTIC COOPERATIVE CORPORATION",
+            "Religious",
+        ):
+            self.assertTrue(bool(_EXCLUDED_CT_BIZ_TYPE_RE.search(ct_excluded)), ct_excluded)
+        for ct_allowed in ("LLC", "Stock", "DOMESTIC LIMITED LIABILITY COMPANY", "DOMESTIC BUSINESS CORPORATION", "Limited Partnership"):
+            self.assertFalse(bool(_EXCLUDED_CT_BIZ_TYPE_RE.search(ct_allowed)), ct_allowed)
+
+        # Volunteer / advisory / clerical / religious / agent officer positions excluded
+        for bad_pos in ("Advisory Board", "Honorary Director", "Chaplain", "Assistant Secretary", "Registered Agent", "Attorney", "Volunteer"):
+            self.assertTrue(bool(_NON_BENEFICIAL_OFFICER_POSITION_RE.search(bad_pos)), bad_pos)
+        for good_pos in ("Manager", "Managing Member", "President", "Beneficial Owner", "General Partner"):
+            self.assertFalse(bool(_NON_BENEFICIAL_OFFICER_POSITION_RE.search(good_pos)), good_pos)
+
+        # OC-verified non-landlord nonprofit (e.g. Dudley Neighbors Inc / Armistead Homes Corp)
+        # is pruned from private landlord networks while genuine for-profit LLCs are preserved.
+        props = [
+            {"bbl": "NP1", "owner_name": "DUDLEY NEIGHBORS INC", "owner_name_norm": "DUDLEY NEIGHBORS INC", "oc_jurisdiction_code": "us_ma", "oc_company_number": "NP_1"},
+            {"bbl": "NP2", "owner_name": "ARMISTEAD HOMES CORP", "owner_name_norm": "ARMISTEAD HOMES CORP", "oc_jurisdiction_code": "us_md", "oc_company_number": "NP_2"},
+            {"bbl": "PR1", "owner_name": "PRIVATE LANDLORD LLC", "owner_name_norm": "PRIVATE LANDLORD LLC", "oc_jurisdiction_code": "us_ma", "oc_company_number": "PR_1"},
+        ]
+        init_g = {p["bbl"]: [p] for p in props}
+        oc_res = {
+            ("us_ma", "NP_1"): {"humans": [], "holding_entities": [], "reached_companies": [], "hq_addresses": [], "raw_hq_addresses": [], "is_excluded_entity": True},
+            ("us_md", "NP_2"): {"humans": [], "holding_entities": [], "reached_companies": [], "hq_addresses": [], "raw_hq_addresses": [], "is_excluded_entity": True},
+            ("us_ma", "PR_1"): {"humans": ["JANE LANDLORD"], "holding_entities": [], "reached_companies": ["us_ma/PR_1"], "hq_addresses": ["100 MAIN ST BOSTON MA"], "raw_hq_addresses": []},
+        }
+        out_g, _ = cluster_with_oc_and_series(props, init_g, oc_res)
+        kept_bbls = {p["bbl"] for grp in out_g.values() for p in grp}
+        self.assertEqual(kept_bbls, {"PR1"})
 
 
 if __name__ == "__main__":

@@ -1,4 +1,6 @@
 User-agent: *
 Allow: /
 Disallow: /api/
+Disallow: /review
+Disallow: /review/
 Sitemap: https://theyownwhat.net/sitemap.xml
