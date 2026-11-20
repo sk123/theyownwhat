@@ -16,6 +16,7 @@ from typing import Optional, List
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse
 import psycopg2
+import psycopg2.pool
 from psycopg2.extras import RealDictCursor
 import requests
 
@@ -164,10 +165,20 @@ def _validate_city(city: str):
         raise HTTPException(status_code=400, detail=f"Unsupported city: {city}")
     return c
 
-def _query(sql: str, params=None) -> list[dict]:
-    conn = db_module.db_pool.getconn()
+def _query(sql: str, params=None, *, timeout_ms: int | None = 15000, lock_timeout_ms: int | None = 4000) -> list[dict]:
+    try:
+        conn = db_module.db_pool.getconn()
+    except psycopg2.pool.PoolError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Database is temporarily busy; please retry in a moment.",
+        ) from exc
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            if timeout_ms is not None:
+                cur.execute("SET LOCAL statement_timeout = %s", (int(timeout_ms),))
+            if lock_timeout_ms is not None:
+                cur.execute("SET LOCAL lock_timeout = %s", (int(lock_timeout_ms),))
             cur.execute(sql, params or ())
             rows = [dict(r) for r in cur.fetchall()]
         conn.commit()
@@ -556,100 +567,103 @@ def city_stats(city: str, force_refresh: bool = False):
                 _stats_ts[cache_key] = now
                 return kv_val
 
-    # Dynamically inject table names based on whitelisted city
-    rows = _query(f"""
-        SELECT
-            COUNT(*) FILTER (WHERE COALESCE(building_count, 0) > 0)
-                                                            AS networks,
-            SUM(building_count)                             AS buildings,
-            SUM(unit_count)                                 AS units,
-            COUNT(*) FILTER (WHERE COALESCE(building_count, 0) > 10)
-                                                            AS large_networks,
-            MAX(building_count)                             AS largest_network,
-            MAX(unit_count)                                 AS most_units
-        FROM {c}_networks
-    """)
+        # Dynamically inject table names based on whitelisted city.
+        # Serialized by `city_lock` and cached in `kv_cache` (stale-while-revalidate),
+        # so allow up to 60s for cold multi-million-row statewide aggregations.
+        rows = _query(f"""
+            SELECT
+                COUNT(*) FILTER (WHERE COALESCE(building_count, 0) > 0)
+                                                                AS networks,
+                SUM(building_count)                             AS buildings,
+                SUM(unit_count)                                 AS units,
+                COUNT(*) FILTER (WHERE COALESCE(building_count, 0) > 10)
+                                                                AS large_networks,
+                MAX(building_count)                             AS largest_network,
+                MAX(unit_count)                                 AS most_units
+            FROM {c}_networks
+        """, timeout_ms=60000)
 
-    reg_row = _query(f"SELECT COUNT(*) AS registrations FROM {c}_hpd_registrations")
-    prop_row = _query(f"SELECT COUNT(*) AS lots FROM {c}_properties")
-    biz_row = _query(
-        f"""
-        SELECT COUNT(DISTINCT UPPER(TRIM(m)))::int AS businesses
-        FROM {c}_networks n
-        CROSS JOIN LATERAL UNNEST(n.member_names) AS m
-        WHERE COALESCE(n.building_count, 0) > 0
-          AND m ~* %s
-        """,
-        (
-            r"(LLC|L\.L\.C|INC|CORP|CORPORATION|LTD|LP|L\.P|LLP|HOLDINGS|REALTY|PROPERTIES|PROPERTY|"
-            r"ASSOCIATES|ASSOC|PARTNERS|PARTNERSHIP|VENTURES|TRUST|TRUSTEE|COMPANY|CO\y|ENTERPRISES|"
-            r"GROUP|MANAGEMENT|INVESTMENTS|INVESTMENT|DEVELOPMENT|EQUITY|CAPITAL|BORROWER|OWNER|"
-            r"ESTATES|FUND|APARTMENTS|HOMES|HOUSING|RESIDENTIAL)",
-        ),
-    )
+        reg_row = _query(f"SELECT COUNT(*) AS registrations FROM {c}_hpd_registrations", timeout_ms=60000)
+        prop_row = _query(f"SELECT COUNT(*) AS lots FROM {c}_properties", timeout_ms=60000)
+        biz_row = _query(
+            f"""
+            SELECT COUNT(DISTINCT UPPER(TRIM(m)))::int AS businesses
+            FROM {c}_networks n
+            CROSS JOIN LATERAL UNNEST(n.member_names) AS m
+            WHERE COALESCE(n.building_count, 0) > 0
+              AND m ~* %s
+            """,
+            (
+                r"(LLC|L\.L\.C|INC|CORP|CORPORATION|LTD|LP|L\.P|LLP|HOLDINGS|REALTY|PROPERTIES|PROPERTY|"
+                r"ASSOCIATES|ASSOC|PARTNERS|PARTNERSHIP|VENTURES|TRUST|TRUSTEE|COMPANY|CO\y|ENTERPRISES|"
+                r"GROUP|MANAGEMENT|INVESTMENTS|INVESTMENT|DEVELOPMENT|EQUITY|CAPITAL|BORROWER|OWNER|"
+                r"ESTATES|FUND|APARTMENTS|HOMES|HOUSING|RESIDENTIAL)",
+            ),
+            timeout_ms=60000,
+        )
 
-    status_rows = _query("""
-        SELECT last_refreshed_at, external_last_updated
-        FROM data_source_status
-        WHERE source_name = %s
-        LIMIT 1
-    """, (c.upper(),))
-    status = status_rows[0] if status_rows else {}
-    last_updated = status.get("external_last_updated") or status.get("last_refreshed_at")
-    refresh_snapshot = _city_refresh_snapshot(c)
+        status_rows = _query("""
+            SELECT last_refreshed_at, external_last_updated
+            FROM data_source_status
+            WHERE source_name = %s
+            LIMIT 1
+        """, (c.upper(),))
+        status = status_rows[0] if status_rows else {}
+        last_updated = status.get("external_last_updated") or status.get("last_refreshed_at")
+        refresh_snapshot = _city_refresh_snapshot(c)
 
-    # City-specific display details
-    city_display_names = {
-        "nyc": "NYC HPD Multiple Dwelling Registrations + PLUTO",
-        "dc": "D.C. GIS Computer Assisted Mass Appraisal",
-        "baltimore": "Baltimore City GIS Ownership Records",
-        "philadelphia": "Philadelphia OPA Assessments + L&I Active Rental Licenses + PA DOS",
-        "boston": "Boston Property Assessment Roll",
-        "detroit": "Detroit Property Assessment Roll",
-        "chicago": "Cook County Assessor Parcels (City of Chicago)",
-        "miami": "Miami-Dade Parcels + Florida Sunbiz + DBPR Apartment Licenses",
-        "minneapolis": "Minneapolis Active Rental Licenses + MapIT GIS",
-        "nj": "New Jersey DCA BHI Active Building Records",
-        "ma": "MassGIS Level 3 Property Tax Parcels + 112 Municipal CAMA Scrapers (All 351 Municipalities)",
-        "fl": "Florida Unified 67-County Parcels (FDOR + Miami-Dade PA + Hillsborough HCPA) + Sunbiz + DBPR Ch. 509 + Miami-Dade/Orlando/Gainesville Code",
-        "ny": "New York Unified 62-County Explorer (NYC PLUTO/HPD/Marshal Evictions + NYS ORPTS + Rochester/Buffalo/Syracuse + SDG ImageMate)",
-        "il": "Illinois Chicagoland Explorer (Cook 1.66M + DuPage 309K + Lake 258K PINs + Chicago DOB Violations + Devnet/Beacon CAMA)",
-        "ca": "LA & San Francisco Registered-Lessor Explorer (Partial: 2 of 58 CA counties; business-tax lessors + evictions/violations + CA SOS)",
-        "co": "Colorado OIT Public Parcels + CO SOS + Denver Active Rental Licenses",
-        "vt": "Vermont VCGI Standardized Parcels + Statewide Grand List",
-        "wi": "Wisconsin SCO/DOA Statewide Parcels (Class 1 Residential & Class 2 Multifamily)",
-        "nc": "North Carolina NC OneMap Parcels (All 100 Counties)",
-        "ar": "Arkansas GIS Office Statewide Parcels (All 75 Counties) + AR SOS",
-        "va": "Virginia VGIN Local Schema Parcels + HRGeo + County CAMA + VA SCC",
-        "mt": "Montana MSDI / DOR ORION Cadastral Parcels (All 56 Counties) + MT SOS",
-        "mn": "Minnesota Unified Explorer (Hennepin, Ramsey, Dakota, Anoka & Olmsted/Rochester CAMA + Minneapolis Rental Licenses) + MN SOS",
-        "oh": "Ohio County Auditor CAMA Parcels (Columbus/Franklin, Cleveland/Cuyahoga, Cincinnati/Hamilton & Toledo/Lucas) + OH SOS",
-    }
+        # City-specific display details
+        city_display_names = {
+            "nyc": "NYC HPD Multiple Dwelling Registrations + PLUTO",
+            "dc": "D.C. GIS Computer Assisted Mass Appraisal",
+            "baltimore": "Baltimore City GIS Ownership Records",
+            "philadelphia": "Philadelphia OPA Assessments + L&I Active Rental Licenses + PA DOS",
+            "boston": "Boston Property Assessment Roll",
+            "detroit": "Detroit Property Assessment Roll",
+            "chicago": "Cook County Assessor Parcels (City of Chicago)",
+            "miami": "Miami-Dade Parcels + Florida Sunbiz + DBPR Apartment Licenses",
+            "minneapolis": "Minneapolis Active Rental Licenses + MapIT GIS",
+            "nj": "New Jersey DCA BHI Active Building Records",
+            "ma": "MassGIS Level 3 Property Tax Parcels + 112 Municipal CAMA Scrapers (All 351 Municipalities)",
+            "fl": "Florida Unified 67-County Parcels (FDOR + Miami-Dade PA + Hillsborough HCPA) + Sunbiz + DBPR Ch. 509 + Miami-Dade/Orlando/Gainesville Code",
+            "ny": "New York Unified 62-County Explorer (NYC PLUTO/HPD/Marshal Evictions + NYS ORPTS + Rochester/Buffalo/Syracuse + SDG ImageMate)",
+            "il": "Illinois Chicagoland Explorer (Cook 1.66M + DuPage 309K + Lake 258K PINs + Chicago DOB Violations + Devnet/Beacon CAMA)",
+            "ca": "LA & San Francisco Registered-Lessor Explorer (Partial: 2 of 58 CA counties; business-tax lessors + evictions/violations + CA SOS)",
+            "co": "Colorado OIT Public Parcels + CO SOS + Denver Active Rental Licenses",
+            "vt": "Vermont VCGI Standardized Parcels + Statewide Grand List",
+            "wi": "Wisconsin SCO/DOA Statewide Parcels (Class 1 Residential & Class 2 Multifamily)",
+            "nc": "North Carolina NC OneMap Parcels (All 100 Counties)",
+            "ar": "Arkansas GIS Office Statewide Parcels (All 75 Counties) + AR SOS",
+            "va": "Virginia VGIN Local Schema Parcels + HRGeo + County CAMA + VA SCC",
+            "mt": "Montana MSDI / DOR ORION Cadastral Parcels (All 56 Counties) + MT SOS",
+            "mn": "Minnesota Unified Explorer (Hennepin, Ramsey, Dakota, Anoka & Olmsted/Rochester CAMA + Minneapolis Rental Licenses) + MN SOS",
+            "oh": "Ohio County Auditor CAMA Parcels (Columbus/Franklin, Cleveland/Cuyahoga, Cincinnati/Hamilton & Toledo/Lucas) + OH SOS",
+        }
 
-    result = {
-        "networks":        int(rows[0]["networks"]  or 0),
-        "businesses":      int(biz_row[0]["businesses"] or 0) if biz_row else 0,
-        "buildings":       int(rows[0]["buildings"] or 0),
-        "units":           int(rows[0]["units"] or 0) if c in RELIABLE_UNIT_CITIES else None,
-        "unit_data_available": c in RELIABLE_UNIT_CITIES,
-        "large_networks":  int(rows[0]["large_networks"] or 0),
-        "largest_network": int(rows[0]["largest_network"] or 0),
-        "most_units":      int(rows[0]["most_units"] or 0) if c in RELIABLE_UNIT_CITIES else None,
-        "registrations":   int(reg_row[0]["registrations"] or 0),
-        "pluto_lots":      int(prop_row[0]["lots"] or 0),
-        "data_source":     city_display_names.get(c, "Property Registrations"),
-        "last_updated":    str(last_updated) if last_updated else None,
-        "refresh_status":  refresh_snapshot["refresh_status"],
-        "is_refreshing":   refresh_snapshot["is_refreshing"],
-        "active_refreshes": refresh_snapshot["active_refreshes"],
-        "eviction_data":   _city_eviction_summary(c),
-        "code_data":       _city_code_summary(c),
-    }
+        result = {
+            "networks":        int(rows[0]["networks"]  or 0),
+            "businesses":      int(biz_row[0]["businesses"] or 0) if biz_row else 0,
+            "buildings":       int(rows[0]["buildings"] or 0),
+            "units":           int(rows[0]["units"] or 0) if c in RELIABLE_UNIT_CITIES else None,
+            "unit_data_available": c in RELIABLE_UNIT_CITIES,
+            "large_networks":  int(rows[0]["large_networks"] or 0),
+            "largest_network": int(rows[0]["largest_network"] or 0),
+            "most_units":      int(rows[0]["most_units"] or 0) if c in RELIABLE_UNIT_CITIES else None,
+            "registrations":   int(reg_row[0]["registrations"] or 0),
+            "pluto_lots":      int(prop_row[0]["lots"] or 0),
+            "data_source":     city_display_names.get(c, "Property Registrations"),
+            "last_updated":    str(last_updated) if last_updated else None,
+            "refresh_status":  refresh_snapshot["refresh_status"],
+            "is_refreshing":   refresh_snapshot["is_refreshing"],
+            "active_refreshes": refresh_snapshot["active_refreshes"],
+            "eviction_data":   _city_eviction_summary(c),
+            "code_data":       _city_code_summary(c),
+        }
 
-    _stats_cache[cache_key] = result
-    _stats_ts[cache_key] = time.time()
-    _kv_set(cache_key, result)
-    return result
+        _stats_cache[cache_key] = result
+        _stats_ts[cache_key] = time.time()
+        _kv_set(cache_key, result)
+        return result
 
 
 def _city_eviction_summary(city: str) -> dict:
@@ -811,6 +825,7 @@ def city_search(
     city:  str,
     q:     str = Query(..., min_length=2),
     limit: int = Query(20, ge=1, le=100),
+    fast:  bool = Query(False),
 ):
     c = _validate_city(city)
     term = q.strip().upper()
@@ -820,6 +835,14 @@ def city_search(
     terms = [t for t in clean_term.split() if t]
     if not terms:
         return []
+
+    search_timeout_ms = 2500 if fast else 5000
+
+    def _search_query(sql: str, params=None) -> list[dict]:
+        try:
+            return _query(sql, params, timeout_ms=search_timeout_ms, lock_timeout_ms=1500)
+        except (psycopg2.errors.QueryCanceled, psycopg2.errors.LockNotAvailable):
+            return []
 
     term_like = f"%{' '.join(terms)}%"
     multi_word = len(terms) >= 2
@@ -898,7 +921,7 @@ def city_search(
         where_rep_op, rep_op_params = _build_where(
             "CONCAT_WS(' ', COALESCE(rp.operator_name, ''), COALESCE(rp.representative_human_name, ''), COALESCE(rp.operating_entities::text, ''))"
         )
-        rep_net_rows = _query(f"""
+        rep_net_rows = _search_query(f"""
             SELECT
                 n.network_key,
                 n.display_name,
@@ -924,7 +947,7 @@ def city_search(
     # 1. Direct network name or primary OpenCorporates/registration principal matches.
     # Split `display_name` from `primary_human_name` so `*_networks_display_trgm_idx` is always used.
     where_disp, disp_params = _build_where("display_name")
-    disp_rows = _query(f"""
+    disp_rows = _search_query(f"""
         SELECT
             network_key,
             display_name,
@@ -944,9 +967,9 @@ def city_search(
             direct_net_rows.append(dr)
 
     if len(direct_net_rows) < limit:
-        where_human, human_params = _build_where("COALESCE(connection_signals::jsonb->>'primary_human_name', '')")
         rem_direct = limit - len(direct_net_rows)
-        human_net_rows = _query(f"""
+        # 1a. Exact indexed lookup on `idx_{c}_nets_primary_human_upper` (<1ms even on 2.5M rows)
+        exact_human_rows = _search_query(f"""
             SELECT
                 network_key,
                 display_name,
@@ -956,19 +979,57 @@ def city_search(
                 member_names,
                 connection_signals
             FROM {c}_networks
-            WHERE COALESCE(building_count, 0) >= 2
-              AND (connection_signals::jsonb->>'primary_human_name') IS NOT NULL
-              AND ({where_human})
+            WHERE (connection_signals::jsonb->>'primary_human_name') IS NOT NULL
+              AND UPPER(connection_signals::jsonb->>'primary_human_name') = %s
             ORDER BY building_count DESC NULLS LAST, display_name
             LIMIT %s
-        """, human_params + [rem_direct])
-        for hr in human_net_rows:
+        """, [" ".join(terms), rem_direct])
+        for hr in exact_human_rows:
             if hr["network_key"] not in seen_network_keys:
                 seen_network_keys.add(hr["network_key"])
                 direct_net_rows.append(hr)
 
-        if not direct_net_rows:
-            single_human_rows = _query(f"""
+        # 1b. Substring human-name scan bounded to the top 5,000 largest multi-building portfolios
+        # via `*_networks_bldg_count_idx` (prevents 2.5M-row full-table seq scans on unindexed ILIKE).
+        if len(direct_net_rows) < limit and not fast:
+            where_human, human_params = _build_where("COALESCE(connection_signals::jsonb->>'primary_human_name', '')")
+            rem_direct = limit - len(direct_net_rows)
+            human_net_rows = _search_query(f"""
+                WITH top_human_cands AS (
+                    SELECT
+                        network_key,
+                        display_name,
+                        building_count,
+                        unit_count,
+                        borough_summary,
+                        member_names,
+                        connection_signals
+                    FROM {c}_networks
+                    WHERE COALESCE(building_count, 0) >= 2
+                    ORDER BY building_count DESC NULLS LAST
+                    LIMIT 5000
+                )
+                SELECT *
+                FROM top_human_cands
+                WHERE (connection_signals::jsonb->>'primary_human_name') IS NOT NULL
+                  AND ({where_human})
+                ORDER BY building_count DESC NULLS LAST, display_name
+                LIMIT %s
+            """, human_params + [rem_direct])
+            for hr in human_net_rows:
+                if hr["network_key"] not in seen_network_keys:
+                    seen_network_keys.add(hr["network_key"])
+                    direct_net_rows.append(hr)
+
+    # 2. Multi-entity network member / corporate officer matches bounded to top 2,500 portfolios
+    # via `*_networks_bldg_count_idx` (skipped in landing omni-search `fast=true`).
+    member_net_cap = 0 if fast else min(5, limit)
+    if member_net_cap > 0:
+        where_hidden_exists, hidden_params = _build_where("n")
+        where_member_like, member_params = _build_where("member_name")
+
+        hidden_net_rows = _search_query(f"""
+            WITH top_multi_nets AS (
                 SELECT
                     network_key,
                     display_name,
@@ -978,24 +1039,10 @@ def city_search(
                     member_names,
                     connection_signals
                 FROM {c}_networks
-                WHERE COALESCE(building_count, 0) = 1
-                  AND (connection_signals::jsonb->>'primary_human_name') IS NOT NULL
-                  AND ({where_human})
-                LIMIT %s
-            """, human_params + [min(limit, 8)])
-            for hr in single_human_rows:
-                if hr["network_key"] not in seen_network_keys:
-                    seen_network_keys.add(hr["network_key"])
-                    direct_net_rows.append(hr)
-
-    # 2. Multi-entity network member / corporate officer matches (always check major multi-entity
-    # portfolios so searching "Winn" or "Hamilton" surfaces the 908-parcel portfolio before 1-parcel matches).
-    member_net_cap = min(5, limit)
-    if member_net_cap > 0:
-        where_hidden_exists, hidden_params = _build_where("n")
-        where_member_like, member_params = _build_where("member_name")
-
-        hidden_net_rows = _query(f"""
+                WHERE COALESCE(building_count, 0) >= 2
+                ORDER BY building_count DESC NULLS LAST
+                LIMIT 2500
+            )
             SELECT
                 network_key,
                 display_name,
@@ -1021,9 +1068,8 @@ def city_search(
                     ORDER BY length(member_name), member_name
                     LIMIT 5
                 ) AS matched_member_names
-            FROM {c}_networks
-            WHERE COALESCE(building_count, 0) >= 2
-              AND (
+            FROM top_multi_nets
+            WHERE (
                     COALESCE(array_length(member_names, 1), 0) > 1
                     OR connection_signals::text LIKE '%%source_human_names%%'
                   )
@@ -1083,7 +1129,7 @@ def city_search(
     if remaining > 0:
         where_paddr, paddr_params = _build_where("p.address")
         where_owner, owner_params = _build_where("p.owner_name")
-        prop_rows = _query(f"""
+        prop_rows = _search_query(f"""
             WITH matched_props AS (
                 SELECT
                     p.bbl,
@@ -1126,9 +1172,13 @@ def city_search(
             ) n ON TRUE
         """, paddr_params + owner_params + [term_like, term_like, remaining])
 
-        if not prop_rows and not results:
+        # Indexed address+city fallback ONLY for multi-token street-number queries (e.g. "123 MAIN BOSTON").
+        # Pushing `p.address ILIKE %first_two_tokens%` guarantees `*_properties_addr_trgm_idx` is used
+        # instead of a full multi-million-row sequential scan on `CONCAT_WS(' ', p.address, p.borough)`.
+        if not prop_rows and not results and not fast and len(terms) >= 2 and any(ch.isdigit() for ch in terms[0]):
+            addr_seed_like = f"%{terms[0]} {terms[1]}%"
             where_addr_boro, addr_boro_params = _build_where("CONCAT_WS(' ', p.address, p.borough)")
-            prop_rows = _query(f"""
+            prop_rows = _search_query(f"""
                 WITH matched_props AS (
                     SELECT
                         p.bbl,
@@ -1138,7 +1188,8 @@ def city_search(
                         p.owner_name,
                         p.units_res
                     FROM {c}_properties p
-                    WHERE {where_addr_boro}
+                    WHERE p.address ILIKE %s
+                      AND ({where_addr_boro})
                     ORDER BY p.units_res DESC NULLS LAST, p.address
                     LIMIT %s
                 )
@@ -1163,7 +1214,7 @@ def city_search(
                     ORDER BY net.building_count DESC NULLS LAST
                     LIMIT 1
                 ) n ON TRUE
-            """, addr_boro_params + [remaining])
+            """, [addr_seed_like] + addr_boro_params + [remaining])
 
         for r in prop_rows:
             owner_name = r["owner_name"] or ""

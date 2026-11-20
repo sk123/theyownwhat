@@ -168,7 +168,8 @@ export default function DatasetLanding({
   // Debounced multi-jurisdiction search across CT + active city/state explorers
   useEffect(() => {
     const q = omniTerm.trim();
-    if (q.length < 2) {
+    const minChars = omniScope === 'ALL' ? 3 : 2;
+    if (q.length < minChars) {
       setOmniResults([]);
       setOmniLoading(false);
       return undefined;
@@ -182,10 +183,10 @@ export default function DatasetLanding({
       try {
         const qEnc = encodeURIComponent(q);
         const qUpper = q.toUpperCase();
-        const tasks = [];
+        const taskFns = [];
 
         if (omniScope === 'ALL' || omniScope === 'CT') {
-          tasks.push(
+          taskFns.push(() =>
             fetch(`/api/autocomplete?q=${qEnc}&type=all&state=CT`, { signal })
               .then((r) => (r.ok ? r.json() : []))
               .then((rows) =>
@@ -216,9 +217,10 @@ export default function DatasetLanding({
             : activeSearchCities.filter((c) => c.key === omniScope);
 
         const perCityLimit = omniScope === 'ALL' ? 2 : 10;
+        const fastFlag = omniScope === 'ALL' ? '&fast=1' : '';
         citiesToQuery.forEach((cityMeta) => {
-          tasks.push(
-            fetch(`/api/${cityMeta.prefix}/search?q=${qEnc}&limit=${perCityLimit}`, { signal })
+          taskFns.push(() =>
+            fetch(`/api/${cityMeta.prefix}/search?q=${qEnc}&limit=${perCityLimit}${fastFlag}`, { signal })
               .then((r) => (r.ok ? r.json() : []))
               .then((rows) =>
                 (Array.isArray(rows) ? rows : []).map((row) => {
@@ -264,7 +266,17 @@ export default function DatasetLanding({
           );
         });
 
-        const settled = await Promise.all(tasks);
+        // Cap concurrency to 6 in-flight jurisdiction queries so omni-search never floods the API pool
+        const settled = [];
+        const concurrency = 6;
+        let cursor = 0;
+        const workers = Array.from({ length: Math.min(concurrency, taskFns.length) }, async () => {
+          while (cursor < taskFns.length && !signal.aborted) {
+            const idx = cursor++;
+            settled[idx] = await taskFns[idx]();
+          }
+        });
+        await Promise.all(workers);
         if (signal.aborted) return;
         const merged = settled
           .flat()
@@ -282,7 +294,7 @@ export default function DatasetLanding({
       } finally {
         if (!signal.aborted) setOmniLoading(false);
       }
-    }, 220);
+    }, 350);
 
     return () => {
       clearTimeout(timer);

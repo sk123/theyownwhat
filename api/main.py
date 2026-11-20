@@ -35,7 +35,7 @@ from psycopg2.extras import RealDictCursor, execute_batch
 
 from fastapi import FastAPI, Depends, HTTPException, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, HTMLResponse
+from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -506,6 +506,16 @@ app.include_router(audit_review_router)
 
 from api.reviewer_feedback_routes import router as reviewer_feedback_router
 app.include_router(reviewer_feedback_router)
+
+@app.exception_handler(psycopg2.errors.QueryCanceled)
+@app.exception_handler(psycopg2.errors.LockNotAvailable)
+@app.exception_handler(psycopg2.pool.PoolError)
+async def _handle_db_busy(request: Request, exc: Exception):
+    logger.warning("Database busy/timeout on %s: %s", request.url.path, exc)
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "Database is temporarily busy; please retry in a moment."},
+    )
 
 import api.db as db_module
 from api.db import init_db_pool, get_db_connection
@@ -1014,7 +1024,7 @@ def backfill_owner_norm_columns(conn) -> None:
 
 @app.on_event("startup")
 def startup_event():
-    init_db_pool()
+    init_db_pool(statement_timeout_ms=25000, lock_timeout_ms=5000)
 
     conn = db_module.db_pool.getconn()
     try:
@@ -1500,6 +1510,7 @@ def autocomplete(q: str, type: str, state: Optional[str] = None, conn=Depends(ge
 
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute("SET LOCAL statement_timeout = 4000; SET LOCAL lock_timeout = 1500;")
             terms = [t for t in q_clean.split() if t]
             normalized_query = normalize_business_name(q_clean)
             broad_owner_terms = {

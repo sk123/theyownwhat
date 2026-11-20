@@ -358,6 +358,9 @@ def ensure_jurisdiction_partition(conn, jurisdiction: str) -> None:
                 ON {jur}_networks USING GIN (display_name gin_trgm_ops);
             CREATE INDEX IF NOT EXISTS {jur}_networks_bbl_gin_idx
                 ON {jur}_networks USING GIN (bbl_list);
+            CREATE INDEX IF NOT EXISTS idx_{jur}_nets_primary_human_upper
+                ON {jur}_networks (UPPER((connection_signals::jsonb->>'primary_human_name')))
+                WHERE (connection_signals::jsonb->>'primary_human_name') IS NOT NULL;
 
             CREATE TABLE IF NOT EXISTS {jur}_hpd_registrations
                 PARTITION OF us_hpd_registrations FOR VALUES IN ('{jur}');

@@ -1559,19 +1559,34 @@ def build_and_save_state_networks(conn, jur: str, state_code: str, source_tag: s
     if oc_merges:
         print(f"  [{jur.upper()}] Corporate registry & series untangling merged {oc_merges:,} multi-entity links.")
 
+    staging_tbl = f"{jur}_networks_staging"
     insert_sql = f"""
-        INSERT INTO {jur}_networks (
+        INSERT INTO {staging_tbl} (
             jurisdiction, network_key, anchor_type, display_name, member_names,
             member_addresses, registration_ids, bbl_list, building_count, unit_count,
             borough_summary, connection_signals, oc_company_ids
         )
-        VALUES %s
-        ON CONFLICT (jurisdiction, network_key) DO NOTHING;
+        VALUES %s;
     """
     n_networks = 0
+    seen_network_keys: Set[str] = set()
     batch: List[tuple] = []
+    # Build into an unattached staging table so live `{jur}_networks` reads stay
+    # completely unblocked throughout the multi-million-row insert and index build.
     with conn.cursor() as cur:
-        cur.execute(f"TRUNCATE TABLE {jur}_networks;")
+        cur.execute(f"DROP TABLE IF EXISTS public.{staging_tbl};")
+        cur.execute(
+            f"CREATE TABLE public.{staging_tbl} "
+            f"(LIKE public.us_networks INCLUDING DEFAULTS INCLUDING GENERATED INCLUDING STORAGE);"
+        )
+        cur.execute(f"ALTER TABLE public.{staging_tbl} ALTER COLUMN jurisdiction SET DEFAULT '{jur}';")
+        cur.execute(
+            f"ALTER TABLE public.{staging_tbl} "
+            f"ADD CONSTRAINT {staging_tbl}_jur_chk CHECK (jurisdiction = '{jur}');"
+        )
+    conn.commit()
+
+    with conn.cursor() as cur:
         while network_groups:
             root_bbl, group = network_groups.popitem()
             dedup = {p["bbl"]: p for p in group if p.get("bbl")}
@@ -1614,6 +1629,9 @@ def build_and_save_state_networks(conn, jur: str, state_code: str, source_tag: s
             primary_human = source_humans[0] if source_humans else None
             safe_root = re.sub(r"[^a-z0-9_.-]", "_", root_bbl.lower())
             network_key = f"network_{jur}_{safe_root}"
+            if network_key in seen_network_keys:
+                continue
+            seen_network_keys.add(network_key)
             anchor_type = (
                 "person"
                 if not any(
@@ -1681,8 +1699,78 @@ def build_and_save_state_networks(conn, jur: str, state_code: str, source_tag: s
         if batch:
             execute_values(cur, insert_sql, batch, page_size=2500)
             batch.clear()
+    conn.commit()
+    seen_network_keys.clear()
+
+    # Build all search & partition indexes on staging while live traffic stays unblocked.
+    with conn.cursor() as cur:
         cur.execute(
-            "DELETE FROM kv_cache WHERE key IN ('completeness_matrix', %s) OR key LIKE %s",
+            f"ALTER TABLE public.{staging_tbl} "
+            f"ADD CONSTRAINT {staging_tbl}_pkey PRIMARY KEY (jurisdiction, network_key);"
+        )
+        cur.execute(f"CREATE UNIQUE INDEX {staging_tbl}_key_uidx ON public.{staging_tbl} (network_key);")
+        cur.execute(f"CREATE INDEX {staging_tbl}_bldg_count_idx ON public.{staging_tbl} (building_count DESC);")
+        cur.execute(f"CREATE INDEX {staging_tbl}_unit_count_idx ON public.{staging_tbl} (unit_count DESC);")
+        cur.execute(
+            f"CREATE INDEX {staging_tbl}_display_trgm_idx "
+            f"ON public.{staging_tbl} USING GIN (display_name gin_trgm_ops);"
+        )
+        cur.execute(f"CREATE INDEX {staging_tbl}_bbl_gin_idx ON public.{staging_tbl} USING GIN (bbl_list);")
+        cur.execute(
+            f"CREATE INDEX {staging_tbl}_primary_human_upper "
+            f"ON public.{staging_tbl} (UPPER((connection_signals::jsonb->>'primary_human_name'))) "
+            f"WHERE (connection_signals::jsonb->>'primary_human_name') IS NOT NULL;"
+        )
+        cur.execute(f"ANALYZE public.{staging_tbl};")
+    conn.commit()
+
+    # Atomic sub-second partition swap: replaces live `{jur}_networks` without multi-minute locks.
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM pg_inherits
+                WHERE inhrelid = to_regclass(%s)
+                  AND inhparent = to_regclass('public.us_networks')
+            )
+            """,
+            (f"public.{jur}_networks",),
+        )
+        is_partition = bool(cur.fetchone()[0])
+        if is_partition:
+            cur.execute(f"ALTER TABLE public.us_networks DETACH PARTITION public.{jur}_networks;")
+        cur.execute(f"DROP TABLE IF EXISTS public.{jur}_networks;")
+        cur.execute(f"ALTER TABLE public.{staging_tbl} RENAME TO {jur}_networks;")
+        cur.execute(
+            f"ALTER TABLE public.{jur}_networks "
+            f"RENAME CONSTRAINT {staging_tbl}_pkey TO {jur}_networks_pkey;"
+        )
+        cur.execute(f"ALTER INDEX public.{staging_tbl}_key_uidx RENAME TO {jur}_networks_key_uidx;")
+        cur.execute(f"ALTER INDEX public.{staging_tbl}_bldg_count_idx RENAME TO {jur}_networks_bldg_count_idx;")
+        cur.execute(f"ALTER INDEX public.{staging_tbl}_unit_count_idx RENAME TO {jur}_networks_unit_count_idx;")
+        cur.execute(f"ALTER INDEX public.{staging_tbl}_display_trgm_idx RENAME TO {jur}_networks_display_trgm_idx;")
+        cur.execute(f"ALTER INDEX public.{staging_tbl}_bbl_gin_idx RENAME TO {jur}_networks_bbl_gin_idx;")
+        cur.execute(
+            f"ALTER INDEX public.{staging_tbl}_primary_human_upper "
+            f"RENAME TO idx_{jur}_nets_primary_human_upper;"
+        )
+        if is_partition:
+            cur.execute(
+                f"ALTER TABLE public.us_networks ATTACH PARTITION public.{jur}_networks "
+                f"FOR VALUES IN ('{jur}');"
+            )
+            cur.execute(
+                f"ALTER TABLE public.{jur}_networks "
+                f"DROP CONSTRAINT IF EXISTS {staging_tbl}_jur_chk;"
+            )
+        cur.execute(
+            """
+            UPDATE kv_cache
+            SET updated_at = NOW() - INTERVAL '30 days'
+            WHERE key IN ('completeness_matrix', %s)
+               OR key LIKE %s
+            """,
             (f"city_stats:v1:{jur}", f"city_top_nets:v1:{jur}:%"),
         )
     conn.commit()

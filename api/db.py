@@ -11,16 +11,28 @@ logger = logging.getLogger("they-own-what")
 # Global DB Pool
 db_pool: Optional[pool.ThreadedConnectionPool] = None
 
-def init_db_pool():
+def init_db_pool(
+    statement_timeout_ms: Optional[int] = None,
+    lock_timeout_ms: Optional[int] = None,
+):
     global db_pool
     if db_pool is None:
         DATABASE_URL = os.environ.get("DATABASE_URL")
+        option_parts = []
+        if statement_timeout_ms is not None:
+            option_parts.append(f"-c statement_timeout={int(statement_timeout_ms)}")
+        if lock_timeout_ms is not None:
+            option_parts.append(f"-c lock_timeout={int(lock_timeout_ms)}")
+        pool_kwargs = {"dsn": DATABASE_URL}
+        if option_parts:
+            pool_kwargs["options"] = " ".join(option_parts)
+
         retries = 60
         while retries > 0:
             try:
                 db_pool = psycopg2.pool.ThreadedConnectionPool(
                     2, 50,
-                    dsn=DATABASE_URL
+                    **pool_kwargs,
                 )
                 logger.info("Database connection pool created successfully.")
                 break
@@ -40,7 +52,13 @@ def get_db_connection():
     if db_pool is None:
         raise HTTPException(status_code=503, detail="Database connection unavailable")
         
-    conn = db_pool.getconn()
+    try:
+        conn = db_pool.getconn()
+    except psycopg2.pool.PoolError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Database is temporarily busy; please retry in a moment.",
+        ) from exc
     try:
         yield conn
     except Exception:
