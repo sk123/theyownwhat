@@ -3,6 +3,7 @@ import { Check, Flag, Link2, ShieldCheck, X } from 'lucide-react';
 
 const SESSION_KEY = 'theyownwhat.reviewerMode';
 const LABEL_STORAGE_KEY = 'theyownwhat.reviewerLabel';
+const EMAIL_STORAGE_KEY = 'theyownwhat.reviewerEmail';
 
 export function isReviewUrl(loc = typeof window !== 'undefined' ? window.location : null) {
   if (!loc) return false;
@@ -53,6 +54,8 @@ const ReviewerModeContext = createContext({
   isReviewerMode: false,
   reviewerLabel: '',
   setReviewerLabel: () => {},
+  reviewerEmail: '',
+  setReviewerEmail: () => {},
   submittedCount: 0,
   isItemFlagged: () => false,
   openReportModal: () => {},
@@ -80,6 +83,15 @@ export function ReviewerModeProvider({ children }) {
     if (typeof window === 'undefined') return '';
     try {
       return window.localStorage.getItem(LABEL_STORAGE_KEY) || '';
+    } catch {
+      return '';
+    }
+  });
+
+  const [reviewerEmail, setReviewerEmailState] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    try {
+      return window.localStorage.getItem(EMAIL_STORAGE_KEY) || '';
     } catch {
       return '';
     }
@@ -132,6 +144,14 @@ export function ReviewerModeProvider({ children }) {
     setReviewerLabelState(clean);
     try {
       window.localStorage.setItem(LABEL_STORAGE_KEY, clean);
+    } catch {}
+  }, []);
+
+  const setReviewerEmail = useCallback((val) => {
+    const clean = String(val || '').slice(0, 200);
+    setReviewerEmailState(clean);
+    try {
+      window.localStorage.setItem(EMAIL_STORAGE_KEY, clean);
     } catch {}
   }, []);
 
@@ -191,6 +211,8 @@ export function ReviewerModeProvider({ children }) {
     isReviewerMode,
     reviewerLabel,
     setReviewerLabel,
+    reviewerEmail,
+    setReviewerEmail,
     submittedCount,
     isItemFlagged,
     openReportModal,
@@ -202,6 +224,8 @@ export function ReviewerModeProvider({ children }) {
     isReviewerMode,
     reviewerLabel,
     setReviewerLabel,
+    reviewerEmail,
+    setReviewerEmail,
     submittedCount,
     isItemFlagged,
     openReportModal,

@@ -22,9 +22,13 @@ from unittest.mock import MagicMock, patch
 from api.feedback import (
     ALERT_EMAIL_TO,
     ALERT_EMAIL_FROM,
+    FEEDBACK_AUTO_REPLY_MESSAGE,
+    extract_valid_email,
     format_general_feedback_email,
+    format_reviewer_auto_reply_email,
     get_feedback_recipients,
     send_feedback_notification_email,
+    send_reviewer_auto_reply_email,
 )
 from api.reviewer_feedback_routes import (
     format_revert_notification,
@@ -183,12 +187,15 @@ class TestFeedbackAndAutocomplete(unittest.TestCase):
         self.assertIn("MA", txt_rev)
 
     def test_review_report_post_spawns_email_on_create_and_dedup_append(self):
-        """Verify POST /api/review-reports dispatches notification emails for both new reports and appended notes."""
+        """Verify POST /api/review-reports dispatches admin alert + reviewer auto-reply."""
         from fastapi.testclient import TestClient
         from api.main import app
 
         report_id = None
-        with patch("api.reviewer_feedback_routes.spawn_feedback_notification_email") as mock_spawn:
+        with (
+            patch("api.reviewer_feedback_routes.spawn_feedback_notification_email") as mock_spawn,
+            patch("api.reviewer_feedback_routes.spawn_reviewer_auto_reply_email") as mock_auto_reply,
+        ):
             with TestClient(app) as client:
                 base_payload = {
                     "report_kind": "missed_connection",
@@ -203,6 +210,7 @@ class TestFeedbackAndAutocomplete(unittest.TestCase):
                     "reason_code": "missed_shared_address",
                     "explanation": "Initial automated test explanation.",
                     "reviewer_label": "Unit Test Reviewer",
+                    "reviewer_email": "attorney@legalaid.org",
                     "source_path": "/review/ma",
                 }
                 r1 = client.post("/api/review-reports", json=base_payload)
@@ -210,9 +218,11 @@ class TestFeedbackAndAutocomplete(unittest.TestCase):
                 d1 = r1.json()
                 self.assertTrue(d1["ok"])
                 self.assertFalse(d1["deduplicated"])
+                self.assertTrue(d1["auto_reply_sent"])
+                self.assertEqual(d1["message"], FEEDBACK_AUTO_REPLY_MESSAGE)
                 report_id = d1["report_id"]
 
-                # Second identical report within 24h appends a note and also emails
+                # Second identical report within 24h from same reviewer appends note (admin notified, no duplicate auto-reply)
                 r2 = client.post(
                     "/api/review-reports",
                     json={**base_payload, "explanation": "Second note with additional clue."},
@@ -220,14 +230,18 @@ class TestFeedbackAndAutocomplete(unittest.TestCase):
                 self.assertEqual(r2.status_code, 200, r2.text)
                 d2 = r2.json()
                 self.assertTrue(d2["deduplicated"])
+                self.assertFalse(d2["auto_reply_sent"])
                 self.assertEqual(d2["report_id"], report_id)
 
         try:
             self.assertEqual(mock_spawn.call_count, 2)
+            self.assertEqual(mock_auto_reply.call_count, 1)
+            self.assertEqual(mock_auto_reply.call_args.args[0], "attorney@legalaid.org")
             first_subj, first_body = mock_spawn.call_args_list[0].args[:2]
             second_subj, second_body = mock_spawn.call_args_list[1].args[:2]
             self.assertIn("New /review Missed Connection", first_subj)
             self.assertIn("TEST AFFILIATE HOLDINGS LLC", first_body)
+            self.assertIn("attorney@legalaid.org", first_body)
             self.assertIn("Note added to /review report", second_subj)
             self.assertIn("Second note with additional clue.", second_body)
         finally:
@@ -235,6 +249,42 @@ class TestFeedbackAndAutocomplete(unittest.TestCase):
                 with self.conn.cursor() as cur:
                     cur.execute("DELETE FROM network_error_reports WHERE id = %s", (report_id,))
                 self.conn.commit()
+
+    def test_reviewer_auto_reply_content_and_isolation(self):
+        """Verify auto-reply carries exact daily-review copy, sends ONLY to reviewer, and blocks self-reply loops."""
+        self.assertEqual(extract_valid_email("salmun@storrsmagic.org"), "")
+        self.assertEqual(extract_valid_email("Jane Doe <jane@legalaid.org>"), "jane@legalaid.org")
+
+        subj, txt, html = format_reviewer_auto_reply_email(
+            reference_id=77,
+            event_label="/review (OH)",
+            summary="Sample LLC -> Affiliate LLC",
+        )
+        self.assertIn("#77", subj)
+        self.assertIn(FEEDBACK_AUTO_REPLY_MESSAGE, txt)
+        self.assertIn(FEEDBACK_AUTO_REPLY_MESSAGE, html)
+
+        mock_smtp = MagicMock()
+        mock_ctx = MagicMock()
+        mock_ctx.__enter__.return_value = mock_smtp
+        with patch.dict(
+            os.environ,
+            {
+                "ALERT_EMAIL_FROM": "sender@example.com",
+                "ALERT_EMAIL_PASS": "abcd efgh ijkl mnop",
+                "DISABLE_FEEDBACK_EMAILS": "",
+            },
+        ), patch("api.feedback.smtplib.SMTP", return_value=mock_ctx):
+            ok = send_reviewer_auto_reply_email(
+                "jane@legalaid.org",
+                reference_id=77,
+                event_label="/review (OH)",
+                summary="Sample LLC",
+            )
+        self.assertTrue(ok)
+        send_args = mock_smtp.sendmail.call_args[0]
+        # Auto-reply must go strictly to the reviewer — never leaking internal recipients
+        self.assertEqual(send_args[1], ["jane@legalaid.org"])
 
     def test_submit_feedback_endpoint_and_db_save(self):
         """Verify feedback post endpoint saves appropriately to user_feedback database table."""

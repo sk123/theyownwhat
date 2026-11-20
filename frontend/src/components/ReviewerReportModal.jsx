@@ -79,6 +79,8 @@ export default function ReviewerReportModal() {
     closeReportModal,
     reviewerLabel,
     setReviewerLabel,
+    reviewerEmail,
+    setReviewerEmail,
     markItemFlagged,
   } = useReviewerMode();
 
@@ -88,6 +90,7 @@ export default function ReviewerReportModal() {
   const sideBInputRef = useRef(null);
   const explanationInputRef = useRef(null);
   const urlInputRef = useRef(null);
+  const emailInputRef = useRef(null);
 
   const titleId = useId();
   const sideAErrorId = useId();
@@ -98,6 +101,8 @@ export default function ReviewerReportModal() {
   const explanationHintId = useId();
   const urlErrorId = useId();
   const urlHintId = useId();
+  const emailErrorId = useId();
+  const emailHintId = useId();
 
   const [reportKind, setReportKind] = useState('false_positive');
   const [jurisdiction, setJurisdiction] = useState('ct');
@@ -116,6 +121,7 @@ export default function ReviewerReportModal() {
     sideB: false,
     explanation: false,
     evidenceUrl: false,
+    email: false,
   });
 
   useEffect(() => {
@@ -135,7 +141,7 @@ export default function ReviewerReportModal() {
       setEvidenceUrl('');
       setSubmitError('');
       setSubmitSuccess(null);
-      setTouchedFields({ sideA: false, sideB: false, explanation: false, evidenceUrl: false });
+      setTouchedFields({ sideA: false, sideB: false, explanation: false, evidenceUrl: false, email: false });
 
       if (!dialog.open) {
         try {
@@ -193,6 +199,8 @@ export default function ReviewerReportModal() {
   const sideATrimmed = sideAValue.trim();
   const sideBTrimmed = relatedTargetValue.trim();
   const urlTrimmed = evidenceUrl.trim();
+  const emailTrimmed = reviewerEmail.trim();
+  const emailFormatValid = !emailTrimmed || /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(emailTrimmed);
 
   const sideAInvalid = touchedFields.sideA && sideATrimmed.length < 2;
   const sideBInvalid = isMissed && touchedFields.sideB && sideBTrimmed.length < 2;
@@ -201,11 +209,12 @@ export default function ReviewerReportModal() {
     touchedFields.evidenceUrl &&
     urlTrimmed.length > 0 &&
     !(urlTrimmed.startsWith('https://') || urlTrimmed.startsWith('http://'));
+  const emailInvalid = touchedFields.email && !emailFormatValid;
 
   const handleSubmit = async (event) => {
     event.preventDefault();
     if (!activeReportDraft) return;
-    setTouchedFields({ sideA: true, sideB: true, explanation: true, evidenceUrl: true });
+    setTouchedFields({ sideA: true, sideB: true, explanation: true, evidenceUrl: true, email: true });
     setSubmitError('');
 
     if (sideATrimmed.length < 2) {
@@ -226,6 +235,11 @@ export default function ReviewerReportModal() {
     if (urlTrimmed && !(urlTrimmed.startsWith('https://') || urlTrimmed.startsWith('http://'))) {
       setSubmitError('Evidence URL must start with https:// or http://.');
       urlInputRef.current?.focus();
+      return;
+    }
+    if (!emailFormatValid) {
+      setSubmitError('Enter an email address in the format you@example.com, or leave it blank.');
+      emailInputRef.current?.focus();
       return;
     }
 
@@ -256,6 +270,7 @@ export default function ReviewerReportModal() {
           explanation: explanation.trim(),
           evidence_url: urlTrimmed,
           reviewer_label: reviewerLabel.trim(),
+          reviewer_email: emailTrimmed,
           source_path: activeReportDraft.sourcePath,
         }),
       });
@@ -646,6 +661,40 @@ export default function ReviewerReportModal() {
                       placeholder="e.g., Sam / CT Tenant Union"
                       className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-base sm:text-xs text-slate-900 focus:outline-none focus:border-blue-500"
                     />
+                  </div>
+
+                  <div>
+                    <label htmlFor="reviewer-email-input" className="block text-xs font-bold text-slate-700">
+                      Your email (optional — for confirmation)
+                    </label>
+                    <span id={emailHintId} className="block text-[11px] text-slate-500 mt-0.5 mb-1">
+                      Format: you@example.com — sends an automatic daily-review confirmation; saved locally.
+                    </span>
+                    <input
+                      ref={emailInputRef}
+                      id="reviewer-email-input"
+                      name="reviewer_email"
+                      type="email"
+                      autoComplete="email"
+                      autoCorrect="off"
+                      autoCapitalize="none"
+                      spellCheck={false}
+                      maxLength={200}
+                      value={reviewerEmail}
+                      onChange={(e) => setReviewerEmail(e.target.value)}
+                      onBlur={() => setTouchedFields((p) => ({ ...p, email: true }))}
+                      aria-invalid={emailInvalid ? 'true' : 'false'}
+                      aria-describedby={emailInvalid ? `${emailHintId} ${emailErrorId}` : emailHintId}
+                      placeholder="you@legalaid.org"
+                      className={`reviewer-field w-full rounded-xl border px-3 py-2 text-base sm:text-xs text-slate-900 focus:outline-none focus:border-blue-500 ${
+                        emailInvalid ? 'user-invalid-fallback border-rose-500 bg-rose-50/40' : 'border-slate-300 bg-white'
+                      }`}
+                    />
+                    {emailInvalid && (
+                      <div id={emailErrorId} className="mt-1 text-[11px] font-semibold text-rose-700">
+                        Error: Enter an email address in the format you@example.com.
+                      </div>
+                    )}
                   </div>
                 </div>
 

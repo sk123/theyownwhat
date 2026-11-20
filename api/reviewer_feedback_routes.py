@@ -44,7 +44,12 @@ from api.audit_review_routes import (
     _authorize_request,
     sign_review_token,
 )
-from api.feedback import spawn_feedback_notification_email
+from api.feedback import (
+    FEEDBACK_AUTO_REPLY_MESSAGE,
+    extract_valid_email,
+    spawn_feedback_notification_email,
+    spawn_reviewer_auto_reply_email,
+)
 from api.linking_rules import deactivate_learned_rule, ensure_linking_rules_tables
 
 logger = logging.getLogger("reviewer-feedback")
@@ -202,6 +207,8 @@ def ensure_reviewer_feedback_tables(conn) -> None:
             "related_target_type TEXT NOT NULL DEFAULT ''",
             "related_target_value TEXT NOT NULL DEFAULT ''",
             "related_target_id TEXT NOT NULL DEFAULT ''",
+            "reviewer_email TEXT NOT NULL DEFAULT ''",
+            "auto_reply_sent_at TIMESTAMPTZ",
         ):
             cur.execute(f"ALTER TABLE network_error_reports ADD COLUMN IF NOT EXISTS {col_def}")
         cur.execute(
@@ -282,6 +289,7 @@ class ReviewReportCreate(BaseModel):
     explanation: str = Field(default="", max_length=2000)
     evidence_url: str = Field(default="", max_length=600)
     reviewer_label: str = Field(default="", max_length=120)
+    reviewer_email: str = Field(default="", max_length=200)
     source_path: str = Field(default="", max_length=300)
 
 
@@ -329,6 +337,7 @@ def format_review_report_notification(
     source_path: str,
     bridge_context: Dict[str, Any],
     deduplicated: bool = False,
+    reviewer_email: str = "",
 ) -> Tuple[str, str, str]:
     """Build (subject, text_body, html_body) for /review feedback events."""
     submitted_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -358,11 +367,15 @@ def format_review_report_notification(
         ("Jurisdiction", jur_u),
         ("Submitted", submitted_utc),
         ("Reviewer", reviewer_label or "(anonymous)"),
+    ]
+    if reviewer_email:
+        detail_rows.append(("Reviewer Email", reviewer_email))
+    detail_rows.extend([
         ("Reason", f"{reason_label} [{reason_code}]"),
         ("Network", network_name or "(none)"),
         ("Network Key / ID", " / ".join(x for x in (network_key, network_id) if x) or "(none)"),
         ("Target", f"[{target_type}] {target_value}" + (f" (ID: {target_id})" if target_id else "")),
-    ]
+    ])
     if related_target_value:
         detail_rows.append((
             "Related Target (Side B)",
@@ -495,6 +508,11 @@ def submit_review_report(payload: ReviewReportCreate, request: Request):
     if ev_url and not (ev_url.startswith("https://") or ev_url.startswith("http://")):
         raise HTTPException(status_code=400, detail="evidence_url must start with http:// or https://")
 
+    raw_rev_email = str(payload.reviewer_email or "").strip()
+    if raw_rev_email and not extract_valid_email(raw_rev_email, allow_internal=True):
+        raise HTTPException(status_code=400, detail="reviewer_email must be a valid email address")
+    reviewer_email = extract_valid_email(raw_rev_email, payload.reviewer_label, payload.explanation)
+
     safe_ctx = _sanitize_bridge_context(payload.bridge_context)
 
     conn = _connect()
@@ -504,7 +522,7 @@ def submit_review_report(payload: ReviewReportCreate, request: Request):
             # Deduplicate identical pending reports within 24 hours
             cur.execute(
                 """
-                SELECT id, status, created_at
+                SELECT id, status, created_at, reviewer_email, auto_reply_sent_at
                 FROM network_error_reports
                 WHERE status = 'pending'
                   AND report_kind = %s
@@ -521,12 +539,20 @@ def submit_review_report(payload: ReviewReportCreate, request: Request):
             )
             existing = cur.fetchone()
             if existing:
-                # Merge any additional explanation/evidence into the pending report
-                if payload.explanation.strip():
+                should_send_auto_reply = bool(
+                    reviewer_email
+                    and (
+                        not existing.get("auto_reply_sent_at")
+                        or reviewer_email.lower() != str(existing.get("reviewer_email") or "").lower()
+                    )
+                )
+                # Merge any additional explanation/evidence/email into the pending report
+                if payload.explanation.strip() or reviewer_email:
                     cur.execute(
                         """
                         UPDATE network_error_reports
                         SET explanation = CASE
+                                WHEN %s = '' THEN explanation
                                 WHEN explanation = '' THEN %s
                                 WHEN position(%s in explanation) > 0 THEN explanation
                                 ELSE explanation || E'\n---\n' || %s
@@ -535,15 +561,27 @@ def submit_review_report(payload: ReviewReportCreate, request: Request):
                                 WHEN evidence_url = '' AND %s <> '' THEN %s
                                 ELSE evidence_url
                             END,
+                            reviewer_email = CASE
+                                WHEN %s <> '' THEN %s
+                                ELSE reviewer_email
+                            END,
+                            auto_reply_sent_at = CASE
+                                WHEN %s THEN NOW()
+                                ELSE auto_reply_sent_at
+                            END,
                             updated_at = NOW()
                         WHERE id = %s
                         """,
                         (
                             payload.explanation.strip(),
+                            payload.explanation.strip(),
                             payload.explanation.strip()[:120],
                             payload.explanation.strip(),
                             ev_url,
                             ev_url,
+                            reviewer_email,
+                            reviewer_email,
+                            should_send_auto_reply,
                             existing["id"],
                         ),
                     )
@@ -565,19 +603,30 @@ def submit_review_report(payload: ReviewReportCreate, request: Request):
                     explanation=payload.explanation.strip(),
                     evidence_url=ev_url,
                     reviewer_label=payload.reviewer_label.strip(),
+                    reviewer_email=reviewer_email,
                     source_path=payload.source_path.strip(),
                     bridge_context=safe_ctx,
                     deduplicated=True,
                 )
-                spawn_feedback_notification_email(subj, txt_body, html_body=html_body)
+                spawn_feedback_notification_email(
+                    subj, txt_body, html_body=html_body, reply_to=reviewer_email or None
+                )
+                if should_send_auto_reply:
+                    spawn_reviewer_auto_reply_email(
+                        reviewer_email,
+                        reference_id=int(existing["id"]),
+                        event_label=f"/review ({jur.upper()})",
+                        summary=f"{target_val}" + (f" -> {rel_val}" if rel_val else ""),
+                    )
                 return {
                     "ok": True,
                     "report_id": int(existing["id"]),
                     "status": "pending",
                     "deduplicated": True,
+                    "auto_reply_sent": should_send_auto_reply,
                     "message": (
-                        "Added your note to an open report for this item. "
-                        "It will be checked against public records in tonight's verification pass."
+                        f"Added your note to open report #{int(existing['id'])}. "
+                        f"{FEEDBACK_AUTO_REPLY_MESSAGE}"
                     ),
                 }
 
@@ -588,10 +637,17 @@ def submit_review_report(payload: ReviewReportCreate, request: Request):
                     target_type, target_value, target_id,
                     related_target_type, related_target_value, related_target_id,
                     bridge_context,
-                    reason_code, explanation, evidence_url, reviewer_label,
-                    source_path, client_ip_hash
+                    reason_code, explanation, evidence_url, reviewer_label, reviewer_email,
+                    auto_reply_sent_at, source_path, client_ip_hash
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s)
+                VALUES (
+                    %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s,
+                    %s::jsonb,
+                    %s, %s, %s, %s, %s,
+                    CASE WHEN %s <> '' THEN NOW() ELSE NULL END, %s, %s
+                )
                 RETURNING id, status, created_at
                 """,
                 (
@@ -612,6 +668,8 @@ def submit_review_report(payload: ReviewReportCreate, request: Request):
                     payload.explanation.strip(),
                     ev_url,
                     payload.reviewer_label.strip(),
+                    reviewer_email,
+                    reviewer_email,
                     payload.source_path.strip(),
                     ip_hash,
                 ),
@@ -635,26 +693,29 @@ def submit_review_report(payload: ReviewReportCreate, request: Request):
             explanation=payload.explanation.strip(),
             evidence_url=ev_url,
             reviewer_label=payload.reviewer_label.strip(),
+            reviewer_email=reviewer_email,
             source_path=payload.source_path.strip(),
             bridge_context=safe_ctx,
             deduplicated=False,
         )
-        spawn_feedback_notification_email(subj, txt_body, html_body=html_body)
+        spawn_feedback_notification_email(
+            subj, txt_body, html_body=html_body, reply_to=reviewer_email or None
+        )
+        if reviewer_email:
+            spawn_reviewer_auto_reply_email(
+                reviewer_email,
+                reference_id=int(row["id"]),
+                event_label=f"/review ({jur.upper()})",
+                summary=f"{target_val}" + (f" -> {rel_val}" if rel_val else ""),
+            )
         return {
             "ok": True,
             "report_id": int(row["id"]),
             "report_kind": r_kind,
             "status": str(row["status"]),
             "deduplicated": False,
-            "message": (
-                "Missed connection recorded. Tonight's verification job will inspect both sides in public records, "
-                "look for an organic builder tweak (e.g. address/abbreviation/role normalization or over-blocked HQ allowlist) "
-                "that makes the link naturally across jurisdictions, rebuild affected networks, and summarize in the daily digest."
-                if r_kind == "missed_connection"
-                else "Report recorded. Tonight's verification job will check the underlying public filings, "
-                "generalize any confirmed logic fix across jurisdictions, rebuild affected networks, "
-                "and summarize the outcome in the daily digest."
-            ),
+            "auto_reply_sent": bool(reviewer_email),
+            "message": FEEDBACK_AUTO_REPLY_MESSAGE,
         }
     finally:
         conn.close()

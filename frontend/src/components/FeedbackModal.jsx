@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useId } from 'react';
 import { X, MessageSquare, AlertTriangle, Send, Search, Check, Link, Unlink, FileQuestion, HelpCircle, ArrowRight, ArrowLeft, Briefcase, User, MapPin } from 'lucide-react';
 
 const SearchInput = ({
@@ -141,8 +141,13 @@ const FeedbackModal = ({ isOpen, onClose, initialEntity = null, activeState = nu
 
     // Form Data
     const [description, setDescription] = useState('');
+    const [reviewerEmail, setReviewerEmail] = useState('');
+    const [emailTouched, setEmailTouched] = useState(false);
     const [entityA, setEntityA] = useState(null);
     const [entityB, setEntityB] = useState(null);
+    const emailInputRef = useRef(null);
+    const emailHintId = useId();
+    const emailErrorId = useId();
 
     // Search State
     const [activeSearchField, setActiveSearchField] = useState(null); // 'A' or 'B' or 'single'
@@ -167,6 +172,8 @@ const FeedbackModal = ({ isOpen, onClose, initialEntity = null, activeState = nu
         setFlow('menu');
         setStep(1);
         setDescription('');
+        setReviewerEmail('');
+        setEmailTouched(false);
         setEntityA(null);
         setEntityB(null);
         setSearchTerm('');
@@ -219,8 +226,17 @@ const FeedbackModal = ({ isOpen, onClose, initialEntity = null, activeState = nu
         setActiveSearchField(null);
     };
 
+    const emailTrimmed = reviewerEmail.trim();
+    const emailFormatValid = !emailTrimmed || /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(emailTrimmed);
+    const emailInvalid = emailTouched && !emailFormatValid;
+
     const handleSubmit = async () => {
         if (!description) return;
+        setEmailTouched(true);
+        if (!emailFormatValid) {
+            emailInputRef.current?.focus();
+            return;
+        }
 
         setSubmitting(true);
 
@@ -250,7 +266,8 @@ const FeedbackModal = ({ isOpen, onClose, initialEntity = null, activeState = nu
                 body: JSON.stringify({
                     report_type: reportType,
                     description,
-                    related_entities: entities
+                    related_entities: entities,
+                    reviewer_email: emailTrimmed
                 })
             });
             if (!res.ok) throw new Error("Submission failed");
@@ -297,7 +314,9 @@ const FeedbackModal = ({ isOpen, onClose, initialEntity = null, activeState = nu
                             <Check className="w-8 h-8" />
                         </div>
                         <h4 className="text-xl font-bold text-gray-900">Report Submitted!</h4>
-                        <p className="text-gray-500">Thank you for helping us improve the data.</p>
+                        <p className="text-sm text-gray-600 max-w-sm">
+                            All feedback will be reviewed once daily, please check back tomorrow to see if the issue is resolved or further tuning is necessary.
+                        </p>
                     </div>
                 ) : (
                     <div className="flex-1 overflow-y-visible p-6">
@@ -431,6 +450,41 @@ const FeedbackModal = ({ isOpen, onClose, initialEntity = null, activeState = nu
                                         placeholder="Please provide source URLs or explanation..."
                                         className="w-full h-32 p-3 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none resize-none"
                                     ></textarea>
+                                </div>
+
+                                {/* Optional Reviewer Email for Daily-Review Auto-Reply */}
+                                <div>
+                                    <label htmlFor="feedback-reviewer-email" className="block text-sm font-medium text-gray-700 mb-0.5">
+                                        Your email (optional — for confirmation)
+                                    </label>
+                                    <span id={emailHintId} className="block text-xs text-gray-500 mb-1.5">
+                                        Format: you@example.com — sends an automatic daily-review confirmation.
+                                    </span>
+                                    <input
+                                        ref={emailInputRef}
+                                        id="feedback-reviewer-email"
+                                        name="reviewer_email"
+                                        type="email"
+                                        autoComplete="email"
+                                        autoCorrect="off"
+                                        autoCapitalize="none"
+                                        spellCheck={false}
+                                        maxLength={200}
+                                        value={reviewerEmail}
+                                        onChange={e => setReviewerEmail(e.target.value)}
+                                        onBlur={() => setEmailTouched(true)}
+                                        aria-invalid={emailInvalid ? 'true' : 'false'}
+                                        aria-describedby={emailInvalid ? `${emailHintId} ${emailErrorId}` : emailHintId}
+                                        placeholder="you@legalaid.org"
+                                        className={`w-full px-3 py-2.5 border rounded-lg text-base sm:text-sm outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                                            emailInvalid ? 'border-rose-500 bg-rose-50/40' : 'border-gray-200 bg-white'
+                                        }`}
+                                    />
+                                    {emailInvalid && (
+                                        <div id={emailErrorId} className="mt-1 text-xs font-semibold text-rose-700">
+                                            Error: Enter an email address in the format you@example.com.
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                         )}

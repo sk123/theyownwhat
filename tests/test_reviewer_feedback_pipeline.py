@@ -23,6 +23,9 @@ from api.shared_utils import (
 )
 from updater.daily_usage_report import render_reviewer_reports_digest_section
 from updater.evaluate_reviewer_reports import (
+    _assert_generalized_rules_only,
+    _infer_jur_from_network_key,
+    diagnose_missed_connection_root_cause,
     discover_missed_connection_tweaks,
     evaluate_address_hub_evidence,
     evaluate_email_hub_evidence,
@@ -468,6 +471,50 @@ class ReviewerFeedbackPipelineTests(unittest.TestCase):
         self.assertIn("Harborview Holdings LLC <-> Harborview Hldgs LLC", txt)
         self.assertIn("MISSED CONNECTION", htm)
         self.assertIn("Revert This Change", htm)
+
+    def test_anti_hardcoding_invariant_rejects_pairwise_forced_merges(self):
+        with self.assertRaises(ValueError):
+            _assert_generalized_rules_only([
+                {"rule_type": "forced_pair_merge", "rule_key": "A||B", "scope": "global"}
+            ])
+        with self.assertRaises(ValueError):
+            _assert_generalized_rules_only([
+                {"rule_type": "biz_abbrev", "rule_key": "HLDGS", "scope": "ny"}
+            ])
+        # Valid generalized global rule passes
+        _assert_generalized_rules_only([
+            {"rule_type": "biz_abbrev", "rule_key": "HLDGS", "rule_value": "HOLDINGS", "scope": "global"}
+        ])
+
+    def test_missed_connection_diagnoses_stale_sale_and_data_hygiene_without_hardcoding(self):
+        self.assertEqual(_infer_jur_from_network_key("network_oh_oh-luc-1008164", "ny"), "oh")
+        side_a = {
+            "matched_in_db": True,
+            "entities": ["ALEXANDER CHRISTOPHER JOHN & RACHAEL (ORSURVTC)"],
+            "raw_addresses": ["3220 MAHER ST, TOL.EDO OH +4360"],
+            "emails": [],
+            "principals": [],
+        }
+        side_b = {
+            "matched_in_db": False,
+            "entities": ["ARW Realty"],
+            "raw_addresses": [],
+            "emails": [],
+            "principals": [],
+        }
+        outcome = discover_missed_connection_tweaks(
+            side_a,
+            side_b,
+            has_external_evidence_url=True,
+            explanation="ARW Realty is the new owner, purchased earlier in 2026.",
+        )
+        self.assertEqual(outcome["status"], "needs_human_review")
+        self.assertEqual(outcome["rules"], [])
+        diag = outcome["evidence"]["root_cause_diagnosis"]
+        self.assertEqual(diag["primary_cause"], "stale_deed_or_recent_sale")
+        hygiene_cats = {f["category"] for f in diag["systemic_data_hygiene_findings"]}
+        self.assertIn("deed_tenancy_suffix_noise", hygiene_cats)
+        self.assertIn("corrupted_source_address_noise", hygiene_cats)
 
 
 if __name__ == "__main__":

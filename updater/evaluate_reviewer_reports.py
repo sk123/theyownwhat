@@ -1023,6 +1023,147 @@ def _is_plausible_abbrev(short_tok: str, long_tok: str) -> bool:
     return SequenceMatcher(None, s, l).ratio() >= 0.75
 
 
+GENERALIZED_MISSED_CONNECTION_RULE_TYPES = frozenset({
+    "ra_allowlist",
+    "benign_care_of_token",
+    "address_alias",
+    "biz_abbrev",
+    "officer_role_suffix",
+    "email_allowlist",
+    "entity_allowlist",
+})
+
+_STALE_SALE_CLUE_RE = re.compile(
+    r"\b(?:new\s+owner|purchased|bought|sold|transferred|acquired|deed\s+transfer|changed\s+hands|foreclos(?:ed|ure))\b",
+    re.IGNORECASE,
+)
+_DEED_TENANCY_SUFFIX_RE = re.compile(
+    r"(?:\(\s*(?:ORSURVTC|JTROS|JTWROS|ET\s+UX|ET\s+VIR|ET\s+AL|SURV|TC|TIC|TBE|LIFE\s+EST(?:ATE)?)\s*\)|\b(?:ORSURVTC|JTWROS|JTROS)\b)",
+    re.IGNORECASE,
+)
+_CORRUPTED_ADDR_NOISE_RE = re.compile(
+    r"(?:[A-Z]{2,}\.[A-Z]{2,}|\+\d{4,5}\b|\b\d{4}\s*$)"
+)
+_NETWORK_KEY_JUR_RE = re.compile(r"^network_([a-z]{2,14})_")
+
+
+def _infer_jur_from_network_key(network_key: str, fallback: str) -> str:
+    m = _NETWORK_KEY_JUR_RE.match(str(network_key or "").strip().lower())
+    if m:
+        return normalize_jurisdiction(m.group(1))
+    return normalize_jurisdiction(fallback)
+
+
+def _assert_generalized_rules_only(rules: Sequence[Dict[str, Any]]) -> None:
+    """Hard invariant: missed-connection remediation may ONLY emit generalized global builder
+    rules — never a hardcoded pairwise entity/network merge."""
+    for rule in rules:
+        rtype = str(rule.get("rule_type") or "")
+        scope = str(rule.get("scope") or "global")
+        if rtype not in GENERALIZED_MISSED_CONNECTION_RULE_TYPES or scope != "global":
+            raise ValueError(
+                f"Refusing non-generalized missed-connection rule: type={rtype!r}, scope={scope!r}"
+            )
+
+
+def diagnose_missed_connection_root_cause(
+    side_a: Dict[str, Any],
+    side_b: Dict[str, Any],
+    *,
+    explanation: str = "",
+) -> Dict[str, Any]:
+    """Classify WHY the builder did not link Side A and Side B so maintainers/nightly
+    digests see actionable systemic root causes (never lazy hardcoded pair merges)."""
+    entities_a = [str(x).strip() for x in (side_a.get("entities") or []) if x]
+    entities_b = [str(x).strip() for x in (side_b.get("entities") or []) if x]
+    addrs_a = [str(x).strip() for x in (side_a.get("raw_addresses") or []) if x]
+    addrs_b = [str(x).strip() for x in (side_b.get("raw_addresses") or []) if x]
+    prins_a = [str(x).strip() for x in (side_a.get("principals") or []) if x]
+    prins_b = [str(x).strip() for x in (side_b.get("principals") or []) if x]
+
+    findings: List[Dict[str, Any]] = []
+    deed_suffix_hits = sorted({e for e in entities_a + entities_b if _DEED_TENANCY_SUFFIX_RE.search(e)})
+    if deed_suffix_hits:
+        findings.append({
+            "category": "deed_tenancy_suffix_noise",
+            "samples": deed_suffix_hits[:5],
+            "generalized_fix_hint": (
+                "Strip county deed-tenancy parenthetical/suffix tokens (e.g., ORSURVTC, JTROS, ET UX) "
+                "during statewide owner-name normalization."
+            ),
+        })
+
+    corrupted_addrs = sorted({a for a in addrs_a + addrs_b if _CORRUPTED_ADDR_NOISE_RE.search(a)})
+    if corrupted_addrs:
+        findings.append({
+            "category": "corrupted_source_address_noise",
+            "samples": corrupted_addrs[:5],
+            "generalized_fix_hint": (
+                "Clean county CAMA address punctuation/ZIP artifacts (e.g., stray dots inside city names "
+                "or leading '+' on ZIP codes) in shared address normalization."
+            ),
+        })
+
+    expl_text = str(explanation or "").strip()
+    a_has_db = (
+        bool(side_a["matched_in_db"])
+        if "matched_in_db" in side_a
+        else bool(entities_a or addrs_a or prins_a)
+    )
+    b_has_db = (
+        bool(side_b["matched_in_db"])
+        if "matched_in_db" in side_b
+        else bool(entities_b or addrs_b or prins_b)
+    )
+
+    if expl_text and _STALE_SALE_CLUE_RE.search(expl_text):
+        primary_cause = "stale_deed_or_recent_sale"
+        summary = (
+            "Reviewer note indicates a recent property sale / new owner; loaded assessor tax roll still "
+            "lists the prior owner. Do NOT merge seller and buyer — refresh the county parcel roll instead."
+        )
+    elif not b_has_db:
+        primary_cause = "missing_public_filing"
+        summary = (
+            "Side B was not found in loaded local parcel rolls or indexed corporate registries "
+            "(OpenCorporates / state SOS). Needs upstream parcel/SOS refresh rather than a hardcoded merge."
+        )
+    elif not a_has_db:
+        primary_cause = "side_a_not_resolved_in_db"
+        summary = (
+            "Side A could not be resolved in loaded public tables for the reported jurisdiction. "
+            "Check jurisdiction mapping / parcel roll coverage."
+        )
+    else:
+        # Check if same surname+first-initial principal exists across both sides (middle initial / variant gap)
+        toks_a = {tuple(normalize_person_name(p).split()) for p in prins_a if len(normalize_person_name(p).split()) >= 2}
+        toks_b = {tuple(normalize_person_name(p).split()) for p in prins_b if len(normalize_person_name(p).split()) >= 2}
+        near_prin = any(
+            ta[0] == tb[0] and ta[-1] == tb[-1] and ta != tb
+            for ta in toks_a for tb in toks_b
+        )
+        if near_prin:
+            primary_cause = "principal_middle_initial_or_variant_gap"
+            summary = (
+                "Both sides share a principal with matching first and last name that differed by middle name/initial; "
+                "inspect whether homonym-safe canonicalization can link this pattern globally."
+            )
+        else:
+            primary_cause = "no_shared_public_bridge"
+            summary = (
+                "Loaded public filings for Side A and Side B share no verified address, email, corporate officer, "
+                "or normalized name root. Refusing to hardcode an unverified merge."
+            )
+
+    return {
+        "primary_cause": primary_cause,
+        "summary": summary,
+        "side_a_matched_in_db": a_has_db,
+        "side_b_matched_in_db": b_has_db,
+        "systemic_data_hygiene_findings": findings,
+    }
+
+
 def discover_missed_connection_tweaks(
     side_a: Dict[str, Any],
     side_b: Dict[str, Any],
@@ -1031,6 +1172,7 @@ def discover_missed_connection_tweaks(
     address_stats_fn: Optional[Callable[[str], Dict[str, Any]]] = None,
     email_stats_fn: Optional[Callable[[str], Dict[str, Any]]] = None,
     has_external_evidence_url: bool = False,
+    explanation: str = "",
 ) -> Dict[str, Any]:
     """Forensically inspect public-record profiles of Side A and Side B to find GENERALIZED,
     ORGANIC builder tweaks (`ra_allowlist`, `benign_care_of_token`, `address_alias`,
@@ -1317,35 +1459,63 @@ def discover_missed_connection_tweaks(
             seen_rk.add(k)
             dedup_rules.append(r)
 
+    # Enforce anti-hardcoding invariant: every emitted rule MUST be a generalized global rule.
+    _assert_generalized_rules_only(dedup_rules)
+    root_cause = diagnose_missed_connection_root_cause(side_a, side_b, explanation=explanation)
+
     if dedup_rules:
         return {
             "status": "verified_applied",
             "rules": dedup_rules,
             "rationale": " ".join(rationales),
-            "evidence": {"checks": checks, "shared_zips": sorted(shared_zips), "shared_principals": sorted(shared_prins)},
+            "evidence": {
+                "checks": checks,
+                "shared_zips": sorted(shared_zips),
+                "shared_principals": sorted(shared_prins),
+                "root_cause_diagnosis": root_cause,
+                "generalized_only": True,
+            },
         }
 
     # No organic builder tweak verified from loaded public records -> NEVER force a hardcoded merge!
     has_loaded_records = bool(entities_a or addrs_a or prins_a) and bool(entities_b or addrs_b or prins_b)
-    if has_external_evidence_url or not has_loaded_records:
+    if (
+        has_external_evidence_url
+        or not has_loaded_records
+        or root_cause["primary_cause"] in (
+            "stale_deed_or_recent_sale",
+            "missing_public_filing",
+            "principal_middle_initial_or_variant_gap",
+        )
+    ):
         return {
             "status": "needs_human_review",
             "rules": [],
             "rationale": (
-                "No organic normalization or allowlist tweak in loaded public filings bridges these two records yet "
-                "(no hardcoded merge applied). Escalated for human review / external-source inspection."
+                f"No generalized builder tweak applied (never hardcoding pair merges). "
+                f"Root cause: {root_cause['primary_cause']} — {root_cause['summary']}"
             ),
-            "evidence": {"checks": checks, "has_loaded_records": has_loaded_records},
+            "evidence": {
+                "checks": checks,
+                "has_loaded_records": has_loaded_records,
+                "root_cause_diagnosis": root_cause,
+                "generalized_only": True,
+            },
         }
 
     return {
         "status": "rejected_unverified",
         "rules": [],
         "rationale": (
-            "No linking change applied — loaded public filings for both sides show no corroborating shared "
-            "address, email, principal, abbreviation variant, or over-blocked HQ (anti-fabrication safeguard)."
+            f"No linking change applied (anti-fabrication / no-hardcoding safeguard). "
+            f"Root cause: {root_cause['primary_cause']} — {root_cause['summary']}"
         ),
-        "evidence": {"checks": checks, "has_loaded_records": has_loaded_records},
+        "evidence": {
+            "checks": checks,
+            "has_loaded_records": has_loaded_records,
+            "root_cause_diagnosis": root_cause,
+            "generalized_only": True,
+        },
     }
 
 
@@ -1359,6 +1529,7 @@ def _collect_side_profile(
     network_id: str = "",
     network_key: str = "",
     bridge_context: Optional[Dict[str, Any]] = None,
+    extra_jurisdictions: Sequence[str] = (),
 ) -> Dict[str, Any]:
     """Pull entities, entity types, raw mailing/business/OC addresses, emails, and principals
     for one side of a reported missed connection from loaded PostgreSQL tables."""
@@ -1367,6 +1538,10 @@ def _collect_side_profile(
     raw_addresses: Set[str] = set()
     emails: Set[str] = set()
     principals: Set[str] = set()
+    matched_in_db = False
+
+    # Auto-correct jurisdiction from `network_<jur>_...` key if reviewer changed dropdown
+    effective_jur = _infer_jur_from_network_key(network_key, jur) if network_key else normalize_jurisdiction(jur)
 
     ctx = bridge_context if isinstance(bridge_context, dict) else {}
     for k in ("address", "mailing_address", "hq_address", "shared_address"):
@@ -1391,8 +1566,25 @@ def _collect_side_profile(
     elif t_type == "address" and t_val:
         raw_addresses.add(t_val)
 
+    def _jur_to_oc_code(jcode: str) -> str:
+        c_map = {
+            "philadelphia": "us_pa",
+            "baltimore": "us_md",
+            "detroit": "us_mi",
+            "boston": "us_ma",
+            "chicago": "us_il",
+            "miami": "us_fl",
+            "minneapolis": "us_mn",
+            "nyc": "us_ny",
+            "dc": "us_dc",
+        }
+        j = normalize_jurisdiction(jcode)
+        if j in c_map:
+            return c_map[j]
+        return f"us_{j}" if len(j) == 2 else ""
+
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
-        if jur == "ct":
+        if effective_jur == "ct":
             biz_ids: Set[str] = set()
             if network_id and str(network_id).isdigit():
                 try:
@@ -1416,7 +1608,10 @@ def _collect_side_profile(
                             "SELECT business_id, owner, mailing_address FROM properties WHERE UPPER(TRIM(address)) = UPPER(%s) OR id::text = %s LIMIT 15",
                             (t_val, target_id),
                         )
-                        for r in cur.fetchall():
+                        prop_rows = cur.fetchall()
+                        if prop_rows:
+                            matched_in_db = True
+                        for r in prop_rows:
                             if r.get("business_id"):
                                 biz_ids.add(str(r["business_id"]))
                             if r.get("owner"):
@@ -1424,15 +1619,17 @@ def _collect_side_profile(
                             if r.get("mailing_address"):
                                 raw_addresses.add(str(r["mailing_address"]))
                     else:
+                        t_norm = normalize_business_name(t_val)
                         cur.execute(
-                            "SELECT id FROM businesses WHERE UPPER(TRIM(name)) = UPPER(%s) OR id = %s LIMIT 15",
-                            (t_val, target_id),
+                            "SELECT id FROM businesses WHERE UPPER(TRIM(name)) = UPPER(%s) OR name_norm = %s OR id = %s LIMIT 15",
+                            (t_val, t_norm, target_id),
                         )
                         biz_ids.update(str(r["id"]) for r in cur.fetchall() if r.get("id"))
                 except Exception:
                     conn.rollback()
 
             if biz_ids:
+                matched_in_db = True
                 bid_list = sorted(biz_ids)[:60]
                 try:
                     cur.execute(
@@ -1470,24 +1667,72 @@ def _collect_side_profile(
                 except Exception:
                     conn.rollback()
         else:
-            prop_tbl, _ = _jur_tables(jur)
-            try:
-                cur.execute("SELECT to_regclass(%s) IS NOT NULL AS ok", (f"public.{prop_tbl}",))
-                if cur.fetchone()["ok"]:
-                    rows = []
-                    if network_key:
+            search_jurs: List[str] = []
+            for jcand in [effective_jur] + [normalize_jurisdiction(x) for x in extra_jurisdictions]:
+                if jcand and jcand != "ct" and jcand not in search_jurs:
+                    search_jurs.append(jcand)
+
+            oc_keys: List[Tuple[str, str]] = []
+            for sj in search_jurs:
+                prop_tbl, net_tbl = _jur_tables(sj)
+                try:
+                    cur.execute(
+                        "SELECT to_regclass(%s) IS NOT NULL AS has_prop, to_regclass(%s) IS NOT NULL AS has_net",
+                        (f"public.{prop_tbl}", f"public.{net_tbl}"),
+                    )
+                    tbl_flags = cur.fetchone()
+                    if not tbl_flags or not tbl_flags["has_prop"]:
+                        continue
+
+                    bbls_from_net: List[str] = []
+                    if tbl_flags["has_net"] and network_key and sj == effective_jur:
                         cur.execute(
-                            f"SELECT owner_name, mailing_address, oc_jurisdiction_code, oc_company_number FROM {prop_tbl} WHERE network_key = %s LIMIT 80",
+                            f"""
+                            SELECT display_name, member_names, member_addresses, bbl_list,
+                                   connection_signals, oc_company_ids
+                            FROM {net_tbl}
+                            WHERE network_key = %s
+                            LIMIT 1
+                            """,
                             (network_key,),
                         )
-                        rows = cur.fetchall()
-                    elif network_id:
+                        net_row = cur.fetchone()
+                        if net_row:
+                            matched_in_db = True
+                            if net_row.get("display_name"):
+                                entities.add(str(net_row["display_name"]).strip())
+                            for mn in (net_row.get("member_names") or [])[:50]:
+                                if mn:
+                                    entities.add(str(mn).strip())
+                            for ma in (net_row.get("member_addresses") or [])[:50]:
+                                if ma:
+                                    raw_addresses.add(str(ma).strip())
+                            bbls_from_net = [str(b) for b in (net_row.get("bbl_list") or [])[:80] if b]
+                            sigs = net_row.get("connection_signals")
+                            if isinstance(sigs, str):
+                                try:
+                                    sigs = json.loads(sigs)
+                                except Exception:
+                                    sigs = {}
+                            if isinstance(sigs, dict):
+                                if sigs.get("primary_human_name"):
+                                    principals.add(str(sigs["primary_human_name"]).strip())
+                                for sh in (sigs.get("source_human_names") or [])[:30]:
+                                    if sh:
+                                        principals.add(str(sh).strip())
+                            for cid in (net_row.get("oc_company_ids") or [])[:25]:
+                                if isinstance(cid, str) and "/" in cid:
+                                    oj, on = cid.split("/", 1)
+                                    oc_keys.append((oj, on))
+
+                    rows = []
+                    if bbls_from_net:
                         cur.execute(
-                            f"SELECT owner_name, mailing_address, oc_jurisdiction_code, oc_company_number FROM {prop_tbl} WHERE network_id::text = %s LIMIT 80",
-                            (str(network_id),),
+                            f"SELECT owner_name, mailing_address, oc_jurisdiction_code, oc_company_number FROM {prop_tbl} WHERE bbl = ANY(%s) LIMIT 80",
+                            (bbls_from_net,),
                         )
                         rows = cur.fetchall()
-                    if not rows and t_val:
+                    elif t_val:
                         if t_type == "property":
                             cur.execute(
                                 f"SELECT owner_name, mailing_address, oc_jurisdiction_code, oc_company_number FROM {prop_tbl} WHERE UPPER(TRIM(address)) = UPPER(%s) OR bbl = %s LIMIT 25",
@@ -1495,18 +1740,25 @@ def _collect_side_profile(
                             )
                             rows = cur.fetchall()
                         elif t_type == "principal":
+                            # Indexed lookup via `idx_oc_officers_beneficial_name`
                             cur.execute(
                                 """
                                 SELECT o.jurisdiction_code, o.company_number, o.name AS officer_name,
                                        c.name AS co_name, c.company_type, c.registered_address_raw, c.mailing_address_raw
                                 FROM oc_officers o
-                                JOIN oc_companies c ON c.jurisdiction_code = o.jurisdiction_code AND c.company_number = o.company_number
-                                WHERE o.name_norm = %s OR UPPER(TRIM(o.name)) = UPPER(%s)
+                                JOIN oc_companies c
+                                  ON c.jurisdiction_code = o.jurisdiction_code
+                                 AND c.company_number = o.company_number
+                                WHERE o.role_class IN ('beneficial_principal', 'corporate_parent')
+                                  AND o.name_norm = %s
                                 LIMIT 40
                                 """,
-                                (normalize_person_name(t_val).upper(), t_val),
+                                (normalize_person_name(t_val).upper(),),
                             )
-                            for oc_r in cur.fetchall():
+                            oc_pr_rows = cur.fetchall()
+                            if oc_pr_rows:
+                                matched_in_db = True
+                            for oc_r in oc_pr_rows:
                                 if oc_r.get("officer_name"):
                                     principals.add(str(oc_r["officer_name"]))
                                 if oc_r.get("co_name"):
@@ -1517,13 +1769,20 @@ def _collect_side_profile(
                                     if a:
                                         raw_addresses.add(str(a))
                         else:
+                            t_norm = normalize_business_name(t_val)
                             cur.execute(
-                                f"SELECT owner_name, mailing_address, oc_jurisdiction_code, oc_company_number FROM {prop_tbl} WHERE UPPER(TRIM(owner_name)) = UPPER(%s) LIMIT 40",
-                                (t_val,),
+                                f"""
+                                SELECT owner_name, mailing_address, oc_jurisdiction_code, oc_company_number
+                                FROM {prop_tbl}
+                                WHERE owner_name_norm = %s OR UPPER(TRIM(owner_name)) = UPPER(%s)
+                                LIMIT 40
+                                """,
+                                (t_norm, t_val),
                             )
                             rows = cur.fetchall()
 
-                    oc_keys: List[Tuple[str, str]] = []
+                    if rows:
+                        matched_in_db = True
                     for r in rows:
                         if r.get("owner_name"):
                             entities.add(str(r["owner_name"]).strip())
@@ -1531,13 +1790,31 @@ def _collect_side_profile(
                             raw_addresses.add(str(r["mailing_address"]).strip())
                         if r.get("oc_jurisdiction_code") and r.get("oc_company_number"):
                             oc_keys.append((r["oc_jurisdiction_code"], r["oc_company_number"]))
-                    for oj, on in oc_keys[:20]:
+                except Exception:
+                    conn.rollback()
+
+            # Indexed OpenCorporates lookup by normalized name across relevant state(s) + Delaware
+            if not oc_keys and t_val and t_type not in ("property", "address", "principal"):
+                t_norm = normalize_business_name(t_val)
+                oc_jurs = sorted({c for c in ([_jur_to_oc_code(j) for j in search_jurs] + ["us_de"]) if c})
+                if t_norm and oc_jurs:
+                    try:
                         cur.execute(
-                            "SELECT name, company_type, registered_address_raw, mailing_address_raw FROM oc_companies WHERE jurisdiction_code = %s AND company_number = %s",
-                            (oj, on),
+                            """
+                            SELECT jurisdiction_code, company_number, name, company_type,
+                                   registered_address_raw, mailing_address_raw
+                            FROM oc_companies
+                            WHERE jurisdiction_code = ANY(%s)
+                              AND name_norm = %s
+                            LIMIT 15
+                            """,
+                            (oc_jurs, t_norm),
                         )
-                        cr = cur.fetchone()
-                        if cr:
+                        oc_name_rows = cur.fetchall()
+                        if oc_name_rows:
+                            matched_in_db = True
+                        for cr in oc_name_rows:
+                            oc_keys.append((cr["jurisdiction_code"], cr["company_number"]))
                             if cr.get("name"):
                                 entities.add(str(cr["name"]).strip())
                                 if cr.get("company_type"):
@@ -1545,17 +1822,42 @@ def _collect_side_profile(
                             for a in (cr.get("mailing_address_raw"), cr.get("registered_address_raw")):
                                 if a:
                                     raw_addresses.add(str(a).strip())
-                        cur.execute(
-                            "SELECT name FROM oc_officers WHERE jurisdiction_code = %s AND company_number = %s AND COALESCE(is_current, TRUE) = TRUE LIMIT 20",
-                            (oj, on),
-                        )
-                        for o_row in cur.fetchall():
-                            if o_row.get("name"):
-                                principals.add(str(o_row["name"]).strip())
-            except Exception:
-                conn.rollback()
+                    except Exception:
+                        conn.rollback()
+
+            seen_oc: Set[Tuple[str, str]] = set()
+            for oj, on in oc_keys:
+                if (oj, on) in seen_oc or len(seen_oc) >= 20:
+                    continue
+                seen_oc.add((oj, on))
+                try:
+                    cur.execute(
+                        "SELECT name, company_type, registered_address_raw, mailing_address_raw FROM oc_companies WHERE jurisdiction_code = %s AND company_number = %s",
+                        (oj, on),
+                    )
+                    cr = cur.fetchone()
+                    if cr:
+                        matched_in_db = True
+                        if cr.get("name"):
+                            entities.add(str(cr["name"]).strip())
+                            if cr.get("company_type"):
+                                entity_types[str(cr["name"]).strip().upper()] = str(cr["company_type"])
+                        for a in (cr.get("mailing_address_raw"), cr.get("registered_address_raw")):
+                            if a:
+                                raw_addresses.add(str(a).strip())
+                    cur.execute(
+                        "SELECT name FROM oc_officers WHERE jurisdiction_code = %s AND company_number = %s AND COALESCE(is_current, TRUE) = TRUE LIMIT 20",
+                        (oj, on),
+                    )
+                    for o_row in cur.fetchall():
+                        if o_row.get("name"):
+                            principals.add(str(o_row["name"]).strip())
+                except Exception:
+                    conn.rollback()
 
     return {
+        "jurisdiction": effective_jur,
+        "matched_in_db": matched_in_db,
         "entities": sorted(entities)[:60],
         "entity_types": entity_types,
         "raw_addresses": sorted(raw_addresses)[:60],
@@ -1575,15 +1877,18 @@ def evaluate_single_report(conn, report: Dict[str, Any]) -> Dict[str, Any]:
 
     if report_kind == "missed_connection":
         ctx = report.get("bridge_context") if isinstance(report.get("bridge_context"), dict) else {}
+        net_key_str = str(report.get("network_key") or "")
+        side_a_jur = _infer_jur_from_network_key(net_key_str, jur) if net_key_str else jur
         side_a = _collect_side_profile(
             conn,
-            jur,
+            side_a_jur,
             target_type=str(report.get("target_type") or "network"),
             target_value=str(report.get("target_value") or report.get("network_name") or ""),
             target_id=str(report.get("target_id") or ""),
             network_id=str(report.get("network_id") or ""),
-            network_key=str(report.get("network_key") or ""),
+            network_key=net_key_str,
             bridge_context=ctx,
+            extra_jurisdictions=[jur],
         )
         side_b = _collect_side_profile(
             conn,
@@ -1592,15 +1897,17 @@ def evaluate_single_report(conn, report: Dict[str, Any]) -> Dict[str, Any]:
             target_value=str(report.get("related_target_value") or ""),
             target_id=str(report.get("related_target_id") or ""),
             bridge_context={"address": ctx.get("related_address", "")} if ctx.get("related_address") else {},
+            extra_jurisdictions=[side_a_jur],
         )
         blocked_addrs = load_registrar_address_substrings(conn)
         return discover_missed_connection_tweaks(
             side_a,
             side_b,
             blocked_addresses=blocked_addrs,
-            address_stats_fn=lambda addr: _measure_address_across_db(conn, addr, jur),
+            address_stats_fn=lambda addr: _measure_address_across_db(conn, addr, side_a_jur),
             email_stats_fn=lambda em: _measure_email_across_db(conn, em),
             has_external_evidence_url=bool(str(report.get("evidence_url") or "").strip()),
+            explanation=str(report.get("explanation") or ""),
         )
 
     target_type = str(report.get("target_type") or "").lower()
