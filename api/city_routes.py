@@ -614,7 +614,7 @@ def city_stats(city: str, force_refresh: bool = False):
         "fl": "Florida Unified 67-County Parcels (FDOR + Miami-Dade PA + Hillsborough HCPA) + Sunbiz + DBPR Ch. 509 + Miami-Dade/Orlando/Gainesville Code",
         "ny": "New York Unified 62-County Explorer (NYC PLUTO/HPD/Marshal Evictions + NYS ORPTS + Rochester/Buffalo/Syracuse + SDG ImageMate)",
         "il": "Illinois Chicagoland Explorer (Cook 1.66M + DuPage 309K + Lake 258K PINs + Chicago DOB Violations + Devnet/Beacon CAMA)",
-        "ca": "California 58-County Explorer (LA & SF Rolls + Registered Lessor Businesses + Evictions/Violations + CA SOS)",
+        "ca": "LA & San Francisco Registered-Lessor Explorer (Partial: 2 of 58 CA counties; business-tax lessors + evictions/violations + CA SOS)",
         "co": "Colorado OIT Public Parcels + CO SOS + Denver Active Rental Licenses",
         "vt": "Vermont VCGI Standardized Parcels + Statewide Grand List",
         "wi": "Wisconsin SCO/DOA Statewide Parcels (Class 1 Residential & Class 2 Multifamily)",

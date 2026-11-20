@@ -17,7 +17,6 @@ const SPONSOR_URL = 'https://github.com/sponsors/sk123';
 
 const SEARCH_CITIES = [
   { key: 'NY', prefix: 'ny', label: 'New York' },
-  { key: 'CA', prefix: 'ca', label: 'California' },
   { key: 'FL', prefix: 'fl', label: 'Florida' },
   { key: 'IL', prefix: 'il', label: 'Illinois' },
   { key: 'MA', prefix: 'ma', label: 'Mass.' },
@@ -47,7 +46,6 @@ const QUICK_OMNI_EXAMPLES = [
 const DATASETS = [
   { key: 'AR', title: 'Arkansas', scope: 'Statewide' },
   { key: 'BALTIMORE', title: 'Baltimore', scope: 'City' },
-  { key: 'CA', title: 'California', scope: 'LA & SF' },
   { key: 'CO', title: 'Colorado', scope: 'Statewide' },
   { key: 'CT', title: 'Connecticut', scope: 'Statewide' },
   { key: 'DETROIT', title: 'Detroit', scope: 'City' },

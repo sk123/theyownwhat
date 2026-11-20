@@ -26,7 +26,7 @@ const DATASET_ORDER = [
 const DATASET_META = {
     CT: { label: 'Connecticut (All 169 Towns)', short: 'CT', accent: 'blue' },
     NY: { label: 'New York (All 62 Counties incl. NYC)', short: 'NY', accent: 'indigo' },
-    CA: { label: 'California (All 58 Counties)', short: 'CA', accent: 'amber' },
+    CA: { label: 'LA & San Francisco (Partial · Registered Lessors Only)', short: 'LA/SF', accent: 'amber' },
     FL: { label: 'Florida (All 67 Counties incl. Miami-Dade)', short: 'FL', accent: 'teal' },
     IL: { label: 'Illinois (All 102 Counties incl. Chicago)', short: 'IL', accent: 'sky' },
     MA: { label: 'Massachusetts (All 351 Cities & Towns)', short: 'MA', accent: 'emerald' },

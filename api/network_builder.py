@@ -821,16 +821,21 @@ def build_graph(conn, skip_emails=False):
         for bid, plinks in pending_pbl_by_bid.items():
             b_name, b_type = bid_meta.get(bid, ("", ""))
             b_type_u = b_type.upper()
-            is_nonstock_or_civic = (
-                any(tok in b_type_u for tok in _NONSTOCK_CIVIC_TYPE_TOKENS)
-                or bool(_NONSTOCK_CIVIC_NAME_RE.search(b_name))
+            is_for_profit_llc_or_lp = any(
+                tok in b_type_u for tok in ("LLC", "LIMITED LIABILITY", "LIMITED PARTNERSHIP", "LP", "LLP")
             )
+            is_nonstock_type = any(tok in b_type_u for tok in _NONSTOCK_CIVIC_TYPE_TOKENS)
+            is_civic_name = bool(_NONSTOCK_CIVIC_NAME_RE.search(b_name))
             uniq_pids = {pid for pid, _ in plinks}
-            board_cap = (
-                MAX_CT_SOTS_NONPROFIT_PRINCIPALS
-                if is_nonstock_or_civic
-                else MAX_CT_SOTS_CLOSELY_HELD_PRINCIPALS
-            )
+            if is_nonstock_type or (is_civic_name and not is_for_profit_llc_or_lp):
+                board_cap = MAX_CT_SOTS_NONPROFIT_PRINCIPALS
+            elif is_civic_name and is_for_profit_llc_or_lp:
+                # Closely-held for-profit LLCs with "Cooperative"/"Association" in their name
+                # (e.g. ASYLUM STREET COOPERATIVE, LLC) retain 1-2 beneficial owners while still
+                # blocking large multi-member boards (>2) from star-bridging unrelated landlords.
+                board_cap = 2
+            else:
+                board_cap = MAX_CT_SOTS_CLOSELY_HELD_PRINCIPALS
             if len(uniq_pids) > board_cap:
                 suppressed_board_businesses += 1
                 suppressed_board_links += len(uniq_pids)

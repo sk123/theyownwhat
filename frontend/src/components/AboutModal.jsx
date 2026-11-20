@@ -18,7 +18,7 @@ const SECTIONS = [
         ),
     },
     {
-        title: 'Supported Jurisdictions (20 Unified Live Explorers)',
+        title: 'Supported Jurisdictions (19 Featured Live Explorers)',
         defaultOpen: true,
         content: (
             <div className="space-y-3">
@@ -28,7 +28,6 @@ const SECTIONS = [
                     { name: 'Massachusetts (Unified Statewide — All 351 Cities & Towns incl. Boston)', desc: 'All 351 towns & cities via MassGIS Level 3 Property Tax Parcels, Analyze Boston FY2026 & ISD violations, Cambridge FY2027, 112 Vision/MapGeo CAMA scrapers, MA OpenCorporates piercing, and NHPD subsidies.', dot: 'bg-emerald-600' },
                     { name: 'Florida (Unified Statewide — All 67 Counties incl. Miami-Dade & Tampa)', desc: 'Unified 67-county improved parcels (FDOR NAL + Miami-Dade PA untruncated owners + Hillsborough HCPA CAMA + 67 County PA links), FL Sunbiz & OpenCorporates LLC Managers/Officers, FL DBPR Ch. 509 Apartment Licenses, Miami-Dade/Orlando/Gainesville code enforcement, and NHPD subsidies.', dot: 'bg-teal-600' },
                     { name: 'Illinois (Unified — Cook/Chicago, DuPage & Lake County + 102-County CAMA)', desc: 'Full Cook County (Chicago + 130+ suburbs, 1.66M improved PINs + CCAO residential/multifamily characteristics) + DuPage County GIS (309K) + Lake County GIS (258K) + 500K+ Chicago Dept. of Buildings code violations + 102-county Devnet/Beacon CAMA portals + IL SOS/OpenCorporates piercing.', dot: 'bg-blue-700' },
-                    { name: 'California (Statewide — LA & SF Rolls + Lessor Registries + 31.96M us_ca Officer Links)', desc: 'Los Angeles County & San Francisco improved rolls joined with SF/LA registered business-tax lessors, LAHD & SF Rent Board eviction notices, LADBS & SF DBI code violations, NHPD subsidies, and 31.96M CA SOS/OpenCorporates LLC member/officer records (with explicit Gov. Code § 7928.205 redaction badges).', dot: 'bg-amber-500' },
                     { name: 'Virginia (Statewide — ~88 Counties & Independent Cities)', desc: 'Improved parcels (vacant paper lots pruned) from VGIN 2026 Q3 Local Schema Tables, Hampton Roads HRGeo, Henrico & Prince William CAMA rolls, VA SCC & OpenCorporates piercing, recent parcel sales, and NHPD subsidies.', dot: 'bg-violet-600' },
                     { name: 'North Carolina (Statewide — All 100 Counties)', desc: 'NC OneMap statewide improved parcels across all 100 counties (with recorded sale dates), NC SOS & OpenCorporates corporate/LLC officer & foreign-branch piercing, and NHPD subsidy enrichment.', dot: 'bg-indigo-500' },
                     { name: 'Minnesota (Unified — Twin Cities 4-County Metro & Rochester/Olmsted + Rental Licenses)', desc: '903K improved CAMA parcels across Hennepin, Ramsey, Dakota, Anoka, and Olmsted (Rochester) Counties fused with Minneapolis Active Rental Licenses, owner/applicant contacts, Regulatory Services code violations, MN SOS/OpenCorporates piercing, and NHPD subsidies.', dot: 'bg-purple-600' },

@@ -1521,9 +1521,9 @@ const CITY_CONFIG = {
     ],
   },
   ca: {
-    name: 'California',
-    title: 'California Owner Networks',
-    subTitle: 'LA & SF improved rolls, registered lessor businesses, evictions/violations & 31.96M CA SOS officers',
+    name: 'LA & San Francisco (Partial)',
+    title: 'Los Angeles & San Francisco Lessor Networks',
+    subTitle: 'Partial coverage (2 of 58 CA counties): LA & SF business-tax registered lessors only — 84.5% of parcels redacted under CA Gov. Code § 7928.205',
     beta: true,
     idLabel: 'APN / AIN',
     idDesc: 'California County Assessor Parcel / Identification Number',

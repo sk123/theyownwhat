@@ -1,0 +1,22 @@
+{
+  "generated_at_utc": "2026-11-20T15:15:50.404409+00:00",
+  "model": "gemini-3.5-flash-lite",
+  "newly_tagged": 2776,
+  "total_in_db": 2776,
+  "by_category": {
+    "administrative_or_other": 1031,
+    "structural_roof_exterior": 305,
+    "unlicensed_illegal_occupancy": 274,
+    "fire_egress_safety": 264,
+    "trash_sanitation": 249,
+    "electrical_gas": 249,
+    "plumbing_sewage": 181,
+    "pests_rodents_vermin": 83,
+    "heat_hot_water": 78,
+    "mold_moisture_leaks": 57,
+    "lead_paint_hazards": 5
+  },
+  "prompt_tokens": 93630,
+  "output_tokens": 185295,
+  "elapsed_sec": 124.8
+}

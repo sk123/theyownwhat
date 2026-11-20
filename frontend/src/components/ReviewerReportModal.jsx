@@ -9,7 +9,7 @@ const JURISDICTION_OPTIONS = [
   ['fl', 'Florida (FL)'],
   ['ma', 'Massachusetts (MA)'],
   ['il', 'Illinois (IL)'],
-  ['ca', 'California (CA)'],
+  ['ca', 'LA & San Francisco (Partial CA)'],
   ['nj', 'New Jersey (NJ)'],
   ['dc', 'Washington, D.C.'],
   ['baltimore', 'Baltimore (MD)'],

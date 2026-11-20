@@ -6,7 +6,6 @@ import LiveIngestionBadge from './LiveIngestionBadge';
 const ALL_HEADER_JURISDICTIONS = [
     { key: 'AR', label: 'AR', mobileLabel: 'Arkansas', fullTitle: 'ARKANSAS' },
     { key: 'BALTIMORE', label: 'Balt', mobileLabel: 'Baltimore', fullTitle: 'BALTIMORE' },
-    { key: 'CA', label: 'CA', mobileLabel: 'California', fullTitle: 'CALIFORNIA' },
     { key: 'CO', label: 'CO', mobileLabel: 'Colorado', fullTitle: 'COLORADO' },
     { key: 'CT', label: 'CT', mobileLabel: 'CT', fullTitle: 'CONNECTICUT' },
     { key: 'DC', label: 'D.C.', mobileLabel: 'D.C.', fullTitle: 'D.C.' },
@@ -27,11 +26,14 @@ const ALL_HEADER_JURISDICTIONS = [
 ].sort((a, b) => a.label.localeCompare(b.label, 'en'));
 
 const DEFAULT_LIVE_KEYS = new Set([
-    'AR', 'BALTIMORE', 'CA', 'CO', 'CT', 'DC', 'DETROIT', 'FL', 'IL', 'MA',
+    'AR', 'BALTIMORE', 'CO', 'CT', 'DC', 'DETROIT', 'FL', 'IL', 'MA',
     'MN', 'MT', 'NC', 'NJ', 'NY', 'OH', 'PHILADELPHIA', 'VA', 'VT', 'WI',
 ]);
 
-const HEADER_STATE_TITLES = Object.fromEntries(ALL_HEADER_JURISDICTIONS.map((j) => [j.key, j.fullTitle]));
+const HEADER_STATE_TITLES = {
+    ...Object.fromEntries(ALL_HEADER_JURISDICTIONS.map((j) => [j.key, j.fullTitle])),
+    CA: 'LA & SAN FRANCISCO (PARTIAL)',
+};
 
 function prefersReducedMotion() {
     return typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;

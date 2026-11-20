@@ -188,8 +188,8 @@ const SEO_BY_DATASET = {
     path: '/fl',
   },
   CA: {
-    title: 'They Own WHAT?? | California Property Owner Explorer',
-    description: 'Explore California improved property rolls, SF & LA registered real-estate lessor businesses, eviction notices, code enforcement, NHPD subsidies, and 31.96M CA LLC/corporate officer filings.',
+    title: 'They Own WHAT?? | LA & San Francisco Registered-Lessor Explorer (Partial)',
+    description: 'Partial California coverage (LA & SF only): business-tax registered real-estate lessors, eviction notices, code enforcement, NHPD subsidies, and CA SOS LLC/corporate officer filings.',
     path: '/ca',
   },
   MT: {

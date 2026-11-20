@@ -93,11 +93,11 @@ CORP_MAX_USERS = 500
 # retain their HDFC portfolios, while third-party co-op/condo managing agents like AKAM,
 # The Andrews Organization, and Daisy Management do not merge unrelated boards).
 PRIVATE_COOP_CONDO_CORP_RE = re.compile(
-    r"\b(?:CONDO|CONDOMINIUM|COOPERATIVE|CO-OP|"
+    r"\b(?:CONDO|CONDOMINI?UM|COOPERATIVE|CO-OP|"
     r"OWNERS\s+CORP(?:ORATION|ORATED)?|"
     r"OWNERS\s+INC(?:ORPORATED)?|"
-    r"TENANTS\s+CORP(?:ORATION|ORATED)?|"
-    r"APARTMENTS?\s+CORP(?:ORATION|ORATED)?)\b",
+    r"TENANTS\s+(?:CORP(?:ORATION|ORATED)?|INC(?:ORPORATED)?)|"
+    r"(?:APARTMENTS?|APT\.?)\s+(?:CORP(?:ORATION|ORATED)?|INC(?:ORPORATED)?))\b",
     re.IGNORECASE,
 )
 
@@ -358,6 +358,24 @@ def build_nyc_networks(skip_property_join: bool = False, max_buildings: int = DE
             ):
                 reg_has_excluded_owner.add(reg_id)
 
+    # Snapshot EVERY registration's corporate owners & head-officer person names BEFORE popping
+    # excluded condo/co-op/REO registrations from `reg_bbl`. Otherwise excluding CONDOMINIUM /
+    # OWNERS CORPORATION registrations strips away the evidence that a 3rd-party managing agent
+    # (e.g. RASHAD DIVYA / AKAM / Andrews) serves across dozens of unrelated shareholder co-ops,
+    # allowing their remaining non-excluded co-op buildings ("133 MERCER STREET CORPORATION")
+    # to collapse into a fake landlord portfolio.
+    all_valid_reg_ids = set(reg_bbl.keys())
+    pre_excl_reg_owner_corps: dict[str, set[str]] = defaultdict(set)
+    pre_excl_person_regs: dict[str, set[str]] = defaultdict(set)
+    for reg_id, contact_type, name_norm, corp_norm, *_ in contacts:
+        if not reg_id or reg_id not in all_valid_reg_ids:
+            continue
+        ctype_u = (contact_type or "").upper()
+        if corp_norm and ctype_u in CORP_CONTACT_TYPES:
+            pre_excl_reg_owner_corps[reg_id].add(corp_norm)
+        if name_norm and len(name_norm) >= 5 and name_norm not in NOISE_NAMES and ctype_u in PERSON_CONTACT_TYPES:
+            pre_excl_person_regs[name_norm].add(reg_id)
+
     excluded_reg_ids = reg_has_excluded_owner - reg_has_private_owner
     if excluded_reg_ids:
         logger.info(
@@ -468,10 +486,12 @@ def build_nyc_networks(skip_property_join: bool = False, max_buildings: int = DE
     person_tpt_regs: dict[str, set[str]] = defaultdict(set)
     person_total_regs: dict[str, set[str]] = defaultdict(set)
     for p_name, rids in list(person_index.items()):
-        unique_rids = set(rids)
+        # Evaluate managing-agent co-op/condo share across ALL pre-exclusion registrations so
+        # popping excluded condo/owners-corp rows never hides a third-party managing agent.
+        unique_rids = set(rids) | pre_excl_person_regs.get(p_name, set())
         person_total_regs[p_name] = unique_rids
         for rid in unique_rids:
-            owners = raw_reg_owner_corps.get(rid, set())
+            owners = raw_reg_owner_corps.get(rid, set()) | pre_excl_reg_owner_corps.get(rid, set())
             person_owner_corps[p_name].update(owners)
             if owners and owners <= NONPROFIT_INTERMEDIARY_CORPS:
                 person_tpt_regs[p_name].add(rid)
