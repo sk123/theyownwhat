@@ -74,13 +74,18 @@ NON_OWNING_RA_MAX_OWNING_RATIO = float(os.environ.get("NON_OWNING_RA_MAX_OWNING_
 MAX_CT_SOTS_CLOSELY_HELD_PRINCIPALS = int(os.environ.get("MAX_CT_SOTS_CLOSELY_HELD_PRINCIPALS", "8"))
 MAX_CT_SOTS_NONPROFIT_PRINCIPALS = int(os.environ.get("MAX_CT_SOTS_NONPROFIT_PRINCIPALS", "0"))
 
-# Non-landlord / nonprofit / religious / co-op / professional-service corporate types
-# that must NEVER anchor or bridge private landlord networks (eliminates charity/civic/
-# synagogue/condo/law-firm board-member leaks across Phases 2A, 2A1b, 2A2, 2B, and 2C).
+# Pure non-landlord / professional-service / religious / co-op / municipal types excluded
+# from owning networks altogether, vs. Nonprofit / Non-Stock / Charitable entities which
+# REMAIN in the system as searchable portfolios (tenants live in nonprofit housing too!)
+# while strictly firewalled from board-member / email / address BFS bridging into private LLCs.
 _EXCLUDED_CT_BIZ_TYPE_RE = re.compile(
-    r"(?:NON[- ]?STOCK|NON[- ]?PROFIT|NOT[- ]FOR[- ]PROFIT|RELIGIOUS|CO-?OP(?:ERATIVE)?|"
-    r"CHARIT(?:ABLE|Y)|PROFESSIONAL\s+(?:SERVICE|CORPORATION|LLC|LIMITED\s+LIABILITY)|"
-    r"LAND\s+BANK|MUNICIPAL|BENEVOLENT|HOUSING\s+DEVELOPMENT\s+FUND|MENTAL\s+HEALTH)",
+    r"(?:RELIGIOUS|CO-?OP(?:ERATIVE)?|PROFESSIONAL\s+(?:SERVICE|CORPORATION|LLC|LIMITED\s+LIABILITY)|"
+    r"LAND\s+BANK|MUNICIPAL)",
+    re.IGNORECASE,
+)
+_NONPROFIT_BOARD_ISOLATED_CT_TYPE_RE = re.compile(
+    r"(?:NON[- ]?STOCK|NON[- ]?PROFIT|NOT[- ]FOR[- ]PROFIT|CHARIT(?:ABLE|Y)|"
+    r"BENEVOLENT|HOUSING\s+DEVELOPMENT\s+FUND|MENTAL\s+HEALTH)",
     re.IGNORECASE,
 )
 
@@ -559,6 +564,7 @@ def build_graph(conn, skip_emails=False):
         cur.execute("SELECT DISTINCT business_id FROM properties WHERE business_id IS NOT NULL")
         raw_owning_business_ids = {row['business_id'] for row in cur}
         excluded_ct_biz_ids = set()
+        nonprofit_ct_biz_ids = set()
         if raw_owning_business_ids:
             raw_bid_list = sorted(raw_owning_business_ids)
             for b_off in range(0, len(raw_bid_list), 10000):
@@ -581,11 +587,18 @@ def build_graph(conn, skip_emails=False):
                         continue
                     if (b_tp and _EXCLUDED_CT_BIZ_TYPE_RE.search(b_tp)) or is_excluded_third_party_entity(b_nm):
                         excluded_ct_biz_ids.add(brow["id"])
+                    elif b_tp and _NONPROFIT_BOARD_ISOLATED_CT_TYPE_RE.search(b_tp):
+                        nonprofit_ct_biz_ids.add(brow["id"])
         owning_business_ids = raw_owning_business_ids - excluded_ct_biz_ids
         property_owning_business_ids = set(owning_business_ids)  # Snapshot before adding bridges
+        # Register property-owning nonprofits as valid graph nodes so their portfolios remain
+        # searchable even with zero principal/board edges.
+        for np_bid in nonprofit_ct_biz_ids:
+            get_id(('business', np_bid))
         logger.info(
-            f"    Found {len(owning_business_ids):,} private property-owning businesses "
-            f"(excluded {len(excluded_ct_biz_ids):,} non-stock/nonprofit/religious/co-op/institutional/professional entities)."
+            f"    Found {len(owning_business_ids):,} property-owning businesses "
+            f"(excluded {len(excluded_ct_biz_ids):,} non-landlord/institutional/professional; "
+            f"board-isolated {len(nonprofit_ct_biz_ids):,} nonprofit/non-stock portfolios)."
         )
 
         # Keep general matching constrained to businesses that directly own property.
@@ -765,8 +778,8 @@ def build_graph(conn, skip_emails=False):
                 bid = row['business_id']
                 pid = row['principal_id']
 
-                # --- FILTER: Must be an owning business ---
-                if bid not in owning_business_ids:
+                # --- FILTER: Must be an owning non-board-isolated business ---
+                if bid not in owning_business_ids or bid in nonprofit_ct_biz_ids:
                     continue
 
                 if is_ignored_principal(row['p_name']) or is_ignored_principal(row['p_rep_name']): continue
@@ -928,7 +941,7 @@ def build_graph(conn, skip_emails=False):
                         btype_u = (brow.get("business_type") or "").upper()
                         if not bname or (INSTITUTIONAL_PATTERN.search(bname) and not WHITELIST_PATTERN.search(bname)):
                             continue
-                        if any(tok in btype_u for tok in _NONSTOCK_CIVIC_TYPE_TOKENS):
+                        if bid_k in nonprofit_ct_biz_ids or any(tok in btype_u for tok in _NONSTOCK_CIVIC_TYPE_TOKENS):
                             continue
                         m_addr = compose_address(brow.get("mail_address"), brow.get("mail_city"), brow.get("mail_state"), brow.get("mail_zip"))
                         b_addr = compose_address(brow.get("business_address"), brow.get("business_city"), brow.get("business_state"), brow.get("business_zip"))
@@ -1150,7 +1163,7 @@ def build_graph(conn, skip_emails=False):
 
                 b_name = row['b_name'] or ""
                 b_type = row.get('b_type') or ""
-                if b_type and _EXCLUDED_CT_BIZ_TYPE_RE.search(b_type):
+                if b_type and (_EXCLUDED_CT_BIZ_TYPE_RE.search(b_type) or _NONPROFIT_BOARD_ISOLATED_CT_TYPE_RE.search(b_type)):
                     continue
                 is_whitelisted = (
                     WHITELIST_PATTERN.search(row['p_name'] or "")
@@ -1273,6 +1286,10 @@ def build_graph(conn, skip_emails=False):
 
                 key = get_email_match_key(row['business_email_address'], email_rules)
                 if key and not _INTERMEDIARY_EMAIL_KEY_RE.search(key):
+                    # Namespace nonprofit email keys so sibling nonprofit entities still group
+                    # together without ever bridging a nonprofit into a for-profit landlord.
+                    if row['id'] in nonprofit_ct_biz_ids:
+                        key = f"np:{key}"
                     email_map[key].append(row['id']) # Store string ID directly
                     m_addr = compose_address(row.get('mail_address'), row.get('mail_city'), row.get('mail_state'), row.get('mail_zip'))
                     b_addr = compose_address(row.get('business_address'), row.get('business_city'), row.get('business_state'), row.get('business_zip'))
@@ -1481,15 +1498,18 @@ def build_graph(conn, skip_emails=False):
         for bid, norm, fine_no_zip, has_unit in raw_addr_records:
             if norm in law_office_coarse_addrs:
                 continue
+            np_prefix = "np:" if bid in nonprofit_ct_biz_ids else ""
             if norm in multi_unit_buildings:
                 # Multi-unit office tower / UPS Store / PMB center: only match businesses
                 # sharing the exact same unit/mailbox number; never collapse the building.
                 if has_unit and fine_no_zip:
-                    addr_map[fine_no_zip].append(bid)
-                    addr_key_to_coarse[fine_no_zip] = norm
+                    akey_ct = f"{np_prefix}{fine_no_zip}"
+                    addr_map[akey_ct].append(bid)
+                    addr_key_to_coarse[akey_ct] = norm
             else:
-                addr_map[norm].append(bid)
-                addr_key_to_coarse[norm] = norm
+                akey_ct = f"{np_prefix}{norm}"
+                addr_map[akey_ct].append(bid)
+                addr_key_to_coarse[akey_ct] = norm
 
         # Also route deferred OpenCorporates direct HQ addresses through the exact same
         # unified law/PM/multi-unit/dispersed-hub vetting pass.

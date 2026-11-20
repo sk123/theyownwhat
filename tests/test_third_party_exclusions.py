@@ -813,27 +813,18 @@ class ThirdPartyExclusionTests(unittest.TestCase):
         self.assertEqual(len(clusters), 2)
 
     def test_legal_aid_nonprofit_clt_hdfc_condo_coop_and_cmra_exclusions(self):
-        # Universal non-landlord exclusions uncovered in 25-jurisdiction legal-aid audit
+        # Universal non-housing / non-rental exclusions uncovered in 25-jurisdiction legal-aid audit
         for non_landlord in (
             "ROLLING MEADOWS COOP",
             "BELT'S LANDING, A CONDOMINIUM, INCORPORATED",
             "A Country Place Condominium",
             "THE REED CONDO",
             "SOCIETY HILL AT BERNARDS 1 CONDO",
-            "Winfield Mutual Housing Corportation",
             "CONSOLIDATED RAIL CORPORATION ATTN: TAX DEPARTMENT",
             "WASTE MANAGEMENT OF MASSACHUSETTS, INC.",
             "AIRTOUCH CELLULAR INC.",
-            "MHANY 2015 HOUSING DEVELOPMENT FUND",
-            "ZEVRONE REALTY HOUSING DEVELOPMENT FUND",
-            "CHAMPLAIN HOUSING TRUST",
-            "WINDHAM & WINDSOR HOUSING TRUST INC",
-            "HOUSING FOUNDATION INC",
-            "TENANTS DEVELOPMENT CORPORATION",
-            "WEST BANK COMMUNITY DEV CORP",
             "BOSTON NATURAL AREAS FUND",
             "NEIGHBORSPACE",
-            "CHRISTIAN RELIEF SERVICES OF VIRGINIA INC",
             "ULBRICH BOYS & GIRLS CLUB, INC.",
             "WILLINGTON FISH AND GAME CLUB INC., THE",
             "CONGREGATION BH, INC.",
@@ -848,8 +839,9 @@ class ThirdPartyExclusionTests(unittest.TestCase):
             with self.subTest(non_landlord=non_landlord):
                 self.assertTrue(is_excluded_third_party_entity(non_landlord))
 
-        # Genuine private landlords that share substrings must NEVER be excluded
-        for private_landlord in (
+        # Genuine private landlords AND nonprofit housing operators (whose boards are firewalled
+        # in oc_linker / network_builder rather than omitting the nonprofits from the system!)
+        for preserved_operator in (
             "1628 CHURCH ST, LLC",
             "WABASH CONDOMINIUM LLC",
             "BUSHNELL CONDOS, LLC",
@@ -858,9 +850,17 @@ class ThirdPartyExclusionTests(unittest.TestCase):
             "SFR 2 DE LLC",
             "WINNCOMPANIES",
             "NEW HAVEN REALTY TRUST",
+            "CHAMPLAIN HOUSING TRUST",
+            "WINDHAM & WINDSOR HOUSING TRUST INC",
+            "MHANY 2015 HOUSING DEVELOPMENT FUND",
+            "DUDLEY NEIGHBORS INC",
+            "WEST BANK COMMUNITY DEV CORP",
+            "PROJECT FOR PRIDE IN LIVING",
+            "TENANTS DEVELOPMENT CORPORATION",
+            "Winfield Mutual Housing Corportation",
         ):
-            with self.subTest(private_landlord=private_landlord):
-                self.assertFalse(is_excluded_third_party_entity(private_landlord))
+            with self.subTest(preserved_operator=preserved_operator):
+                self.assertFalse(is_excluded_third_party_entity(preserved_operator))
 
         # Leading-zero streetless floor, bare cityless PO Boxes, and city-scoped CMRA/RA hubs
         for bad_addr in (

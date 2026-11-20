@@ -939,16 +939,24 @@ def load_oc_registered_agent_addresses(conn) -> Set[str]:
 
 
 _EXCLUDED_OC_COMPANY_TYPE_RE = re.compile(
-    r"\b(?:NON[- ]?PROFIT|NON[- ]?STOCK|NOT[- ]FOR[- ]PROFIT|CHARIT(?:ABLE|Y)|"
-    r"PUBLIC\s+BENEFIT|MUTUAL\s+BENEFIT|ELEEMOSYNARY|FRATERNAL|BENEVOLENT|"
-    r"RELIGIOUS|CHURCH\s+CORP|SAVINGS\s+BANK|BANK\s+STOCK|BANK\s+NON[- ]STOCK|^BANK$|"
+    r"\b(?:RELIGIOUS|CHURCH\s+CORP|SAVINGS\s+BANK|BANK\s+STOCK|BANK\s+NON[- ]STOCK|^BANK$|"
     r"BANK\s*-\s*(?:DOMESTIC|FOREIGN)|CREDIT\s+UNION|INSURANCE\s+(?:COMPANY|STOCK|NON[- ]STOCK)|"
     r"^INSURANCE$|MUNICIPAL\s*-\s*(?:DOMESTIC|FOREIGN)|MUNICIPAL\s+CORP|GOVERNMENTAL|"
     r"ELECTRIC\s+MEMBERSHIP\s+COOP|RURAL\s+COOPERATIVE|"
     r"CO-?OP(?:ERATIVE)?(?:\s+(?:UTILITY|ASSOCIATION|CORPORATION|CORP|HOUSING))?|"
-    r"TELEPHONE\s+COOPERATIVE|MUTUAL\s+(?:WATER|DITCH|IRRIGATION|INSURANCE|HOUSING)|"
-    r"HOUSING\s+DEVELOPMENT\s+FUND|LAND\s+BANK|CONDOMINIUM|HOMEOWNERS|"
+    r"TELEPHONE\s+COOPERATIVE|MUTUAL\s+(?:WATER|DITCH|IRRIGATION|INSURANCE)|"
+    r"LAND\s+BANK|CONDOMINIUM|HOMEOWNERS|"
     r"PROFESSIONAL\s+(?:SERVICE|CORPORATION|LLC|LIMITED\s+LIABILITY)|^SCHOOL$)\b",
+    re.IGNORECASE,
+)
+# Nonprofit / charitable / non-stock / public-benefit entities remain searchable in the system
+# (tenants live in nonprofit-owned housing too), but their boards of directors are strictly
+# firewalled from BFS bridging: ZERO board officers exported and ZERO cross-type HQ/parent edges
+# so rich businesspeople sharing a charity board never have their unrelated ventures merged.
+_NONPROFIT_BOARD_ISOLATED_TYPE_RE = re.compile(
+    r"\b(?:NON[- ]?PROFIT|NON[- ]?STOCK|NOT[- ]FOR[- ]PROFIT|CHARIT(?:ABLE|Y)|"
+    r"PUBLIC\s+BENEFIT|MUTUAL\s+BENEFIT|ELEEMOSYNARY|FRATERNAL|BENEVOLENT|"
+    r"HOUSING\s+DEVELOPMENT\s+FUND)\b",
     re.IGNORECASE,
 )
 # Non-beneficial volunteer, advisory, religious, clerical, or professional-agent officer
@@ -1106,11 +1114,6 @@ def resolve_oc_company_principals(
                     if (
                         (cname and (is_excluded_third_party_entity(cname) or _INTERMEDIARY_EXCHANGE_LENDER_RE.search(cname)))
                         or (ctype and _EXCLUDED_OC_COMPANY_TYPE_RE.search(ctype))
-                        or bool(row.get("is_nonprofit"))
-                        or any(
-                            tok in ctype.upper()
-                            for tok in ("NONPROFIT", "NON-PROFIT", "NON-STOCK", "NONSTOCK", "CHARITABLE", "NOT-FOR-PROFIT", "COOPERATIVE", "CO-OP")
-                        )
                         or any(
                             tok in cname.upper()
                             for tok in ("CO-OPERATIVE", "COOPERATIVE", "YACHT CLUB", "COUNTRY CLUB", "GOLF CLUB", "FAIR SOCIETY", "BOYS & GIRLS CLUB", "BOYS AND GIRLS CLUB")
@@ -1119,6 +1122,15 @@ def resolve_oc_company_principals(
                         excluded_company_keys.add(key)
                         all_nonprofit_keys.add(key)
                         continue
+                    if (
+                        bool(row.get("is_nonprofit"))
+                        or (ctype and _NONPROFIT_BOARD_ISOLATED_TYPE_RE.search(ctype))
+                        or any(
+                            tok in cname.upper()
+                            for tok in ("FOUNDATION", "CHARITABLE", "COMMUNITY LAND TRUST", "HOUSING TRUST", "HOUSING DEVELOPMENT FUND", "MUTUAL HOUSING")
+                        )
+                    ):
+                        all_nonprofit_keys.add(key)
 
                     raw_agent_nm = (row.get("agent_name") or "").strip()
                     if raw_agent_nm and not looks_like_business_name(raw_agent_nm):
@@ -1229,7 +1241,7 @@ def resolve_oc_company_principals(
                 learned_3p_principals.discard("")
                 for row in cur.fetchall():
                     ckey = (row["jurisdiction_code"], row["company_number"])
-                    if ckey in excluded_company_keys:
+                    if ckey in excluded_company_keys or ckey in all_nonprofit_keys:
                         continue
                     raw_nm = row.get("name") or ""
                     raw_pos = (row.get("position") or "").strip()
@@ -1296,10 +1308,10 @@ def resolve_oc_company_principals(
                                 continue
                             p_clean = clean_oc_officer_name(raw_p)
                             if p_clean and not is_excluded_third_party_entity(p_clean) and looks_like_person_owner(p_clean):
-                                if bkey in visited and bkey not in excluded_company_keys:
+                                if bkey in visited and bkey not in excluded_company_keys and bkey not in all_nonprofit_keys:
                                     direct_humans.setdefault(bkey, set()).add(p_clean)
                                     touched_human_keys.add(bkey)
-                                if hkey in visited and hkey not in excluded_company_keys:
+                                if hkey in visited and hkey not in excluded_company_keys and hkey not in all_nonprofit_keys:
                                     direct_humans.setdefault(hkey, set()).add(p_clean)
                                     touched_human_keys.add(hkey)
 
@@ -1322,7 +1334,7 @@ def resolve_oc_company_principals(
                     ct_pl_by_co: Dict[Tuple[str, str], List[dict]] = {}
                     for row in cur.fetchall():
                         ck = (row["jurisdiction_code"], row["company_number"])
-                        if ck in excluded_company_keys:
+                        if ck in excluded_company_keys or ck in all_nonprofit_keys:
                             continue
                         ct_pl_by_co.setdefault(ck, []).append(row)
                     for ck, prows in ct_pl_by_co.items():
@@ -1376,6 +1388,8 @@ def resolve_oc_company_principals(
                             continue
                         for sk, dk in pairs:
                             if sk in excluded_company_keys or dk in excluded_company_keys:
+                                continue
+                            if (sk in all_nonprofit_keys) != (dk in all_nonprofit_keys):
                                 continue
                             if sk in visited:
                                 parent_edges.setdefault(sk, set()).add(dk)
@@ -1543,7 +1557,7 @@ def resolve_oc_company_principals(
                         ctype = (row.get("company_type") or "").strip()
                         if (
                             (cname and (is_excluded_third_party_entity(cname) or _INTERMEDIARY_EXCHANGE_LENDER_RE.search(cname)))
-                            or (ctype and _EXCLUDED_OC_COMPANY_TYPE_RE.search(ctype))
+                            or (ctype and (_EXCLUDED_OC_COMPANY_TYPE_RE.search(ctype) or _NONPROFIT_BOARD_ISOLATED_TYPE_RE.search(ctype)))
                             or bool(row.get("is_nonprofit"))
                             or any(tok in ctype.upper() for tok in ("NONPROFIT", "NON-PROFIT", "NON-STOCK", "NONSTOCK", "CHARITABLE", "NOT-FOR-PROFIT", "COOPERATIVE", "CO-OP", "RELIGIOUS"))
                         ):
@@ -1708,16 +1722,25 @@ def resolve_oc_company_principals(
                 if parent_node in entity_labels:
                     holdings.add(entity_labels[parent_node])
                 stack.append((parent_node, depth + 1))
-        if len(humans) > MAX_CUMULATIVE_ROLLUP_OFFICERS or len(ct_pids) > MAX_CUMULATIVE_ROLLUP_OFFICERS:
+        if seed in all_nonprofit_keys or len(humans) > MAX_CUMULATIVE_ROLLUP_OFFICERS or len(ct_pids) > MAX_CUMULATIVE_ROLLUP_OFFICERS:
             humans = set()
             ct_pids = {}
+        # Namespace nonprofit HQ addresses with `NP||` so sibling entities of the same nonprofit
+        # housing operator still unify cleanly, while NEVER cross-merging with for-profit LLCs
+        # that happen to share a physical office building or mailing address.
+        out_hq_addrs = (
+            sorted(f"NP||{h}" for h in hq_addrs)
+            if seed in all_nonprofit_keys
+            else sorted(hq_addrs)
+        )
         resolved[seed] = {
             "humans": sorted(humans),
             "ct_principal_ids": ct_pids,
             "holding_entities": sorted(holdings),
             "reached_companies": sorted(f"{j}/{n}" for j, n in seen_nodes if (j, n) not in excluded_company_keys),
-            "hq_addresses": sorted(hq_addrs),
+            "hq_addresses": out_hq_addrs,
             "raw_hq_addresses": sorted(raw_hq_addrs),
+            "is_nonprofit_isolated": seed in all_nonprofit_keys,
         }
     return resolved
 
@@ -2627,26 +2650,9 @@ def cluster_with_oc_and_series(
             if union_r(roots[0], other):
                 merges += 1
 
-    # Prune OC-verified non-landlord nonprofits, charities, CLTs, co-ops, religious orgs, and
-    # professional-service firms from private landlord networks (`*_networks`) while preserving
-    # genuine for-profit LLC/LP entities (in case of a cross-state homonym) and leaving all raw
-    # parcel rows intact in `*_properties`.
-    _for_profit_llc_lp_re = re.compile(
-        r"\b(?:L\.?L\.?C\.?|LIMITED\s+LIABILITY\s+COMPANY|L\.?P\.?|LIMITED\s+PARTNERSHIP|L\.?L\.?L\.?P\.?)\b",
-        re.IGNORECASE,
-    )
     merged_groups: Dict[str, List[dict]] = {}
     for r, props in root_to_props.items():
-        kept_props = []
-        for pp in props:
-            oj_p, on_p = pp.get("oc_jurisdiction_code"), pp.get("oc_company_number")
-            if oj_p and on_p and (oc_resolved.get((oj_p, on_p)) or {}).get("is_excluded_entity"):
-                raw_o = pp.get("owner_name") or ""
-                if is_excluded_third_party_entity(raw_o) or not _for_profit_llc_lp_re.search(raw_o):
-                    continue
-            kept_props.append(pp)
-        if kept_props:
-            merged_groups.setdefault(find_r(r), []).extend(kept_props)
+        merged_groups.setdefault(find_r(r), []).extend(props)
     return merged_groups, merges
 
 

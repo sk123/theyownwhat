@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-11-20T05:25:50Z",
+  "updated_at": "2026-11-20T08:05:50Z",
   "rules": [
     {
       "rule_type": "address_alias",
@@ -63,7 +63,7 @@
         "source": "legal_aid_audit",
         "reason": "Housing Authority of Baltimore City (HABC) RAD instrumentality at 417 E Fayette St Room 401"
       },
-      "active": true,
+      "active": false,
       "updated_at": "2026-11-20T05:23:10Z"
     },
     {
@@ -76,7 +76,7 @@
         "source": "legal_aid_audit",
         "reason": "HABC RAD public housing instrumentality at 417 E Fayette St Room 401"
       },
-      "active": true,
+      "active": false,
       "updated_at": "2026-11-20T05:25:38Z"
     },
     {
@@ -89,7 +89,7 @@
         "source": "legal_aid_audit",
         "reason": "HABC RAD public housing instrumentality (no-space comma typo variant)"
       },
-      "active": true,
+      "active": false,
       "updated_at": "2026-11-20T05:25:50Z"
     },
     {
@@ -102,8 +102,22 @@
         "source": "legal_aid_audit",
         "reason": "HABC RAD public housing instrumentality at 417 E Fayette St Room 401"
       },
-      "active": true,
+      "active": false,
       "updated_at": "2026-11-20T05:25:38Z"
+    },
+    {
+      "rule_type": "placeholder_owner",
+      "rule_key": "UNKNOWN OWNERSHIP",
+      "rule_value": "EXCLUDE",
+      "scope": "global",
+      "discovered_in": "va",
+      "evidence": {
+        "jur": "va",
+        "display_name": "UNKNOWN OWNERSHIP",
+        "buildings": 12
+      },
+      "active": false,
+      "updated_at": "2026-11-20T06:37:13Z"
     },
     {
       "rule_type": "ra_allowlist",
@@ -315,6 +329,22 @@
     },
     {
       "rule_type": "ra_allowlist",
+      "rule_key": "2999 OVERLAND AVENUE LOS ANGELES CA",
+      "rule_value": "KMK CAPITAL CORPORATION",
+      "scope": "global",
+      "discovered_in": "ca",
+      "evidence": {
+        "jur": "ca",
+        "parcels": 40,
+        "officer_concentration": 0.8,
+        "family_concentration": 0.025,
+        "top_officer": "KMK CAPITAL CORPORATION"
+      },
+      "active": false,
+      "updated_at": "2026-11-20T06:34:14Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
       "rule_key": "3315 NORTH OAK TRAFFICWAY KANSAS CITY MO",
       "rule_value": "NPD MANAGEMENT LLC",
       "scope": "global",
@@ -344,6 +374,22 @@
       },
       "active": false,
       "updated_at": "2026-11-19T06:13:35Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "3500 VICKSBURG LANE NORTH PLYMOUTH MN",
+      "rule_value": "ALI SAJJAD",
+      "scope": "global",
+      "discovered_in": "mn",
+      "evidence": {
+        "jur": "mn",
+        "parcels": 64,
+        "officer_concentration": 1.0,
+        "family_concentration": 0.133,
+        "top_officer": "ALI SAJJAD"
+      },
+      "active": false,
+      "updated_at": "2026-11-20T06:36:02Z"
     },
     {
       "rule_type": "ra_allowlist",
@@ -443,6 +489,22 @@
     },
     {
       "rule_type": "ra_allowlist",
+      "rule_key": "5200 WILLSON ROAD EDINA MN",
+      "rule_value": "DREW PANDOLFO",
+      "scope": "global",
+      "discovered_in": "mn",
+      "evidence": {
+        "jur": "mn",
+        "parcels": 28,
+        "officer_concentration": 1.0,
+        "family_concentration": 0.125,
+        "top_officer": "DREW PANDOLFO"
+      },
+      "active": false,
+      "updated_at": "2026-11-20T06:36:02Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
       "rule_key": "549 EMPIRE BOULEVARD BROOKLYN NY",
       "rule_value": "DOVIE SPERLIN",
       "scope": "global",
@@ -456,6 +518,22 @@
       },
       "active": false,
       "updated_at": "2026-11-19T05:22:45Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "5670 WILSHIRE BOULEVARD LOS ANGELES CA",
+      "rule_value": "ALAN STERN",
+      "scope": "global",
+      "discovered_in": "ca",
+      "evidence": {
+        "jur": "ca",
+        "parcels": 57,
+        "officer_concentration": 0.98,
+        "family_concentration": 0.018,
+        "top_officer": "ALAN STERN"
+      },
+      "active": false,
+      "updated_at": "2026-11-20T06:34:13Z"
     },
     {
       "rule_type": "ra_allowlist",
@@ -475,6 +553,22 @@
     },
     {
       "rule_type": "ra_allowlist",
+      "rule_key": "600 GALLERIA PARKWAY ATLANTA GA",
+      "rule_value": "FKH SFR",
+      "scope": "global",
+      "discovered_in": "nc",
+      "evidence": {
+        "jur": "nc",
+        "parcels": 52,
+        "officer_concentration": 0.0,
+        "family_concentration": 0.667,
+        "top_officer": ""
+      },
+      "active": false,
+      "updated_at": "2026-11-20T06:38:45Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
       "rule_key": "600 GALLERIA PARKWAY SOUTHEAST ATLANTA GA",
       "rule_value": "JEFFREY MONDAY",
       "scope": "global",
@@ -488,6 +582,22 @@
       },
       "active": false,
       "updated_at": "2026-11-19T05:51:41Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "6390 CARLSON DRIVE EDEN PRAIRIE MN",
+      "rule_value": "INTERSTATE DEVELOPMENT CORPORATION",
+      "scope": "global",
+      "discovered_in": "mn",
+      "evidence": {
+        "jur": "mn",
+        "parcels": 22,
+        "officer_concentration": 0.833,
+        "family_concentration": 0.158,
+        "top_officer": "INTERSTATE DEVELOPMENT CORPORATION"
+      },
+      "active": false,
+      "updated_at": "2026-11-20T06:36:02Z"
     },
     {
       "rule_type": "ra_allowlist",
@@ -552,6 +662,22 @@
       },
       "active": false,
       "updated_at": "2026-11-19T05:51:41Z"
+    },
+    {
+      "rule_type": "ra_allowlist",
+      "rule_key": "7772 SANTA MONICA BOULEVARD WEST HOLLYWOOD CA",
+      "rule_value": "FARDAD DANNY MONEMPOUR",
+      "scope": "global",
+      "discovered_in": "ca",
+      "evidence": {
+        "jur": "ca",
+        "parcels": 46,
+        "officer_concentration": 0.85,
+        "family_concentration": 0.025,
+        "top_officer": "FARDAD DANNY MONEMPOUR"
+      },
+      "active": false,
+      "updated_at": "2026-11-20T06:34:14Z"
     },
     {
       "rule_type": "ra_allowlist",
@@ -683,6 +809,76 @@
     },
     {
       "rule_type": "third_party_hub_block",
+      "rule_key": "11390 WEST OLYMPIC BOULEVARD LOS ANGELES CA",
+      "rule_value": "BLOCK_HUB",
+      "scope": "global",
+      "discovered_in": "ca",
+      "evidence": {
+        "jur": "ca",
+        "distinct_owner_families": 44,
+        "disjoint_external_oc_hqs": 19
+      },
+      "active": false,
+      "updated_at": "2026-11-20T06:34:14Z"
+    },
+    {
+      "rule_type": "third_party_hub_block",
+      "rule_key": "11766 WILSHIRE BOULEVARD LOS ANGELES CA",
+      "rule_value": "BLOCK_HUB",
+      "scope": "global",
+      "discovered_in": "ca",
+      "evidence": {
+        "jur": "ca",
+        "distinct_owner_families": 86,
+        "disjoint_external_oc_hqs": 17
+      },
+      "active": false,
+      "updated_at": "2026-11-20T06:34:14Z"
+    },
+    {
+      "rule_type": "third_party_hub_block",
+      "rule_key": "1180 SOUTH BEVERLY DRIVE LOS ANGELES CA",
+      "rule_value": "BLOCK_HUB",
+      "scope": "global",
+      "discovered_in": "ca",
+      "evidence": {
+        "jur": "ca",
+        "distinct_owner_families": 51,
+        "disjoint_external_oc_hqs": 11
+      },
+      "active": false,
+      "updated_at": "2026-11-20T06:34:14Z"
+    },
+    {
+      "rule_type": "third_party_hub_block",
+      "rule_key": "1212 LONG BEACH BOULEVARD LONG BEACH CA",
+      "rule_value": "BLOCK_HUB",
+      "scope": "global",
+      "discovered_in": "ca",
+      "evidence": {
+        "jur": "ca",
+        "distinct_owner_families": 59,
+        "disjoint_external_oc_hqs": 27
+      },
+      "active": false,
+      "updated_at": "2026-11-20T06:34:14Z"
+    },
+    {
+      "rule_type": "third_party_hub_block",
+      "rule_key": "22020 CLARENDON STREET WOODLAND HILLS CA",
+      "rule_value": "BLOCK_HUB",
+      "scope": "global",
+      "discovered_in": "ca",
+      "evidence": {
+        "jur": "ca",
+        "distinct_owner_families": 42,
+        "disjoint_external_oc_hqs": 19
+      },
+      "active": false,
+      "updated_at": "2026-11-20T06:34:14Z"
+    },
+    {
+      "rule_type": "third_party_hub_block",
       "rule_key": "2875 NORTHEAST 191 STREET AVENTURA",
       "rule_value": "BLOCK_HUB",
       "scope": "global",
@@ -697,6 +893,20 @@
     },
     {
       "rule_type": "third_party_hub_block",
+      "rule_key": "3217 WEST JEFFERSON BOULEVARD LOS ANGELES CA",
+      "rule_value": "BLOCK_HUB",
+      "scope": "global",
+      "discovered_in": "ca",
+      "evidence": {
+        "jur": "ca",
+        "distinct_owner_families": 65,
+        "disjoint_external_oc_hqs": 23
+      },
+      "active": false,
+      "updated_at": "2026-11-20T06:34:14Z"
+    },
+    {
+      "rule_type": "third_party_hub_block",
       "rule_key": "3595 SHERIDAN STREET HOLLYWOOD",
       "rule_value": "BLOCK_HUB",
       "scope": "global",
@@ -708,6 +918,34 @@
       },
       "active": false,
       "updated_at": "2026-11-19T05:51:41Z"
+    },
+    {
+      "rule_type": "third_party_hub_block",
+      "rule_key": "3623 MOTOR AVENUE LOS ANGELES CA",
+      "rule_value": "BLOCK_HUB",
+      "scope": "global",
+      "discovered_in": "ca",
+      "evidence": {
+        "jur": "ca",
+        "distinct_owner_families": 57,
+        "disjoint_external_oc_hqs": 14
+      },
+      "active": false,
+      "updated_at": "2026-11-20T06:34:14Z"
+    },
+    {
+      "rule_type": "third_party_hub_block",
+      "rule_key": "4433 CORPORATION LANE VIRGINIA BEACH VA",
+      "rule_value": "BLOCK_HUB",
+      "scope": "global",
+      "discovered_in": "va",
+      "evidence": {
+        "jur": "va",
+        "distinct_owner_families": 13,
+        "disjoint_external_oc_hqs": 9
+      },
+      "active": false,
+      "updated_at": "2026-11-20T06:37:13Z"
     },
     {
       "rule_type": "third_party_hub_block",

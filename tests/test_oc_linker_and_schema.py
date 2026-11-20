@@ -385,8 +385,8 @@ class TestOCMultiHopResolutionIntegration(unittest.TestCase):
             )
             np_info = resolved[("us_ma", "TEST-NP-BOARD")]
             self.assertEqual(np_info["humans"], [])
-            self.assertEqual(np_info["hq_addresses"], [])
-            self.assertTrue(np_info.get("is_excluded_entity"))
+            self.assertIn("NP||550 DUDLEY STREET ROXBURY MA", np_info["hq_addresses"])
+            self.assertTrue(np_info.get("is_nonprofit_isolated"))
 
             corp_info = resolved[("us_ma", "TEST-CORP-HOME")]
             self.assertIn("26999 SYNTHETIC MILL ROAD CHELMSFORD MA", corp_info["hq_addresses"])
@@ -429,6 +429,82 @@ class TestOCMultiHopResolutionIntegration(unittest.TestCase):
             self.assertEqual(resolved2[("us_mt", "TEST-COOP-UTIL")]["ct_principal_ids"], {})
             self.assertEqual(resolved2[("us_mt", "TEST-BIG-LP")]["humans"], [])
             self.assertEqual(resolved2[("us_mt", "TEST-BIG-LP")]["ct_principal_ids"], {})
+        finally:
+            conn.rollback()
+            conn.close()
+
+    def test_shared_charity_board_never_bridges_unrelated_business_ventures(self):
+        """Nonprofits stay searchable in the system, while two unrelated private landlords
+        who happen to co-serve on a charity board NEVER get bridged via BFS or Step-6 hops."""
+        import os
+        import psycopg2
+        from api.oc_linker import cluster_with_oc_and_series, resolve_oc_company_principals
+
+        db_url = os.environ.get("DATABASE_URL", "postgresql://user:password@127.0.0.1:5432/ctdata")
+        try:
+            conn = psycopg2.connect(db_url, connect_timeout=3)
+        except Exception:
+            conn = psycopg2.connect("postgresql://user:password@ctdata_db:5432/ctdata", connect_timeout=3)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO oc_companies (
+                        jurisdiction_code, company_number, name, name_norm, company_type, is_active, is_nonprofit,
+                        registered_address_raw, mailing_address_raw
+                    ) VALUES
+                        ('us_ma', 'TEST-CHARITY-BRD', 'METROPOLITAN RELIEF HOUSING INC', 'METROPOLITAN RELIEF HOUSING INCORPORATED',
+                         'Nonprofit Corporation', TRUE, TRUE, '777 CHARITY PLAZA, BOSTON, MA 02116', '777 CHARITY PLAZA, BOSTON, MA 02116'),
+                        ('us_ma', 'TEST-VENTURE-A', 'ALPHA WINN APARTMENTS LLC', 'ALPHA WINN APARTMENTS LIMITED LIABILITY COMPANY',
+                         'Domestic Limited Liability Company', TRUE, FALSE, '100 ALPHA WAY, BOSTON, MA 02110', '100 ALPHA WAY, BOSTON, MA 02110'),
+                        ('us_ma', 'TEST-VENTURE-B', 'BETA THERESA VENTURES LLC', 'BETA THERESA VENTURES LIMITED LIABILITY COMPANY',
+                         'Domestic Limited Liability Company', TRUE, FALSE, '200 BETA AVE, CAMBRIDGE, MA 02139', '200 BETA AVE, CAMBRIDGE, MA 02139')
+                    """
+                )
+                cur.execute(
+                    """
+                    INSERT INTO oc_officers (
+                        jurisdiction_code, company_number, name, name_norm,
+                        position, role_class, is_corporate_officer, is_current
+                    ) VALUES
+                        ('us_ma', 'TEST-CHARITY-BRD', 'ARTHUR WINNSTON', 'ARTHUR WINNSTON', 'Director', 'beneficial_principal', FALSE, TRUE),
+                        ('us_ma', 'TEST-CHARITY-BRD', 'TERESA CALCUTTA', 'TERESA CALCUTTA', 'Director', 'beneficial_principal', FALSE, TRUE),
+                        ('us_ma', 'TEST-VENTURE-A', 'ARTHUR WINNSTON', 'ARTHUR WINNSTON', 'Manager', 'beneficial_principal', FALSE, TRUE),
+                        ('us_ma', 'TEST-VENTURE-B', 'TERESA CALCUTTA', 'TERESA CALCUTTA', 'Manager', 'beneficial_principal', FALSE, TRUE)
+                    """
+                )
+            resolved = resolve_oc_company_principals(
+                conn,
+                [
+                    ("us_ma", "TEST-CHARITY-BRD"),
+                    ("us_ma", "TEST-VENTURE-A"),
+                    ("us_ma", "TEST-VENTURE-B"),
+                ],
+                max_hops=3,
+            )
+            charity_info = resolved[("us_ma", "TEST-CHARITY-BRD")]
+            va_info = resolved[("us_ma", "TEST-VENTURE-A")]
+            vb_info = resolved[("us_ma", "TEST-VENTURE-B")]
+
+            # Charity stays in system with isolated NP|| HQ and ZERO exported board humans
+            self.assertEqual(charity_info["humans"], [])
+            self.assertTrue(charity_info.get("is_nonprofit_isolated"))
+            self.assertIn("NP||777 CHARITY PLAZA BOSTON MA", charity_info["hq_addresses"])
+            # Each private venture keeps ONLY its own manager — zero cross-contamination!
+            self.assertEqual(va_info["humans"], ["ARTHUR WINNSTON"])
+            self.assertEqual(vb_info["humans"], ["TERESA CALCUTTA"])
+
+            props = [
+                {"bbl": "CH-1", "owner_name": "METROPOLITAN RELIEF HOUSING INC", "owner_name_norm": "METROPOLITAN RELIEF HOUSING INC", "oc_jurisdiction_code": "us_ma", "oc_company_number": "TEST-CHARITY-BRD"},
+                {"bbl": "VA-1", "owner_name": "ALPHA WINN APARTMENTS LLC", "owner_name_norm": "ALPHA WINN APARTMENTS LLC", "oc_jurisdiction_code": "us_ma", "oc_company_number": "TEST-VENTURE-A"},
+                {"bbl": "VB-1", "owner_name": "BETA THERESA VENTURES LLC", "owner_name_norm": "BETA THERESA VENTURES LLC", "oc_jurisdiction_code": "us_ma", "oc_company_number": "TEST-VENTURE-B"},
+            ]
+            out_g, _ = cluster_with_oc_and_series(props, {p["bbl"]: [p] for p in props}, resolved)
+            clusters = [frozenset(p["bbl"] for p in grp) for grp in out_g.values()]
+            self.assertEqual(len(clusters), 3)
+            self.assertIn(frozenset({"CH-1"}), clusters)
+            self.assertIn(frozenset({"VA-1"}), clusters)
+            self.assertIn(frozenset({"VB-1"}), clusters)
         finally:
             conn.rollback()
             conn.close()
@@ -870,43 +946,47 @@ class TestAssessorPlaceholderAndInstitutionalHygiene(unittest.TestCase):
     def test_mother_teresa_nonprofit_firewall_non_beneficial_roles_and_generic_manager(self):
         from api.oc_linker import (
             _EXCLUDED_OC_COMPANY_TYPE_RE,
+            _NONPROFIT_BOARD_ISOLATED_TYPE_RE,
             _NON_BENEFICIAL_OFFICER_POSITION_RE,
             cluster_with_oc_and_series,
             is_generic_homonym_stem,
         )
-        from api.network_builder import _EXCLUDED_CT_BIZ_TYPE_RE
+        from api.network_builder import _EXCLUDED_CT_BIZ_TYPE_RE, _NONPROFIT_BOARD_ISOLATED_CT_TYPE_RE
 
         # Generic bare corporate names must never Tier-2 match across unrelated entities
         for generic_nm in ("MANAGER LLC", "MANAGING LLC", "OWNER LLC", "TRUSTEE LLC", "GENERAL PARTNER LP"):
             self.assertTrue(is_generic_homonym_stem(generic_nm), generic_nm)
         self.assertFalse(is_generic_homonym_stem("WINNCOMPANIES LLC"))
 
-        # Nonprofit / Non-Stock / Charitable / Religious / Co-op / Professional Service types excluded
+        # Nonprofit / Non-Stock / Charitable / Public-Benefit types are board-isolated (NOT omitted!)
         for non_profit_ct in (
             "Non-Profit Corporation - Domestic",
             "Nonprofit Corporation",
             "Non-Stock",
             "DOMESTIC NOT-FOR-PROFIT CORPORATION",
             "DOMESTIC NOT-FOR-PROFIT CORPORATION (HOUSING DEVELOPMENT FUND COMPANY) (ARTICLE XI)",
-            "DOMESTIC PROFESSIONAL SERVICE CORPORATION",
-            "DOMESTIC PROFESSIONAL SERVICE LIMITED LIABILITY COMPANY",
             "Public Benefit Corporation",
             "Mutual Benefit Nonprofit Corporation",
             "Charitable Corporation",
+        ):
+            self.assertTrue(bool(_NONPROFIT_BOARD_ISOLATED_TYPE_RE.search(non_profit_ct)), non_profit_ct)
+        for non_landlord_ct in (
+            "DOMESTIC PROFESSIONAL SERVICE CORPORATION",
+            "DOMESTIC PROFESSIONAL SERVICE LIMITED LIABILITY COMPANY",
             "Religious",
         ):
-            self.assertTrue(bool(_EXCLUDED_OC_COMPANY_TYPE_RE.search(non_profit_ct)), non_profit_ct)
-        for ct_excluded in (
+            self.assertTrue(bool(_EXCLUDED_OC_COMPANY_TYPE_RE.search(non_landlord_ct)), non_landlord_ct)
+        for ct_np in (
             "Non-Stock",
             "DOMESTIC NOT-FOR-PROFIT CORPORATION",
             "DOMESTIC NOT-FOR-PROFIT CORPORATION (COMMUNITY MENTAL HEALTH SERVICES AND MENTAL RETARDATION SERVICES COMPANIES)",
-            "DOMESTIC PROFESSIONAL SERVICE CORPORATION",
-            "DOMESTIC COOPERATIVE CORPORATION",
-            "Religious",
         ):
-            self.assertTrue(bool(_EXCLUDED_CT_BIZ_TYPE_RE.search(ct_excluded)), ct_excluded)
+            self.assertTrue(bool(_NONPROFIT_BOARD_ISOLATED_CT_TYPE_RE.search(ct_np)), ct_np)
+        for ct_excl in ("DOMESTIC PROFESSIONAL SERVICE CORPORATION", "DOMESTIC COOPERATIVE CORPORATION", "Religious"):
+            self.assertTrue(bool(_EXCLUDED_CT_BIZ_TYPE_RE.search(ct_excl)), ct_excl)
         for ct_allowed in ("LLC", "Stock", "DOMESTIC LIMITED LIABILITY COMPANY", "DOMESTIC BUSINESS CORPORATION", "Limited Partnership"):
             self.assertFalse(bool(_EXCLUDED_CT_BIZ_TYPE_RE.search(ct_allowed)), ct_allowed)
+            self.assertFalse(bool(_NONPROFIT_BOARD_ISOLATED_CT_TYPE_RE.search(ct_allowed)), ct_allowed)
 
         # Volunteer / advisory / clerical / religious / agent officer positions excluded
         for bad_pos in ("Advisory Board", "Honorary Director", "Chaplain", "Assistant Secretary", "Registered Agent", "Attorney", "Volunteer"):
@@ -914,22 +994,28 @@ class TestAssessorPlaceholderAndInstitutionalHygiene(unittest.TestCase):
         for good_pos in ("Manager", "Managing Member", "President", "Beneficial Owner", "General Partner"):
             self.assertFalse(bool(_NON_BENEFICIAL_OFFICER_POSITION_RE.search(good_pos)), good_pos)
 
-        # OC-verified non-landlord nonprofit (e.g. Dudley Neighbors Inc / Armistead Homes Corp)
-        # is pruned from private landlord networks while genuine for-profit LLCs are preserved.
+        # Nonprofit housing operators STAY in `*_networks` as their own isolated portfolios,
+        # while NEVER bridging into private landlords (even at a co-located street address!)
+        # and exporting ZERO volunteer board members into BFS clustering.
         props = [
             {"bbl": "NP1", "owner_name": "DUDLEY NEIGHBORS INC", "owner_name_norm": "DUDLEY NEIGHBORS INC", "oc_jurisdiction_code": "us_ma", "oc_company_number": "NP_1"},
-            {"bbl": "NP2", "owner_name": "ARMISTEAD HOMES CORP", "owner_name_norm": "ARMISTEAD HOMES CORP", "oc_jurisdiction_code": "us_md", "oc_company_number": "NP_2"},
-            {"bbl": "PR1", "owner_name": "PRIVATE LANDLORD LLC", "owner_name_norm": "PRIVATE LANDLORD LLC", "oc_jurisdiction_code": "us_ma", "oc_company_number": "PR_1"},
+            {"bbl": "NP2", "owner_name": "DUDLEY NEIGHBORS TWO INC", "owner_name_norm": "DUDLEY NEIGHBORS TWO INC", "oc_jurisdiction_code": "us_ma", "oc_company_number": "NP_2"},
+            {"bbl": "PR1", "owner_name": "PRIVATE LANDLORD ALPHA LLC", "owner_name_norm": "PRIVATE LANDLORD ALPHA LLC", "oc_jurisdiction_code": "us_ma", "oc_company_number": "PR_1"},
+            {"bbl": "PR2", "owner_name": "PRIVATE LANDLORD BETA LLC", "owner_name_norm": "PRIVATE LANDLORD BETA LLC", "oc_jurisdiction_code": "us_ma", "oc_company_number": "PR_2"},
         ]
         init_g = {p["bbl"]: [p] for p in props}
         oc_res = {
-            ("us_ma", "NP_1"): {"humans": [], "holding_entities": [], "reached_companies": [], "hq_addresses": [], "raw_hq_addresses": [], "is_excluded_entity": True},
-            ("us_md", "NP_2"): {"humans": [], "holding_entities": [], "reached_companies": [], "hq_addresses": [], "raw_hq_addresses": [], "is_excluded_entity": True},
-            ("us_ma", "PR_1"): {"humans": ["JANE LANDLORD"], "holding_entities": [], "reached_companies": ["us_ma/PR_1"], "hq_addresses": ["100 MAIN ST BOSTON MA"], "raw_hq_addresses": []},
+            ("us_ma", "NP_1"): {"humans": [], "holding_entities": [], "reached_companies": ["us_ma/NP_1"], "hq_addresses": ["NP||100 MAIN STREET BOSTON MA"], "raw_hq_addresses": ["100 MAIN ST, BOSTON, MA"], "is_nonprofit_isolated": True},
+            ("us_ma", "NP_2"): {"humans": [], "holding_entities": [], "reached_companies": ["us_ma/NP_2"], "hq_addresses": ["NP||100 MAIN STREET BOSTON MA"], "raw_hq_addresses": ["100 MAIN ST, BOSTON, MA"], "is_nonprofit_isolated": True},
+            ("us_ma", "PR_1"): {"humans": ["ALICE LANDLORD"], "holding_entities": [], "reached_companies": ["us_ma/PR_1"], "hq_addresses": ["100 MAIN STREET BOSTON MA"], "raw_hq_addresses": ["100 MAIN ST, BOSTON, MA"], "is_nonprofit_isolated": False},
+            ("us_ma", "PR_2"): {"humans": ["BOB LANDLORD"], "holding_entities": [], "reached_companies": ["us_ma/PR_2"], "hq_addresses": ["200 OAK STREET BOSTON MA"], "raw_hq_addresses": ["200 OAK ST, BOSTON, MA"], "is_nonprofit_isolated": False},
         }
         out_g, _ = cluster_with_oc_and_series(props, init_g, oc_res)
-        kept_bbls = {p["bbl"] for grp in out_g.values() for p in grp}
-        self.assertEqual(kept_bbls, {"PR1"})
+        clusters = [frozenset(p["bbl"] for p in grp) for grp in out_g.values()]
+        self.assertIn(frozenset({"NP1", "NP2"}), clusters)  # Sibling nonprofits unify with each other
+        self.assertIn(frozenset({"PR1"}), clusters)          # Private landlord at same address NEVER merges with nonprofit
+        self.assertIn(frozenset({"PR2"}), clusters)          # Unrelated private landlord stays completely separate
+        self.assertEqual(len(clusters), 3)
 
 
 if __name__ == "__main__":
