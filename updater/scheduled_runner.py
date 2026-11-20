@@ -865,6 +865,64 @@ def run_post_rebuild_representative_label_audit():
     logger.info("=" * 80)
 
 
+def run_weekly_federal_subsidies_and_syracuse_refresh():
+    """Weekly zero-GCP watermark-gated local refresher for HUD/USDA federal housing
+    subsidies, HUD REAC physical inspection scores, and Syracuse NY code/rental overlays."""
+    logger.info("=" * 80)
+    logger.info("Starting Weekly Local Federal Subsidies / REAC & Syracuse NY Refresh (Watermark-Gated)")
+    logger.info("=" * 80)
+    try:
+        cmd = [
+            sys.executable,
+            "scripts/refresh_federal_and_spot_layers_local.py",
+            "--layers",
+            "federal_subsidies",
+            "syracuse_ny",
+            "--only-if-changed",
+        ]
+        res = run_source_only(cmd, check=False, timeout=3600)
+        if getattr(res, "returncode", 1) == 0:
+            logger.info("✓ Weekly federal subsidies/REAC & Syracuse NY refresh finished cleanly.")
+        else:
+            logger.warning(
+                "⚠ Weekly federal subsidies/REAC & Syracuse NY refresh exited with code %s.",
+                getattr(res, "returncode", "unknown"),
+            )
+    except Exception as e:
+        logger.error("✘ Weekly federal subsidies/REAC & Syracuse NY refresh failed: %s", e)
+    logger.info("=" * 80)
+
+
+def run_monthly_spot_county_parcels_and_geocodes_refresh():
+    """Monthly zero-GCP watermark-gated local refresher for the 9 Spot V4/V5 county
+    parcel rolls (OH Stark/Lake/Delaware/Summit, MN Washington/Scott/Carver, IL Kane/McHenry)
+    and WGS84 geocoding backfills (DC/Baltimore/MT/MN)."""
+    logger.info("=" * 80)
+    logger.info("Starting Monthly Local Spot County Parcels & WGS84 Geocode Refresh (Watermark-Gated)")
+    logger.info("=" * 80)
+    try:
+        cmd = [
+            sys.executable,
+            "scripts/refresh_federal_and_spot_layers_local.py",
+            "--layers",
+            "county_parcels",
+            "geocode_backfill",
+            "--only-if-changed",
+            "--rebuild-changed",
+        ]
+        res = run_source_only(cmd, check=False, timeout=NETWORK_REBUILD_TIMEOUT)
+        if getattr(res, "returncode", 1) == 0:
+            logger.info("✓ Monthly local Spot county parcels & geocode refresh finished cleanly.")
+        else:
+            logger.warning(
+                "⚠ Monthly local Spot county parcels & geocode refresh exited with code %s.",
+                getattr(res, "returncode", "unknown"),
+            )
+    except Exception as e:
+        logger.error("✘ Monthly local Spot county parcels & geocode refresh failed: %s", e)
+    logger.info("=" * 80)
+
+
 def main():
     """Main scheduler loop"""
     logger.info("Vision Data Updater Service Starting")
@@ -890,9 +948,11 @@ def main():
     schedule.every().day.at("05:15").do(run_nightly_network_linking_optimization)
     schedule.every().day.at("05:50").do(run_post_rebuild_representative_label_audit)
     schedule.every().saturday.at("01:30").do(run_weekly_statewide_and_opencorporates_update)
+    schedule.every().saturday.at("03:30").do(run_weekly_federal_subsidies_and_syracuse_refresh)
     schedule.every().sunday.at("00:00").do(run_weekly_nightly_updates)
     schedule.every().sunday.at("02:00").do(run_weekly_public_corporate_registries_refresh)
     schedule.every(30).days.at("01:00").do(run_monthly_other_updates)
+    schedule.every(30).days.at("02:30").do(run_monthly_spot_county_parcels_and_geocodes_refresh)
     schedule.every().sunday.at("03:00").do(run_weekly_full_scan)
     schedule.every().sunday.at("05:00").do(run_weekly_other_cities_full_scan)
     schedule.every().sunday.at("06:00").do(run_weekly_app_audit)
@@ -909,7 +969,9 @@ def main():
     logger.info("  - Nightly 5-Jurisdiction Recursive Network-Linking & Performance Optimizer (best-available Gemini -> salmun@storrsmagic.org): 5:15 AM daily")
     logger.info("  - Nightly Post-Rebuild Representative-Label & Grounded External-Source Audit: 5:50 AM daily")
     logger.info("  - Weekly OpenCorporates SFTP poll & 9-Statewide GIS rotation (VT/CO/WI/NY/NC/AR/FL/MA/VA): 1:30 AM Saturday")
+    logger.info("  - Weekly Local Federal Subsidies/REAC (HUD LIHTC/MF Assisted/Insured/USDA 515) & Syracuse NY refresh (watermark-gated): 3:30 AM Saturday")
     logger.info("  - Weekly Direct Public Corporate Registries refresh (CT/DC/PA/NY/CO/FL + IRS 501c, watermark-gated): 2:00 AM Sunday")
+    logger.info("  - Monthly Local Spot County Parcel Rolls (OH/MN/IL) & WGS84 Geocode refresh (watermark-gated): 2:30 AM every 30 days")
     logger.info("  - Rotating Jurisdiction Optimization Battery (Cycle 1 nightly -> Cycle 2+ weekly): 11:30 AM UTC daily [INDEPENDENT THREAD]")
     logger.info("  - Daily Server-Side Usage Analytics Email (salmunk@gmail.com): 8:00 AM daily [INDEPENDENT THREAD]")
     logger.info("  - Weekly update (Weekly/Nightly towns): 12:00 AM Sunday")

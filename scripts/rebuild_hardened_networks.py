@@ -2,16 +2,15 @@
 """
 scripts/rebuild_hardened_networks.py
 ====================================
-Sequential, zero-OOM, DB-only ownership-network re-clustering pass across existing
-statewide and municipal jurisdictions using the hardened 3rd-party registrar,
-foreign-branch service-of-process, NNN lessee tax-hub, institutional stale-parcel,
-natural-person homonym, and condo-building exclusion guards.
+Rebuilds ownership networks across specified nationwide jurisdictions after
+additive Spot V4/V5 parcel/subsidy/overlay imports, IRS 501(c) nonprofit
+isolation updates, and universal false-bridge hardening in `api/shared_utils.py`,
+then refreshes the daily landing snapshot (`landing_snapshot:v1`).
 """
 
 from __future__ import annotations
 
 import argparse
-import gc
 import os
 import sys
 import time
@@ -21,116 +20,65 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-from api.oc_linker import refresh_empirical_registered_agent_addresses
 from api.populate_cities import rebuild_city_networks_from_db
-from ma.ingest_massgis import build_and_save_ma_networks
 from states.ingest_statewide_parcels import build_and_save_state_networks
 
-
-STATE_SOURCE_TAGS = {
-    "fl": ("FL", "FL_UNIFIED_67_COUNTY_PARCELS"),
-    "ny": ("NY", "NY_UNIFIED_62_COUNTY_HPD_ORPTS"),
-    "il": ("IL", "IL_COOK_COLLAR_CAMA"),
-    "ca": ("CA", "CA_ASSESSOR_ROLL_AND_BIZ_TAX"),
+STATE_META = {
+    "oh": ("OH", "OH_AUDITOR_CAMA"),
     "mn": ("MN", "MN_TWIN_CITIES_CAMA_AND_RENTAL_LICENSES"),
-    "oh": ("OH", "OH_COUNTY_AUDITOR_CAMA"),
-    "mt": ("MT", "MT_MSDI_ORION_CADASTRAL"),
-    "va": ("VA", "VA_STATEWIDE_PARCELS"),
+    "il": ("IL", "IL_CHICAGOLAND_PARCELS"),
+    "ny": ("NY", "NY_STATEWIDE_PARCELS"),
+    "fl": ("FL", "FL_FDOR_NAL_PARCELS"),
     "nc": ("NC", "NC_ONEMAP_STATEWIDE_PARCELS"),
-    "co": ("CO", "CO_OIT_PUBLIC_PARCELS"),
-    "wi": ("WI", "WI_SCO_DOA_STATEWIDE_PARCELS"),
-    "ar": ("AR", "ARKANSAS_GIS_PARCELS"),
-    "vt": ("VT", "VT_VCGI_STANDARDIZED_PARCELS"),
+    "co": ("CO", "CO_STATEWIDE_PARCELS"),
+    "ma": ("MA", "MA_MASSGIS_LEVEL3_PARCELS"),
+    "va": ("VA", "VA_STATEWIDE_PARCELS"),
+    "ar": ("AR", "AR_STATEWIDE_PARCELS"),
+    "vt": ("VT", "VT_STATEWIDE_PARCELS"),
+    "wi": ("WI", "WI_STATEWIDE_PARCELS"),
+    "mt": ("MT", "MT_MSDI_ORION_CADASTRAL"),
+    "nj": ("NJ", "NJ_DCA_BHI_REGISTRATIONS"),
 }
 
-DEFAULT_STATES = [
-    "ma", "il", "ca", "mn", "oh", "mt", "fl", "ny", "va", "nc", "co", "wi", "ar", "vt"
-]
-DEFAULT_CITIES = ["dc", "baltimore", "detroit", "philadelphia"]
-
-
-def _db_url() -> str:
-    raw = os.environ.get("DATABASE_URL", "postgresql://user:password@127.0.0.1:5432/ctdata")
-    if "@ctdata_db" in raw and not os.path.exists("/.dockerenv"):
-        return raw.replace("@ctdata_db", "@127.0.0.1")
-    return raw
+CITIES = {"philadelphia", "chicago", "boston", "baltimore", "detroit", "miami", "minneapolis", "dc"}
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Sequential DB-only false-positive network hardening rebuild")
-    parser.add_argument("--states", nargs="*", default=DEFAULT_STATES)
-    parser.add_argument("--cities", nargs="*", default=DEFAULT_CITIES)
-    parser.add_argument("--skip-ra-refresh", action="store_true")
-    parser.add_argument("--skip-oc-relink", action="store_true", help="Reuse existing oc_company_number matches on {jur}_properties for 10x faster re-clustering.")
-    parser.add_argument("--skip-landing-cache", action="store_true", help="Skip refreshing landing_snapshot:v1 at the end of this run.")
+    parser = argparse.ArgumentParser(description="Rebuild hardened networks and refresh landing snapshot.")
+    parser.add_argument(
+        "--targets",
+        nargs="+",
+        default=["oh", "mn", "il", "ny", "fl", "nc", "co", "ma", "va", "ar", "philadelphia", "chicago", "boston", "baltimore", "detroit", "miami"],
+    )
+    parser.add_argument("--skip-landing-snapshot", action="store_true")
     args = parser.parse_args()
 
-    dsn = _db_url()
-    if not args.skip_ra_refresh:
-        t0 = time.time()
-        conn = psycopg2.connect(dsn)
-        try:
-            upserted = refresh_empirical_registered_agent_addresses(conn)
-            print(f"[HARDEN] Refreshed empirical RA & shared-office hubs ({upserted:,} rows) in {time.time() - t0:.1f}s.", flush=True)
-        finally:
-            conn.close()
-
-    for st in args.states:
-        st_l = st.lower().strip()
-        t0 = time.time()
-        conn = psycopg2.connect(dsn)
-        try:
-            if st_l == "ma":
-                p_cnt, n_cnt = build_and_save_ma_networks(conn, skip_oc_relink=args.skip_oc_relink)
-            else:
-                st_code, src_tag = STATE_SOURCE_TAGS[st_l]
-                p_cnt, n_cnt = build_and_save_state_networks(conn, st_l, st_code, src_tag, skip_oc_relink=args.skip_oc_relink)
-            print(
-                f"[HARDEN] ✓ [{st_l.upper()}] {p_cnt:,} parcels -> {n_cnt:,} clean networks ({time.time() - t0:.1f}s)",
-                flush=True,
-            )
-            try:
-                from updater.post_rebuild_label_audit import audit_jurisdiction_labels
-                audit_jurisdiction_labels(conn, st_l, limit=120, with_web_audit=False)
-            except Exception as aud_exc:
-                print(f"[HARDEN] ⚠ [{st_l.upper()}] representative label audit skipped: {aud_exc}", flush=True)
-            try:
-                from scripts.audit_network_bridges import audit_nationwide_jurisdiction
-                b_aud = audit_nationwide_jurisdiction(conn, st_l, top_n=15)
-                for bf in b_aud.get("findings") or ():
-                    print(f"[HARDEN]   [BRIDGE-AUDIT {bf['severity']}] {st_l.upper()} {bf['kind']} on {bf['primary_name']}: {bf['detail']}", flush=True)
-            except Exception as baud_exc:
-                print(f"[HARDEN] ⚠ [{st_l.upper()}] bridge audit skipped: {baud_exc}", flush=True)
-        finally:
-            conn.close()
-        gc.collect()
-
-    for city in args.cities:
-        c_l = city.lower().strip()
-        t0 = time.time()
-        conn = psycopg2.connect(dsn)
-        try:
-            rebuild_city_networks_from_db(conn, c_l)
-            print(f"[HARDEN] ✓ [{c_l.upper()}] city networks rebuilt ({time.time() - t0:.1f}s)", flush=True)
-            try:
-                from updater.post_rebuild_label_audit import audit_jurisdiction_labels
-                audit_jurisdiction_labels(conn, c_l, limit=120, with_web_audit=False)
-            except Exception as aud_exc:
-                print(f"[HARDEN] ⚠ [{c_l.upper()}] representative label audit skipped: {aud_exc}", flush=True)
-        finally:
-            conn.close()
-        gc.collect()
-
-    if not args.skip_landing_cache:
-        try:
-            os.environ.setdefault("DATABASE_URL", dsn)
-            from api.landing_cache import build_and_store_landing_snapshot
+    db_url = os.environ.get("DATABASE_URL", "postgresql://user:password@127.0.0.1:5432/ctdata")
+    t_all = time.time()
+    conn = psycopg2.connect(db_url)
+    try:
+        for t in args.targets:
             t0 = time.time()
-            build_and_store_landing_snapshot()
-            print(f"[HARDEN] ✓ Refreshed landing_snapshot:v1 & per-jurisdiction top-networks cache ({time.time() - t0:.1f}s)", flush=True)
-        except Exception as snap_exc:
-            print(f"[HARDEN] ⚠ Landing snapshot refresh skipped: {snap_exc}", flush=True)
+            tl = t.lower()
+            if tl in STATE_META:
+                st_code, src_tag = STATE_META[tl]
+                print(f"▶ Rebuilding statewide networks for {tl.upper()}...", flush=True)
+                p_cnt, n_cnt = build_and_save_state_networks(conn, tl, st_code, src_tag)
+                print(f"  ✓ [{tl.upper()}] {p_cnt:,} parcels -> {n_cnt:,} networks in {time.time() - t0:.1f}s", flush=True)
+            elif tl in CITIES:
+                print(f"▶ Rebuilding city networks for {tl.upper()}...", flush=True)
+                rebuild_city_networks_from_db(conn, tl)
+                print(f"  ✓ [{tl.upper()}] rebuilt in {time.time() - t0:.1f}s", flush=True)
+            else:
+                print(f"⚠ Unknown target `{t}`, skipping.", flush=True)
+    finally:
+        conn.close()
 
+    if not args.skip_landing_snapshot:
+        print("▶ Refreshing daily landing_snapshot:v1...", flush=True)
+        from api.landing_cache import refresh_landing_snapshot
+        refresh_landing_snapshot()
+        print(f"✓ All rebuilds + landing snapshot complete in {time.time() - t_all:.1f}s.", flush=True)
     return 0
 
 

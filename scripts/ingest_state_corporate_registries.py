@@ -1688,7 +1688,7 @@ def ingest_ct_sots_mirror(conn) -> Tuple[int, int]:
                 b.status,
                 (UPPER(COALESCE(b.status, '')) LIKE 'ACTIVE%%'),
                 (COALESCE(b.business_type, '') ~* '(non[- ]?stock|non[- ]?profit|not[- ]?for[- ]?profit|charit|relig|church|benevolent|housing\\s+development\\s+fund)'),
-                CASE WHEN b.date_of_formation ~ '^\\d{4}-\\d{2}-\\d{2}' THEN SUBSTRING(b.date_of_formation, 1, 10)::date ELSE NULL END,
+                b.date_of_formation,
                 NULLIF(TRIM(CONCAT_WS(', ', NULLIF(b.business_address, ''), NULLIF(b.business_city, ''), NULLIF(b.business_state, ''), NULLIF(b.business_zip, ''))), ''),
                 NULLIF(UPPER(TRIM(COALESCE(b.business_state, 'CT'))), ''),
                 NULLIF(TRIM(CONCAT_WS(', ', NULLIF(b.mail_address, ''), NULLIF(b.mail_city, ''), NULLIF(b.mail_state, ''), NULLIF(b.mail_zip, ''))), ''),

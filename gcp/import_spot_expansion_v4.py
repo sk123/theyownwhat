@@ -299,8 +299,21 @@ def import_geocoding_backfill(conn, gz_path: str) -> Dict[str, int]:
                     )
                     tot_upd += cur.rowcount
             elif is_city:
-                for i in range(0, len(rows), 10000):
-                    chunk = [(b, lat, lng) for b, lat, lng, _, _ in rows[i : i + 10000]]
+                # Match exact bbl OR whitespace-normalized SSL (DC uses fixed-width spaces e.g. '1271    0051')
+                cur.execute(f"SELECT bbl FROM {jur}_properties WHERE latitude IS NULL")
+                resolved_city: List[Tuple[str, float, float]] = []
+                compact_map = {" ".join(k.split()).upper(): (lat, lng) for k, (lat, lng, _, _) in mapping.items()}
+                for (db_bbl,) in cur.fetchall():
+                    hit = mapping.get(db_bbl)
+                    if hit:
+                        resolved_city.append((db_bbl, hit[0], hit[1]))
+                    else:
+                        ck = " ".join((db_bbl or "").split()).upper()
+                        chit = compact_map.get(ck)
+                        if chit:
+                            resolved_city.append((db_bbl, chit[0], chit[1]))
+                for i in range(0, len(resolved_city), 10000):
+                    chunk = resolved_city[i : i + 10000]
                     execute_values(
                         cur,
                         f"""

@@ -199,7 +199,7 @@ const SEO_BY_DATASET = {
   },
   OH: {
     title: 'They Own WHAT?? | Ohio Property Owner Explorer',
-    description: 'Explore 1.34M Ohio County Auditor improved CAMA property parcels across Columbus (Franklin), Cleveland (Cuyahoga), Cincinnati (Hamilton) & Toledo (Lucas), recent transfers, corporate filings, and NHPD subsidies.',
+    description: 'Explore 1.87M Ohio County Auditor improved CAMA property parcels across Columbus (Franklin), Cleveland (Cuyahoga), Cincinnati (Hamilton), Akron (Summit), Toledo (Lucas), Canton (Stark), Lake & Delaware, recent transfers, corporate filings, and HUD/USDA/NHPD subsidies.',
     path: '/oh',
   },
   CO: {

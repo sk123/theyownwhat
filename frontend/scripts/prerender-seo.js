@@ -138,8 +138,8 @@ const routes = [
   {
     path: '/il',
     file: 'il.html',
-    title: 'They Own WHAT?? | Illinois Statewide Property Owner Explorer',
-    description: 'Explore Illinois property parcels across Chicago, all 130+ Cook County suburbs, DuPage County GIS, Chicago building violations, IL SOS corporate filings, and NHPD subsidies.',
+    title: 'They Own WHAT?? | Illinois Property Owner Explorer',
+    description: 'Explore 5-county Chicagoland property parcels across Cook (Chicago + 130+ suburbs), DuPage, Lake, Kane & McHenry Counties, Chicago building violations, IL SOS filings, and HUD/USDA/NHPD subsidies.',
   },
   {
     path: '/ca',
@@ -151,7 +151,7 @@ const routes = [
     path: '/mn',
     file: 'mn.html',
     title: 'They Own WHAT?? | Minnesota Property Owner Explorer',
-    description: 'Explore unified Minnesota property records across Hennepin & Ramsey Counties, Minneapolis active rental licenses, Regulatory Services code cases, and MN SOS filings.',
+    description: 'Explore unified Minnesota property records across all 7 Twin Cities Metro counties and Olmsted (Rochester), Minneapolis active rental licenses, Regulatory Services code cases, and MN SOS filings.',
   },
   {
     path: '/mt',
@@ -163,7 +163,7 @@ const routes = [
     path: '/oh',
     file: 'oh.html',
     title: 'They Own WHAT?? | Ohio Property Owner Explorer',
-    description: 'Explore Ohio County Auditor improved CAMA property parcels (Greater Cleveland / Cuyahoga), transfer sales, corporate officer filings, and NHPD subsidies.',
+    description: 'Explore 1.87M Ohio County Auditor improved CAMA property parcels across Franklin, Cuyahoga, Hamilton, Summit, Lucas, Stark, Lake & Delaware Counties, corporate filings, and HUD/USDA/NHPD subsidies.',
   },
 ];
 
